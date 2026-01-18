@@ -24,7 +24,7 @@ public sealed record ScheduleTrigger(
     string Name,
     string Schedule,
     bool Enabled,
-    IReadOnlyDictionary<string, string>? Parameters,
+    IReadOnlyDictionary<string, string?>? Parameters,
     DateTimeOffset? LastRunAt,
     DateTimeOffset? NextRunAt,
     DateTimeOffset CreatedAt,

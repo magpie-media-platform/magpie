@@ -15,5 +15,5 @@ public sealed record AuthProviderPatch
     /// <inheritdoc cref="AuthProvider.IsDefault" />
     public FieldPatch<bool>? IsDefault { get; init; }
     /// <inheritdoc cref="AuthProvider.Settings" />
-    public FieldPatch<IReadOnlyDictionary<string, string>>? Settings { get; init; }
+    public FieldPatch<IReadOnlyDictionary<string, string?>>? Settings { get; init; }
 }

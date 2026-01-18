@@ -23,7 +23,7 @@ public sealed record IndexerFeed(
     string? Description,
     string Provider,
     bool Enabled,
-    IReadOnlyDictionary<string, string> Settings,
+    IReadOnlyDictionary<string, string?> Settings,
     DateTimeOffset? LastSync,
     DateTimeOffset CreatedAt,
     Guid? CreatedByUserId,

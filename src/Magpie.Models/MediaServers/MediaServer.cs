@@ -22,7 +22,7 @@ public sealed record MediaServer(
     string Name,
     string Provider,
     bool Enabled,
-    IReadOnlyDictionary<string, string> Settings,
+    IReadOnlyDictionary<string, string?> Settings,
     MediaServerStatus Status,
     DateTimeOffset? LastChecked,
     DateTimeOffset CreatedAt,

@@ -8,7 +8,6 @@
   <ItemGroup>
     <ProjectReference Include="..\Magpie.Abstractions\Magpie.Abstractions.csproj" />
     <ProjectReference Include="..\Magpie.Data.Database.Entities\Magpie.Data.Database.Entities.csproj" />
-    <ProjectReference Include="..\Magpie.Models\Magpie.Models.csproj" />
   </ItemGroup>
 
   <ItemGroup>

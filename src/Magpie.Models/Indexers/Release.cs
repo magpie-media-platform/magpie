@@ -36,7 +36,7 @@ public sealed record Release(
     IReadOnlyList<string> Categories,
     Uri DownloadUrl,
     Uri? InfoUrl,
-    IReadOnlyDictionary<string, string>? Properties,
+    IReadOnlyDictionary<string, string?>? Properties,
     IReadOnlyList<string> Languages,
     IReadOnlyList<string> Tags,
     DateTimeOffset CreatedAt,

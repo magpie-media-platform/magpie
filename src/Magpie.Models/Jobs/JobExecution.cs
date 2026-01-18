@@ -30,7 +30,7 @@ public sealed record JobExecution(
     JobExecutionStatus Status,
     double? Progress,
     string? Message,
-    IReadOnlyDictionary<string, string> Parameters,
+    IReadOnlyDictionary<string, string?> Parameters,
     DateTimeOffset StartedAt,
     DateTimeOffset? CompletedAt,
     DateTimeOffset CreatedAt,

@@ -24,7 +24,7 @@ public sealed record DownloadClient(
     string Provider,
     bool Enabled,
     IReadOnlyList<string> Tags,
-    IReadOnlyDictionary<string, string> Settings,
+    IReadOnlyDictionary<string, string?> Settings,
     DownloadClientStatus Status,
     DateTimeOffset? LastChecked,
     DateTimeOffset CreatedAt,

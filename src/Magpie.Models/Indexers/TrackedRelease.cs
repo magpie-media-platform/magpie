@@ -17,4 +17,4 @@ public sealed record TrackedRelease(
     int? Seeders,
     int? Leechers,
     int? Peers,
-    IReadOnlyDictionary<string, string>? Properties);
+    IReadOnlyDictionary<string, string?>? Properties);

@@ -15,5 +15,5 @@ public sealed record MediaServerPatch
     /// <inheritdoc cref="MediaServer.Enabled" />
     public FieldPatch<bool>? Enabled { get; init; }
     /// <inheritdoc cref="MediaServer.Settings" />
-    public FieldPatch<IReadOnlyDictionary<string, string>>? Settings { get; init; }
+    public FieldPatch<IReadOnlyDictionary<string, string?>>? Settings { get; init; }
 }

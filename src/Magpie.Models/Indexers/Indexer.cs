@@ -24,7 +24,7 @@ public sealed record Indexer(
     string Name,
     bool Enabled,
     IReadOnlyList<string> Tags,
-    IReadOnlyDictionary<string, string> Settings,
+    IReadOnlyDictionary<string, string?> Settings,
     IndexerStatus Status,
     DateTimeOffset? LastChecked,
     DateTimeOffset CreatedAt,

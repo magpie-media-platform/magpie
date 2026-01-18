@@ -17,5 +17,5 @@ public sealed record IndexerFeedPatch
     /// <inheritdoc cref="IndexerFeed.Enabled" />
     public FieldPatch<bool>? Enabled { get; init; }
     /// <inheritdoc cref="IndexerFeed.Settings" />
-    public FieldPatch<IReadOnlyDictionary<string, string>>? Settings { get; init; }
+    public FieldPatch<IReadOnlyDictionary<string, string?>>? Settings { get; init; }
 }

@@ -22,7 +22,7 @@ public sealed record AuthProvider(
     string Provider,
     bool Enabled,
     bool IsDefault,
-    IReadOnlyDictionary<string, string> Settings,
+    IReadOnlyDictionary<string, string?> Settings,
     DateTimeOffset CreatedAt,
     Guid? CreatedByUserId,
     DateTimeOffset? ModifiedAt,
