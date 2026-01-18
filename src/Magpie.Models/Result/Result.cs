@@ -7,7 +7,7 @@ namespace Magpie.Models.Result;
 public abstract record Result(bool IsSuccess) : IResult
 {
     /// <summary>
-    /// Create a successful result.
+    /// Creates a successful result.
     /// </summary>
     public static SuccessResult Success()
     {
@@ -15,7 +15,7 @@ public abstract record Result(bool IsSuccess) : IResult
     }
 
     /// <summary>
-    /// Create a successful result with a value.
+    /// Creates a successful result with a value.
     /// </summary>
     /// <param name="value">The result value.</param>
     /// <returns>A successful result containing the value.</returns>
@@ -25,7 +25,7 @@ public abstract record Result(bool IsSuccess) : IResult
     }
 
     /// <summary>
-    /// Create a failed result.
+    /// Creates a failed result.
     /// </summary>
     /// <param name="reason"><inheritdoc cref="IFailureResult.Reason" path="/summary"/></param>
     /// <param name="errorCode"><inheritdoc cref="IFailureResult.ErrorCode" path="/summary"/></param>
@@ -37,7 +37,7 @@ public abstract record Result(bool IsSuccess) : IResult
     }
 
     /// <summary>
-    /// Create a failed value result.
+    /// Creates a failed value result.
     /// </summary>
     /// <typeparam name="T">The type of value represented by the result.</typeparam>
     /// <param name="reason"><inheritdoc cref="IFailureResult.Reason" path="/summary"/></param>

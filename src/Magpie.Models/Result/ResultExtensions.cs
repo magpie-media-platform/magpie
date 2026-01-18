@@ -9,7 +9,7 @@ namespace Magpie.Models.Result;
 public static class ResultExtensions
 {
     /// <summary>
-    /// Transform the value if successful, otherwise forward the error.
+    /// Transforms the value if successful, otherwise forwards the error.
     /// </summary>
     /// <typeparam name="TSource">The source value type.</typeparam>
     /// <typeparam name="TResult">The target value type.</typeparam>
@@ -37,7 +37,7 @@ public static class ResultExtensions
     }
 
     /// <summary>
-    /// Chain an operation that returns a Result, flattening the result.
+    /// Chains an operation that returns a Result, flattening the result.
     /// </summary>
     /// <typeparam name="TSource">The source value type.</typeparam>
     /// <typeparam name="TResult">The target value type.</typeparam>
@@ -67,7 +67,7 @@ public static class ResultExtensions
     }
 
     /// <summary>
-    /// Transform the value if successful, otherwise forward the error. Async version.
+    /// Transforms the value if successful, otherwise forwards the error. Async version.
     /// </summary>
     /// <typeparam name="TSource">The source value type.</typeparam>
     /// <typeparam name="TResult">The target value type.</typeparam>
@@ -99,7 +99,7 @@ public static class ResultExtensions
     }
 
     /// <summary>
-    /// Transform the value if successful using an async function, otherwise forward the error.
+    /// Transforms the value if successful using an async function, otherwise forwards the error.
     /// </summary>
     /// <typeparam name="TSource">The source value type.</typeparam>
     /// <typeparam name="TResult">The target value type.</typeparam>
@@ -131,7 +131,7 @@ public static class ResultExtensions
     }
 
     /// <summary>
-    /// Chain an operation that returns a Result, flattening the result. Async version.
+    /// Chains an operation that returns a Result, flattening the result. Async version.
     /// </summary>
     /// <typeparam name="TSource">The source value type.</typeparam>
     /// <typeparam name="TResult">The target value type.</typeparam>
@@ -163,7 +163,7 @@ public static class ResultExtensions
     }
 
     /// <summary>
-    /// Chain an async operation that returns a Result, flattening the result.
+    /// Chains an async operation that returns a Result, flattening the result.
     /// </summary>
     /// <typeparam name="TSource">The source value type.</typeparam>
     /// <typeparam name="TResult">The target value type.</typeparam>
