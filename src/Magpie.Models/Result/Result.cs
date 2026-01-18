@@ -3,6 +3,7 @@ namespace Magpie.Models.Result;
 /// <summary>
 /// Represents the outcome of an operation.
 /// </summary>
+/// <param name="IsSuccess"><inheritdoc cref="IResult.IsSuccess" path="/summary"/></param>
 public abstract record Result(bool IsSuccess) : IResult
 {
     /// <summary>
@@ -26,9 +27,9 @@ public abstract record Result(bool IsSuccess) : IResult
     /// <summary>
     /// Create a failed result.
     /// </summary>
-    /// <param name="reason">The error reason or message.</param>
-    /// <param name="errorCode">The error code.</param>
-    /// <param name="subErrorCode">The sub error code.</param>
+    /// <param name="reason"><inheritdoc cref="IFailureResult.Reason" path="/summary"/></param>
+    /// <param name="errorCode"><inheritdoc cref="IFailureResult.ErrorCode" path="/summary"/></param>
+    /// <param name="subErrorCode"><inheritdoc cref="IFailureResult.SubErrorCode" path="/summary"/></param>
     /// <returns>A failed result containing the error information.</returns>
     public static FailureResult Fail(string reason, string? errorCode = default, string? subErrorCode = default)
     {
@@ -39,10 +40,10 @@ public abstract record Result(bool IsSuccess) : IResult
     /// Create a failed value result.
     /// </summary>
     /// <typeparam name="T">The type of value represented by the result.</typeparam>
-    /// <param name="reason">The error reason or message.</param>
-    /// <param name="errorCode">The error code.</param>
-    /// <param name="subErrorCode">The sub error code.</param>
-    /// <returns>A failed value result containing the error information.</returns>
+    /// <param name="reason"><inheritdoc cref="IFailureResult.Reason" path="/summary"/></param>
+    /// <param name="errorCode"><inheritdoc cref="IFailureResult.ErrorCode" path="/summary"/></param>
+    /// <param name="subErrorCode"><inheritdoc cref="IFailureResult.SubErrorCode" path="/summary"/></param>
+    /// <returns>A failed typed result containing the error information.</returns>
     public static FailureResult<T> Fail<T>(string reason, string? errorCode = default, string? subErrorCode = default)
     {
         return new(reason, errorCode, subErrorCode);
@@ -53,5 +54,5 @@ public abstract record Result(bool IsSuccess) : IResult
 /// Represents a result that may contain a value.
 /// </summary>
 /// <typeparam name="T">The type of value represented by the result.</typeparam>
-/// <param name="IsSuccess">Whether the result is successful.</param>
+/// <param name="IsSuccess"><inheritdoc cref="IResult.IsSuccess" path="/summary"/></param>
 public abstract record Result<T>(bool IsSuccess) : Result(IsSuccess), IResult<T>;
