@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Magpie.Abstractions\Magpie.Abstractions.csproj" />
+    <ProjectReference Include="..\Magpie.Api\Magpie.Api.csproj" />
+    <ProjectReference Include="..\Magpie.Core\Magpie.Core.csproj" />
+    <ProjectReference Include="..\Magpie.Data.Database\Magpie.Data.Database.csproj" />
+  </ItemGroup>
+
+</Project>
