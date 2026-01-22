@@ -1,6 +1,6 @@
 namespace Magpie.Data.Database.Entities;
 
-public class Tag
+public record Tag
 {
     public required string Name { get; set; }
 }

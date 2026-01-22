@@ -3,7 +3,7 @@ using System.Collections.Generic;
 
 namespace Magpie.Data.Database.Entities;
 
-public class Release
+public record Release
 {
     public Guid Id { get; set; }
     public Guid? IndexerId { get; set; }

@@ -2,7 +2,7 @@ using System;
 
 namespace Magpie.Data.Database.Entities;
 
-public class Preview
+public record Preview
 {
     public Guid Id { get; set; }
     public Guid MetadataContributionId { get; set; }
@@ -15,5 +15,5 @@ public class Preview
     public DateTime? ReleaseDate { get; set; }
     public string? Language { get; set; }
 
-    public required MetadataContribution MetadataContribution { get; set; }
+    public MetadataContribution? MetadataContribution { get; set; }
 }

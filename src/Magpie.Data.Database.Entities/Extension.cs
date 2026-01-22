@@ -2,7 +2,7 @@ using System;
 
 namespace Magpie.Data.Database.Entities;
 
-public class Extension
+public record Extension
 {
     public Guid Id { get; set; }
     public required string Version { get; set; }

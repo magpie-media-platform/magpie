@@ -2,7 +2,7 @@ using System;
 
 namespace Magpie.Data.Database.Entities;
 
-public class MediaInfo
+public record MediaInfo
 {
     public string? Container { get; set; }
     public TimeSpan? Duration { get; set; }

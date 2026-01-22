@@ -10,11 +10,6 @@ namespace Magpie.Data.Database.SQLite;
 /// <summary>
 /// Design-time factory for SQLite migrations.
 /// </summary>
-/// <remarks>
-/// The connection string can be passed as an argument after --:
-/// <code>dotnet ef migrations add MyMigration -- "Data Source=mydb.db"</code>
-/// If no argument is provided, the default connection string uses an absolute path to the project root's data directory.
-/// </remarks>
 public sealed class MagpieDbContextFactory : IDesignTimeDbContextFactory<MagpieDbContext>
 {
     /// <inheritdoc />
@@ -53,7 +48,7 @@ public sealed class MagpieDbContextFactory : IDesignTimeDbContextFactory<MagpieD
     private static string FindProjectRoot(string startPath)
     {
         var current = new DirectoryInfo(startPath);
-        while (current != null)
+        while (current is not null)
         {
             if (File.Exists(Path.Combine(current.FullName, "Magpie.sln")))
             {

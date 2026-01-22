@@ -5,7 +5,7 @@ using Magpie.Models.MediaServers;
 
 namespace Magpie.Data.Database.Entities;
 
-public class MediaServer
+public record MediaServer
 {
     public Guid Id { get; set; }
     public required string Name { get; set; }

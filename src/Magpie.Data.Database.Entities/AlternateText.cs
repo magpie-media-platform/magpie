@@ -2,7 +2,7 @@ using System;
 
 namespace Magpie.Data.Database.Entities;
 
-public class AlternateText
+public record AlternateText
 {
     public Guid Id { get; set; }
     public Guid MetadataContributionId { get; set; }
@@ -11,5 +11,5 @@ public class AlternateText
     public string? Language { get; set; }
     public required string Text { get; set; }
 
-    public required MetadataContribution MetadataContribution { get; set; }
+    public MetadataContribution? MetadataContribution { get; set; }
 }

@@ -5,7 +5,7 @@ using Magpie.Models.Indexers;
 
 namespace Magpie.Data.Database.Entities;
 
-public class IndexerDefinition
+public record IndexerDefinition
 {
     public Guid Id { get; set; }
     public Guid? FeedId { get; set; }

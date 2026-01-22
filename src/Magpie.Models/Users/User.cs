@@ -23,7 +23,7 @@ public sealed record User(
     Guid Id,
     string Username,
     string? Email,
-    Guid AuthProviderId,
+    Guid? AuthProviderId,
     string? ExternalId,
     bool Enabled,
     Role Role,

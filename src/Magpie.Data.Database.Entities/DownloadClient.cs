@@ -5,7 +5,7 @@ using Magpie.Models.Downloads;
 
 namespace Magpie.Data.Database.Entities;
 
-public class DownloadClient
+public record DownloadClient
 {
     public Guid Id { get; set; }
     public required string Name { get; set; }

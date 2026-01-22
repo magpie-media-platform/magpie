@@ -68,7 +68,6 @@ namespace Magpie.Data.Database.MySQL.Migrations
                         .HasColumnType("datetime");
 
                     b.Property<string>("KeyHash")
-                        .IsRequired()
                         .HasColumnType("longtext");
 
                     b.Property<string>("KeyPrefix")
@@ -150,9 +149,21 @@ namespace Magpie.Data.Database.MySQL.Migrations
                     b.Property<Guid>("AuthProviderId")
                         .HasColumnType("char(36)");
 
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("datetime");
+
+                    b.Property<Guid?>("CreatedByUserId")
+                        .HasColumnType("char(36)");
+
                     b.Property<string>("Key")
                         .IsRequired()
                         .HasColumnType("varchar(255)");
+
+                    b.Property<DateTimeOffset?>("ModifiedAt")
+                        .HasColumnType("datetime");
+
+                    b.Property<Guid?>("ModifiedByUserId")
+                        .HasColumnType("char(36)");
 
                     b.Property<string>("Value")
                         .HasColumnType("longtext");
@@ -542,12 +553,24 @@ namespace Magpie.Data.Database.MySQL.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("char(36)");
 
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("datetime");
+
+                    b.Property<Guid?>("CreatedByUserId")
+                        .HasColumnType("char(36)");
+
                     b.Property<Guid>("DownloadClientId")
                         .HasColumnType("char(36)");
 
                     b.Property<string>("Key")
                         .IsRequired()
                         .HasColumnType("varchar(255)");
+
+                    b.Property<DateTimeOffset?>("ModifiedAt")
+                        .HasColumnType("datetime");
+
+                    b.Property<Guid?>("ModifiedByUserId")
+                        .HasColumnType("char(36)");
 
                     b.Property<string>("Value")
                         .HasColumnType("longtext");
@@ -567,6 +590,12 @@ namespace Magpie.Data.Database.MySQL.Migrations
 
                     b.Property<string>("TagName")
                         .HasColumnType("varchar(255)");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("datetime");
+
+                    b.Property<Guid?>("CreatedByUserId")
+                        .HasColumnType("char(36)");
 
                     b.HasKey("DownloadClientId", "TagName");
 
@@ -766,6 +795,9 @@ namespace Magpie.Data.Database.MySQL.Migrations
 
                     b.Property<string>("Operation")
                         .IsRequired()
+                        .HasColumnType("longtext");
+
+                    b.Property<string>("ParentEntityId")
                         .HasColumnType("longtext");
 
                     b.Property<string>("Result")
@@ -1009,12 +1041,24 @@ namespace Magpie.Data.Database.MySQL.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("char(36)");
 
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("datetime");
+
+                    b.Property<Guid?>("CreatedByUserId")
+                        .HasColumnType("char(36)");
+
                     b.Property<Guid>("IndexerFeedId")
                         .HasColumnType("char(36)");
 
                     b.Property<string>("Key")
                         .IsRequired()
                         .HasColumnType("varchar(255)");
+
+                    b.Property<DateTimeOffset?>("ModifiedAt")
+                        .HasColumnType("datetime");
+
+                    b.Property<Guid?>("ModifiedByUserId")
+                        .HasColumnType("char(36)");
 
                     b.Property<string>("Value")
                         .HasColumnType("longtext");
@@ -1033,12 +1077,24 @@ namespace Magpie.Data.Database.MySQL.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("char(36)");
 
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("datetime");
+
+                    b.Property<Guid?>("CreatedByUserId")
+                        .HasColumnType("char(36)");
+
                     b.Property<Guid>("IndexerId")
                         .HasColumnType("char(36)");
 
                     b.Property<string>("Key")
                         .IsRequired()
                         .HasColumnType("varchar(255)");
+
+                    b.Property<DateTimeOffset?>("ModifiedAt")
+                        .HasColumnType("datetime");
+
+                    b.Property<Guid?>("ModifiedByUserId")
+                        .HasColumnType("char(36)");
 
                     b.Property<string>("Value")
                         .HasColumnType("longtext");
@@ -1058,6 +1114,12 @@ namespace Magpie.Data.Database.MySQL.Migrations
 
                     b.Property<string>("TagName")
                         .HasColumnType("varchar(255)");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("datetime");
+
+                    b.Property<Guid?>("CreatedByUserId")
+                        .HasColumnType("char(36)");
 
                     b.HasKey("IndexerId", "TagName");
 
@@ -1255,11 +1317,23 @@ namespace Magpie.Data.Database.MySQL.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("char(36)");
 
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("datetime");
+
+                    b.Property<Guid?>("CreatedByUserId")
+                        .HasColumnType("char(36)");
+
                     b.Property<string>("Key")
                         .IsRequired()
                         .HasColumnType("varchar(255)");
 
                     b.Property<Guid>("MediaServerId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTimeOffset?>("ModifiedAt")
+                        .HasColumnType("datetime");
+
+                    b.Property<Guid?>("ModifiedByUserId")
                         .HasColumnType("char(36)");
 
                     b.Property<string>("Value")
@@ -1881,16 +1955,11 @@ namespace Magpie.Data.Database.MySQL.Migrations
                     b.Property<Guid>("SettingsGroupId")
                         .HasColumnType("char(36)");
 
-                    b.Property<Guid?>("SettingsGroupId1")
-                        .HasColumnType("char(36)");
-
                     b.Property<string>("Value")
                         .IsRequired()
                         .HasColumnType("longtext");
 
                     b.HasKey("Id");
-
-                    b.HasIndex("SettingsGroupId1");
 
                     b.HasIndex("SettingsGroupId", "Key")
                         .IsUnique();
@@ -1996,7 +2065,7 @@ namespace Magpie.Data.Database.MySQL.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("char(36)");
 
-                    b.Property<Guid>("AuthProviderId")
+                    b.Property<Guid?>("AuthProviderId")
                         .HasColumnType("char(36)");
 
                     b.Property<DateTimeOffset>("CreatedAt")
@@ -2803,15 +2872,10 @@ namespace Magpie.Data.Database.MySQL.Migrations
             modelBuilder.Entity("Magpie.Data.Database.Entities.Setting", b =>
                 {
                     b.HasOne("Magpie.Data.Database.Entities.SettingsGroup", "SettingsGroup")
-                        .WithMany()
-                        .HasForeignKey("SettingsGroupId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.HasOne("Magpie.Data.Database.Entities.SettingsGroup", null)
                         .WithMany("Settings")
-                        .HasForeignKey("SettingsGroupId1")
-                        .HasConstraintName("FK_configuration_setting_configuration_settingsGroup_SettingsG~1");
+                        .HasForeignKey("SettingsGroupId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
 
                     b.Navigation("SettingsGroup");
                 });
@@ -2821,7 +2885,7 @@ namespace Magpie.Data.Database.MySQL.Migrations
                     b.HasOne("Magpie.Data.Database.Entities.Extension", "Extension")
                         .WithMany()
                         .HasForeignKey("ExtensionId")
-                        .OnDelete(DeleteBehavior.Cascade);
+                        .OnDelete(DeleteBehavior.Restrict);
 
                     b.Navigation("Extension");
                 });
@@ -2850,8 +2914,7 @@ namespace Magpie.Data.Database.MySQL.Migrations
                     b.HasOne("Magpie.Data.Database.Entities.AuthProvider", "AuthProvider")
                         .WithMany("Users")
                         .HasForeignKey("AuthProviderId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
+                        .OnDelete(DeleteBehavior.Restrict);
 
                     b.Navigation("AuthProvider");
                 });
@@ -2933,8 +2996,7 @@ namespace Magpie.Data.Database.MySQL.Migrations
 
                     b.Navigation("LanguagePreferences");
 
-                    b.Navigation("MetadataContainer")
-                        .IsRequired();
+                    b.Navigation("MetadataContainer");
                 });
 
             modelBuilder.Entity("Magpie.Data.Database.Entities.ContentItem", b =>
@@ -3066,8 +3128,7 @@ namespace Magpie.Data.Database.MySQL.Migrations
 
             modelBuilder.Entity("Magpie.Data.Database.Entities.Subject", b =>
                 {
-                    b.Navigation("MetadataContainer")
-                        .IsRequired();
+                    b.Navigation("MetadataContainer");
 
                     b.Navigation("Tags");
                 });

@@ -5,7 +5,7 @@ using Magpie.Models.Indexers;
 
 namespace Magpie.Data.Database.Entities;
 
-public class Indexer
+public record Indexer
 {
     public Guid Id { get; set; }
     public Guid DefinitionId { get; set; }
@@ -18,7 +18,7 @@ public class Indexer
     public DateTimeOffset? ModifiedAt { get; set; }
     public Guid? ModifiedByUserId { get; set; }
 
-    public required IndexerDefinition Definition { get; set; }
+    public IndexerDefinition? Definition { get; set; }
     public ICollection<IndexerSetting> Settings { get; } = [];
     public ICollection<IndexerTag> Tags { get; } = [];
     public ICollection<Release> Releases { get; } = [];

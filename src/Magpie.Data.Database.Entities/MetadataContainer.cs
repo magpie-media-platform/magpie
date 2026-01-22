@@ -3,7 +3,7 @@ using System.Collections.Generic;
 
 namespace Magpie.Data.Database.Entities;
 
-public class MetadataContainer
+public record MetadataContainer
 {
     public Guid Id { get; set; }
     public DateTimeOffset DateAdded { get; set; }

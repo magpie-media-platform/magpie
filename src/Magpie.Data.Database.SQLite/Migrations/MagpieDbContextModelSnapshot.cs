@@ -66,7 +66,6 @@ namespace Magpie.Data.Database.SQLite.Migrations
                         .HasColumnType("TEXT");
 
                     b.Property<string>("KeyHash")
-                        .IsRequired()
                         .HasColumnType("TEXT");
 
                     b.Property<string>("KeyPrefix")
@@ -148,8 +147,20 @@ namespace Magpie.Data.Database.SQLite.Migrations
                     b.Property<Guid>("AuthProviderId")
                         .HasColumnType("TEXT");
 
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid?>("CreatedByUserId")
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("Key")
                         .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset?>("ModifiedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid?>("ModifiedByUserId")
                         .HasColumnType("TEXT");
 
                     b.Property<string>("Value")
@@ -540,11 +551,23 @@ namespace Magpie.Data.Database.SQLite.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("TEXT");
 
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid?>("CreatedByUserId")
+                        .HasColumnType("TEXT");
+
                     b.Property<Guid>("DownloadClientId")
                         .HasColumnType("TEXT");
 
                     b.Property<string>("Key")
                         .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset?>("ModifiedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid?>("ModifiedByUserId")
                         .HasColumnType("TEXT");
 
                     b.Property<string>("Value")
@@ -564,6 +587,12 @@ namespace Magpie.Data.Database.SQLite.Migrations
                         .HasColumnType("TEXT");
 
                     b.Property<string>("TagName")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid?>("CreatedByUserId")
                         .HasColumnType("TEXT");
 
                     b.HasKey("DownloadClientId", "TagName");
@@ -764,6 +793,9 @@ namespace Magpie.Data.Database.SQLite.Migrations
 
                     b.Property<string>("Operation")
                         .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ParentEntityId")
                         .HasColumnType("TEXT");
 
                     b.Property<string>("Result")
@@ -1007,11 +1039,23 @@ namespace Magpie.Data.Database.SQLite.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("TEXT");
 
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid?>("CreatedByUserId")
+                        .HasColumnType("TEXT");
+
                     b.Property<Guid>("IndexerFeedId")
                         .HasColumnType("TEXT");
 
                     b.Property<string>("Key")
                         .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset?>("ModifiedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid?>("ModifiedByUserId")
                         .HasColumnType("TEXT");
 
                     b.Property<string>("Value")
@@ -1031,11 +1075,23 @@ namespace Magpie.Data.Database.SQLite.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("TEXT");
 
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid?>("CreatedByUserId")
+                        .HasColumnType("TEXT");
+
                     b.Property<Guid>("IndexerId")
                         .HasColumnType("TEXT");
 
                     b.Property<string>("Key")
                         .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset?>("ModifiedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid?>("ModifiedByUserId")
                         .HasColumnType("TEXT");
 
                     b.Property<string>("Value")
@@ -1055,6 +1111,12 @@ namespace Magpie.Data.Database.SQLite.Migrations
                         .HasColumnType("TEXT");
 
                     b.Property<string>("TagName")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid?>("CreatedByUserId")
                         .HasColumnType("TEXT");
 
                     b.HasKey("IndexerId", "TagName");
@@ -1253,11 +1315,23 @@ namespace Magpie.Data.Database.SQLite.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("TEXT");
 
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid?>("CreatedByUserId")
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("Key")
                         .IsRequired()
                         .HasColumnType("TEXT");
 
                     b.Property<Guid>("MediaServerId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset?>("ModifiedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid?>("ModifiedByUserId")
                         .HasColumnType("TEXT");
 
                     b.Property<string>("Value")
@@ -1879,16 +1953,11 @@ namespace Magpie.Data.Database.SQLite.Migrations
                     b.Property<Guid>("SettingsGroupId")
                         .HasColumnType("TEXT");
 
-                    b.Property<Guid?>("SettingsGroupId1")
-                        .HasColumnType("TEXT");
-
                     b.Property<string>("Value")
                         .IsRequired()
                         .HasColumnType("TEXT");
 
                     b.HasKey("Id");
-
-                    b.HasIndex("SettingsGroupId1");
 
                     b.HasIndex("SettingsGroupId", "Key")
                         .IsUnique();
@@ -1994,7 +2063,7 @@ namespace Magpie.Data.Database.SQLite.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("TEXT");
 
-                    b.Property<Guid>("AuthProviderId")
+                    b.Property<Guid?>("AuthProviderId")
                         .HasColumnType("TEXT");
 
                     b.Property<DateTimeOffset>("CreatedAt")
@@ -2801,14 +2870,10 @@ namespace Magpie.Data.Database.SQLite.Migrations
             modelBuilder.Entity("Magpie.Data.Database.Entities.Setting", b =>
                 {
                     b.HasOne("Magpie.Data.Database.Entities.SettingsGroup", "SettingsGroup")
-                        .WithMany()
-                        .HasForeignKey("SettingsGroupId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.HasOne("Magpie.Data.Database.Entities.SettingsGroup", null)
                         .WithMany("Settings")
-                        .HasForeignKey("SettingsGroupId1");
+                        .HasForeignKey("SettingsGroupId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
 
                     b.Navigation("SettingsGroup");
                 });
@@ -2818,7 +2883,7 @@ namespace Magpie.Data.Database.SQLite.Migrations
                     b.HasOne("Magpie.Data.Database.Entities.Extension", "Extension")
                         .WithMany()
                         .HasForeignKey("ExtensionId")
-                        .OnDelete(DeleteBehavior.Cascade);
+                        .OnDelete(DeleteBehavior.Restrict);
 
                     b.Navigation("Extension");
                 });
@@ -2847,8 +2912,7 @@ namespace Magpie.Data.Database.SQLite.Migrations
                     b.HasOne("Magpie.Data.Database.Entities.AuthProvider", "AuthProvider")
                         .WithMany("Users")
                         .HasForeignKey("AuthProviderId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
+                        .OnDelete(DeleteBehavior.Restrict);
 
                     b.Navigation("AuthProvider");
                 });
@@ -2930,8 +2994,7 @@ namespace Magpie.Data.Database.SQLite.Migrations
 
                     b.Navigation("LanguagePreferences");
 
-                    b.Navigation("MetadataContainer")
-                        .IsRequired();
+                    b.Navigation("MetadataContainer");
                 });
 
             modelBuilder.Entity("Magpie.Data.Database.Entities.ContentItem", b =>
@@ -3063,8 +3126,7 @@ namespace Magpie.Data.Database.SQLite.Migrations
 
             modelBuilder.Entity("Magpie.Data.Database.Entities.Subject", b =>
                 {
-                    b.Navigation("MetadataContainer")
-                        .IsRequired();
+                    b.Navigation("MetadataContainer");
 
                     b.Navigation("Tags");
                 });

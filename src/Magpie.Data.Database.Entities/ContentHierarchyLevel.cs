@@ -3,7 +3,7 @@ using System.Collections.Generic;
 
 namespace Magpie.Data.Database.Entities;
 
-public class ContentHierarchyLevel
+public record ContentHierarchyLevel
 {
     public Guid Id { get; set; }
     public Guid ContentHierarchyLevelDefinitionId { get; set; }
@@ -19,9 +19,9 @@ public class ContentHierarchyLevel
     public Guid? ModifiedByUserId { get; set; }
 
     public ContentHierarchyLevel? Parent { get; set; }
-    public required RootFolder RootFolder { get; set; }
+    public RootFolder? RootFolder { get; set; }
     public ICollection<ContentHierarchyLevel> Children { get; } = [];
     public ContentItem? ContentItem { get; set; }
-    public required MetadataContainer MetadataContainer { get; set; }
+    public MetadataContainer? MetadataContainer { get; set; }
     public ICollection<LanguagePreference> LanguagePreferences { get; } = [];
 }

@@ -5,7 +5,7 @@ using Magpie.Models.Content;
 
 namespace Magpie.Data.Database.Entities;
 
-public class ContentItem
+public record ContentItem
 {
     public Guid Id { get; set; }
     public Guid ContentHierarchyId { get; set; }
@@ -23,7 +23,7 @@ public class ContentItem
     public DateTimeOffset? ModifiedAt { get; set; }
     public Guid? ModifiedByUserId { get; set; }
 
-    public required ContentHierarchyLevel ContentHierarchyLevel { get; set; }
+    public ContentHierarchyLevel? ContentHierarchyLevel { get; set; }
     public QualityTierList? QualityTierList { get; set; }
     public User? RequestedByUser { get; set; }
     public Wishlist? RequestedViaWishlist { get; set; }

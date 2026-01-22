@@ -2,6 +2,7 @@ using Magpie.Data.Database.Entities;
 
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
+using Microsoft.EntityFrameworkCore.ValueGeneration;
 
 namespace Magpie.Data.Database;
 
@@ -76,9 +77,11 @@ internal sealed class EntityTypeConfiguration :
     {
         builder.ToTable("metadata_alternateText");
         builder.HasKey(e => e.Id);
+        builder.Property(e => e.Id).ValueGeneratedOnAdd();
         builder.HasOne(e => e.MetadataContribution)
             .WithMany(e => e.AlternateTexts)
             .HasForeignKey(e => e.MetadataContributionId)
+            .IsRequired()
             .OnDelete(DeleteBehavior.Cascade);
         builder.HasIndex(e => e.MetadataContributionId);
     }
@@ -87,9 +90,11 @@ internal sealed class EntityTypeConfiguration :
     {
         builder.ToTable("auth_apiKey");
         builder.HasKey(e => e.Id);
+        builder.Property(e => e.Id).ValueGeneratedOnAdd();
         builder.HasOne(e => e.User)
             .WithMany(e => e.ApiKeys)
             .HasForeignKey(e => e.UserId)
+            .IsRequired()
             .OnDelete(DeleteBehavior.Cascade);
         builder.HasIndex(e => e.UserId);
         builder.HasIndex(e => e.KeyPrefix);
@@ -100,6 +105,7 @@ internal sealed class EntityTypeConfiguration :
     {
         builder.ToTable("auth_provider");
         builder.HasKey(e => e.Id);
+        builder.Property(e => e.Id).ValueGeneratedOnAdd();
         builder.HasIndex(e => e.IsDefault);
     }
 
@@ -107,9 +113,11 @@ internal sealed class EntityTypeConfiguration :
     {
         builder.ToTable("auth_providerSetting");
         builder.HasKey(e => e.Id);
+        builder.Property(e => e.Id).ValueGeneratedOnAdd();
         builder.HasOne(e => e.AuthProvider)
             .WithMany(e => e.Settings)
             .HasForeignKey(e => e.AuthProviderId)
+            .IsRequired()
             .OnDelete(DeleteBehavior.Cascade);
         builder.HasIndex(e => new { e.AuthProviderId, e.Key }).IsUnique();
     }
@@ -118,9 +126,11 @@ internal sealed class EntityTypeConfiguration :
     {
         builder.ToTable("metadata_award");
         builder.HasKey(e => e.Id);
+        builder.Property(e => e.Id).ValueGeneratedOnAdd();
         builder.HasOne(e => e.MetadataContribution)
             .WithMany(e => e.Awards)
             .HasForeignKey(e => e.MetadataContributionId)
+            .IsRequired()
             .OnDelete(DeleteBehavior.Cascade);
         builder.HasIndex(e => e.MetadataContributionId);
     }
@@ -129,6 +139,7 @@ internal sealed class EntityTypeConfiguration :
     {
         builder.ToTable("filter_content");
         builder.HasKey(e => e.Id);
+        builder.Property(e => e.Id).ValueGeneratedOnAdd();
     }
 
     public void Configure(EntityTypeBuilder<ContentFilterTag> builder)
@@ -138,10 +149,12 @@ internal sealed class EntityTypeConfiguration :
         builder.HasOne(e => e.ContentFilter)
             .WithMany(e => e.Tags)
             .HasForeignKey(e => e.ContentFilterId)
+            .IsRequired()
             .OnDelete(DeleteBehavior.Cascade);
         builder.HasOne(e => e.Tag)
             .WithMany()
             .HasForeignKey(e => e.TagName)
+            .IsRequired()
             .OnDelete(DeleteBehavior.Cascade);
     }
 
@@ -149,6 +162,7 @@ internal sealed class EntityTypeConfiguration :
     {
         builder.ToTable("content_hierarchyLevel");
         builder.HasKey(e => e.Id);
+        builder.Property(e => e.Id).ValueGeneratedOnAdd();
         builder.HasOne(e => e.Parent)
             .WithMany(e => e.Children)
             .HasForeignKey(e => e.ParentId)
@@ -156,6 +170,7 @@ internal sealed class EntityTypeConfiguration :
         builder.HasOne(e => e.RootFolder)
             .WithMany(e => e.ContentHierarchyLevels)
             .HasForeignKey(e => e.RootFolderId)
+            .IsRequired()
             .OnDelete(DeleteBehavior.Restrict);
         builder.HasIndex(e => e.ContentHierarchyLevelDefinitionId);
         builder.HasIndex(e => e.ParentId);
@@ -167,9 +182,11 @@ internal sealed class EntityTypeConfiguration :
     {
         builder.ToTable("content_item");
         builder.HasKey(e => e.Id);
+        builder.Property(e => e.Id).ValueGeneratedOnAdd();
         builder.HasOne(e => e.ContentHierarchyLevel)
             .WithOne(e => e.ContentItem)
             .HasForeignKey<ContentItem>(e => e.ContentHierarchyId)
+            .IsRequired()
             .OnDelete(DeleteBehavior.Cascade);
         builder.HasOne(e => e.RequestedByUser)
             .WithMany()
@@ -196,10 +213,12 @@ internal sealed class EntityTypeConfiguration :
         builder.HasOne(e => e.ContentItem)
             .WithMany(e => e.Tags)
             .HasForeignKey(e => e.ContentItemId)
+            .IsRequired()
             .OnDelete(DeleteBehavior.Cascade);
         builder.HasOne(e => e.Tag)
             .WithMany()
             .HasForeignKey(e => e.TagName)
+            .IsRequired()
             .OnDelete(DeleteBehavior.Cascade);
     }
 
@@ -207,9 +226,11 @@ internal sealed class EntityTypeConfiguration :
     {
         builder.ToTable("metadata_contentRating");
         builder.HasKey(e => e.Id);
+        builder.Property(e => e.Id).ValueGeneratedOnAdd();
         builder.HasOne(e => e.MetadataContribution)
             .WithMany(e => e.ContentRatings)
             .HasForeignKey(e => e.MetadataContributionId)
+            .IsRequired()
             .OnDelete(DeleteBehavior.Cascade);
         builder.HasIndex(e => e.MetadataContributionId);
     }
@@ -218,6 +239,7 @@ internal sealed class EntityTypeConfiguration :
     {
         builder.ToTable("download_download");
         builder.HasKey(e => e.Id);
+        builder.Property(e => e.Id).ValueGeneratedOnAdd();
         builder.HasOne(e => e.ContentItem)
             .WithMany(e => e.Downloads)
             .HasForeignKey(e => e.ContentItemId)
@@ -229,6 +251,7 @@ internal sealed class EntityTypeConfiguration :
         builder.HasOne(e => e.DownloadClient)
             .WithMany(e => e.Downloads)
             .HasForeignKey(e => e.DownloadClientId)
+            .IsRequired()
             .OnDelete(DeleteBehavior.Restrict);
         builder.HasIndex(e => e.ContentItemId);
         builder.HasIndex(e => e.ReleaseId);
@@ -240,15 +263,18 @@ internal sealed class EntityTypeConfiguration :
     {
         builder.ToTable("download_client");
         builder.HasKey(e => e.Id);
+        builder.Property(e => e.Id).ValueGeneratedOnAdd();
     }
 
     public void Configure(EntityTypeBuilder<DownloadClientSetting> builder)
     {
         builder.ToTable("download_clientSetting");
         builder.HasKey(e => e.Id);
+        builder.Property(e => e.Id).ValueGeneratedOnAdd();
         builder.HasOne(e => e.DownloadClient)
             .WithMany(e => e.Settings)
             .HasForeignKey(e => e.DownloadClientId)
+            .IsRequired()
             .OnDelete(DeleteBehavior.Cascade);
         builder.HasIndex(e => new { e.DownloadClientId, e.Key }).IsUnique();
     }
@@ -260,10 +286,12 @@ internal sealed class EntityTypeConfiguration :
         builder.HasOne(e => e.DownloadClient)
             .WithMany(e => e.Tags)
             .HasForeignKey(e => e.DownloadClientId)
+            .IsRequired()
             .OnDelete(DeleteBehavior.Cascade);
         builder.HasOne(e => e.Tag)
             .WithMany()
             .HasForeignKey(e => e.TagName)
+            .IsRequired()
             .OnDelete(DeleteBehavior.Cascade);
     }
 
@@ -271,6 +299,7 @@ internal sealed class EntityTypeConfiguration :
     {
         builder.ToTable("job_eventTrigger");
         builder.HasKey(e => e.Id);
+        builder.Property(e => e.Id).ValueGeneratedOnAdd();
         builder.HasIndex(e => e.JobTemplateId);
         builder.HasIndex(e => e.Enabled);
         builder.HasIndex(e => e.EventName);
@@ -280,6 +309,7 @@ internal sealed class EntityTypeConfiguration :
     {
         builder.ToTable("extension_extension");
         builder.HasKey(e => e.Id);
+        builder.Property(e => e.Id).ValueGeneratedOnAdd();
         builder.HasIndex(e => e.AssemblyName).IsUnique();
     }
 
@@ -287,21 +317,24 @@ internal sealed class EntityTypeConfiguration :
     {
         builder.ToTable("configuration_settingsGroup");
         builder.HasKey(sg => sg.Id);
+        builder.Property(sg => sg.Id).ValueGeneratedOnAdd();
         builder.HasIndex(sg => sg.Name).IsUnique();
         builder.HasOne(sg => sg.Extension)
             .WithMany()
             .HasForeignKey(sg => sg.ExtensionId)
-            .OnDelete(DeleteBehavior.Cascade);
+            .OnDelete(DeleteBehavior.Restrict);
     }
 
     public void Configure(EntityTypeBuilder<Setting> builder)
     {
         builder.ToTable("configuration_setting");
         builder.HasKey(s => s.Id);
+        builder.Property(s => s.Id).ValueGeneratedOnAdd();
         builder.HasOne(s => s.SettingsGroup)
-            .WithMany()
+            .WithMany(sg => sg.Settings)
             .HasForeignKey(s => s.SettingsGroupId)
-            .OnDelete(DeleteBehavior.Cascade);
+            .IsRequired()
+            .OnDelete(DeleteBehavior.Restrict);
         builder.HasIndex(s => new { s.SettingsGroupId, s.Key }).IsUnique();
     }
 
@@ -309,9 +342,11 @@ internal sealed class EntityTypeConfiguration :
     {
         builder.ToTable("metadata_externalId");
         builder.HasKey(e => e.Id);
+        builder.Property(e => e.Id).ValueGeneratedOnAdd();
         builder.HasOne(e => e.MetadataContribution)
             .WithMany(e => e.ExternalIds)
             .HasForeignKey(e => e.MetadataContributionId)
+            .IsRequired()
             .OnDelete(DeleteBehavior.Cascade);
         builder.HasIndex(e => e.MetadataContributionId);
     }
@@ -320,9 +355,11 @@ internal sealed class EntityTypeConfiguration :
     {
         builder.ToTable("metadata_genre");
         builder.HasKey(e => e.Id);
+        builder.Property(e => e.Id).ValueGeneratedOnAdd();
         builder.HasOne(e => e.MetadataContribution)
             .WithMany(e => e.Genres)
             .HasForeignKey(e => e.MetadataContributionId)
+            .IsRequired()
             .OnDelete(DeleteBehavior.Cascade);
         builder.HasIndex(e => e.MetadataContributionId);
     }
@@ -331,6 +368,7 @@ internal sealed class EntityTypeConfiguration :
     {
         builder.ToTable("system_history");
         builder.HasKey(e => e.Id);
+        builder.Property(e => e.Id).HasValueGenerator<SequentialGuidValueGenerator>();
         builder.HasOne(e => e.User)
             .WithMany()
             .HasForeignKey(e => e.UserId)
@@ -346,9 +384,11 @@ internal sealed class EntityTypeConfiguration :
     {
         builder.ToTable("metadata_image");
         builder.HasKey(e => e.Id);
+        builder.Property(e => e.Id).ValueGeneratedOnAdd();
         builder.HasOne(e => e.MetadataContribution)
             .WithMany(e => e.Images)
             .HasForeignKey(e => e.MetadataContributionId)
+            .IsRequired()
             .OnDelete(DeleteBehavior.Cascade);
         builder.HasIndex(e => e.MetadataContributionId);
     }
@@ -357,9 +397,11 @@ internal sealed class EntityTypeConfiguration :
     {
         builder.ToTable("indexer_indexer");
         builder.HasKey(e => e.Id);
+        builder.Property(e => e.Id).ValueGeneratedOnAdd();
         builder.HasOne(e => e.Definition)
             .WithMany(e => e.Indexers)
             .HasForeignKey(e => e.DefinitionId)
+            .IsRequired()
             .OnDelete(DeleteBehavior.Cascade);
         builder.HasIndex(e => e.DefinitionId);
     }
@@ -368,6 +410,7 @@ internal sealed class EntityTypeConfiguration :
     {
         builder.ToTable("indexer_definition");
         builder.HasKey(e => e.Id);
+        builder.Property(e => e.Id).ValueGeneratedOnAdd();
         builder.HasOne(e => e.Feed)
             .WithMany(e => e.Definitions)
             .HasForeignKey(e => e.FeedId)
@@ -383,6 +426,7 @@ internal sealed class EntityTypeConfiguration :
         builder.HasOne(e => e.IndexerDefinition)
             .WithMany(e => e.Categories)
             .HasForeignKey(e => e.IndexerDefinitionId)
+            .IsRequired()
             .OnDelete(DeleteBehavior.Cascade);
     }
 
@@ -393,6 +437,7 @@ internal sealed class EntityTypeConfiguration :
         builder.HasOne(e => e.IndexerDefinition)
             .WithMany(e => e.Languages)
             .HasForeignKey(e => e.IndexerDefinitionId)
+            .IsRequired()
             .OnDelete(DeleteBehavior.Cascade);
     }
 
@@ -403,10 +448,12 @@ internal sealed class EntityTypeConfiguration :
         builder.HasOne(e => e.IndexerDefinition)
             .WithMany(e => e.Tags)
             .HasForeignKey(e => e.IndexerDefinitionId)
+            .IsRequired()
             .OnDelete(DeleteBehavior.Cascade);
         builder.HasOne(e => e.Tag)
             .WithMany()
             .HasForeignKey(e => e.TagName)
+            .IsRequired()
             .OnDelete(DeleteBehavior.Cascade);
     }
 
@@ -414,15 +461,18 @@ internal sealed class EntityTypeConfiguration :
     {
         builder.ToTable("indexer_feed");
         builder.HasKey(e => e.Id);
+        builder.Property(e => e.Id).ValueGeneratedOnAdd();
     }
 
     public void Configure(EntityTypeBuilder<IndexerFeedSetting> builder)
     {
         builder.ToTable("indexer_feedSetting");
         builder.HasKey(e => e.Id);
+        builder.Property(e => e.Id).ValueGeneratedOnAdd();
         builder.HasOne(e => e.IndexerFeed)
             .WithMany(e => e.Settings)
             .HasForeignKey(e => e.IndexerFeedId)
+            .IsRequired()
             .OnDelete(DeleteBehavior.Cascade);
         builder.HasIndex(e => new { e.IndexerFeedId, e.Key }).IsUnique();
     }
@@ -431,9 +481,11 @@ internal sealed class EntityTypeConfiguration :
     {
         builder.ToTable("indexer_setting");
         builder.HasKey(e => e.Id);
+        builder.Property(e => e.Id).ValueGeneratedOnAdd();
         builder.HasOne(e => e.Indexer)
             .WithMany(e => e.Settings)
             .HasForeignKey(e => e.IndexerId)
+            .IsRequired()
             .OnDelete(DeleteBehavior.Cascade);
         builder.HasIndex(e => new { e.IndexerId, e.Key }).IsUnique();
     }
@@ -445,10 +497,12 @@ internal sealed class EntityTypeConfiguration :
         builder.HasOne(e => e.Indexer)
             .WithMany(e => e.Tags)
             .HasForeignKey(e => e.IndexerId)
+            .IsRequired()
             .OnDelete(DeleteBehavior.Cascade);
         builder.HasOne(e => e.Tag)
             .WithMany()
             .HasForeignKey(e => e.TagName)
+            .IsRequired()
             .OnDelete(DeleteBehavior.Cascade);
     }
 
@@ -456,6 +510,7 @@ internal sealed class EntityTypeConfiguration :
     {
         builder.ToTable("job_execution");
         builder.HasKey(e => e.Id);
+        builder.Property(e => e.Id).ValueGeneratedOnAdd();
         builder.HasOne(e => e.ScheduleTrigger)
             .WithMany()
             .HasForeignKey(e => e.ScheduleTriggerId)
@@ -476,6 +531,7 @@ internal sealed class EntityTypeConfiguration :
         builder.HasOne(e => e.JobExecution)
             .WithMany(e => e.Parameters)
             .HasForeignKey(e => e.JobExecutionId)
+            .IsRequired()
             .OnDelete(DeleteBehavior.Cascade);
     }
 
@@ -483,9 +539,11 @@ internal sealed class EntityTypeConfiguration :
     {
         builder.ToTable("content_languagePreference");
         builder.HasKey(e => e.Id);
+        builder.Property(e => e.Id).ValueGeneratedOnAdd();
         builder.HasOne(e => e.ContentHierarchyLevel)
             .WithMany(e => e.LanguagePreferences)
             .HasForeignKey(e => e.ContentHierarchyId)
+            .IsRequired()
             .OnDelete(DeleteBehavior.Cascade);
         builder.HasIndex(e => new { e.ContentHierarchyId, e.Ordinal });
     }
@@ -494,9 +552,11 @@ internal sealed class EntityTypeConfiguration :
     {
         builder.ToTable("content_mediaFile");
         builder.HasKey(e => e.Id);
+        builder.Property(e => e.Id).ValueGeneratedOnAdd();
         builder.HasOne(e => e.ContentItem)
             .WithMany(e => e.MediaFiles)
             .HasForeignKey(e => e.ContentItemId)
+            .IsRequired()
             .OnDelete(DeleteBehavior.Cascade);
         builder.OwnsOne(e => e.MediaInfo);
         builder.HasIndex(e => e.ContentItemId);
@@ -507,15 +567,18 @@ internal sealed class EntityTypeConfiguration :
     {
         builder.ToTable("media_server");
         builder.HasKey(e => e.Id);
+        builder.Property(e => e.Id).ValueGeneratedOnAdd();
     }
 
     public void Configure(EntityTypeBuilder<MediaServerSetting> builder)
     {
         builder.ToTable("media_serverSetting");
         builder.HasKey(e => e.Id);
+        builder.Property(e => e.Id).ValueGeneratedOnAdd();
         builder.HasOne(e => e.MediaServer)
             .WithMany(e => e.Settings)
             .HasForeignKey(e => e.MediaServerId)
+            .IsRequired()
             .OnDelete(DeleteBehavior.Cascade);
         builder.HasIndex(e => new { e.MediaServerId, e.Key }).IsUnique();
     }
@@ -524,6 +587,7 @@ internal sealed class EntityTypeConfiguration :
     {
         builder.ToTable("metadata_container");
         builder.HasKey(e => e.Id);
+        builder.Property(e => e.Id).ValueGeneratedOnAdd();
         builder.HasOne(e => e.ContentHierarchyLevel)
             .WithOne(e => e.MetadataContainer)
             .HasForeignKey<MetadataContainer>(e => e.ContentHierarchyId)
@@ -541,9 +605,11 @@ internal sealed class EntityTypeConfiguration :
     {
         builder.ToTable("metadata_contribution");
         builder.HasKey(e => e.Id);
+        builder.Property(e => e.Id).ValueGeneratedOnAdd();
         builder.HasOne(e => e.MetadataContainer)
             .WithMany(e => e.Contributions)
             .HasForeignKey(e => e.MetadataContainerId)
+            .IsRequired()
             .OnDelete(DeleteBehavior.Cascade);
         builder.HasIndex(e => e.MetadataContainerId);
         builder.HasIndex(e => e.Provider);
@@ -556,6 +622,7 @@ internal sealed class EntityTypeConfiguration :
         builder.HasOne(e => e.MetadataContribution)
             .WithMany(e => e.CustomMetadataValues)
             .HasForeignKey(e => e.MetadataContributionId)
+            .IsRequired()
             .OnDelete(DeleteBehavior.Cascade);
     }
 
@@ -563,6 +630,7 @@ internal sealed class EntityTypeConfiguration :
     {
         builder.ToTable("filter_metadata");
         builder.HasKey(e => e.Id);
+        builder.Property(e => e.Id).ValueGeneratedOnAdd();
     }
 
     public void Configure(EntityTypeBuilder<MetadataFilterTag> builder)
@@ -572,10 +640,12 @@ internal sealed class EntityTypeConfiguration :
         builder.HasOne(e => e.MetadataFilter)
             .WithMany(e => e.Tags)
             .HasForeignKey(e => e.MetadataFilterId)
+            .IsRequired()
             .OnDelete(DeleteBehavior.Cascade);
         builder.HasOne(e => e.Tag)
             .WithMany()
             .HasForeignKey(e => e.TagName)
+            .IsRequired()
             .OnDelete(DeleteBehavior.Cascade);
     }
 
@@ -583,9 +653,11 @@ internal sealed class EntityTypeConfiguration :
     {
         builder.ToTable("metadata_preview");
         builder.HasKey(e => e.Id);
+        builder.Property(e => e.Id).ValueGeneratedOnAdd();
         builder.HasOne(e => e.MetadataContribution)
             .WithMany(e => e.Previews)
             .HasForeignKey(e => e.MetadataContributionId)
+            .IsRequired()
             .OnDelete(DeleteBehavior.Cascade);
         builder.HasIndex(e => e.MetadataContributionId);
     }
@@ -594,9 +666,11 @@ internal sealed class EntityTypeConfiguration :
     {
         builder.ToTable("quality_criterion");
         builder.HasKey(e => e.Id);
+        builder.Property(e => e.Id).ValueGeneratedOnAdd();
         builder.HasOne(e => e.QualityTier)
             .WithMany(e => e.Criteria)
             .HasForeignKey(e => e.QualityTierId)
+            .IsRequired()
             .OnDelete(DeleteBehavior.Cascade);
         builder.HasIndex(e => e.QualityTierId);
     }
@@ -605,9 +679,11 @@ internal sealed class EntityTypeConfiguration :
     {
         builder.ToTable("quality_tier");
         builder.HasKey(e => e.Id);
+        builder.Property(e => e.Id).ValueGeneratedOnAdd();
         builder.HasOne(e => e.QualityTierList)
             .WithMany(e => e.Tiers)
             .HasForeignKey(e => e.QualityTierListId)
+            .IsRequired()
             .OnDelete(DeleteBehavior.Cascade);
         builder.HasIndex(e => new { e.QualityTierListId, e.Ordinal });
     }
@@ -616,6 +692,7 @@ internal sealed class EntityTypeConfiguration :
     {
         builder.ToTable("quality_tierList");
         builder.HasKey(e => e.Id);
+        builder.Property(e => e.Id).ValueGeneratedOnAdd();
     }
 
     public void Configure(EntityTypeBuilder<QualityTierListTag> builder)
@@ -625,10 +702,12 @@ internal sealed class EntityTypeConfiguration :
         builder.HasOne(e => e.QualityTierList)
             .WithMany(e => e.Tags)
             .HasForeignKey(e => e.QualityTierListId)
+            .IsRequired()
             .OnDelete(DeleteBehavior.Cascade);
         builder.HasOne(e => e.Tag)
             .WithMany()
             .HasForeignKey(e => e.TagName)
+            .IsRequired()
             .OnDelete(DeleteBehavior.Cascade);
     }
 
@@ -636,9 +715,11 @@ internal sealed class EntityTypeConfiguration :
     {
         builder.ToTable("metadata_reference");
         builder.HasKey(e => e.Id);
+        builder.Property(e => e.Id).ValueGeneratedOnAdd();
         builder.HasOne(e => e.MetadataContribution)
             .WithMany(e => e.References)
             .HasForeignKey(e => e.MetadataContributionId)
+            .IsRequired()
             .OnDelete(DeleteBehavior.Cascade);
         builder.HasIndex(e => e.MetadataContributionId);
     }
@@ -647,13 +728,16 @@ internal sealed class EntityTypeConfiguration :
     {
         builder.ToTable("metadata_relationship");
         builder.HasKey(e => e.Id);
+        builder.Property(e => e.Id).ValueGeneratedOnAdd();
         builder.HasOne(e => e.MetadataContribution)
             .WithMany(e => e.Relationships)
             .HasForeignKey(e => e.MetadataContributionId)
+            .IsRequired()
             .OnDelete(DeleteBehavior.Cascade);
         builder.HasOne(e => e.Subject)
             .WithMany()
             .HasForeignKey(e => e.SubjectId)
+            .IsRequired()
             .OnDelete(DeleteBehavior.Cascade);
         builder.HasIndex(e => e.MetadataContributionId);
         builder.HasIndex(e => e.SubjectId);
@@ -664,6 +748,7 @@ internal sealed class EntityTypeConfiguration :
     {
         builder.ToTable("indexer_release");
         builder.HasKey(e => e.Id);
+        builder.Property(e => e.Id).ValueGeneratedOnAdd();
         builder.HasOne(e => e.Indexer)
             .WithMany(e => e.Releases)
             .HasForeignKey(e => e.IndexerId)
@@ -681,6 +766,7 @@ internal sealed class EntityTypeConfiguration :
         builder.HasOne(e => e.Release)
             .WithMany(e => e.Categories)
             .HasForeignKey(e => e.ReleaseId)
+            .IsRequired()
             .OnDelete(DeleteBehavior.Cascade);
     }
 
@@ -691,6 +777,7 @@ internal sealed class EntityTypeConfiguration :
         builder.HasOne(e => e.Release)
             .WithMany(e => e.Languages)
             .HasForeignKey(e => e.ReleaseId)
+            .IsRequired()
             .OnDelete(DeleteBehavior.Cascade);
     }
 
@@ -701,6 +788,7 @@ internal sealed class EntityTypeConfiguration :
         builder.HasOne(e => e.Release)
             .WithMany(e => e.Properties)
             .HasForeignKey(e => e.ReleaseId)
+            .IsRequired()
             .OnDelete(DeleteBehavior.Cascade);
     }
 
@@ -711,10 +799,12 @@ internal sealed class EntityTypeConfiguration :
         builder.HasOne(e => e.Release)
             .WithMany(e => e.Tags)
             .HasForeignKey(e => e.ReleaseId)
+            .IsRequired()
             .OnDelete(DeleteBehavior.Cascade);
         builder.HasOne(e => e.Tag)
             .WithMany()
             .HasForeignKey(e => e.TagName)
+            .IsRequired()
             .OnDelete(DeleteBehavior.Cascade);
     }
 
@@ -722,6 +812,7 @@ internal sealed class EntityTypeConfiguration :
     {
         builder.ToTable("system_rootFolder");
         builder.HasKey(e => e.Id);
+        builder.Property(e => e.Id).ValueGeneratedOnAdd();
         builder.HasIndex(e => e.ContentTypeId);
         builder.HasIndex(e => e.Path).IsUnique();
     }
@@ -730,6 +821,7 @@ internal sealed class EntityTypeConfiguration :
     {
         builder.ToTable("job_scheduleTrigger");
         builder.HasKey(e => e.Id);
+        builder.Property(e => e.Id).ValueGeneratedOnAdd();
         builder.HasIndex(e => e.JobTemplateId);
         builder.HasIndex(e => e.Enabled);
         builder.HasIndex(e => e.NextRunAt);
@@ -745,6 +837,7 @@ internal sealed class EntityTypeConfiguration :
     {
         builder.ToTable("content_subject");
         builder.HasKey(e => e.Id);
+        builder.Property(e => e.Id).ValueGeneratedOnAdd();
         builder.HasIndex(e => e.Kind);
     }
 
@@ -755,10 +848,12 @@ internal sealed class EntityTypeConfiguration :
         builder.HasOne(e => e.Subject)
             .WithMany(e => e.Tags)
             .HasForeignKey(e => e.SubjectId)
+            .IsRequired()
             .OnDelete(DeleteBehavior.Cascade);
         builder.HasOne(e => e.Tag)
             .WithMany()
             .HasForeignKey(e => e.TagName)
+            .IsRequired()
             .OnDelete(DeleteBehavior.Cascade);
     }
 
@@ -772,6 +867,7 @@ internal sealed class EntityTypeConfiguration :
     {
         builder.ToTable("auth_user");
         builder.HasKey(e => e.Id);
+        builder.Property(e => e.Id).ValueGeneratedOnAdd();
         builder.HasOne(e => e.AuthProvider)
             .WithMany(e => e.Users)
             .HasForeignKey(e => e.AuthProviderId)
@@ -788,6 +884,7 @@ internal sealed class EntityTypeConfiguration :
         builder.HasOne(e => e.User)
             .WithMany(e => e.ProviderData)
             .HasForeignKey(e => e.UserId)
+            .IsRequired()
             .OnDelete(DeleteBehavior.Cascade);
     }
 
@@ -795,9 +892,11 @@ internal sealed class EntityTypeConfiguration :
     {
         builder.ToTable("wishlist_wishlist");
         builder.HasKey(e => e.Id);
+        builder.Property(e => e.Id).ValueGeneratedOnAdd();
         builder.HasOne(e => e.ContentFilter)
             .WithMany(e => e.Wishlists)
             .HasForeignKey(e => e.ContentFilterId)
+            .IsRequired()
             .OnDelete(DeleteBehavior.Restrict);
         builder.HasOne(e => e.QualityTierList)
             .WithMany(e => e.Wishlists)
@@ -819,10 +918,12 @@ internal sealed class EntityTypeConfiguration :
         builder.HasOne(e => e.Wishlist)
             .WithMany(e => e.Tags)
             .HasForeignKey(e => e.WishlistId)
+            .IsRequired()
             .OnDelete(DeleteBehavior.Cascade);
         builder.HasOne(e => e.Tag)
             .WithMany()
             .HasForeignKey(e => e.TagName)
+            .IsRequired()
             .OnDelete(DeleteBehavior.Cascade);
     }
 }

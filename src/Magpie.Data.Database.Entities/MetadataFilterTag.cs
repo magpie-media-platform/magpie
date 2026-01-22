@@ -2,11 +2,11 @@ using System;
 
 namespace Magpie.Data.Database.Entities;
 
-public class MetadataFilterTag
+public record MetadataFilterTag
 {
     public Guid MetadataFilterId { get; set; }
     public required string TagName { get; set; }
 
-    public required MetadataFilter MetadataFilter { get; set; }
-    public required Tag Tag { get; set; }
+    public MetadataFilter? MetadataFilter { get; set; }
+    public Tag? Tag { get; set; }
 }

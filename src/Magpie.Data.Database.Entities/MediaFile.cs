@@ -2,7 +2,7 @@ using System;
 
 namespace Magpie.Data.Database.Entities;
 
-public class MediaFile
+public record MediaFile
 {
     public Guid Id { get; set; }
     public Guid ContentItemId { get; set; }
@@ -16,5 +16,5 @@ public class MediaFile
     public Guid? ModifiedByUserId { get; set; }
 
     public MediaInfo? MediaInfo { get; set; }
-    public required ContentItem ContentItem { get; set; }
+    public ContentItem? ContentItem { get; set; }
 }

@@ -6,6 +6,7 @@ namespace Magpie.Models.History;
 /// A history log entry recording an operation that occurred in the system.
 /// </summary>
 /// <param name="EntityId">The identifier of the entity involved, if applicable.</param>
+/// <param name="ParentEntityId">The identifier of the parent entity, if applicable.</param>
 /// <param name="EntityType">The type of entity involved, if applicable.</param>
 /// <param name="Category">The category of the operation.</param>
 /// <param name="Operation">The operation that was performed.</param>
@@ -17,6 +18,7 @@ namespace Magpie.Models.History;
 /// <param name="UserId">The user who performed the operation, if applicable.</param>
 public sealed record HistoryEntry(
     string? EntityId,
+    string? ParentEntityId,
     string? EntityType,
     string Category,
     string Operation,

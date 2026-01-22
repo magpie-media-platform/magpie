@@ -3,7 +3,7 @@ using System.Collections.Generic;
 
 namespace Magpie.Data.Database.Entities;
 
-public class MetadataContribution
+public record MetadataContribution
 {
     public Guid Id { get; set; }
     public Guid MetadataContainerId { get; set; }
@@ -26,7 +26,7 @@ public class MetadataContribution
     public DateTime? BirthDate { get; set; }
     public DateTime? DeathDate { get; set; }
 
-    public required MetadataContainer MetadataContainer { get; set; }
+    public MetadataContainer? MetadataContainer { get; set; }
     public ICollection<CustomMetadataValue> CustomMetadataValues { get; } = [];
     public ICollection<ExternalId> ExternalIds { get; } = [];
     public ICollection<Reference> References { get; } = [];

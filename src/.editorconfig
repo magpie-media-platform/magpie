@@ -153,6 +153,7 @@ dotnet_diagnostic.IDE0005.severity = warning
 
 # Disable logging performance analyzers
 dotnet_diagnostic.CA1873.severity = none
+dotnet_diagnostic.CA1859.severity = none
 
 #### C# Formatting Rules ####
 

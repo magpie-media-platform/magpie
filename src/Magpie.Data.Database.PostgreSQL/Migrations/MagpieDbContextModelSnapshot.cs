@@ -71,7 +71,6 @@ namespace Magpie.Data.Database.PostgreSQL.Migrations
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("KeyHash")
-                        .IsRequired()
                         .HasColumnType("text");
 
                     b.Property<string>("KeyPrefix")
@@ -153,9 +152,21 @@ namespace Magpie.Data.Database.PostgreSQL.Migrations
                     b.Property<Guid>("AuthProviderId")
                         .HasColumnType("uuid");
 
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("CreatedByUserId")
+                        .HasColumnType("uuid");
+
                     b.Property<string>("Key")
                         .IsRequired()
                         .HasColumnType("text");
+
+                    b.Property<DateTimeOffset?>("ModifiedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("ModifiedByUserId")
+                        .HasColumnType("uuid");
 
                     b.Property<string>("Value")
                         .HasColumnType("text");
@@ -545,12 +556,24 @@ namespace Magpie.Data.Database.PostgreSQL.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("CreatedByUserId")
+                        .HasColumnType("uuid");
+
                     b.Property<Guid>("DownloadClientId")
                         .HasColumnType("uuid");
 
                     b.Property<string>("Key")
                         .IsRequired()
                         .HasColumnType("text");
+
+                    b.Property<DateTimeOffset?>("ModifiedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("ModifiedByUserId")
+                        .HasColumnType("uuid");
 
                     b.Property<string>("Value")
                         .HasColumnType("text");
@@ -570,6 +593,12 @@ namespace Magpie.Data.Database.PostgreSQL.Migrations
 
                     b.Property<string>("TagName")
                         .HasColumnType("text");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("CreatedByUserId")
+                        .HasColumnType("uuid");
 
                     b.HasKey("DownloadClientId", "TagName");
 
@@ -769,6 +798,9 @@ namespace Magpie.Data.Database.PostgreSQL.Migrations
 
                     b.Property<string>("Operation")
                         .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("ParentEntityId")
                         .HasColumnType("text");
 
                     b.Property<string>("Result")
@@ -1012,12 +1044,24 @@ namespace Magpie.Data.Database.PostgreSQL.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("CreatedByUserId")
+                        .HasColumnType("uuid");
+
                     b.Property<Guid>("IndexerFeedId")
                         .HasColumnType("uuid");
 
                     b.Property<string>("Key")
                         .IsRequired()
                         .HasColumnType("text");
+
+                    b.Property<DateTimeOffset?>("ModifiedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("ModifiedByUserId")
+                        .HasColumnType("uuid");
 
                     b.Property<string>("Value")
                         .HasColumnType("text");
@@ -1036,12 +1080,24 @@ namespace Magpie.Data.Database.PostgreSQL.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("CreatedByUserId")
+                        .HasColumnType("uuid");
+
                     b.Property<Guid>("IndexerId")
                         .HasColumnType("uuid");
 
                     b.Property<string>("Key")
                         .IsRequired()
                         .HasColumnType("text");
+
+                    b.Property<DateTimeOffset?>("ModifiedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("ModifiedByUserId")
+                        .HasColumnType("uuid");
 
                     b.Property<string>("Value")
                         .HasColumnType("text");
@@ -1061,6 +1117,12 @@ namespace Magpie.Data.Database.PostgreSQL.Migrations
 
                     b.Property<string>("TagName")
                         .HasColumnType("text");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("CreatedByUserId")
+                        .HasColumnType("uuid");
 
                     b.HasKey("IndexerId", "TagName");
 
@@ -1258,11 +1320,23 @@ namespace Magpie.Data.Database.PostgreSQL.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("CreatedByUserId")
+                        .HasColumnType("uuid");
+
                     b.Property<string>("Key")
                         .IsRequired()
                         .HasColumnType("text");
 
                     b.Property<Guid>("MediaServerId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset?>("ModifiedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("ModifiedByUserId")
                         .HasColumnType("uuid");
 
                     b.Property<string>("Value")
@@ -1886,16 +1960,11 @@ namespace Magpie.Data.Database.PostgreSQL.Migrations
                     b.Property<Guid>("SettingsGroupId")
                         .HasColumnType("uuid");
 
-                    b.Property<Guid?>("SettingsGroupId1")
-                        .HasColumnType("uuid");
-
                     b.Property<string>("Value")
                         .IsRequired()
                         .HasColumnType("text");
 
                     b.HasKey("Id");
-
-                    b.HasIndex("SettingsGroupId1");
 
                     b.HasIndex("SettingsGroupId", "Key")
                         .IsUnique();
@@ -2001,7 +2070,7 @@ namespace Magpie.Data.Database.PostgreSQL.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
-                    b.Property<Guid>("AuthProviderId")
+                    b.Property<Guid?>("AuthProviderId")
                         .HasColumnType("uuid");
 
                     b.Property<DateTimeOffset>("CreatedAt")
@@ -2808,15 +2877,10 @@ namespace Magpie.Data.Database.PostgreSQL.Migrations
             modelBuilder.Entity("Magpie.Data.Database.Entities.Setting", b =>
                 {
                     b.HasOne("Magpie.Data.Database.Entities.SettingsGroup", "SettingsGroup")
-                        .WithMany()
-                        .HasForeignKey("SettingsGroupId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.HasOne("Magpie.Data.Database.Entities.SettingsGroup", null)
                         .WithMany("Settings")
-                        .HasForeignKey("SettingsGroupId1")
-                        .HasConstraintName("FK_configuration_setting_configuration_settingsGroup_Settings~1");
+                        .HasForeignKey("SettingsGroupId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
 
                     b.Navigation("SettingsGroup");
                 });
@@ -2826,7 +2890,7 @@ namespace Magpie.Data.Database.PostgreSQL.Migrations
                     b.HasOne("Magpie.Data.Database.Entities.Extension", "Extension")
                         .WithMany()
                         .HasForeignKey("ExtensionId")
-                        .OnDelete(DeleteBehavior.Cascade);
+                        .OnDelete(DeleteBehavior.Restrict);
 
                     b.Navigation("Extension");
                 });
@@ -2855,8 +2919,7 @@ namespace Magpie.Data.Database.PostgreSQL.Migrations
                     b.HasOne("Magpie.Data.Database.Entities.AuthProvider", "AuthProvider")
                         .WithMany("Users")
                         .HasForeignKey("AuthProviderId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
+                        .OnDelete(DeleteBehavior.Restrict);
 
                     b.Navigation("AuthProvider");
                 });
@@ -2938,8 +3001,7 @@ namespace Magpie.Data.Database.PostgreSQL.Migrations
 
                     b.Navigation("LanguagePreferences");
 
-                    b.Navigation("MetadataContainer")
-                        .IsRequired();
+                    b.Navigation("MetadataContainer");
                 });
 
             modelBuilder.Entity("Magpie.Data.Database.Entities.ContentItem", b =>
@@ -3071,8 +3133,7 @@ namespace Magpie.Data.Database.PostgreSQL.Migrations
 
             modelBuilder.Entity("Magpie.Data.Database.Entities.Subject", b =>
                 {
-                    b.Navigation("MetadataContainer")
-                        .IsRequired();
+                    b.Navigation("MetadataContainer");
 
                     b.Navigation("Tags");
                 });

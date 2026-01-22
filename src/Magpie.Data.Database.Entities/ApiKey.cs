@@ -2,12 +2,12 @@ using System;
 
 namespace Magpie.Data.Database.Entities;
 
-public class ApiKey
+public record ApiKey
 {
     public Guid Id { get; set; }
     public Guid UserId { get; set; }
     public required string Name { get; set; }
-    public required string KeyHash { get; set; }
+    public string? KeyHash { get; set; }
     public required string KeyPrefix { get; set; }
     public bool Enabled { get; set; }
     public DateTimeOffset? ExpiresAt { get; set; }
@@ -17,5 +17,5 @@ public class ApiKey
     public DateTimeOffset? ModifiedAt { get; set; }
     public Guid? ModifiedByUserId { get; set; }
 
-    public required User User { get; set; }
+    public User? User { get; set; }
 }

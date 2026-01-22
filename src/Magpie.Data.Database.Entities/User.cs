@@ -5,12 +5,12 @@ using Magpie.Models.Users;
 
 namespace Magpie.Data.Database.Entities;
 
-public class User
+public record User
 {
     public Guid Id { get; set; }
     public required string Username { get; set; }
     public string? Email { get; set; }
-    public Guid AuthProviderId { get; set; }
+    public Guid? AuthProviderId { get; set; }
     public string? ExternalId { get; set; }
     public bool Enabled { get; set; }
     public Role Role { get; set; }
@@ -24,7 +24,7 @@ public class User
     public DateTimeOffset? ModifiedAt { get; set; }
     public Guid? ModifiedByUserId { get; set; }
 
-    public required AuthProvider AuthProvider { get; set; }
+    public AuthProvider? AuthProvider { get; set; }
     public ICollection<UserProviderData> ProviderData { get; } = [];
     public ICollection<Wishlist> Wishlists { get; } = [];
     public ICollection<ApiKey> ApiKeys { get; } = [];

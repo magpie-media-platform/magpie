@@ -44,7 +44,7 @@ public sealed class ExtensionSettingsProvider(
             .GetSettingsGroupAsync(extensionId, settingsGroupName, cancellationToken)
             .BindAsync(async group =>
             {
-                if (group == null)
+                if (group is null)
                 {
                     return Result.Success<IReadOnlyDictionary<string, string>>(
                         ImmutableDictionary<string, string>.Empty);

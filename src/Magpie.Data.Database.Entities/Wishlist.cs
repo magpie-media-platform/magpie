@@ -3,7 +3,7 @@ using System.Collections.Generic;
 
 namespace Magpie.Data.Database.Entities;
 
-public class Wishlist
+public record Wishlist
 {
     public Guid Id { get; set; }
     public required string Name { get; set; }
@@ -22,7 +22,7 @@ public class Wishlist
     public Guid? ModifiedByUserId { get; set; }
 
     public User? User { get; set; }
-    public required ContentFilter ContentFilter { get; set; }
+    public ContentFilter? ContentFilter { get; set; }
     public QualityTierList? QualityTierList { get; set; }
     public ICollection<WishlistTag> Tags { get; } = [];
 }

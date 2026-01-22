@@ -3,9 +3,9 @@ using System.Collections.Generic;
 
 namespace Magpie.Data.Database.Entities;
 
-public class SettingsGroup
+public record SettingsGroup
 {
-    public required Guid Id { get; set; }
+    public Guid Id { get; set; }
     public required string Name { get; set; }
     public Guid? ExtensionId { get; set; }
     public DateTimeOffset CreatedAt { get; set; }

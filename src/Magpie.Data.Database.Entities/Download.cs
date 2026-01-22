@@ -4,7 +4,7 @@ using Magpie.Models.Downloads;
 
 namespace Magpie.Data.Database.Entities;
 
-public class Download
+public record Download
 {
     public Guid Id { get; set; }
     public Guid? ContentItemId { get; set; }
@@ -23,5 +23,5 @@ public class Download
 
     public ContentItem? ContentItem { get; set; }
     public Release? Release { get; set; }
-    public required DownloadClient DownloadClient { get; set; }
+    public DownloadClient? DownloadClient { get; set; }
 }

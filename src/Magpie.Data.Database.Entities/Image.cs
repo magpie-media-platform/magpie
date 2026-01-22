@@ -2,7 +2,7 @@ using System;
 
 namespace Magpie.Data.Database.Entities;
 
-public class Image
+public record Image
 {
     public Guid Id { get; set; }
     public Guid MetadataContributionId { get; set; }
@@ -15,5 +15,5 @@ public class Image
     public int? Width { get; set; }
     public int? Height { get; set; }
 
-    public required MetadataContribution MetadataContribution { get; set; }
+    public MetadataContribution? MetadataContribution { get; set; }
 }

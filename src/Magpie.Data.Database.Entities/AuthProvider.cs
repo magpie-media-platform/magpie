@@ -3,7 +3,7 @@ using System.Collections.Generic;
 
 namespace Magpie.Data.Database.Entities;
 
-public class AuthProvider
+public record AuthProvider
 {
     public Guid Id { get; set; }
     public required string Name { get; set; }

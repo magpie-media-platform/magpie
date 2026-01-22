@@ -2,7 +2,7 @@ using System;
 
 namespace Magpie.Data.Database.Entities;
 
-public class ServerConfig
+public record ServerConfig
 {
     public required int Id { get; set; }
     public string? DefaultLanguagePreference { get; set; }

@@ -4,7 +4,7 @@ using Magpie.Models.QualityTiers;
 
 namespace Magpie.Data.Database.Entities;
 
-public class QualityCriterion
+public record QualityCriterion
 {
     public Guid Id { get; set; }
     public Guid QualityTierId { get; set; }
@@ -12,5 +12,5 @@ public class QualityCriterion
     public QualityCriterionOperator Operator { get; set; }
     public required string Value { get; set; }
 
-    public required QualityTier QualityTier { get; set; }
+    public QualityTier? QualityTier { get; set; }
 }

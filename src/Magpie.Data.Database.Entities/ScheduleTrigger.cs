@@ -2,7 +2,7 @@ using System;
 
 namespace Magpie.Data.Database.Entities;
 
-public class ScheduleTrigger
+public record ScheduleTrigger
 {
     public Guid Id { get; set; }
     public Guid JobTemplateId { get; set; }

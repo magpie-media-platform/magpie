@@ -3,7 +3,7 @@ using System.Collections.Generic;
 
 namespace Magpie.Data.Database.Entities;
 
-public class QualityTierList
+public record QualityTierList
 {
     public Guid Id { get; set; }
     public required string Name { get; set; }

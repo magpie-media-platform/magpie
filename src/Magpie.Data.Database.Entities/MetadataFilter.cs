@@ -3,7 +3,7 @@ using System.Collections.Generic;
 
 namespace Magpie.Data.Database.Entities;
 
-public class MetadataFilter
+public record MetadataFilter
 {
     public Guid Id { get; set; }
     public required string Name { get; set; }

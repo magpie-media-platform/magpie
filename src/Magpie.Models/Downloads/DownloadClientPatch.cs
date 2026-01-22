@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 
 namespace Magpie.Models.Downloads;
 
@@ -17,5 +16,5 @@ public sealed record DownloadClientPatch
     /// <inheritdoc cref="DownloadClient.Tags" />
     public SetPatch<string, string>? Tags { get; init; }
     /// <inheritdoc cref="DownloadClient.Settings" />
-    public FieldPatch<IReadOnlyDictionary<string, string?>>? Settings { get; init; }
+    public DictionaryPatch<string, string?, string?>? Settings { get; init; }
 }

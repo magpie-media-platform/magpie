@@ -2,7 +2,7 @@ using System;
 
 namespace Magpie.Data.Database.Entities;
 
-public class ContentRating
+public record ContentRating
 {
     public Guid Id { get; set; }
     public Guid MetadataContributionId { get; set; }
@@ -10,5 +10,5 @@ public class ContentRating
     public required string RatingsBody { get; set; }
     public required string Value { get; set; }
 
-    public required MetadataContribution MetadataContribution { get; set; }
+    public MetadataContribution? MetadataContribution { get; set; }
 }

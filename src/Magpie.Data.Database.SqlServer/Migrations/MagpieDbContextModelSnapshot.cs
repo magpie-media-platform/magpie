@@ -71,7 +71,6 @@ namespace Magpie.Data.Database.SqlServer.Migrations
                         .HasColumnType("datetimeoffset");
 
                     b.Property<string>("KeyHash")
-                        .IsRequired()
                         .HasColumnType("nvarchar(max)");
 
                     b.Property<string>("KeyPrefix")
@@ -153,9 +152,21 @@ namespace Magpie.Data.Database.SqlServer.Migrations
                     b.Property<Guid>("AuthProviderId")
                         .HasColumnType("uniqueidentifier");
 
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<Guid?>("CreatedByUserId")
+                        .HasColumnType("uniqueidentifier");
+
                     b.Property<string>("Key")
                         .IsRequired()
                         .HasColumnType("nvarchar(450)");
+
+                    b.Property<DateTimeOffset?>("ModifiedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<Guid?>("ModifiedByUserId")
+                        .HasColumnType("uniqueidentifier");
 
                     b.Property<string>("Value")
                         .HasColumnType("nvarchar(max)");
@@ -545,12 +556,24 @@ namespace Magpie.Data.Database.SqlServer.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uniqueidentifier");
 
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<Guid?>("CreatedByUserId")
+                        .HasColumnType("uniqueidentifier");
+
                     b.Property<Guid>("DownloadClientId")
                         .HasColumnType("uniqueidentifier");
 
                     b.Property<string>("Key")
                         .IsRequired()
                         .HasColumnType("nvarchar(450)");
+
+                    b.Property<DateTimeOffset?>("ModifiedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<Guid?>("ModifiedByUserId")
+                        .HasColumnType("uniqueidentifier");
 
                     b.Property<string>("Value")
                         .HasColumnType("nvarchar(max)");
@@ -570,6 +593,12 @@ namespace Magpie.Data.Database.SqlServer.Migrations
 
                     b.Property<string>("TagName")
                         .HasColumnType("nvarchar(450)");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<Guid?>("CreatedByUserId")
+                        .HasColumnType("uniqueidentifier");
 
                     b.HasKey("DownloadClientId", "TagName");
 
@@ -769,6 +798,9 @@ namespace Magpie.Data.Database.SqlServer.Migrations
 
                     b.Property<string>("Operation")
                         .IsRequired()
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<string>("ParentEntityId")
                         .HasColumnType("nvarchar(max)");
 
                     b.Property<string>("Result")
@@ -1012,12 +1044,24 @@ namespace Magpie.Data.Database.SqlServer.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uniqueidentifier");
 
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<Guid?>("CreatedByUserId")
+                        .HasColumnType("uniqueidentifier");
+
                     b.Property<Guid>("IndexerFeedId")
                         .HasColumnType("uniqueidentifier");
 
                     b.Property<string>("Key")
                         .IsRequired()
                         .HasColumnType("nvarchar(450)");
+
+                    b.Property<DateTimeOffset?>("ModifiedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<Guid?>("ModifiedByUserId")
+                        .HasColumnType("uniqueidentifier");
 
                     b.Property<string>("Value")
                         .HasColumnType("nvarchar(max)");
@@ -1036,12 +1080,24 @@ namespace Magpie.Data.Database.SqlServer.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uniqueidentifier");
 
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<Guid?>("CreatedByUserId")
+                        .HasColumnType("uniqueidentifier");
+
                     b.Property<Guid>("IndexerId")
                         .HasColumnType("uniqueidentifier");
 
                     b.Property<string>("Key")
                         .IsRequired()
                         .HasColumnType("nvarchar(450)");
+
+                    b.Property<DateTimeOffset?>("ModifiedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<Guid?>("ModifiedByUserId")
+                        .HasColumnType("uniqueidentifier");
 
                     b.Property<string>("Value")
                         .HasColumnType("nvarchar(max)");
@@ -1061,6 +1117,12 @@ namespace Magpie.Data.Database.SqlServer.Migrations
 
                     b.Property<string>("TagName")
                         .HasColumnType("nvarchar(450)");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<Guid?>("CreatedByUserId")
+                        .HasColumnType("uniqueidentifier");
 
                     b.HasKey("IndexerId", "TagName");
 
@@ -1258,11 +1320,23 @@ namespace Magpie.Data.Database.SqlServer.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uniqueidentifier");
 
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<Guid?>("CreatedByUserId")
+                        .HasColumnType("uniqueidentifier");
+
                     b.Property<string>("Key")
                         .IsRequired()
                         .HasColumnType("nvarchar(450)");
 
                     b.Property<Guid>("MediaServerId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTimeOffset?>("ModifiedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<Guid?>("ModifiedByUserId")
                         .HasColumnType("uniqueidentifier");
 
                     b.Property<string>("Value")
@@ -1888,16 +1962,11 @@ namespace Magpie.Data.Database.SqlServer.Migrations
                     b.Property<Guid>("SettingsGroupId")
                         .HasColumnType("uniqueidentifier");
 
-                    b.Property<Guid?>("SettingsGroupId1")
-                        .HasColumnType("uniqueidentifier");
-
                     b.Property<string>("Value")
                         .IsRequired()
                         .HasColumnType("nvarchar(max)");
 
                     b.HasKey("Id");
-
-                    b.HasIndex("SettingsGroupId1");
 
                     b.HasIndex("SettingsGroupId", "Key")
                         .IsUnique();
@@ -2003,7 +2072,7 @@ namespace Magpie.Data.Database.SqlServer.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uniqueidentifier");
 
-                    b.Property<Guid>("AuthProviderId")
+                    b.Property<Guid?>("AuthProviderId")
                         .HasColumnType("uniqueidentifier");
 
                     b.Property<DateTimeOffset>("CreatedAt")
@@ -2810,14 +2879,10 @@ namespace Magpie.Data.Database.SqlServer.Migrations
             modelBuilder.Entity("Magpie.Data.Database.Entities.Setting", b =>
                 {
                     b.HasOne("Magpie.Data.Database.Entities.SettingsGroup", "SettingsGroup")
-                        .WithMany()
-                        .HasForeignKey("SettingsGroupId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.HasOne("Magpie.Data.Database.Entities.SettingsGroup", null)
                         .WithMany("Settings")
-                        .HasForeignKey("SettingsGroupId1");
+                        .HasForeignKey("SettingsGroupId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
 
                     b.Navigation("SettingsGroup");
                 });
@@ -2827,7 +2892,7 @@ namespace Magpie.Data.Database.SqlServer.Migrations
                     b.HasOne("Magpie.Data.Database.Entities.Extension", "Extension")
                         .WithMany()
                         .HasForeignKey("ExtensionId")
-                        .OnDelete(DeleteBehavior.Cascade);
+                        .OnDelete(DeleteBehavior.Restrict);
 
                     b.Navigation("Extension");
                 });
@@ -2856,8 +2921,7 @@ namespace Magpie.Data.Database.SqlServer.Migrations
                     b.HasOne("Magpie.Data.Database.Entities.AuthProvider", "AuthProvider")
                         .WithMany("Users")
                         .HasForeignKey("AuthProviderId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
+                        .OnDelete(DeleteBehavior.Restrict);
 
                     b.Navigation("AuthProvider");
                 });
@@ -2939,8 +3003,7 @@ namespace Magpie.Data.Database.SqlServer.Migrations
 
                     b.Navigation("LanguagePreferences");
 
-                    b.Navigation("MetadataContainer")
-                        .IsRequired();
+                    b.Navigation("MetadataContainer");
                 });
 
             modelBuilder.Entity("Magpie.Data.Database.Entities.ContentItem", b =>
@@ -3072,8 +3135,7 @@ namespace Magpie.Data.Database.SqlServer.Migrations
 
             modelBuilder.Entity("Magpie.Data.Database.Entities.Subject", b =>
                 {
-                    b.Navigation("MetadataContainer")
-                        .IsRequired();
+                    b.Navigation("MetadataContainer");
 
                     b.Navigation("Tags");
                 });

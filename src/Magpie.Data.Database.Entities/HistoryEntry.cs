@@ -2,10 +2,11 @@ using System;
 
 namespace Magpie.Data.Database.Entities;
 
-public class HistoryEntry
+public record HistoryEntry
 {
     public Guid Id { get; set; }
     public string? EntityId { get; set; }
+    public string? ParentEntityId { get; set; }
     public string? EntityType { get; set; }
     public required string Category { get; set; }
     public required string Operation { get; set; }

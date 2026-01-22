@@ -2,7 +2,7 @@ using System;
 
 namespace Magpie.Data.Database.Entities;
 
-public class Award
+public record Award
 {
     public Guid Id { get; set; }
     public Guid MetadataContributionId { get; set; }
@@ -16,5 +16,5 @@ public class Award
     public string? Language { get; set; }
     public string? Country { get; set; }
 
-    public required MetadataContribution MetadataContribution { get; set; }
+    public MetadataContribution? MetadataContribution { get; set; }
 }

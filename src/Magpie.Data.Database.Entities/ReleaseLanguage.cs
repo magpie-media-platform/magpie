@@ -2,10 +2,10 @@ using System;
 
 namespace Magpie.Data.Database.Entities;
 
-public class ReleaseLanguage
+public record ReleaseLanguage
 {
     public Guid ReleaseId { get; set; }
     public required string Language { get; set; }
 
-    public required Release Release { get; set; }
+    public Release? Release { get; set; }
 }

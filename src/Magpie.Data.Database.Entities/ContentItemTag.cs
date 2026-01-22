@@ -2,11 +2,11 @@ using System;
 
 namespace Magpie.Data.Database.Entities;
 
-public class ContentItemTag
+public record ContentItemTag
 {
     public Guid ContentItemId { get; set; }
     public required string TagName { get; set; }
 
-    public required ContentItem ContentItem { get; set; }
-    public required Tag Tag { get; set; }
+    public ContentItem? ContentItem { get; set; }
+    public Tag? Tag { get; set; }
 }

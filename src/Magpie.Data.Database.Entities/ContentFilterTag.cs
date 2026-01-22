@@ -2,11 +2,11 @@ using System;
 
 namespace Magpie.Data.Database.Entities;
 
-public class ContentFilterTag
+public record ContentFilterTag
 {
     public Guid ContentFilterId { get; set; }
     public required string TagName { get; set; }
 
-    public required ContentFilter ContentFilter { get; set; }
-    public required Tag Tag { get; set; }
+    public ContentFilter? ContentFilter { get; set; }
+    public Tag? Tag { get; set; }
 }

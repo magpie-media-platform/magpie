@@ -2,7 +2,7 @@ using System;
 
 namespace Magpie.Data.Database.Entities;
 
-public class Reference
+public record Reference
 {
     public Guid Id { get; set; }
     public Guid MetadataContributionId { get; set; }
@@ -12,5 +12,5 @@ public class Reference
     public string? DisplayName { get; set; }
     public string? Language { get; set; }
 
-    public required MetadataContribution MetadataContribution { get; set; }
+    public MetadataContribution? MetadataContribution { get; set; }
 }

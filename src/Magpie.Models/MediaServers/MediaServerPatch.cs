@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 
 namespace Magpie.Models.MediaServers;
 
@@ -15,5 +14,5 @@ public sealed record MediaServerPatch
     /// <inheritdoc cref="MediaServer.Enabled" />
     public FieldPatch<bool>? Enabled { get; init; }
     /// <inheritdoc cref="MediaServer.Settings" />
-    public FieldPatch<IReadOnlyDictionary<string, string?>>? Settings { get; init; }
+    public DictionaryPatch<string, string?, string?>? Settings { get; init; }
 }

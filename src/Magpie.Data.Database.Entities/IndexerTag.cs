@@ -2,11 +2,13 @@ using System;
 
 namespace Magpie.Data.Database.Entities;
 
-public class IndexerTag
+public record IndexerTag
 {
     public Guid IndexerId { get; set; }
     public required string TagName { get; set; }
+    public DateTimeOffset CreatedAt { get; set; }
+    public Guid? CreatedByUserId { get; set; }
 
-    public required Indexer Indexer { get; set; }
-    public required Tag Tag { get; set; }
+    public Indexer? Indexer { get; set; }
+    public Tag? Tag { get; set; }
 }

@@ -1,5 +1,9 @@
 <Project>
   <ItemGroup>
+    <PackageVersion Include="coverlet.collector" Version="6.0.4">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageVersion>
     <PackageVersion Include="Microsoft.EntityFrameworkCore" Version="10.0.0" />
     <PackageVersion Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.0" />
     <PackageVersion Include="Microsoft.EntityFrameworkCore.SqlServer" Version="10.0.0" />
@@ -7,10 +11,18 @@
     <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.0.0" />
     <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.0" />
     <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.0" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Console" Version="10.0.2" />
     <PackageVersion Include="Microsoft.Extensions.Options" Version="10.0.0" />
     <PackageVersion Include="Microsoft.Extensions.Configuration.Abstractions" Version="10.0.0" />
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.0.1" />
     <PackageVersion Include="MySql.EntityFrameworkCore" Version="10.0.0-rc" />
     <PackageVersion Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.0" />
+    <PackageVersion Include="NUnit" Version="4.4.0" />
+    <PackageVersion Include="NUnit.Analyzers" Version="4.11.2">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageVersion>
+    <PackageVersion Include="NUnit3TestAdapter" Version="6.1.0" />
     <PackageVersion Include="System.CommandLine" Version="2.0.0" />
     <PackageVersion Include="System.Reactive" Version="6.1.0" />
   </ItemGroup>

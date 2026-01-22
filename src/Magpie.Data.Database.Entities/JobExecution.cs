@@ -5,7 +5,7 @@ using Magpie.Models.Jobs;
 
 namespace Magpie.Data.Database.Entities;
 
-public class JobExecution
+public record JobExecution
 {
     public Guid Id { get; set; }
     public Guid JobTemplateId { get; set; }

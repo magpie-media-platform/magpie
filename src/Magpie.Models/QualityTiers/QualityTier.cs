@@ -9,7 +9,9 @@ namespace Magpie.Models.QualityTiers;
 /// <param name="Id">The unique identifier.</param>
 /// <param name="Ordinal">The priority order (lower is higher priority).</param>
 /// <param name="Name">The display name.</param>
-/// <param name="IsCutoff">Whether this tier is satisfactory. Items at this tier will not upgrade, but items above it continue upgrading.</param>
+/// <param name="IsCutoff">
+///  Whether this tier is satisfactory. Items at this tier will not upgrade, but items above it continue upgrading.
+/// </param>
 /// <param name="Criteria">The criteria that a release must match for this tier.</param>
 public sealed record QualityTier(
     Guid Id,
