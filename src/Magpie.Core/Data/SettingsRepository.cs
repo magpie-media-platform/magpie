@@ -264,7 +264,7 @@ public sealed class SettingsRepository(
     }
 
     /// <inheritdoc />
-    public async Task<Result> UpsertSettingAsync(
+    public async Task<Result<Unit>> UpsertSettingAsync(
         SettingKey key,
         string? value,
         Guid? modifiedByUserId, CancellationToken cancellationToken)
@@ -360,7 +360,7 @@ public sealed class SettingsRepository(
                 key.ExtensionId,
                 key.GroupName,
                 errorCode ?? "");
-            return Result.Fail("Error saving setting", ErrorCodes.DbSettingError, errorCode);
+            return Result.Fail<Unit>("Error saving setting", ErrorCodes.DbSettingError, errorCode);
         }
     }
 

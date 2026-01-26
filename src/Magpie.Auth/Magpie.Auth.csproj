@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <OutputType>Library</OutputType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.DirectoryServices.Protocols" />
+    <PackageReference Include="System.IdentityModel.Tokens.Jwt" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Magpie.Test.Auth" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Magpie.Abstractions.Api\Magpie.Abstractions.Api.csproj" />
+    <ProjectReference Include="..\Magpie.Abstractions.Auth\Magpie.Abstractions.Auth.csproj" />
+    <ProjectReference Include="..\Magpie.Abstractions\Magpie.Abstractions.csproj" />
+    <ProjectReference Include="..\Magpie.Core\Magpie.Core.csproj" />
+  </ItemGroup>
+
+</Project>

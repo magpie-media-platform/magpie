@@ -1,52 +1,73 @@
+using System.Threading.Tasks;
+
 namespace Magpie.Models.Result;
 
 /// <summary>
 /// Represents the outcome of an operation.
 /// </summary>
-/// <param name="IsSuccess"><inheritdoc cref="IResult.IsSuccess" path="/summary"/></param>
-public abstract record Result(bool IsSuccess) : IResult
+public static class Result
 {
-    /// <summary>
-    /// Creates a successful result.
-    /// </summary>
-    public static SuccessResult Success()
-    {
-        return new();
-    }
 
     /// <summary>
     /// Creates a successful result with a value.
     /// </summary>
     /// <param name="value">The result value.</param>
     /// <returns>A successful result containing the value.</returns>
-    public static SuccessResult<T> Success<T>(T value)
+    public static Result<T> Success<T>(T value)
     {
-        return new(value);
+        return new SuccessResult<T>(value);
     }
 
     /// <summary>
-    /// Creates a failed result.
+    /// Creates a successful result.
     /// </summary>
-    /// <param name="reason"><inheritdoc cref="IFailureResult.Reason" path="/summary"/></param>
-    /// <param name="errorCode"><inheritdoc cref="IFailureResult.ErrorCode" path="/summary"/></param>
-    /// <param name="subErrorCode"><inheritdoc cref="IFailureResult.SubErrorCode" path="/summary"/></param>
-    /// <returns>A failed result containing the error information.</returns>
-    public static FailureResult Fail(string reason, string? errorCode = default, string? subErrorCode = default)
+    public static Result<Unit> Success()
     {
-        return new(reason, errorCode, subErrorCode);
+        return Success(Unit.Default);
+    }
+
+    /// <summary>
+    /// Creates a successful completed result task containing a value.
+    /// </summary>
+    public static Task<Result<T>> SuccessAsync<T>(T value)
+    {
+        return Task.FromResult(Success(value));
+    }
+
+    /// <summary>
+    /// Creates a successful completed result task.
+    /// </summary>
+    public static Task<Result<Unit>> SuccessAsync()
+    {
+        return Task.FromResult(Success());
     }
 
     /// <summary>
     /// Creates a failed value result.
     /// </summary>
     /// <typeparam name="T">The type of value represented by the result.</typeparam>
-    /// <param name="reason"><inheritdoc cref="IFailureResult.Reason" path="/summary"/></param>
-    /// <param name="errorCode"><inheritdoc cref="IFailureResult.ErrorCode" path="/summary"/></param>
-    /// <param name="subErrorCode"><inheritdoc cref="IFailureResult.SubErrorCode" path="/summary"/></param>
+    /// <param name="reason"><inheritdoc cref="FailureResult{T}.Reason" path="/summary"/></param>
+    /// <param name="errorCode"><inheritdoc cref="FailureResult{T}.ErrorCode" path="/summary"/></param>
+    /// <param name="subErrorCode"><inheritdoc cref="FailureResult{T}.SubErrorCode" path="/summary"/></param>
     /// <returns>A failed typed result containing the error information.</returns>
-    public static FailureResult<T> Fail<T>(string reason, string? errorCode = default, string? subErrorCode = default)
+    public static Result<T> Fail<T>(string reason, string? errorCode = default, string? subErrorCode = default)
     {
-        return new(reason, errorCode, subErrorCode);
+        return new FailureResult<T>(reason, errorCode, subErrorCode);
+    }
+
+    /// <summary>
+    /// Creates a failed completed result task containing a value.
+    /// </summary>
+    /// <param name="reason"><inheritdoc cref="FailureResult{T}.Reason" path="/summary"/></param>
+    /// <param name="errorCode"><inheritdoc cref="FailureResult{T}.ErrorCode" path="/summary"/></param>
+    /// <param name="subErrorCode"><inheritdoc cref="FailureResult{T}.SubErrorCode" path="/summary"/></param>
+    /// <returns>A failed result task containing the error information.</returns>
+    public static Task<Result<T>> FailAsync<T>(
+        string reason,
+        string? errorCode = default,
+        string? subErrorCode = default)
+    {
+        return Task.FromResult((Result<T>)Fail<T>(reason, errorCode, subErrorCode));
     }
 }
 
@@ -54,5 +75,5 @@ public abstract record Result(bool IsSuccess) : IResult
 /// Represents a result that may contain a value.
 /// </summary>
 /// <typeparam name="T">The type of value represented by the result.</typeparam>
-/// <param name="IsSuccess"><inheritdoc cref="IResult.IsSuccess" path="/summary"/></param>
-public abstract record Result<T>(bool IsSuccess) : Result(IsSuccess), IResult<T>;
+/// <param name="IsSuccess">Whether the result is successful.</param>
+public abstract record Result<T>(bool IsSuccess);

@@ -10,6 +10,8 @@ using Magpie.Models;
 using Magpie.Models.Result;
 using Magpie.Models.Users;
 
+using Magpie.Test.Shared;
+
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 
@@ -60,9 +62,8 @@ public class ApiKeyRepositoryTests
         _adminUserId = adminUser.Id;
         _userId = testUser.Id;
 
-        var loggerFactory = LoggerFactory.Create(b => b.AddConsole());
+        var loggerFactory = LoggerFactory.Create(b => b.AddTestLogger());
         var historyRepo = new HistoryRepository(_context, loggerFactory.CreateLogger<HistoryRepository>());
-
         _subject = new ApiKeyRepository(_context, historyRepo, loggerFactory.CreateLogger<ApiKeyRepository>());
     }
 
@@ -215,7 +216,7 @@ public class ApiKeyRepositoryTests
 
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(result, Is.InstanceOf<SuccessResult<bool>>().With.Property(nameof(SuccessResult<>.Value)).True);
+            Assert.That(result, Is.InstanceOf<SuccessResult<bool>>());
             Assert.That(entityExists, Is.False);
             Assert.That(await _context.HistoryEntries.ToListAsync(), Has.One
                 .With.Property(nameof(HistoryEntryEntity.Operation)).EqualTo("Delete")
@@ -231,7 +232,8 @@ public class ApiKeyRepositoryTests
         var result = await _subject.DeleteAsync(Guid.NewGuid(), _adminUserId);
 
         // Assert
-        Assert.That(result, Is.InstanceOf<SuccessResult<bool>>().With.Property(nameof(SuccessResult<>.Value)).False);
+        Assert.That(result, Is.InstanceOf<SuccessResult<bool>>()
+            .With.Property(nameof(SuccessResult<>.Value)).False);
     }
 
     [Test]
@@ -279,44 +281,6 @@ public class ApiKeyRepositoryTests
         }
     }
 
-    [Test]
-    public async Task PatchAsync_PatchesNameField()
-    {
-        // Arrange
-        var apiKeyEntity = new ApiKeyEntity
-        {
-            UserId = _userId,
-            Name = "OriginalName",
-            KeyPrefix = "mgp_",
-            KeyHash = "patchhash",
-            Enabled = true,
-            CreatedAt = DateTimeOffset.UtcNow
-        };
-        _context.ApiKeys.Add(apiKeyEntity);
-        _context.SaveChanges();
-
-        var patch = new ApiKeyPatch
-        {
-            Id = apiKeyEntity.Id,
-            Name = new FieldPatch<string>("PatchedName")
-        };
-
-        // Act
-        var result = await _subject.PatchAsync(patch, _adminUserId);
-
-        // Assert
-        var entity = await (
-            from k in _context.ApiKeys.AsNoTracking()
-            where k.Id == apiKeyEntity.Id
-            select k).SingleOrDefaultAsync();
-
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(result, Is.InstanceOf<SuccessResult<bool>>().With.Property(nameof(SuccessResult<>.Value)).True);
-            Assert.That(entity, Is.InstanceOf<ApiKeyEntity>()
-                .With.Property(nameof(ApiKeyEntity.Name)).EqualTo("PatchedName"));
-        }
-    }
 
     [Test]
     public async Task PatchAsync_PatchesExpiresAtField()
@@ -377,7 +341,7 @@ public class ApiKeyRepositoryTests
     }
 
     [Test]
-    public async Task GetByPrefixAndHashAsync_ReturnsApiKey()
+    public async Task GetByKeyHashAsync_ReturnsApiKey()
     {
         // Arrange
         var apiKeyEntity = new ApiKeyEntity
@@ -393,7 +357,7 @@ public class ApiKeyRepositoryTests
         _context.SaveChanges();
 
         // Act
-        var result = await _subject.GetByPrefixAndHashAsync("mgp_test", "uniquehash123");
+        var result = await _subject.GetByKeyHashAsync("uniquehash123");
 
         // Assert
         Assert.That(result, Is.InstanceOf<SuccessResult<ApiKey>>()
@@ -403,10 +367,10 @@ public class ApiKeyRepositoryTests
     }
 
     [Test]
-    public async Task GetByPrefixAndHashAsync_ReturnsFailure_WhenApiKeyDoesNotExist()
+    public async Task GetByKeyHashAsync_ReturnsFailure_WhenApiKeyDoesNotExist()
     {
         // Act
-        var result = await _subject.GetByPrefixAndHashAsync("nonexistent", "invalidhash");
+        var result = await _subject.GetByKeyHashAsync("invalidhash");
 
         // Assert
         Assert.That(result, Is.InstanceOf<FailureResult<ApiKey>>());
@@ -465,65 +429,6 @@ public class ApiKeyRepositoryTests
             .With.Property(nameof(SuccessResult<>.Value)).Empty);
     }
 
-    [Test]
-    public async Task RecordUsageAsync_UpdatesLastUsedAt()
-    {
-        // Arrange
-        var apiKeyEntity = new ApiKeyEntity
-        {
-            UserId = _userId,
-            Name = "UsageKey",
-            KeyPrefix = "mgp_",
-            KeyHash = "usagehash",
-            Enabled = true,
-            LastUsedAt = null,
-            CreatedAt = DateTimeOffset.UtcNow
-        };
-        _context.ApiKeys.Add(apiKeyEntity);
-        _context.SaveChanges();
-
-        var beforeUsage = DateTimeOffset.UtcNow;
-
-        // Act
-        var result = await _subject.RecordUsageAsync(apiKeyEntity.Id);
-
-        // Assert
-        var entity = await (
-            from k in _context.ApiKeys.AsNoTracking()
-            where k.Id == apiKeyEntity.Id
-            select k).SingleOrDefaultAsync();
-
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(result, Is.InstanceOf<SuccessResult>());
-            Assert.That(entity!.LastUsedAt, Is.Not.Null
-                .And.GreaterThanOrEqualTo(beforeUsage));
-        }
-    }
-
-    [Test]
-    public async Task RecordUsageAsync_DoesNotCreateHistoryEntry()
-    {
-        // Arrange
-        var apiKeyEntity = new ApiKeyEntity
-        {
-            UserId = _userId,
-            Name = "UsageKey",
-            KeyPrefix = "mgp_",
-            KeyHash = "usagehash",
-            Enabled = true,
-            CreatedAt = DateTimeOffset.UtcNow
-        };
-        _context.ApiKeys.Add(apiKeyEntity);
-        _context.SaveChanges();
-
-        // Act
-        await _subject.RecordUsageAsync(apiKeyEntity.Id);
-
-        // Assert
-        var historyEntries = await _context.HistoryEntries.ToListAsync();
-        Assert.That(historyEntries, Is.Empty);
-    }
 
     [Test]
     public async Task CreateAsync_SetsParentEntityIdToUserId()

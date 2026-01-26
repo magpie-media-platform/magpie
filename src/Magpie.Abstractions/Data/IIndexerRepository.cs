@@ -19,14 +19,14 @@ public interface IIndexerRepository :
     /// Get an indexer by name.
     /// </summary>
     /// <param name="name">The indexer name.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
     Task<Result<Indexer?>> GetByNameAsync(string name, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Get all indexers for a definition.
     /// </summary>
     /// <param name="definitionId">The definition identifier.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
     Task<Result<IReadOnlyList<Indexer>>> GetByDefinitionIdAsync(
         Guid definitionId,
         CancellationToken cancellationToken = default);
@@ -35,7 +35,7 @@ public interface IIndexerRepository :
     /// Get all indexers with a specific status.
     /// </summary>
     /// <param name="status">The status to filter by.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
     Task<Result<IReadOnlyList<Indexer>>> GetByStatusAsync(
         IndexerStatus status,
         CancellationToken cancellationToken = default);
@@ -43,7 +43,7 @@ public interface IIndexerRepository :
     /// <summary>
     /// Get all enabled indexers.
     /// </summary>
-    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
     Task<Result<IReadOnlyList<Indexer>>> GetEnabledAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -52,7 +52,7 @@ public interface IIndexerRepository :
     /// <param name="id">The indexer identifier.</param>
     /// <param name="status">The new status.</param>
     /// <param name="lastChecked">The time the indexer was checked.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
     Task<Result<bool>> UpdateStatusAsync(
         Guid id,
         IndexerStatus status,

@@ -52,7 +52,7 @@ public sealed class SystemSettingsProvider(ISettingsRepository repository) : ISy
     }
 
     /// <inheritdoc />
-    public Task<Result> SetSettingAsync(
+    public Task<Result<Unit>> SetSettingAsync(
         string settingsGroupName,
         string key,
         string value,

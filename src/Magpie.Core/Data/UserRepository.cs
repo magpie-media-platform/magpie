@@ -15,6 +15,9 @@ using Magpie.Models.Users;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 
+using UserEntity = Magpie.Data.Database.Entities.User;
+using UserProviderDataEntity = Magpie.Data.Database.Entities.UserProviderData;
+
 namespace Magpie.Core.Data;
 
 /// <summary>
@@ -132,8 +135,45 @@ public sealed class UserRepository(
     }
 
     /// <inheritdoc />
+    public async Task<Result<UserCredentials?>> GetUserCredentialsAsync(
+        string username,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var entity = await (
+                from u in context.Users.AsNoTracking()
+                where u.Username == username
+                select u)
+                .FirstOrDefaultAsync(cancellationToken)
+                .ConfigureAwait(false);
+
+            return Result.Success(entity?.ToCredentialsModel());
+        }
+        catch (Exception ex)
+        {
+            ex.TryGetErrorCode(out var errorCode);
+            logger.LogError(
+                ex,
+                "Error getting credentials for user {Username} ({ExErrorCode})",
+                username,
+                errorCode ?? "");
+            return Result.Fail<UserCredentials?>("Error retrieving credentials", ErrorCodes.DbUserError, errorCode);
+        }
+    }
+
+    /// <inheritdoc />
     public async Task<Result<User>> CreateAsync(
-        User model,
+        string username,
+        string email,
+        Guid authProviderId,
+        string? externalId,
+        bool enabled,
+        Role role,
+        string? passwordHash,
+        string? passwordSalt,
+        IReadOnlyDictionary<string, string> providerData,
+        DateTimeOffset createdAt,
         Guid? createdByUserId,
         CancellationToken cancellationToken)
     {
@@ -143,16 +183,24 @@ public sealed class UserRepository(
                 .BeginTransactionAsync(cancellationToken)
                 .ConfigureAwait(false);
 
-            var entity = model.CreateEntity(createdByUserId);
-
-            if (model.AuthProviderId.HasValue)
+            var entity = new UserEntity
             {
-                entity.AuthProviderId = model.AuthProviderId.Value;
-            }
+                Id = Guid.NewGuid(),
+                Username = username,
+                Email = email,
+                AuthProviderId = authProviderId == Guid.Empty ? null : authProviderId,
+                ExternalId = externalId,
+                Enabled = enabled,
+                Role = role,
+                PasswordHash = passwordHash,
+                PasswordSalt = passwordSalt,
+                CreatedAt = createdAt,
+                CreatedByUserId = createdByUserId
+            };
 
-            foreach (var kvp in model.ProviderData ?? ImmutableDictionary<string, string?>.Empty)
+            foreach (var kvp in providerData)
             {
-                entity.ProviderData.Add(new()
+                entity.ProviderData.Add(new UserProviderDataEntity
                 {
                     Key = kvp.Key,
                     Value = kvp.Value
@@ -167,7 +215,7 @@ public sealed class UserRepository(
                 operation: "Create",
                 entityId: entity.Id,
                 entityType: nameof(User),
-                description: $"Created user {model.Username}",
+                description: $"Created user {username}",
                 userId: createdByUserId,
                 cancellationToken: cancellationToken).ConfigureAwait(false);
 
@@ -181,7 +229,7 @@ public sealed class UserRepository(
             logger.LogError(
                 ex,
                 "Error creating user {Username} ({ExErrorCode})",
-                model.Username,
+                username,
                 errorCode ?? "");
             return Result.Fail<User>("Error creating user", ErrorCodes.DbUserError, errorCode);
         }
@@ -242,7 +290,7 @@ public sealed class UserRepository(
                     }
                     else
                     {
-                        context.UserProviderData.Add(new()
+                        context.UserProviderData.Add(new UserProviderDataEntity
                         {
                             UserId = model.Id,
                             Key = kvp.Key,
@@ -406,10 +454,12 @@ public sealed class UserRepository(
     }
 
     /// <inheritdoc />
-    public async Task<Result> UpdatePasswordAsync(
+    public async Task<Result<Unit>> UpdatePasswordAsync(
         Guid id,
-        string passwordHash,
-        string passwordSalt,
+        string? passwordHash,
+        string? passwordSalt,
+        bool? unlock,
+        bool? resetFailedLoginAttempts,
         Guid? modifiedByUserId,
         CancellationToken cancellationToken)
     {
@@ -419,28 +469,48 @@ public sealed class UserRepository(
                 .BeginTransactionAsync(cancellationToken)
                 .ConfigureAwait(false);
 
-            var updated = await context.Users
-                .Where(u => u.Id == id)
-                .ExecuteUpdateAsync(
-                    setter => setter
-                        .SetProperty(e => e.PasswordHash, passwordHash)
-                        .SetProperty(e => e.PasswordSalt, passwordSalt)
-                        .SetProperty(e => e.ModifiedAt, DateTimeOffset.UtcNow)
-                        .SetProperty(e => e.ModifiedByUserId, modifiedByUserId),
-                    cancellationToken)
+            var user = await context.Users
+                .FirstOrDefaultAsync(u => u.Id == id, cancellationToken)
                 .ConfigureAwait(false);
 
-            if (updated > 0)
+            if (user is null)
             {
-                await historyRepository.RecordEntryAsync(
-                    category: AuditCategories.Security,
-                    operation: "UpdatePassword",
-                    entityId: id,
-                    entityType: nameof(User),
-                    description: "Updated user password",
-                    userId: modifiedByUserId,
-                    cancellationToken: cancellationToken).ConfigureAwait(false);
+                return Result.Success();
             }
+
+            if (passwordHash is not null)
+            {
+                user.PasswordHash = passwordHash;
+            }
+
+            if (passwordSalt is not null)
+            {
+                user.PasswordSalt = passwordSalt;
+            }
+
+            if (unlock == true)
+            {
+                user.LockedUntil = null;
+            }
+
+            if (resetFailedLoginAttempts == true)
+            {
+                user.FailedLoginAttempts = 0;
+            }
+
+            user.ModifiedAt = DateTimeOffset.UtcNow;
+            user.ModifiedByUserId = modifiedByUserId;
+
+            await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+
+            await historyRepository.RecordEntryAsync(
+                category: AuditCategories.Security,
+                operation: "UpdatePassword",
+                entityId: id,
+                entityType: nameof(User),
+                description: "Updated user password",
+                userId: modifiedByUserId,
+                cancellationToken: cancellationToken).ConfigureAwait(false);
 
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
 
@@ -454,12 +524,72 @@ public sealed class UserRepository(
                 "Error updating password for user {UserId} ({ExErrorCode})",
                 id,
                 errorCode ?? "");
-            return Result.Fail("Error updating password", ErrorCodes.DbUserError, errorCode);
+            return Result.Fail<Unit>("Error updating password", ErrorCodes.DbUserError, errorCode);
         }
     }
 
     /// <inheritdoc />
-    public async Task<Result> RecordFailedLoginAsync(
+    public async Task<Result<User>> UnlockUserAsync(
+        Guid id,
+        bool? resetFailedLoginAttempts,
+        Guid? modifiedByUserId,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await using var transaction = await context.Database
+                .BeginTransactionAsync(cancellationToken)
+                .ConfigureAwait(false);
+
+            var user = await context.Users
+                .Include(u => u.ProviderData)
+                .FirstOrDefaultAsync(u => u.Id == id, cancellationToken)
+                .ConfigureAwait(false);
+
+            if (user is null)
+            {
+                return Result.Fail<User>("User not found", ErrorCodes.DbUserError);
+            }
+
+            user.LockedUntil = null;
+
+            if (resetFailedLoginAttempts == true)
+            {
+                user.FailedLoginAttempts = 0;
+            }
+
+            user.ModifiedAt = DateTimeOffset.UtcNow;
+            user.ModifiedByUserId = modifiedByUserId;
+
+            await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+
+            await historyRepository.RecordEntryAsync(
+                category: AuditCategories.Security,
+                operation: "UnlockUser",
+                entityId: id,
+                entityType: nameof(User),
+                description: $"Unlocked user {user.Username}",
+                userId: modifiedByUserId,
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+
+            return Result.Success(user.ToModel());
+        }
+        catch (Exception ex)
+        {
+            ex.TryGetErrorCode(out var errorCode);
+            logger.LogError(
+                ex,
+                "Error unlocking user {UserId} ({ExErrorCode})",
+                id,
+                errorCode ?? "");
+            return Result.Fail<User>("Error unlocking user", ErrorCodes.DbUserError, errorCode);
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task<Result<Unit>> RecordFailedLoginAsync(
         Guid id,
         TimeSpan? lockoutDuration,
         CancellationToken cancellationToken)
@@ -489,12 +619,12 @@ public sealed class UserRepository(
                 "Error recording failed login for user {UserId} ({ExErrorCode})",
                 id,
                 errorCode ?? "");
-            return Result.Fail("Error recording failed login", ErrorCodes.DbUserError, errorCode);
+            return Result.Fail<Unit>("Error recording failed login", ErrorCodes.DbUserError, errorCode);
         }
     }
 
     /// <inheritdoc />
-    public async Task<Result> RecordSuccessfulLoginAsync(Guid id, CancellationToken cancellationToken)
+    public async Task<Result<Unit>> ResetFailedLoginAttemptsAsync(Guid id, CancellationToken cancellationToken)
     {
         try
         {
@@ -503,7 +633,6 @@ public sealed class UserRepository(
                 .ExecuteUpdateAsync(
                     setter => setter
                         .SetProperty(e => e.FailedLoginAttempts, 0)
-                        .SetProperty(e => e.LockedUntil, (DateTimeOffset?)null)
                         .SetProperty(e => e.LastLoginAt, DateTimeOffset.UtcNow),
                     cancellationToken)
                 .ConfigureAwait(false);
@@ -515,10 +644,10 @@ public sealed class UserRepository(
             ex.TryGetErrorCode(out var errorCode);
             logger.LogError(
                 ex,
-                "Error recording successful login for user {UserId} ({ExErrorCode})",
+                "Error resetting failed login attempts for user {UserId} ({ExErrorCode})",
                 id,
                 errorCode ?? "");
-            return Result.Fail("Error recording successful login", ErrorCodes.DbUserError, errorCode);
+            return Result.Fail<Unit>("Error resetting failed login attempts", ErrorCodes.DbUserError, errorCode);
         }
     }
 }

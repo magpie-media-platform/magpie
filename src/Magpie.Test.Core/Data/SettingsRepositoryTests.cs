@@ -10,6 +10,7 @@ using Magpie.Models;
 using Magpie.Models.Configuration;
 using Magpie.Models.Result;
 using Magpie.Models.Users;
+using Magpie.Test.Shared;
 
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
@@ -85,7 +86,7 @@ public class SettingsRepositoryTests
             CreatedByUserId = _userId
         };
 
-        var loggerFactory = LoggerFactory.Create(b => b.AddConsole());
+        var loggerFactory = LoggerFactory.Create(b => b.AddTestLogger());
         var historyRepo = new HistoryRepository(_context, loggerFactory.CreateLogger<HistoryRepository>());
 
         _subject = new SettingsRepository(_context, historyRepo, loggerFactory.CreateLogger<SettingsRepository>());
@@ -599,7 +600,7 @@ public class SettingsRepositoryTests
 
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(result, Is.InstanceOf<SuccessResult>());
+            Assert.That(result, Is.InstanceOf<SuccessResult<Unit>>());
             Assert.That(entity, Is.InstanceOf<SettingEntity>()
                 .With.Property(nameof(SettingEntity.Value)).EqualTo("NewValue")
                 .And.Property(nameof(SettingEntity.ModifiedAt)).Not.Null
@@ -633,7 +634,7 @@ public class SettingsRepositoryTests
 
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(result, Is.InstanceOf<SuccessResult>());
+            Assert.That(result, Is.InstanceOf<SuccessResult<Unit>>());
             Assert.That(entity, Is.InstanceOf<SettingEntity>()
                 .With.Property(nameof(SettingEntity.Value)).EqualTo("NewValue")
                 .And.Property(nameof(SettingEntity.CreatedByUserId)).EqualTo(_userId));
@@ -663,7 +664,7 @@ public class SettingsRepositoryTests
 
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(result, Is.InstanceOf<SuccessResult>());
+            Assert.That(result, Is.InstanceOf<SuccessResult<Unit>>());
             Assert.That(settingEntity, Is.InstanceOf<SettingEntity>()
                 .With.Property(nameof(SettingEntity.Value)).EqualTo("NewValue")
                 .And.Property(nameof(SettingEntity.SettingsGroup))
@@ -701,7 +702,7 @@ public class SettingsRepositoryTests
 
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(result, Is.InstanceOf<SuccessResult>());
+            Assert.That(result, Is.InstanceOf<SuccessResult<Unit>>());
             Assert.That(entityExists, Is.False);
             Assert.That(await _context.HistoryEntries.ToListAsync(), Has.One
                 .With.Property(nameof(HistoryEntryEntity.Operation)).EqualTo("Delete")
@@ -726,7 +727,7 @@ public class SettingsRepositoryTests
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(result, Is.InstanceOf<SuccessResult>());
+            Assert.That(result, Is.InstanceOf<SuccessResult<Unit>>());
             Assert.That(await _context.HistoryEntries.ToListAsync(), Is.Empty);
         }
     }

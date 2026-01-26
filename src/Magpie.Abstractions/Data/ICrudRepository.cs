@@ -19,8 +19,8 @@ public interface ICrudRepository<TKey, TModel> : IRepository<TKey, TModel>
     /// Create a new entity.
     /// </summary>
     /// <param name="model">The model to create.</param>
-    /// <param name="createdByUserId">The user who is creating this record.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="createdByUserId">The id of the user creating the record.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
     Task<Result<TModel>> CreateAsync(
         TModel model,
         Guid? createdByUserId,
@@ -30,8 +30,8 @@ public interface ICrudRepository<TKey, TModel> : IRepository<TKey, TModel>
     /// Update an existing entity.
     /// </summary>
     /// <param name="model">The model with updated values.</param>
-    /// <param name="modifiedByUserId">The user who is modifying this record.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="modifiedByUserId">The id of the user modifying the record.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
     /// <returns>
     /// A <see cref="Result{T}"/> containing <see langword="true"/> if the entity was updated,
     /// otherwise <see langword="false"/>.
@@ -45,8 +45,8 @@ public interface ICrudRepository<TKey, TModel> : IRepository<TKey, TModel>
     /// Delete an entity by ID.
     /// </summary>
     /// <param name="id">The entity identifier.</param>
-    /// <param name="deletedByUserId">The user who is deleting this record.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="deletedByUserId">The id of the user deleting the record.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
     /// <returns>
     /// A <see cref="Result{T}"/> containing <see langword="true"/> if the entity was deleted,
     /// otherwise <see langword="false"/>.

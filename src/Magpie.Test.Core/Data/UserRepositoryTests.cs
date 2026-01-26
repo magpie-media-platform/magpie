@@ -4,12 +4,12 @@ using System.Collections.Immutable;
 using System.Linq;
 using System.Threading.Tasks;
 
-using Magpie.Abstractions.Data;
 using Magpie.Core.Data;
 using Magpie.Data.Database;
 using Magpie.Models;
 using Magpie.Models.Result;
 using Magpie.Models.Users;
+using Magpie.Test.Shared;
 
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
@@ -25,7 +25,7 @@ namespace Magpie.Test.Core.Data;
 public class UserRepositoryTests
 {
     private MagpieDbContext _context = null!;
-    private IUserRepository _subject = null!;
+    private UserRepository _subject = null!;
     private Guid _adminUserId;
 
     [SetUp]
@@ -51,7 +51,7 @@ public class UserRepositoryTests
 
         _adminUserId = adminUser.Id;
 
-        var loggerFactory = LoggerFactory.Create(b => b.AddConsole());
+        var loggerFactory = LoggerFactory.Create(b => b.AddTestLogger());
         var historyRepo = new HistoryRepository(_context, loggerFactory.CreateLogger<HistoryRepository>());
 
         _subject = new UserRepository(_context, historyRepo, loggerFactory.CreateLogger<UserRepository>());
@@ -79,7 +79,7 @@ public class UserRepositoryTests
         _context.SaveChanges();
 
         // Act
-        var result = await _subject.GetByIdAsync(userEntity.Id);
+        var result = await _subject.GetByIdAsync(userEntity.Id, default);
 
         // Assert
         Assert.That(result, Is.InstanceOf<SuccessResult<User?>>()
@@ -92,7 +92,7 @@ public class UserRepositoryTests
     public async Task GetByIdAsync_ReturnsNull_WhenUserDoesNotExist()
     {
         // Act
-        var result = await _subject.GetByIdAsync(Guid.NewGuid());
+        var result = await _subject.GetByIdAsync(Guid.NewGuid(), default);
 
         // Assert
         Assert.That(result, Is.InstanceOf<SuccessResult<User?>>().With.Property(nameof(SuccessResult<>.Value)).Null);
@@ -120,45 +120,41 @@ public class UserRepositoryTests
         _context.SaveChanges();
 
         // Act
-        var result = await _subject.GetAllAsync();
+        var result = await _subject.GetAllAsync(default);
 
-        // Assert
+        // Assert (2 added + 1 seeded admin + 1 setup admin = 4)
         Assert.That(result, Is.InstanceOf<SuccessResult<IReadOnlyList<User>>>()
-            .With.Property(nameof(SuccessResult<>.Value)).With.Count.EqualTo(3));
+            .With.Property(nameof(SuccessResult<>.Value)).With.Count.EqualTo(4));
     }
 
     [Test]
-    public async Task GetAllAsync_ReturnsOnlyAdminUser_WhenNoOtherUsers()
+    public async Task GetAllAsync_ReturnsSeededAndSetupUsers_WhenNoOtherUsers()
     {
         // Act
-        var result = await _subject.GetAllAsync();
+        var result = await _subject.GetAllAsync(default);
 
-        // Assert
+        // Assert (1 seeded admin + 1 setup admin = 2)
         Assert.That(result, Is.InstanceOf<SuccessResult<IReadOnlyList<User>>>()
-            .With.Property(nameof(SuccessResult<>.Value)).With.Count.EqualTo(1));
+            .With.Property(nameof(SuccessResult<>.Value)).With.Count.EqualTo(2));
     }
 
     [Test]
     public async Task CreateAsync_CreatesUser()
     {
-        // Arrange
-        var model = new User(
-            Guid.Empty,
-            "NewUser",
-            "newuser@example.com",
-            null,
-            null,
-            true,
-            Role.Requester,
-            null,
-            null,
-            DateTimeOffset.UtcNow,
-            null,
-            null,
-            null);
-
         // Act
-        var result = await _subject.CreateAsync(model, _adminUserId);
+        var result = await _subject.CreateAsync(
+            username: "NewUser",
+            email: "newuser@example.com",
+            authProviderId: Guid.Empty,
+            externalId: null,
+            enabled: true,
+            role: Role.Requester,
+            passwordHash: null,
+            passwordSalt: null,
+            providerData: ImmutableDictionary<string, string>.Empty,
+            createdAt: DateTimeOffset.UtcNow,
+            createdByUserId: _adminUserId,
+            cancellationToken: default);
 
         // Assert
         var entity = await (
@@ -187,29 +183,26 @@ public class UserRepositoryTests
     public async Task CreateAsync_CreatesUserWithProviderData()
     {
         // Arrange
-        var providerData = new Dictionary<string, string?>
+        var providerData = new Dictionary<string, string>
         {
             ["key1"] = "value1",
             ["key2"] = "value2"
         }.ToImmutableDictionary();
 
-        var model = new User(
-            Guid.Empty,
-            "UserWithData",
-            null,
-            null,
-            null,
-            true,
-            Role.Viewer,
-            providerData,
-            null,
-            DateTimeOffset.UtcNow,
-            null,
-            null,
-            null);
-
         // Act
-        var result = await _subject.CreateAsync(model, _adminUserId);
+        var result = await _subject.CreateAsync(
+            username: "UserWithData",
+            email: string.Empty,
+            authProviderId: Guid.Empty,
+            externalId: null,
+            enabled: true,
+            role: Role.Viewer,
+            passwordHash: null,
+            passwordSalt: null,
+            providerData: providerData,
+            createdAt: DateTimeOffset.UtcNow,
+            createdByUserId: _adminUserId,
+            cancellationToken: default);
 
         // Assert
         var entity = await (
@@ -260,7 +253,7 @@ public class UserRepositoryTests
             null);
 
         // Act
-        var result = await _subject.UpdateAsync(model, _adminUserId);
+        var result = await _subject.UpdateAsync(model, _adminUserId, default);
 
         // Assert
         var entity = await (
@@ -270,7 +263,8 @@ public class UserRepositoryTests
 
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(result, Is.InstanceOf<SuccessResult<bool>>().With.Property(nameof(SuccessResult<>.Value)).True);
+            Assert.That(result, Is.InstanceOf<SuccessResult<bool>>()
+                .With.Property(nameof(SuccessResult<>.Value)).True);
             Assert.That(entity, Is.InstanceOf<UserEntity>()
                 .With.Property(nameof(UserEntity.Username)).EqualTo("UpdatedUser")
                 .And.Property(nameof(UserEntity.Email)).EqualTo("updated@example.com")
@@ -305,7 +299,7 @@ public class UserRepositoryTests
             null);
 
         // Act
-        var result = await _subject.UpdateAsync(model, _adminUserId);
+        var result = await _subject.UpdateAsync(model, _adminUserId, default);
 
         // Assert
         Assert.That(result, Is.InstanceOf<SuccessResult<bool>>().With.Property(nameof(SuccessResult<>.Value)).False);
@@ -357,7 +351,7 @@ public class UserRepositoryTests
             null);
 
         // Act
-        var result = await _subject.UpdateAsync(model, _adminUserId);
+        var result = await _subject.UpdateAsync(model, _adminUserId, default);
 
         // Assert
         var providerDataEntities = await _context.UserProviderData
@@ -375,8 +369,7 @@ public class UserRepositoryTests
             Assert.That(providerDataEntities, Has.One
                 .With.Property("Key").EqualTo("newKey")
                 .And.Property(nameof(SuccessResult<>.Value)).EqualTo("brandNew"));
-            Assert.That(providerDataEntities, Has.None
-                .With.Property("Key").EqualTo("toRemove"));
+            Assert.That(providerDataEntities, Has.None.With.Property("Key").EqualTo("toRemove"));
         }
     }
 
@@ -395,7 +388,7 @@ public class UserRepositoryTests
         _context.SaveChanges();
 
         // Act
-        var result = await _subject.DeleteAsync(userEntity.Id, _adminUserId);
+        var result = await _subject.DeleteAsync(userEntity.Id, _adminUserId, default);
 
         // Assert
         var entityExists = await _context.Users.AnyAsync(u => u.Id == userEntity.Id);
@@ -415,7 +408,7 @@ public class UserRepositoryTests
     public async Task DeleteAsync_ReturnsFalse_WhenUserDoesNotExist()
     {
         // Act
-        var result = await _subject.DeleteAsync(Guid.NewGuid(), _adminUserId);
+        var result = await _subject.DeleteAsync(Guid.NewGuid(), _adminUserId, default);
 
         // Assert
         Assert.That(result, Is.InstanceOf<SuccessResult<bool>>().With.Property(nameof(SuccessResult<>.Value)).False);
@@ -446,7 +439,7 @@ public class UserRepositoryTests
         _context.SaveChanges();
 
         // Act
-        var result = await _subject.DeleteAsync(userEntity.Id, _adminUserId);
+        var result = await _subject.DeleteAsync(userEntity.Id, _adminUserId, default);
 
         // Assert
         var providerDataExists = await _context.UserProviderData
@@ -480,7 +473,7 @@ public class UserRepositoryTests
         };
 
         // Act
-        var result = await _subject.PatchAsync(patch, _adminUserId);
+        var result = await _subject.PatchAsync(patch, _adminUserId, default);
 
         // Assert
         var entity = await (
@@ -523,7 +516,7 @@ public class UserRepositoryTests
         };
 
         // Act
-        var result = await _subject.PatchAsync(patch, _adminUserId);
+        var result = await _subject.PatchAsync(patch, _adminUserId, default);
 
         // Assert
         var entity = await (
@@ -550,7 +543,7 @@ public class UserRepositoryTests
         };
 
         // Act
-        var result = await _subject.PatchAsync(patch, _adminUserId);
+        var result = await _subject.PatchAsync(patch, _adminUserId, default);
 
         // Assert
         Assert.That(result, Is.InstanceOf<SuccessResult<bool>>().With.Property(nameof(SuccessResult<>.Value)).False);
@@ -572,7 +565,7 @@ public class UserRepositoryTests
         _context.SaveChanges();
 
         // Act
-        var result = await _subject.GetByUsernameAsync("UniqueUsername");
+        var result = await _subject.GetByUsernameAsync("UniqueUsername", default);
 
         // Assert
         Assert.That(result, Is.InstanceOf<SuccessResult<User?>>()
@@ -585,7 +578,7 @@ public class UserRepositoryTests
     public async Task GetByUsernameAsync_ReturnsNull_WhenUserDoesNotExist()
     {
         // Act
-        var result = await _subject.GetByUsernameAsync("NonExistentUser");
+        var result = await _subject.GetByUsernameAsync("NonExistentUser", default);
 
         // Assert
         Assert.That(result, Is.InstanceOf<SuccessResult<User?>>().With.Property(nameof(SuccessResult<>.Value)).Null);
@@ -620,7 +613,7 @@ public class UserRepositoryTests
         _context.SaveChanges();
 
         // Act
-        var result = await _subject.GetByExternalIdAsync(authProviderId, "external-123");
+        var result = await _subject.GetByExternalIdAsync(authProviderId, "external-123", default);
 
         // Assert
         Assert.That(result, Is.InstanceOf<SuccessResult<User?>>()
@@ -633,10 +626,78 @@ public class UserRepositoryTests
     public async Task GetByExternalIdAsync_ReturnsNull_WhenUserDoesNotExist()
     {
         // Act
-        var result = await _subject.GetByExternalIdAsync(Guid.NewGuid(), "nonexistent");
+        var result = await _subject.GetByExternalIdAsync(Guid.NewGuid(), "nonexistent", default);
 
         // Assert
         Assert.That(result, Is.InstanceOf<SuccessResult<User?>>().With.Property(nameof(SuccessResult<>.Value)).Null);
+    }
+
+    [Test]
+    public async Task GetUserCredentialsAsync_ReturnsCredentials_WhenUserExists()
+    {
+        // Arrange
+        var userEntity = new UserEntity
+        {
+            Username = "CredUser",
+            Enabled = true,
+            Role = Role.Viewer,
+            PasswordHash = "testhash",
+            PasswordSalt = "testsalt",
+            CreatedAt = DateTimeOffset.UtcNow
+        };
+        _context.Users.Add(userEntity);
+        _context.SaveChanges();
+
+        // Act
+        var result = await _subject.GetUserCredentialsAsync("CredUser", default);
+
+        // Assert
+        Assert.That(result, Is.InstanceOf<SuccessResult<UserCredentials?>>()
+            .With.Property(nameof(SuccessResult<>.Value)).Property(nameof(UserCredentials.UserId))
+                .EqualTo(userEntity.Id)
+            .And.Property(nameof(SuccessResult<>.Value)).Property(nameof(UserCredentials.PasswordHash))
+                .EqualTo("testhash")
+            .And.Property(nameof(SuccessResult<>.Value)).Property(nameof(UserCredentials.PasswordSalt))
+                .EqualTo("testsalt")
+            .And.Property(nameof(SuccessResult<>.Value)).Property(nameof(UserCredentials.Enabled))
+                .True);
+    }
+
+    [Test]
+    public async Task GetUserCredentialsAsync_ReturnsNull_WhenUserDoesNotExist()
+    {
+        // Act
+        var result = await _subject.GetUserCredentialsAsync("nonexistent", default);
+
+        // Assert
+        Assert.That(result, Is.InstanceOf<SuccessResult<UserCredentials?>>().With.Property(nameof(SuccessResult<>.Value)).Null);
+    }
+
+    [Test]
+    public async Task GetUserCredentialsAsync_ReturnsLockedUntil_WhenUserIsLocked()
+    {
+        // Arrange
+        var lockedUntil = DateTimeOffset.UtcNow.AddHours(1);
+        var userEntity = new UserEntity
+        {
+            Username = "LockedUser",
+            Enabled = true,
+            Role = Role.Viewer,
+            PasswordHash = "testhash",
+            PasswordSalt = "testsalt",
+            LockedUntil = lockedUntil,
+            CreatedAt = DateTimeOffset.UtcNow
+        };
+        _context.Users.Add(userEntity);
+        _context.SaveChanges();
+
+        // Act
+        var result = await _subject.GetUserCredentialsAsync("LockedUser", default);
+
+        // Assert
+        Assert.That(result, Is.InstanceOf<SuccessResult<UserCredentials?>>()
+            .With.Property(nameof(SuccessResult<>.Value)).Property(nameof(UserCredentials.LockedUntil))
+                .EqualTo(lockedUntil));
     }
 
     [Test]
@@ -656,7 +717,14 @@ public class UserRepositoryTests
         _context.SaveChanges();
 
         // Act
-        var result = await _subject.UpdatePasswordAsync(userEntity.Id, "newHash", "newSalt", _adminUserId);
+        var result = await _subject.UpdatePasswordAsync(
+            userEntity.Id,
+            "newHash",
+            "newSalt",
+            unlock: null,
+            resetFailedLoginAttempts: null,
+            _adminUserId,
+            default);
 
         // Assert
         var entity = await (
@@ -666,7 +734,7 @@ public class UserRepositoryTests
 
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(result, Is.InstanceOf<SuccessResult>());
+            Assert.That(result, Is.InstanceOf<SuccessResult<Unit>>());
             Assert.That(entity, Is.InstanceOf<UserEntity>()
                 .With.Property(nameof(UserEntity.PasswordHash)).EqualTo("newHash")
                 .And.Property(nameof(UserEntity.PasswordSalt)).EqualTo("newSalt")
@@ -676,6 +744,88 @@ public class UserRepositoryTests
                 .With.Property(nameof(HistoryEntryEntity.Operation)).EqualTo("UpdatePassword")
                 .And.Property(nameof(HistoryEntryEntity.EntityType)).EqualTo("User")
                 .And.Property(nameof(HistoryEntryEntity.UserId)).EqualTo(_adminUserId));
+        }
+    }
+
+    [Test]
+    public async Task UpdatePasswordAsync_UnlocksUser_WhenUnlockIsTrue()
+    {
+        // Arrange
+        var userEntity = new UserEntity
+        {
+            Username = "LockedUser",
+            Enabled = true,
+            Role = Role.Viewer,
+            PasswordHash = "oldHash",
+            PasswordSalt = "oldSalt",
+            LockedUntil = DateTimeOffset.UtcNow.AddHours(1),
+            CreatedAt = DateTimeOffset.UtcNow
+        };
+        _context.Users.Add(userEntity);
+        _context.SaveChanges();
+
+        // Act
+        var result = await _subject.UpdatePasswordAsync(
+            userEntity.Id,
+            "newHash",
+            "newSalt",
+            unlock: true,
+            resetFailedLoginAttempts: null,
+            _adminUserId,
+            default);
+
+        // Assert
+        var entity = await (
+            from u in _context.Users.AsNoTracking()
+            where u.Id == userEntity.Id
+            select u).SingleOrDefaultAsync();
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Is.InstanceOf<SuccessResult<Unit>>());
+            Assert.That(entity, Is.InstanceOf<UserEntity>()
+                .With.Property(nameof(UserEntity.LockedUntil)).Null);
+        }
+    }
+
+    [Test]
+    public async Task UpdatePasswordAsync_ResetsFailedAttempts_WhenResetIsTrue()
+    {
+        // Arrange
+        var userEntity = new UserEntity
+        {
+            Username = "FailedUser",
+            Enabled = true,
+            Role = Role.Viewer,
+            PasswordHash = "oldHash",
+            PasswordSalt = "oldSalt",
+            FailedLoginAttempts = 5,
+            CreatedAt = DateTimeOffset.UtcNow
+        };
+        _context.Users.Add(userEntity);
+        _context.SaveChanges();
+
+        // Act
+        var result = await _subject.UpdatePasswordAsync(
+            userEntity.Id,
+            "newHash",
+            "newSalt",
+            unlock: null,
+            resetFailedLoginAttempts: true,
+            _adminUserId,
+            default);
+
+        // Assert
+        var entity = await (
+            from u in _context.Users.AsNoTracking()
+            where u.Id == userEntity.Id
+            select u).SingleOrDefaultAsync();
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Is.InstanceOf<SuccessResult<Unit>>());
+            Assert.That(entity, Is.InstanceOf<UserEntity>()
+                .With.Property(nameof(UserEntity.FailedLoginAttempts)).EqualTo(0));
         }
     }
 
@@ -695,7 +845,7 @@ public class UserRepositoryTests
         _context.SaveChanges();
 
         // Act
-        var result = await _subject.RecordFailedLoginAsync(userEntity.Id, null);
+        var result = await _subject.RecordFailedLoginAsync(userEntity.Id, null, default);
 
         // Assert
         var entity = await (
@@ -705,7 +855,7 @@ public class UserRepositoryTests
 
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(result, Is.InstanceOf<SuccessResult>());
+            Assert.That(result, Is.InstanceOf<SuccessResult<Unit>>());
             Assert.That(entity, Is.InstanceOf<UserEntity>()
                 .With.Property(nameof(UserEntity.FailedLoginAttempts)).EqualTo(1)
                 .And.Property(nameof(UserEntity.LockedUntil)).Null);
@@ -731,7 +881,7 @@ public class UserRepositoryTests
         var beforeLockout = DateTimeOffset.UtcNow;
 
         // Act
-        var result = await _subject.RecordFailedLoginAsync(userEntity.Id, lockoutDuration);
+        var result = await _subject.RecordFailedLoginAsync(userEntity.Id, lockoutDuration, default);
 
         // Assert
         var entity = await (
@@ -741,7 +891,7 @@ public class UserRepositoryTests
 
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(result, Is.InstanceOf<SuccessResult>());
+            Assert.That(result, Is.InstanceOf<SuccessResult<Unit>>());
             Assert.That(entity, Is.InstanceOf<UserEntity>()
                 .With.Property(nameof(UserEntity.FailedLoginAttempts)).EqualTo(5));
             Assert.That(entity!.LockedUntil, Is.Not.Null
@@ -750,7 +900,7 @@ public class UserRepositoryTests
     }
 
     [Test]
-    public async Task RecordSuccessfulLoginAsync_ResetsFailedAttemptsAndLockout()
+    public async Task ResetFailedLoginAttemptsAsync_ResetsFailedAttemptsAndUpdatesLastLogin()
     {
         // Arrange
         var userEntity = new UserEntity
@@ -759,7 +909,6 @@ public class UserRepositoryTests
             Enabled = true,
             Role = Role.Viewer,
             FailedLoginAttempts = 3,
-            LockedUntil = DateTimeOffset.UtcNow.AddMinutes(10),
             CreatedAt = DateTimeOffset.UtcNow
         };
         _context.Users.Add(userEntity);
@@ -768,7 +917,7 @@ public class UserRepositoryTests
         var beforeLogin = DateTimeOffset.UtcNow;
 
         // Act
-        var result = await _subject.RecordSuccessfulLoginAsync(userEntity.Id);
+        var result = await _subject.ResetFailedLoginAttemptsAsync(userEntity.Id, default);
 
         // Assert
         var entity = await (
@@ -778,10 +927,9 @@ public class UserRepositoryTests
 
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(result, Is.InstanceOf<SuccessResult>());
+            Assert.That(result, Is.InstanceOf<SuccessResult<Unit>>());
             Assert.That(entity, Is.InstanceOf<UserEntity>()
-                .With.Property(nameof(UserEntity.FailedLoginAttempts)).EqualTo(0)
-                .And.Property(nameof(UserEntity.LockedUntil)).Null);
+                .With.Property(nameof(UserEntity.FailedLoginAttempts)).EqualTo(0));
             Assert.That(entity!.LastLoginAt, Is.Not.Null
                 .And.GreaterThanOrEqualTo(beforeLogin));
         }
@@ -807,7 +955,7 @@ public class UserRepositoryTests
         _context.SaveChanges();
 
         // Act
-        var result = await _subject.GetByIdAsync(userEntity.Id);
+        var result = await _subject.GetByIdAsync(userEntity.Id, default);
 
         // Assert
         Assert.That(result, Is.InstanceOf<SuccessResult<User?>>()

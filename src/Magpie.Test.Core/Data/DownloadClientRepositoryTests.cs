@@ -11,6 +11,7 @@ using Magpie.Models;
 using Magpie.Models.Downloads;
 using Magpie.Models.Result;
 using Magpie.Models.Users;
+using Magpie.Test.Shared;
 
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
@@ -55,7 +56,7 @@ public class DownloadClientRepositoryTests
 
         _userId = user.Id;
 
-        var loggerFactory = LoggerFactory.Create(b => b.AddConsole());
+        var loggerFactory = LoggerFactory.Create(b => b.AddTestLogger());
         var historyRepo = new HistoryRepository(_context, loggerFactory.CreateLogger<HistoryRepository>());
 
         _subject = new DownloadClientRepository(
@@ -1699,7 +1700,6 @@ public class DownloadClientRepositoryTests
         };
         entity.Settings.Add(new() { Key = "host", Value = "localhost" });
         entity.Tags.Add(new() { TagName = "primary" });
-
         _context.DownloadClients.Add(entity);
         _context.SaveChanges();
 
@@ -1786,7 +1786,6 @@ public class DownloadClientRepositoryTests
 
         // Assert
         var historyEntries = await _context.HistoryEntries.ToListAsync();
-
         Assert.That(historyEntries, Is.Empty);
     }
 }

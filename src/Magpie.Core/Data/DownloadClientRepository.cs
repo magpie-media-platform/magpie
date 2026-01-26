@@ -622,9 +622,9 @@ public sealed class DownloadClientRepository(
             ex.TryGetErrorCode(out var errorCode);
             logger.LogError(
                 ex,
-                        "Error patching download client {DownloadClientId} ({ExErrorCode})",
-                        patch.Id,
-                        errorCode ?? "");
+                "Error patching download client {DownloadClientId} ({ExErrorCode})",
+                patch.Id,
+                errorCode ?? "");
             return Result.Fail<bool>("Error patching download client", ErrorCodes.DbDownloadClientError, errorCode);
         }
     }

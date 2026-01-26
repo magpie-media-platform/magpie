@@ -35,11 +35,11 @@ public interface ISettingsRepository :
     /// </summary>
     /// <param name="extensionId">The extension ID.</param>
     /// <param name="settingsGroupName">The settings group name.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
     Task<Result<IReadOnlyList<Setting>>> GetSettingsAsync(
         Guid? extensionId,
         string settingsGroupName,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Upsert a setting.
@@ -47,8 +47,8 @@ public interface ISettingsRepository :
     /// <param name="key">The setting key.</param>
     /// <param name="value">The setting value.</param>
     /// <param name="modifiedByUserId">The user modifying the setting.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    Task<Result> UpsertSettingAsync(
+    /// <param name="cancellationToken">The cancellation token.</param>
+    Task<Result<Unit>> UpsertSettingAsync(
         SettingKey key,
         string? value,
         Guid? modifiedByUserId,
@@ -60,7 +60,7 @@ public interface ISettingsRepository :
     /// <param name="extensionId">The extension ID.</param>
     /// <param name="groupName">The settings group name.</param>
     /// <param name="key">The setting key.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
     public Task<Result<Setting?>> GetSettingAsync(
         Guid extensionId,
         string groupName,
@@ -73,7 +73,7 @@ public interface ISettingsRepository :
     /// <summary>
     /// Get all settings.
     /// </summary>
-    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
     public Task<Result<IReadOnlyList<Setting>>> GetAllSettingsAsync(
         CancellationToken cancellationToken = default)
     {
@@ -85,7 +85,7 @@ public interface ISettingsRepository :
     /// </summary>
     /// <param name="extensionId">The extension ID.</param>
     /// <param name="name">The settings group name.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
     public Task<Result<SettingsGroup?>> GetSettingsGroupAsync(
         Guid? extensionId,
         string name,
@@ -97,7 +97,7 @@ public interface ISettingsRepository :
     /// <summary>
     /// Get all settings groups.
     /// </summary>
-    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
     public Task<Result<IReadOnlyList<SettingsGroup>>> GetAllSettingsGroupsAsync(
         CancellationToken cancellationToken = default)
     {

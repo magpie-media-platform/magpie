@@ -10,6 +10,7 @@ using Magpie.Models;
 using Magpie.Models.Result;
 using Magpie.Models.RootFolders;
 using Magpie.Models.Users;
+using Magpie.Test.Shared;
 
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
@@ -54,7 +55,7 @@ public class RootFolderRepositoryTests
         _userId = user.Id;
         _contentTypeId = Guid.NewGuid();
 
-        var loggerFactory = LoggerFactory.Create(b => b.AddConsole());
+        var loggerFactory = LoggerFactory.Create(b => b.AddTestLogger());
         var historyRepo = new HistoryRepository(_context, loggerFactory.CreateLogger<HistoryRepository>());
 
         _subject = new RootFolderRepository(_context, historyRepo, loggerFactory.CreateLogger<RootFolderRepository>());

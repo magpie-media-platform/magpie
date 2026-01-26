@@ -1,29 +1,13 @@
-namespace Magpie.Data.Database;
+namespace Magpie.Core;
 
-internal static class ErrorCodes
+/// <summary>
+/// Defines error codes used throughout the application for consistent error identification.
+/// </summary>
+public static partial class ErrorCodes
 {
     private const string Prefix = "MP";
-    private const string DbLayerArea = "03";
-    private const string DbErrorCategory = "01";
-    private const string DbValidationCategory = "02";
-
-    public const string DbSettingsError = $"{Prefix}{DbLayerArea}{DbErrorCategory}0001";
-    public const string DbSettingsGroupError = $"{Prefix}{DbLayerArea}{DbErrorCategory}0002";
-    public const string DbSettingError = $"{Prefix}{DbLayerArea}{DbErrorCategory}0003";
-    public const string DbApiKeyError = $"{Prefix}{DbLayerArea}{DbErrorCategory}0004";
-    public const string DbUserError = $"{Prefix}{DbLayerArea}{DbErrorCategory}0005";
-    public const string DbAuthProviderError = $"{Prefix}{DbLayerArea}{DbErrorCategory}0006";
-    public const string DbRoleError = $"{Prefix}{DbLayerArea}{DbErrorCategory}0007";
-    public const string DbPermissionError = $"{Prefix}{DbLayerArea}{DbErrorCategory}0008";
-    public const string DbPermissionGroupError = $"{Prefix}{DbLayerArea}{DbErrorCategory}0009";
-    public const string DbHistoryError = $"{Prefix}{DbLayerArea}{DbErrorCategory}0010";
-    public const string DbTagError = $"{Prefix}{DbLayerArea}{DbErrorCategory}0011";
-    public const string DbRootFolderError = $"{Prefix}{DbLayerArea}{DbErrorCategory}0012";
-    public const string DbMediaServerError = $"{Prefix}{DbLayerArea}{DbErrorCategory}0013";
-    public const string DbDownloadClientError = $"{Prefix}{DbLayerArea}{DbErrorCategory}0014";
-    public const string DbIndexerFeedError = $"{Prefix}{DbLayerArea}{DbErrorCategory}0015";
-    public const string DbIndexerError = $"{Prefix}{DbLayerArea}{DbErrorCategory}0016";
-
-    public const string DbSettingValidationError = $"{Prefix}{DbLayerArea}{DbValidationCategory}0001";
-    public const string DbSettingsGroupValidationError = $"{Prefix}{DbLayerArea}{DbValidationCategory}0002";
+    private const string DbArea = $"{Prefix}01";
+    private const string AuthArea = $"{Prefix}02";
+    private const string SecurityArea = $"{Prefix}03";
+    private const string ExtensionsArea = $"{Prefix}04";
 }

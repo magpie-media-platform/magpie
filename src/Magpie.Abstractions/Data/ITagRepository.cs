@@ -16,6 +16,6 @@ public interface ITagRepository : IRepository<Tag>
     /// Get all tags that start with the specified prefix.
     /// </summary>
     /// <param name="prefix">The prefix to match.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
     Task<Result<IReadOnlyList<Tag>>> GetByPrefixAsync(string prefix, CancellationToken cancellationToken = default);
 }

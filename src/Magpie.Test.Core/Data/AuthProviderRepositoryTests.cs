@@ -10,6 +10,7 @@ using Magpie.Data.Database;
 using Magpie.Data.Database.Entities;
 using Magpie.Models.Result;
 using Magpie.Models.Users;
+using Magpie.Test.Shared;
 
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
@@ -53,7 +54,7 @@ public class AuthProviderRepositoryTests
 
         _userId = user.Id;
 
-        var loggerFactory = LoggerFactory.Create(b => b.AddConsole());
+        var loggerFactory = LoggerFactory.Create(b => b.AddTestLogger());
         var historyRepo = new HistoryRepository(_context, loggerFactory.CreateLogger<HistoryRepository>());
 
         _subject = new AuthProviderRepository(
@@ -157,20 +158,20 @@ public class AuthProviderRepositoryTests
         // Act
         var result = await _subject.GetAllAsync();
 
-        // Assert
+        // Assert (2 added + 2 seeded = 4)
         Assert.That(result, Is.InstanceOf<SuccessResult<IReadOnlyList<AuthProvider>>>()
-            .With.Property(nameof(SuccessResult<>.Value)).With.Count.EqualTo(2));
+            .With.Property(nameof(SuccessResult<>.Value)).With.Count.EqualTo(4));
     }
 
     [Test]
-    public async Task GetAllAsync_ReturnsEmptyList_WhenNoProviders()
+    public async Task GetAllAsync_ReturnsSeededProviders_WhenNoAdditionalProviders()
     {
         // Act
         var result = await _subject.GetAllAsync();
 
-        // Assert
+        // Assert (2 seeded providers)
         Assert.That(result, Is.InstanceOf<SuccessResult<IReadOnlyList<AuthProvider>>>()
-            .With.Property(nameof(SuccessResult<>.Value)).Empty);
+            .With.Property(nameof(SuccessResult<>.Value)).With.Count.EqualTo(2));
     }
 
     [Test]
@@ -195,7 +196,9 @@ public class AuthProviderRepositoryTests
         // Assert
         var success = result as SuccessResult<IReadOnlyList<AuthProvider>>;
         Assert.That(success, Is.Not.Null);
-        Assert.That(success!.Value[0].Settings, Has.Count.EqualTo(1));
+        var providerWithSettings = success!.Value.FirstOrDefault(p => p.Name == "ProviderWithSettings");
+        Assert.That(providerWithSettings, Is.Not.Null);
+        Assert.That(providerWithSettings!.Settings, Has.Count.EqualTo(1));
     }
 
     [Test]
@@ -739,7 +742,8 @@ public class AuthProviderRepositoryTests
                 .EqualTo("UniqueProviderName")
             .And.Property(nameof(SuccessResult<>.Value)).Property(nameof(AuthProvider.Provider))
                 .EqualTo("ldap")
-            .And.Property(nameof(SuccessResult<>.Value)).Property(nameof(AuthProvider.IsDefault)).True);
+            .And.Property(nameof(SuccessResult<>.Value)).Property(nameof(AuthProvider.IsDefault))
+                .True);
     }
 
     [Test]
@@ -775,5 +779,130 @@ public class AuthProviderRepositoryTests
         // Assert
         Assert.That(result, Is.InstanceOf<SuccessResult<AuthProvider?>>()
             .With.Property(nameof(SuccessResult<>.Value)).Property(nameof(AuthProvider.Settings)).Count.EqualTo(1));
+    }
+
+    [Test]
+    public async Task GetByProviderTypeAsync_ReturnsEnabledProviders()
+    {
+        // Arrange
+        var enabledEntity = new AuthProviderEntity
+        {
+            Name = "EnabledLdapProvider",
+            Provider = "ldap",
+            Enabled = true,
+            IsDefault = false,
+            CreatedAt = DateTimeOffset.UtcNow
+        };
+        var disabledEntity = new AuthProviderEntity
+        {
+            Name = "DisabledLdapProvider",
+            Provider = "ldap",
+            Enabled = false,
+            IsDefault = false,
+            CreatedAt = DateTimeOffset.UtcNow
+        };
+        var differentTypeEntity = new AuthProviderEntity
+        {
+            Name = "OidcProvider",
+            Provider = "oidc",
+            Enabled = true,
+            IsDefault = false,
+            CreatedAt = DateTimeOffset.UtcNow
+        };
+        _context.AuthProviders.AddRange(enabledEntity, disabledEntity, differentTypeEntity);
+        _context.SaveChanges();
+
+        // Act
+        var result = await _subject.GetByProviderTypeAsync("ldap");
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Is.InstanceOf<SuccessResult<IReadOnlyList<AuthProvider>>>()
+                .With.Property(nameof(SuccessResult<>.Value)).With.Count.EqualTo(1));
+            var success = result as SuccessResult<IReadOnlyList<AuthProvider>>;
+            Assert.That(success!.Value, Has.One
+                .With.Property(nameof(AuthProvider.Name)).EqualTo("EnabledLdapProvider"));
+        }
+    }
+
+    [Test]
+    public async Task GetByProviderTypeAsync_ReturnsEmptyList_WhenNoMatches()
+    {
+        // Arrange
+        var entity = new AuthProviderEntity
+        {
+            Name = "OidcProvider",
+            Provider = "oidc",
+            Enabled = true,
+            IsDefault = false,
+            CreatedAt = DateTimeOffset.UtcNow
+        };
+        _context.AuthProviders.Add(entity);
+        _context.SaveChanges();
+
+        // Act
+        var result = await _subject.GetByProviderTypeAsync("ldap");
+
+        // Assert
+        Assert.That(result, Is.InstanceOf<SuccessResult<IReadOnlyList<AuthProvider>>>()
+            .With.Property(nameof(SuccessResult<>.Value)).With.Count.EqualTo(0));
+    }
+
+    [Test]
+    public async Task GetByProviderTypeAsync_ReturnsMultipleEnabledProviders()
+    {
+        // Arrange
+        var entity1 = new AuthProviderEntity
+        {
+            Name = "LdapProvider1",
+            Provider = "ldap",
+            Enabled = true,
+            IsDefault = false,
+            CreatedAt = DateTimeOffset.UtcNow
+        };
+        var entity2 = new AuthProviderEntity
+        {
+            Name = "LdapProvider2",
+            Provider = "ldap",
+            Enabled = true,
+            IsDefault = true,
+            CreatedAt = DateTimeOffset.UtcNow
+        };
+        _context.AuthProviders.AddRange(entity1, entity2);
+        _context.SaveChanges();
+
+        // Act
+        var result = await _subject.GetByProviderTypeAsync("ldap");
+
+        // Assert
+        Assert.That(result, Is.InstanceOf<SuccessResult<IReadOnlyList<AuthProvider>>>()
+            .With.Property(nameof(SuccessResult<>.Value)).With.Count.EqualTo(2));
+    }
+
+    [Test]
+    public async Task GetByProviderTypeAsync_IncludesSettings()
+    {
+        // Arrange
+        var entity = new AuthProviderEntity
+        {
+            Name = "LdapWithSettings",
+            Provider = "ldap",
+            Enabled = true,
+            IsDefault = false,
+            CreatedAt = DateTimeOffset.UtcNow
+        };
+        entity.Settings.Add(new() { Key = "server", Value = "ldap.example.com" });
+        entity.Settings.Add(new() { Key = "port", Value = "389" });
+        _context.AuthProviders.Add(entity);
+        _context.SaveChanges();
+
+        // Act
+        var result = await _subject.GetByProviderTypeAsync("ldap");
+
+        // Assert
+        Assert.That(result, Is.InstanceOf<SuccessResult<IReadOnlyList<AuthProvider>>>()
+            .With.Property(nameof(SuccessResult<>.Value)).With.One
+                .With.Property(nameof(AuthProvider.Settings)).Count.EqualTo(2));
     }
 }

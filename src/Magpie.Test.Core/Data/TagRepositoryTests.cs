@@ -6,6 +6,7 @@ using Magpie.Core.Data;
 using Magpie.Data.Database;
 using Magpie.Models;
 using Magpie.Models.Result;
+using Magpie.Test.Shared;
 
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
@@ -32,7 +33,7 @@ public class TagRepositoryTests
         _context.Database.OpenConnection();
         _context.Database.EnsureCreated();
 
-        var loggerFactory = LoggerFactory.Create(b => b.AddConsole());
+        var loggerFactory = LoggerFactory.Create(b => b.AddTestLogger());
 
         _subject = new TagRepository(_context, loggerFactory.CreateLogger<TagRepository>());
     }

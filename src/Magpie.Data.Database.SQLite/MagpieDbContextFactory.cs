@@ -24,7 +24,7 @@ public sealed class MagpieDbContextFactory : IDesignTimeDbContextFactory<MagpieD
             connectionString,
             options => options.MigrationsAssembly(typeof(MagpieDbContextFactory).Assembly.GetName().Name));
 
-        return new MagpieDbContext(optionsBuilder.Options);
+        return new(optionsBuilder.Options);
     }
 
     private static string GetDesignTimeConnectionString()

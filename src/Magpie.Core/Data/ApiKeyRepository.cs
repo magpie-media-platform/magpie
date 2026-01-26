@@ -76,70 +76,72 @@ public sealed class ApiKeyRepository(
     }
 
     /// <inheritdoc />
-    public async Task<Result<ApiKey>> GetByPrefixAndHashAsync(
-        string keyPrefix,
-        string keyHash,
-        CancellationToken cancellationToken)
+    public async Task<Result<bool>> PatchAsync(
+        ApiKeyPatch patch,
+        Guid? modifiedByUserId,
+        CancellationToken cancellationToken = default)
     {
         try
         {
-            var entity = await (
-                from k in context.ApiKeys.AsNoTracking()
-                where k.KeyPrefix == keyPrefix
-                where k.KeyHash == keyHash
-                select k)
-                .FirstOrDefaultAsync(cancellationToken)
+            var entity = await context.ApiKeys
+                .FirstOrDefaultAsync(k => k.Id == patch.Id, cancellationToken)
                 .ConfigureAwait(false);
 
-            return entity is null
-                ? Result.Fail<ApiKey>("API key not found", ErrorCodes.DbApiKeyError)
-                : Result.Success(entity.ToModel());
+            if (entity is null)
+            {
+                return Result.Success(false);
+            }
+
+            var userId = entity.UserId;
+
+            if (patch.Enabled is not null)
+            {
+                entity.Enabled = patch.Enabled.Value;
+            }
+            if (patch.ExpiresAt is not null)
+            {
+                entity.ExpiresAt = patch.ExpiresAt.Value;
+            }
+            if (patch.LastUsedAt is not null)
+            {
+                entity.LastUsedAt = patch.LastUsedAt.Value;
+            }
+
+            entity.ModifiedAt = DateTimeOffset.UtcNow;
+            entity.ModifiedByUserId = modifiedByUserId;
+
+            var updated = await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+
+            if (updated > 0)
+            {
+                await historyRepository.RecordEntryAsync(
+                    category: AuditCategories.Security,
+                    operation: "Patch",
+                    entityId: patch.Id,
+                    parentEntityId: userId,
+                    entityType: nameof(ApiKey),
+                    description: $"Updated API key {entity.Name}",
+                    userId: modifiedByUserId,
+                    cancellationToken: cancellationToken).ConfigureAwait(false);
+            }
+
+            return Result.Success(updated > 0);
         }
         catch (Exception ex)
         {
             ex.TryGetErrorCode(out var errorCode);
             logger.LogError(
                 ex,
-                "Error getting API key by prefix {KeyPrefix} ({ExErrorCode})",
-                keyPrefix,
+                "Error patching API key {ApiKeyId} ({ExErrorCode})",
+                patch.Id,
                 errorCode ?? "");
-            return Result.Fail<ApiKey>("Error retrieving API key", ErrorCodes.DbApiKeyError, errorCode);
-        }
-    }
-
-    /// <inheritdoc />
-    public async Task<Result<IReadOnlyList<ApiKey>>> GetByUserIdAsync(
-        Guid userId,
-        CancellationToken cancellationToken)
-    {
-        try
-        {
-            var entities = await (
-                from k in context.ApiKeys.AsNoTracking()
-                where k.UserId == userId
-                select k)
-                .ToListAsync(cancellationToken)
-                .ConfigureAwait(false);
-
-            var result = entities.Select(k => k.ToModel()).ToImmutableList();
-
-            return Result.Success<IReadOnlyList<ApiKey>>(result);
-        }
-        catch (Exception ex)
-        {
-            ex.TryGetErrorCode(out var errorCode);
-            logger.LogError(
-                ex,
-                "Error getting API keys for user {UserId} ({ExErrorCode})",
-                userId,
-                errorCode ?? "");
-            return Result.Fail<IReadOnlyList<ApiKey>>("Error retrieving API keys", ErrorCodes.DbApiKeyError, errorCode);
+            return Result.Fail<bool>("Error updating API key", ErrorCodes.DbApiKeyError, errorCode);
         }
     }
 
     /// <inheritdoc />
     public async Task<Result<ApiKey>> CreateAsync(
-        Guid userId,
+        Guid? userId,
         string name,
         string keyPrefix,
         string keyHash,
@@ -155,7 +157,7 @@ public sealed class ApiKeyRepository(
 
             var entity = new ApiKeyEntity
             {
-                UserId = userId,
+                UserId = userId ?? Guid.Empty,
                 Name = name,
                 KeyPrefix = keyPrefix,
                 KeyHash = keyHash,
@@ -187,19 +189,15 @@ public sealed class ApiKeyRepository(
             ex.TryGetErrorCode(out var errorCode);
             logger.LogError(
                 ex,
-                "Error creating API key {ApiKeyName} for user {UserId} ({ExErrorCode})",
+                "Error creating API key {ApiKeyName} ({ExErrorCode})",
                 name,
-                userId,
                 errorCode ?? "");
             return Result.Fail<ApiKey>("Error creating API key", ErrorCodes.DbApiKeyError, errorCode);
         }
     }
 
     /// <inheritdoc />
-    public async Task<Result<bool>> DeleteAsync(
-        Guid id,
-        Guid? deletedByUserId,
-        CancellationToken cancellationToken)
+    public async Task<Result<bool>> DeleteAsync(Guid id, Guid? deletedByUserId, CancellationToken cancellationToken)
     {
         try
         {
@@ -207,36 +205,36 @@ public sealed class ApiKeyRepository(
                 .BeginTransactionAsync(cancellationToken)
                 .ConfigureAwait(false);
 
-            var entities = await context.ApiKeys
+            var entity = await context.ApiKeys
                 .FirstOrDefaultAsync(k => k.Id == id, cancellationToken)
                 .ConfigureAwait(false);
 
-            if (entities is null)
+            if (entity is null)
             {
                 return Result.Success(false);
             }
 
-            var deleted = await context.ApiKeys
+            var userId = entity.UserId;
+            var name = entity.Name;
+
+            await context.ApiKeys
                 .Where(k => k.Id == id)
                 .ExecuteDeleteAsync(cancellationToken)
                 .ConfigureAwait(false);
 
-            if (deleted > 0)
-            {
-                await historyRepository.RecordEntryAsync(
-                    category: AuditCategories.Security,
-                    operation: "Delete",
-                    entityId: id,
-                    parentEntityId: entities.UserId,
-                    entityType: nameof(ApiKey),
-                    description: $"Deleted API key {entities.Name}",
-                    userId: deletedByUserId,
-                    cancellationToken: cancellationToken).ConfigureAwait(false);
-            }
+            await historyRepository.RecordEntryAsync(
+                category: AuditCategories.Security,
+                operation: "Delete",
+                entityId: id,
+                parentEntityId: userId,
+                entityType: nameof(ApiKey),
+                description: $"Deleted API key {name}",
+                userId: deletedByUserId,
+                cancellationToken: cancellationToken).ConfigureAwait(false);
 
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
 
-            return Result.Success(deleted > 0);
+            return Result.Success(true);
         }
         catch (Exception ex)
         {
@@ -251,98 +249,57 @@ public sealed class ApiKeyRepository(
     }
 
     /// <inheritdoc />
-    public async Task<Result<bool>> PatchAsync(
-        ApiKeyPatch patch,
-        Guid? modifiedByUserId,
-        CancellationToken cancellationToken)
+    public async Task<Result<ApiKey>> GetByKeyHashAsync(string keyHash, CancellationToken cancellationToken)
     {
         try
         {
-            await using var transaction = await context.Database
-                .BeginTransactionAsync(cancellationToken)
-                .ConfigureAwait(false);
-
-            var entity = await context.ApiKeys
-                .FirstOrDefaultAsync(k => k.Id == patch.Id, cancellationToken)
+            var entity = await (
+                from k in context.ApiKeys.AsNoTracking()
+                where k.KeyHash == keyHash
+                select k)
+                .FirstOrDefaultAsync(cancellationToken)
                 .ConfigureAwait(false);
 
             if (entity is null)
             {
-                return Result.Success(false);
+                return Result.Fail<ApiKey>("invalid api key", ErrorCodes.DbApiKeyError);
             }
 
-            if (patch.Name is not null)
-            {
-                entity.Name = patch.Name.Value!;
-            }
-
-            if (patch.Enabled is not null)
-            {
-                entity.Enabled = patch.Enabled.Value;
-            }
-
-            if (patch.ExpiresAt is not null)
-            {
-                entity.ExpiresAt = patch.ExpiresAt.Value;
-            }
-
-            entity.ModifiedAt = DateTimeOffset.UtcNow;
-            entity.ModifiedByUserId = modifiedByUserId;
-
-            var updated = await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
-
-            if (updated > 0)
-            {
-                await historyRepository.RecordEntryAsync(
-                    category: AuditCategories.Security,
-                    operation: "Patch",
-                    entityId: patch.Id,
-                    parentEntityId: entity.UserId,
-                    entityType: nameof(ApiKey),
-                    description: $"Patched API key {entity.Name}",
-                    userId: modifiedByUserId,
-                    cancellationToken: cancellationToken).ConfigureAwait(false);
-            }
-
-            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
-
-            return Result.Success(updated > 0);
+            return Result.Success(entity.ToModel());
         }
         catch (Exception ex)
         {
             ex.TryGetErrorCode(out var errorCode);
-            logger.LogError(
-                ex,
-                "Error patching API key {ApiKeyId} ({ExErrorCode})",
-                patch.Id,
-                errorCode ?? "");
-            return Result.Fail<bool>("Error patching API key", ErrorCodes.DbApiKeyError, errorCode);
+            logger.LogError(ex, "Error getting API key by hash ({ExErrorCode})", errorCode ?? "");
+            return Result.Fail<ApiKey>("api key error", ErrorCodes.DbApiKeyError, errorCode);
         }
     }
 
     /// <inheritdoc />
-    public async Task<Result> RecordUsageAsync(Guid id, CancellationToken cancellationToken)
+    public async Task<Result<IReadOnlyList<ApiKey>>> GetByUserIdAsync(Guid userId, CancellationToken cancellationToken)
     {
         try
         {
-            await context.ApiKeys
-                .Where(k => k.Id == id)
-                .ExecuteUpdateAsync(
-                    setter => setter.SetProperty(e => e.LastUsedAt, DateTimeOffset.UtcNow),
-                    cancellationToken)
+            var entities = await (
+                from k in context.ApiKeys.AsNoTracking()
+                where k.UserId == userId
+                select k)
+                .ToListAsync(cancellationToken)
                 .ConfigureAwait(false);
 
-            return Result.Success();
+            var result = entities.Select(k => k.ToModel()).ToImmutableList();
+
+            return Result.Success<IReadOnlyList<ApiKey>>(result);
         }
         catch (Exception ex)
         {
             ex.TryGetErrorCode(out var errorCode);
             logger.LogError(
                 ex,
-                "Error recording usage for API key {ApiKeyId} ({ExErrorCode})",
-                id,
+                "Error getting API keys for user {UserId} ({ExErrorCode})",
+                userId,
                 errorCode ?? "");
-            return Result.Fail("Error recording API key usage", ErrorCodes.DbApiKeyError, errorCode);
+            return Result.Fail<IReadOnlyList<ApiKey>>("Error retrieving API keys", ErrorCodes.DbApiKeyError, errorCode);
         }
     }
 }

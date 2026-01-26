@@ -14,24 +14,18 @@ namespace Magpie.Abstractions.Data;
 public interface IApiKeyRepository : IPatchRepository<Guid, ApiKey, ApiKeyPatch>
 {
     /// <summary>
-    /// Get an API key by key prefix and hash.
-    /// </summary>
-    /// <param name="keyPrefix">The API key prefix.</param>
-    /// <param name="keyHash">The hashed API key.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    Task<Result<ApiKey>> GetByPrefixAndHashAsync(
-        string keyPrefix,
-        string keyHash,
-        CancellationToken cancellationToken = default);
-
-    /// <summary>
     /// Get all API keys for a user.
     /// </summary>
     /// <param name="userId">The user identifier.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    Task<Result<IReadOnlyList<ApiKey>>> GetByUserIdAsync(
-        Guid userId,
-        CancellationToken cancellationToken = default);
+    /// <param name="cancellationToken">The cancellation token.</param>
+    Task<Result<IReadOnlyList<ApiKey>>> GetByUserIdAsync(Guid userId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Get an API key by its hashed value.
+    /// </summary>
+    /// <param name="keyHash">The hashed API key.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
+    Task<Result<ApiKey>> GetByKeyHashAsync(string keyHash, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Create a new API key.
@@ -41,10 +35,10 @@ public interface IApiKeyRepository : IPatchRepository<Guid, ApiKey, ApiKeyPatch>
     /// <param name="keyPrefix">The first few characters of the key for identification.</param>
     /// <param name="keyHash">The hashed API key.</param>
     /// <param name="expiresAt">When the API key expires, if set.</param>
-    /// <param name="createdByUserId">The user who is creating the API key.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="createdByUserId">The id of the user creating the API key.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
     Task<Result<ApiKey>> CreateAsync(
-        Guid userId,
+        Guid? userId,
         string name,
         string keyPrefix,
         string keyHash,
@@ -53,20 +47,14 @@ public interface IApiKeyRepository : IPatchRepository<Guid, ApiKey, ApiKeyPatch>
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Delete an API key by ID.
+    /// Delete an API key.
     /// </summary>
     /// <param name="id">The API key identifier.</param>
-    /// <param name="deletedByUserId">The user who is deleting this API key.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="deletedByUserId">The id of the user deleting the API key.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
+    /// <returns><see langword="true"/> if the API key was deleted, <see langword="false"/> otherwise.</returns>
     Task<Result<bool>> DeleteAsync(
         Guid id,
         Guid? deletedByUserId,
         CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Record API key usage.
-    /// </summary>
-    /// <param name="id">The API key identifier.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    Task<Result> RecordUsageAsync(Guid id, CancellationToken cancellationToken = default);
 }

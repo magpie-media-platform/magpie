@@ -17,7 +17,7 @@ public interface ISystemSettingsProvider
     /// <param name="settingsGroupName">The settings group name.</param>
     /// <param name="key">The setting key.</param>
     /// <param name="defaultValue">The default value to return if the key does not exist.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
     /// <returns>The setting value, or the default value if the key does not exist.</returns>
     Task<Result<string?>> GetSettingAsync(
         string settingsGroupName,
@@ -29,7 +29,7 @@ public interface ISystemSettingsProvider
     /// Gets all settings from a settings group.
     /// </summary>
     /// <param name="settingsGroupName">The settings group name.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
     /// <returns>A dictionary of all setting key-value pairs.</returns>
     Task<Result<IReadOnlyDictionary<string, string>>> GetSettingsAsync(
         string settingsGroupName,
@@ -41,8 +41,8 @@ public interface ISystemSettingsProvider
     /// <param name="settingsGroupName">The settings group name.</param>
     /// <param name="key">The setting key.</param>
     /// <param name="value">The setting value.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    Task<Result> SetSettingAsync(
+    /// <param name="cancellationToken">The cancellation token.</param>
+    Task<Result<Unit>> SetSettingAsync(
         string settingsGroupName,
         string key,
         string value,
@@ -53,7 +53,7 @@ public interface ISystemSettingsProvider
     /// </summary>
     /// <param name="settingsGroupName">The settings group name.</param>
     /// <param name="key">The setting key.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
     /// <returns>True if the setting was deleted, false if it did not exist.</returns>
     Task<Result<bool>> DeleteSettingAsync(
         string settingsGroupName,

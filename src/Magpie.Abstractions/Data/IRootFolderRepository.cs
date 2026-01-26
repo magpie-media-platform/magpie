@@ -19,7 +19,7 @@ public interface IRootFolderRepository :
     /// Get all root folders for a content type.
     /// </summary>
     /// <param name="contentTypeId">The content type identifier.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
     Task<Result<IReadOnlyList<RootFolder>>> GetByContentTypeIdAsync(
         Guid contentTypeId,
         CancellationToken cancellationToken = default);
@@ -28,6 +28,6 @@ public interface IRootFolderRepository :
     /// Get a root folder by filesystem path.
     /// </summary>
     /// <param name="path">The filesystem path.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
     Task<Result<RootFolder?>> GetByPathAsync(string path, CancellationToken cancellationToken = default);
 }

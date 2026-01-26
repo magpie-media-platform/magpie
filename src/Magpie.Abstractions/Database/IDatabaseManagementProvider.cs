@@ -26,7 +26,7 @@ public interface IDatabaseManagementProvider
     /// Creates a backup of the database.
     /// </summary>
     /// <param name="name">The backup name. If null, a timestamp-based name is generated.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
     /// <returns>The backup identifier that can be used to restore.</returns>
     Task<string> BackupAsync(string? name = null, CancellationToken cancellationToken = default);
 
@@ -34,13 +34,13 @@ public interface IDatabaseManagementProvider
     /// Restores the database from a backup.
     /// </summary>
     /// <param name="backupId">The backup identifier returned from BackupAsync.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
     Task RestoreAsync(string backupId, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Lists available backups.
     /// </summary>
-    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
     /// <returns>A list of available backups.</returns>
     Task<IReadOnlyList<BackupInfo>> ListBackupsAsync(CancellationToken cancellationToken = default);
 
@@ -48,12 +48,12 @@ public interface IDatabaseManagementProvider
     /// Deletes a backup.
     /// </summary>
     /// <param name="backupId">The backup identifier.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
     Task DeleteBackupAsync(string backupId, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Optimizes the database to reclaim space and improve performance.
     /// </summary>
-    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
     Task OptimizeAsync(CancellationToken cancellationToken = default);
 }

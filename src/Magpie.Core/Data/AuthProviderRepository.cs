@@ -389,4 +389,37 @@ public sealed class AuthProviderRepository(
                 cancellationToken: cancellationToken).ConfigureAwait(false);
         }
     }
+
+    /// <inheritdoc />
+    public async Task<Result<IReadOnlyList<AuthProvider>>> GetByProviderTypeAsync(
+        string providerType,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var providers = await context.AuthProviders
+                .AsNoTracking()
+                .Include(p => p.Settings)
+                .Where(p => p.Provider == providerType && p.Enabled)
+                .ToListAsync(cancellationToken)
+                .ConfigureAwait(false);
+
+            var result = providers.Select(p => p.ToModel()).ToImmutableList();
+
+            return Result.Success<IReadOnlyList<AuthProvider>>(result);
+        }
+        catch (Exception ex)
+        {
+            ex.TryGetErrorCode(out var errorCode);
+            logger.LogError(
+                ex,
+                "Error getting auth providers by type {ProviderType} ({ExErrorCode})",
+                providerType,
+                errorCode ?? "");
+            return Result.Fail<IReadOnlyList<AuthProvider>>(
+                "Error retrieving auth providers",
+                ErrorCodes.DbAuthProviderError,
+                errorCode);
+        }
+    }
 }

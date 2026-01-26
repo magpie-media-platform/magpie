@@ -19,14 +19,14 @@ public interface IIndexerFeedRepository :
     /// Get an indexer feed by name.
     /// </summary>
     /// <param name="name">The feed name.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
     Task<Result<IndexerFeed?>> GetByNameAsync(string name, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Get all indexer feeds for a provider.
     /// </summary>
     /// <param name="provider">The provider identifier.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
     Task<Result<IReadOnlyList<IndexerFeed>>> GetByProviderAsync(
         string provider,
         CancellationToken cancellationToken = default);
@@ -34,7 +34,7 @@ public interface IIndexerFeedRepository :
     /// <summary>
     /// Get all enabled indexer feeds.
     /// </summary>
-    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
     Task<Result<IReadOnlyList<IndexerFeed>>> GetEnabledAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -42,7 +42,7 @@ public interface IIndexerFeedRepository :
     /// </summary>
     /// <param name="id">The feed identifier.</param>
     /// <param name="lastSync">The time of the last successful sync.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
     Task<Result<bool>> UpdateLastSyncAsync(
         Guid id,
         DateTimeOffset lastSync,

@@ -1,6 +1,19 @@
-using Microsoft.AspNetCore.Builder;
+using System.CommandLine;
+using System.Linq;
 
-var builder = WebApplication.CreateBuilder(args);
-var app = builder.Build();
+using Magpie.App.Commands;
 
-app.Run();
+var serveCommand = new ServeCommand();
+var versionCommand = new VersionCommand();
+
+var rootCommand = new RootCommand("magpie");
+rootCommand.Subcommands.Add(serveCommand);
+rootCommand.Subcommands.Add(versionCommand);
+
+rootCommand.SetAction((parseResult, cancellationToken) => serveCommand
+    .Parse([.. parseResult.Tokens.Select(t => t.Value)])
+    .InvokeAsync(cancellationToken: cancellationToken));
+
+return await rootCommand.Parse(args)
+    .InvokeAsync()
+    .ConfigureAwait(false);

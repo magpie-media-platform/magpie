@@ -8,6 +8,7 @@
   <ItemGroup>
     <ProjectReference Include="..\Magpie.Data.Database\Magpie.Data.Database.csproj" />
     <ProjectReference Include="..\Magpie.Abstractions\Magpie.Abstractions.csproj" />
+    <ProjectReference Include="..\Magpie.Abstractions.Auth\Magpie.Abstractions.Auth.csproj" />
   </ItemGroup>
 
 </Project>

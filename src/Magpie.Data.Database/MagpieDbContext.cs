@@ -108,6 +108,8 @@ public class MagpieDbContext(DbContextOptions<MagpieDbContext> options) : DbCont
     public DbSet<QualityTierList> QualityTierLists => Set<QualityTierList>();
     /// <summary>Entity set for <see cref="QualityTierListTag"/>.</summary>
     public DbSet<QualityTierListTag> QualityTierListTags => Set<QualityTierListTag>();
+    /// <summary>Entity set for <see cref="RefreshToken"/>.</summary>
+    public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
     /// <summary>Entity set for <see cref="Reference"/>.</summary>
     public DbSet<Reference> References => Set<Reference>();
     /// <summary>Entity set for <see cref="Relationship"/>.</summary>
@@ -130,6 +132,10 @@ public class MagpieDbContext(DbContextOptions<MagpieDbContext> options) : DbCont
     public DbSet<ServerConfig> ServerConfigs => Set<ServerConfig>();
     /// <summary>Entity set for <see cref="Subject"/>.</summary>
     public DbSet<Subject> Subjects => Set<Subject>();
+    /// <summary>Entity set for <see cref="SubjectFilter"/>.</summary>
+    public DbSet<SubjectFilter> SubjectFilters => Set<SubjectFilter>();
+    /// <summary>Entity set for <see cref="SubjectFilterTag"/>.</summary>
+    public DbSet<SubjectFilterTag> SubjectFilterTags => Set<SubjectFilterTag>();
     /// <summary>Entity set for <see cref="SubjectTag"/>.</summary>
     public DbSet<SubjectTag> SubjectTags => Set<SubjectTag>();
     /// <summary>Entity set for <see cref="Tag"/>.</summary>

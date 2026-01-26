@@ -11,6 +11,7 @@ using Magpie.Models;
 using Magpie.Models.MediaServers;
 using Magpie.Models.Result;
 using Magpie.Models.Users;
+using Magpie.Test.Shared;
 
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
@@ -54,7 +55,7 @@ public class MediaServerRepositoryTests
 
         _userId = user.Id;
 
-        var loggerFactory = LoggerFactory.Create(b => b.AddConsole());
+        var loggerFactory = LoggerFactory.Create(b => b.AddTestLogger());
         var historyRepo = new HistoryRepository(_context, loggerFactory.CreateLogger<HistoryRepository>());
 
         _subject = new MediaServerRepository(

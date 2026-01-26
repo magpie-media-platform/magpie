@@ -1,8 +1,12 @@
+using System;
+
 using Magpie.Data.Database.Entities;
 
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
 using Microsoft.EntityFrameworkCore.ValueGeneration;
+
+using Role = Magpie.Models.Users.Role;
 
 namespace Magpie.Data.Database;
 
@@ -54,6 +58,7 @@ internal sealed class EntityTypeConfiguration :
     IEntityTypeConfiguration<QualityCriterion>,
     IEntityTypeConfiguration<QualityTier>,
     IEntityTypeConfiguration<QualityTierList>,
+    IEntityTypeConfiguration<RefreshToken>,
     IEntityTypeConfiguration<QualityTierListTag>,
     IEntityTypeConfiguration<Reference>,
     IEntityTypeConfiguration<Relationship>,
@@ -66,6 +71,8 @@ internal sealed class EntityTypeConfiguration :
     IEntityTypeConfiguration<ScheduleTrigger>,
     IEntityTypeConfiguration<ServerConfig>,
     IEntityTypeConfiguration<Subject>,
+    IEntityTypeConfiguration<SubjectFilter>,
+    IEntityTypeConfiguration<SubjectFilterTag>,
     IEntityTypeConfiguration<SubjectTag>,
     IEntityTypeConfiguration<Tag>,
     IEntityTypeConfiguration<User>,
@@ -107,6 +114,26 @@ internal sealed class EntityTypeConfiguration :
         builder.HasKey(e => e.Id);
         builder.Property(e => e.Id).ValueGeneratedOnAdd();
         builder.HasIndex(e => e.IsDefault);
+
+        builder.HasData(
+            new AuthProvider
+            {
+                Id = new Guid("11111111-1111-1111-1111-111111111111"),
+                Name = "No Authentication",
+                Provider = "noauth",
+                Enabled = true,
+                IsDefault = false,
+                CreatedAt = DateTimeOffset.UnixEpoch
+            },
+            new AuthProvider
+            {
+                Id = new Guid("22222222-2222-2222-2222-222222222222"),
+                Name = "Local",
+                Provider = "local",
+                Enabled = true,
+                IsDefault = true,
+                CreatedAt = DateTimeOffset.UnixEpoch
+            });
     }
 
     public void Configure(EntityTypeBuilder<AuthProviderSetting> builder)
@@ -711,6 +738,20 @@ internal sealed class EntityTypeConfiguration :
             .OnDelete(DeleteBehavior.Cascade);
     }
 
+    public void Configure(EntityTypeBuilder<RefreshToken> builder)
+    {
+        builder.ToTable("auth_refreshToken");
+        builder.HasKey(e => e.Id);
+        builder.Property(e => e.Id).ValueGeneratedOnAdd();
+        builder.HasOne(e => e.User)
+            .WithMany(e => e.RefreshTokens)
+            .HasForeignKey(e => e.UserId)
+            .IsRequired()
+            .OnDelete(DeleteBehavior.Cascade);
+        builder.HasIndex(e => e.UserId);
+        builder.HasIndex(e => e.ExpiresAt);
+    }
+
     public void Configure(EntityTypeBuilder<Reference> builder)
     {
         builder.ToTable("metadata_reference");
@@ -841,6 +882,29 @@ internal sealed class EntityTypeConfiguration :
         builder.HasIndex(e => e.Kind);
     }
 
+    public void Configure(EntityTypeBuilder<SubjectFilter> builder)
+    {
+        builder.ToTable("filter_subject");
+        builder.HasKey(e => e.Id);
+        builder.Property(e => e.Id).ValueGeneratedOnAdd();
+    }
+
+    public void Configure(EntityTypeBuilder<SubjectFilterTag> builder)
+    {
+        builder.ToTable("filter_subjectTag");
+        builder.HasKey(e => new { e.SubjectFilterId, e.TagName });
+        builder.HasOne(e => e.SubjectFilter)
+            .WithMany(e => e.Tags)
+            .HasForeignKey(e => e.SubjectFilterId)
+            .IsRequired()
+            .OnDelete(DeleteBehavior.Cascade);
+        builder.HasOne(e => e.Tag)
+            .WithMany()
+            .HasForeignKey(e => e.TagName)
+            .IsRequired()
+            .OnDelete(DeleteBehavior.Cascade);
+    }
+
     public void Configure(EntityTypeBuilder<SubjectTag> builder)
     {
         builder.ToTable("content_subjectTag");
@@ -875,6 +939,16 @@ internal sealed class EntityTypeConfiguration :
         builder.HasIndex(e => e.Username).IsUnique();
         builder.HasIndex(e => e.Email);
         builder.HasIndex(e => e.AuthProviderId);
+
+        builder.HasData(new User
+        {
+            Id = new Guid("11111111-1111-1111-1111-111111111112"),
+            Username = "admin",
+            Enabled = true,
+            Role = Role.Admin,
+            AuthProviderId = new Guid("11111111-1111-1111-1111-111111111111"),
+            CreatedAt = DateTimeOffset.UnixEpoch
+        });
     }
 
     public void Configure(EntityTypeBuilder<UserProviderData> builder)

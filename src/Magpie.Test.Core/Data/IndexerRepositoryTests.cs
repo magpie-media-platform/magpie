@@ -11,6 +11,7 @@ using Magpie.Models;
 using Magpie.Models.Indexers;
 using Magpie.Models.Result;
 using Magpie.Models.Users;
+using Magpie.Test.Shared;
 
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
@@ -67,7 +68,7 @@ public class IndexerRepositoryTests
         _userId = user.Id;
         _definitionId = definition.Id;
 
-        var loggerFactory = LoggerFactory.Create(b => b.AddConsole());
+        var loggerFactory = LoggerFactory.Create(b => b.AddTestLogger());
         var historyRepo = new HistoryRepository(_context, loggerFactory.CreateLogger<HistoryRepository>());
 
         _subject = new IndexerRepository(_context, historyRepo, loggerFactory.CreateLogger<IndexerRepository>());
@@ -436,7 +437,6 @@ public class IndexerRepositoryTests
             Assert.That(entity, Is.Not.Null);
             Assert.That(entity!.Settings, Has.Count.EqualTo(2));
             Assert.That(entity.Tags, Has.Count.EqualTo(2));
-            // Now expect 5: 1 Indexer, 2 IndexerSetting, 2 IndexerTag
             Assert.That(historyEntities, Has.Count.EqualTo(5));
             Assert.That(historyEntities, Has.One
                 .With.Property(nameof(HistoryEntryEntity.Operation)).EqualTo("Create")
@@ -708,7 +708,6 @@ public class IndexerRepositoryTests
                 .With.Property(nameof(IndexerSettingEntity.Key)).EqualTo("keepMe"));
             Assert.That(settingEntities, Has.None
                 .With.Property(nameof(IndexerSettingEntity.Key)).EqualTo("removeMe"));
-            // Now expect 2: 1 Indexer (Update), 1 IndexerSetting (Delete)
             Assert.That(historyEntities, Has.Count.EqualTo(2));
             Assert.That(historyEntities, Has.One
                 .With.Property(nameof(HistoryEntryEntity.Operation)).EqualTo("Update")
@@ -1041,7 +1040,6 @@ public class IndexerRepositoryTests
         {
             Assert.That(result, Is.InstanceOf<SuccessResult<bool>>().With.Property(nameof(SuccessResult<>.Value)).True);
             Assert.That(settingsExist, Is.False);
-            // Now expect 3: 1 Indexer, 2 IndexerSetting
             Assert.That(historyEntities, Has.Count.EqualTo(3));
             Assert.That(historyEntities, Has.One
                 .With.Property(nameof(HistoryEntryEntity.Operation)).EqualTo("Delete")
@@ -1126,7 +1124,6 @@ public class IndexerRepositoryTests
             Assert.That(result, Is.InstanceOf<SuccessResult<bool>>().With.Property(nameof(SuccessResult<>.Value)).True);
             Assert.That(settingsExist, Is.False);
             Assert.That(tagsExist, Is.False);
-            // Now expect 3: 1 Indexer, 1 IndexerSetting, 1 IndexerTag
             Assert.That(historyEntities, Has.Count.EqualTo(3));
             Assert.That(historyEntities, Has.One
                 .With.Property(nameof(HistoryEntryEntity.Operation)).EqualTo("Delete")
@@ -1176,7 +1173,6 @@ public class IndexerRepositoryTests
                 .With.Property(nameof(IndexerEntity.Name)).EqualTo("PatchedName")
                 .And.Property(nameof(IndexerEntity.ModifiedAt)).Not.Null
                 .And.Property(nameof(IndexerEntity.ModifiedByUserId)).EqualTo(_userId));
-            // Now expect Update instead of Patch
             Assert.That(await _context.HistoryEntries.ToListAsync(), Has.One
                 .With.Property(nameof(HistoryEntryEntity.Operation)).EqualTo("Update")
                 .And.Property(nameof(HistoryEntryEntity.EntityType)).EqualTo("Indexer")

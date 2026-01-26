@@ -136,6 +136,26 @@ namespace Magpie.Data.Database.SQLite.Migrations
                     b.HasIndex("IsDefault");
 
                     b.ToTable("auth_provider", (string)null);
+
+                    b.HasData(
+                        new
+                        {
+                            Id = new Guid("11111111-1111-1111-1111-111111111111"),
+                            CreatedAt = new DateTimeOffset(new DateTime(1970, 1, 1, 0, 0, 0, 0, DateTimeKind.Unspecified), new TimeSpan(0, 0, 0, 0, 0)),
+                            Enabled = true,
+                            IsDefault = false,
+                            Name = "No Authentication",
+                            Provider = "noauth"
+                        },
+                        new
+                        {
+                            Id = new Guid("22222222-2222-2222-2222-222222222222"),
+                            CreatedAt = new DateTimeOffset(new DateTime(1970, 1, 1, 0, 0, 0, 0, DateTimeKind.Unspecified), new TimeSpan(0, 0, 0, 0, 0)),
+                            Enabled = true,
+                            IsDefault = true,
+                            Name = "Local",
+                            Provider = "local"
+                        });
                 });
 
             modelBuilder.Entity("Magpie.Data.Database.Entities.AuthProviderSetting", b =>
@@ -1662,6 +1682,34 @@ namespace Magpie.Data.Database.SQLite.Migrations
                     b.ToTable("metadata_reference", (string)null);
                 });
 
+            modelBuilder.Entity("Magpie.Data.Database.Entities.RefreshToken", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset>("ExpiresAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TokenHash")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ExpiresAt");
+
+                    b.HasIndex("UserId");
+
+                    b.ToTable("auth_refreshToken", (string)null);
+                });
+
             modelBuilder.Entity("Magpie.Data.Database.Entities.Relationship", b =>
                 {
                     b.Property<Guid>("Id")
@@ -2032,6 +2080,52 @@ namespace Magpie.Data.Database.SQLite.Migrations
                     b.ToTable("content_subject", (string)null);
                 });
 
+            modelBuilder.Entity("Magpie.Data.Database.Entities.SubjectFilter", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid?>("CreatedByUserId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Criteria")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset?>("ModifiedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid?>("ModifiedByUserId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("filter_subject", (string)null);
+                });
+
+            modelBuilder.Entity("Magpie.Data.Database.Entities.SubjectFilterTag", b =>
+                {
+                    b.Property<Guid>("SubjectFilterId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TagName")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("SubjectFilterId", "TagName");
+
+                    b.HasIndex("TagName");
+
+                    b.ToTable("filter_subjectTag", (string)null);
+                });
+
             modelBuilder.Entity("Magpie.Data.Database.Entities.SubjectTag", b =>
                 {
                     b.Property<Guid>("SubjectId")
@@ -2119,6 +2213,18 @@ namespace Magpie.Data.Database.SQLite.Migrations
                         .IsUnique();
 
                     b.ToTable("auth_user", (string)null);
+
+                    b.HasData(
+                        new
+                        {
+                            Id = new Guid("11111111-1111-1111-1111-111111111112"),
+                            AuthProviderId = new Guid("11111111-1111-1111-1111-111111111111"),
+                            CreatedAt = new DateTimeOffset(new DateTime(1970, 1, 1, 0, 0, 0, 0, DateTimeKind.Unspecified), new TimeSpan(0, 0, 0, 0, 0)),
+                            Enabled = true,
+                            FailedLoginAttempts = 0,
+                            Role = 3,
+                            Username = "admin"
+                        });
                 });
 
             modelBuilder.Entity("Magpie.Data.Database.Entities.UserProviderData", b =>
@@ -2786,6 +2892,17 @@ namespace Magpie.Data.Database.SQLite.Migrations
                     b.Navigation("MetadataContribution");
                 });
 
+            modelBuilder.Entity("Magpie.Data.Database.Entities.RefreshToken", b =>
+                {
+                    b.HasOne("Magpie.Data.Database.Entities.User", "User")
+                        .WithMany("RefreshTokens")
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("User");
+                });
+
             modelBuilder.Entity("Magpie.Data.Database.Entities.Relationship", b =>
                 {
                     b.HasOne("Magpie.Data.Database.Entities.MetadataContribution", "MetadataContribution")
@@ -2886,6 +3003,25 @@ namespace Magpie.Data.Database.SQLite.Migrations
                         .OnDelete(DeleteBehavior.Restrict);
 
                     b.Navigation("Extension");
+                });
+
+            modelBuilder.Entity("Magpie.Data.Database.Entities.SubjectFilterTag", b =>
+                {
+                    b.HasOne("Magpie.Data.Database.Entities.SubjectFilter", "SubjectFilter")
+                        .WithMany("Tags")
+                        .HasForeignKey("SubjectFilterId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("Magpie.Data.Database.Entities.Tag", "Tag")
+                        .WithMany()
+                        .HasForeignKey("TagName")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("SubjectFilter");
+
+                    b.Navigation("Tag");
                 });
 
             modelBuilder.Entity("Magpie.Data.Database.Entities.SubjectTag", b =>
@@ -3131,11 +3267,18 @@ namespace Magpie.Data.Database.SQLite.Migrations
                     b.Navigation("Tags");
                 });
 
+            modelBuilder.Entity("Magpie.Data.Database.Entities.SubjectFilter", b =>
+                {
+                    b.Navigation("Tags");
+                });
+
             modelBuilder.Entity("Magpie.Data.Database.Entities.User", b =>
                 {
                     b.Navigation("ApiKeys");
 
                     b.Navigation("ProviderData");
+
+                    b.Navigation("RefreshTokens");
 
                     b.Navigation("Wishlists");
                 });

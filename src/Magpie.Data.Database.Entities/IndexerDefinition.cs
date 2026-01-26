@@ -24,3 +24,4 @@ public record IndexerDefinition
     public ICollection<IndexerDefinitionTag> Tags { get; } = [];
     public ICollection<Indexer> Indexers { get; } = [];
 }
+

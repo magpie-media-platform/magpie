@@ -17,7 +17,7 @@ public interface IHistoryRepository : IRepository<HistoryEntry>
     /// Create a new <see cref="HistoryEntry"/> entity.
     /// </summary>
     /// <param name="model">The history entry model to create.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
     Task<Result<HistoryEntry>> CreateAsync(HistoryEntry model, CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -25,7 +25,7 @@ public interface IHistoryRepository : IRepository<HistoryEntry>
     /// </summary>
     /// <param name="query">The history query criteria.</param>
     /// <param name="paging">Pagination parameters, or null for all results.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
     Task<Result<PagedResult<HistoryEntry>>> SearchAsync(
         HistoryQuery query,
         PagingRequest? paging,
@@ -44,7 +44,7 @@ public interface IHistoryRepository : IRepository<HistoryEntry>
     /// <param name="result"><inheritdoc cref="HistoryEntry.Result"  path="/summary"/></param>
     /// <param name="detail"><inheritdoc cref="HistoryEntry.Detail"  path="/summary"/></param>
     /// <param name="userId"><inheritdoc cref="HistoryEntry.UserId"  path="/summary"/></param>
-    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
     Task<Result<HistoryEntry>> RecordEntryAsync(
         string category,
         string operation,

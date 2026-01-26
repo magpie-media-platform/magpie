@@ -28,4 +28,5 @@ public record User
     public ICollection<UserProviderData> ProviderData { get; } = [];
     public ICollection<Wishlist> Wishlists { get; } = [];
     public ICollection<ApiKey> ApiKeys { get; } = [];
+    public ICollection<RefreshToken> RefreshTokens { get; } = [];
 }

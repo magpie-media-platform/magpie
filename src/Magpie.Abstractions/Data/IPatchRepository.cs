@@ -21,8 +21,8 @@ public interface IPatchRepository<TKey, TModel, TPatch> : IRepository<TKey, TMod
     /// Patch an entity with partial updates.
     /// </summary>
     /// <param name="patch">The patch object containing the updates.</param>
-    /// <param name="modifiedByUserId">The user who is modifying this record.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="modifiedByUserId">The id of the user modifying the record.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
     /// <returns>
     /// A <see cref="Result{T}"/> containing <see langword="true"/> if the entity was patched,
     /// otherwise <see langword="false"/>.

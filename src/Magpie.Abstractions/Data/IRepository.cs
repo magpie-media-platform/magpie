@@ -15,7 +15,7 @@ public interface IRepository<TModel> where TModel : class
     /// <summary>
     /// Get all entities.
     /// </summary>
-    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
     Task<Result<IReadOnlyList<TModel>>> GetAllAsync(CancellationToken cancellationToken = default);
 }
 
@@ -32,6 +32,6 @@ public interface IRepository<TKey, TModel> : IRepository<TModel>
     /// Get an entity by ID.
     /// </summary>
     /// <param name="id">The entity identifier.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
     Task<Result<TModel?>> GetByIdAsync(TKey id, CancellationToken cancellationToken = default);
 }

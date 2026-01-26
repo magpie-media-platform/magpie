@@ -19,14 +19,14 @@ public interface IMediaServerRepository :
     /// Get a media server by name.
     /// </summary>
     /// <param name="name">The server name.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
     Task<Result<MediaServer?>> GetByNameAsync(string name, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Get all media servers for a provider.
     /// </summary>
     /// <param name="provider">The provider identifier.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
     Task<Result<IReadOnlyList<MediaServer>>> GetByProviderAsync(
         string provider,
         CancellationToken cancellationToken = default);
@@ -35,7 +35,7 @@ public interface IMediaServerRepository :
     /// Get all media servers with a specific status.
     /// </summary>
     /// <param name="status">The status to filter by.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
     Task<Result<IReadOnlyList<MediaServer>>> GetByStatusAsync(
         MediaServerStatus status,
         CancellationToken cancellationToken = default);
@@ -43,7 +43,7 @@ public interface IMediaServerRepository :
     /// <summary>
     /// Get all enabled media servers.
     /// </summary>
-    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
     Task<Result<IReadOnlyList<MediaServer>>> GetEnabledAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -52,7 +52,7 @@ public interface IMediaServerRepository :
     /// <param name="id">The server identifier.</param>
     /// <param name="status">The new status.</param>
     /// <param name="lastChecked">The time the server was checked.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
     Task<Result<bool>> UpdateStatusAsync(
         Guid id,
         MediaServerStatus status,

@@ -19,14 +19,14 @@ public interface IDownloadClientRepository :
     /// Get a download client by name.
     /// </summary>
     /// <param name="name">The client name.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
     Task<Result<DownloadClient?>> GetByNameAsync(string name, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Get all download clients for a provider.
     /// </summary>
     /// <param name="provider">The provider identifier.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
     Task<Result<IReadOnlyList<DownloadClient>>> GetByProviderAsync(
         string provider,
         CancellationToken cancellationToken = default);
@@ -35,7 +35,7 @@ public interface IDownloadClientRepository :
     /// Get all download clients with a specific status.
     /// </summary>
     /// <param name="status">The status to filter by.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
     Task<Result<IReadOnlyList<DownloadClient>>> GetByStatusAsync(
         DownloadClientStatus status,
         CancellationToken cancellationToken = default);
@@ -43,7 +43,7 @@ public interface IDownloadClientRepository :
     /// <summary>
     /// Get all enabled download clients.
     /// </summary>
-    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
     Task<Result<IReadOnlyList<DownloadClient>>> GetEnabledAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -52,7 +52,7 @@ public interface IDownloadClientRepository :
     /// <param name="id">The client identifier.</param>
     /// <param name="status">The new status.</param>
     /// <param name="lastChecked">The time the client was checked.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
     Task<Result<bool>> UpdateStatusAsync(
         Guid id,
         DownloadClientStatus status,

@@ -20,10 +20,7 @@ public static class ServiceCollectionExtensions
         this IServiceCollection services,
         string connectionString)
     {
-        _ = services.AddDbContext<MagpieDbContext>(options =>
-        {
-            options.UseNpgsql(connectionString);
-        });
+        _ = services.AddDbContext<MagpieDbContext>(options => options.UseNpgsql(connectionString));
 
         return services;
     }
