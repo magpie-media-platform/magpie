@@ -2,9 +2,7 @@ using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 
-using Magpie.Models.Content;
-using Magpie.Models.Metadata;
-using Magpie.Models.Result;
+using Magpie.Models.Data;
 
 namespace Magpie.Abstractions.Content;
 
@@ -14,20 +12,20 @@ namespace Magpie.Abstractions.Content;
 public interface ISubjectMetadataProvider
 {
     /// <summary>
-    /// Gets the subject kinds supported by the provider.
+    /// Get the subject kinds supported by the provider.
     /// </summary>
-    IReadOnlyList<string> SupportedSubjectKinds { get; }
+    IEnumerable<string> SupportedSubjectKinds { get; }
 
     /// <summary>
-    /// Fetches metadata for a subject.
+    /// Fetch metadata for a subject.
     /// </summary>
     /// <param name="subject">The subject to fetch metadata for.</param>
     /// <param name="existingMetadata">The existing metadata contributions for the subject.</param>
     /// <param name="defaultLanguagePreference">The default language preference to use for fetching metadata.</param>
     /// <param name="cancellationToken">The cancellation token.</param>
-    Task<Result<MetadataContribution>> GetMetadataAsync(
+    Task<MetadataContribution?> TryGetMetadataAsync(
         Subject subject,
         IEnumerable<MetadataContribution> existingMetadata,
         string defaultLanguagePreference,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken = default);
 }

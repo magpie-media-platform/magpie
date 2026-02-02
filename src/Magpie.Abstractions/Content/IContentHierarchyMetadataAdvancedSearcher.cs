@@ -2,34 +2,29 @@ using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 
-using Magpie.Models.Content;
-using Magpie.Models.Metadata;
-using Magpie.Models.Result;
+using Magpie.Models;
+using Magpie.Models.Enums;
+using Magpie.Models.Filtering;
 
 namespace Magpie.Abstractions.Content;
 
 /// <summary>
-/// Searches for content hierarchy items in an external metadata source using advanced criteria.
+/// Provides external metadata search capabilities using advanced search criteria..
 /// </summary>
-public interface IContentHierarchyMetadataAdvancedSearcher
+public interface IContentHierarchyMetadataAdvancedSearcher : IContentHierarchyMetadataSearcher
 {
     /// <summary>
-    /// Gets the content type slugs supported by the searcher.
-    /// </summary>
-    IReadOnlyList<string> SupportedContentTypes { get; }
-
-    /// <summary>
-    /// Searches for content hierarchy items by advanced criteria.
+    /// Perform an advanced search for content items.
     /// </summary>
     /// <param name="levelDefinition">The content hierarchy level definition to search for.</param>
-    /// <param name="criteria">The criteria to search by, mapped to metadata fields.</param>
-    /// <param name="customFieldCriteria">The custom field criteria to search by.</param>
-    /// <param name="defaultLanguagePreference">The default language preference to use for search results.</param>
+    /// <param name="criteria">The criteria to search.</param>
+    /// <param name="customFieldCriteria">The custom field criteria to search.</param>
+    /// <param name="defaultLanguagePreference">The default language to use for search results.</param>
     /// <param name="cancellationToken">The cancellation token.</param>
-    Task<Result<IReadOnlyList<MetadataSearchResult>>> SearchAsync(
+    Task<IEnumerable<MetadataSearchResultItem>> AdvancedSearchAsync(
         ContentHierarchyLevelDefinition levelDefinition,
-        IReadOnlyDictionary<MetadataField, string> criteria,
-        IReadOnlyDictionary<string, string> customFieldCriteria,
+        IReadOnlyDictionary<MetadataField, PropertyCriterion<string>> criteria,
+        IReadOnlyDictionary<string, PropertyCriterion<string>> customFieldCriteria,
         string defaultLanguagePreference,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken = default);
 }

@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Json;
@@ -8,12 +7,12 @@ using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions.Api;
-using Magpie.Abstractions.Data;
+using Magpie.Abstractions.Repositories;
 using Magpie.Api.EndpointGroups;
-using Magpie.Models;
-using Magpie.Models.Filters;
-using Magpie.Models.Filters.Content;
-using Magpie.Models.Result;
+using Magpie.Models.Arguments;
+using Magpie.Models.Data;
+using Magpie.Models.Filtering;
+using Magpie.Models.Patch;
 using Magpie.Test.Shared;
 
 using Microsoft.AspNetCore.Authentication;
@@ -37,24 +36,25 @@ public class ContentFiltersEndpointGroupTests
 {
     private IHost _host = null!;
     private HttpClient _client = null!;
-    private Mock<IContentFilterRepository> _contentFilterRepositoryMock = null!;
+    private Mock<IContentFilterRepository> _contentFilterRepository = null!;
 
-    private static readonly ContentItemCriteria DefaultCriteria = new()
+    private static readonly ContentFilterCriteria DefaultCriteria = new()
     {
-        TargetLevel = new ContentHierarchyLevelCriteria()
+        ContentHierarchyItem = new AllCriteria<ContentHierarchyItemCriteria>(),
+        MediaFiles = new AllCriteria<MediaFileCriteria>()
     };
 
     [SetUp]
     public void SetUp()
     {
-        _contentFilterRepositoryMock = new Mock<IContentFilterRepository>();
+        _contentFilterRepository = new Mock<IContentFilterRepository>();
 
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
         builder.Logging.ClearProviders().AddTestLogger();
         var authServiceMock = new Mock<IAuthenticationService>();
         authServiceMock
-            .Setup(x => x.AuthenticateAsync(It.IsAny<HttpContext>(), It.IsAny<string>()))
+            .Setup(m => m.AuthenticateAsync(It.IsAny<HttpContext>(), It.IsAny<string>()))
             .ReturnsAsync(AuthenticateResult.Success(new(new ClaimsPrincipal(new ClaimsIdentity("Test")), "Test")));
         builder.Services.AddSingleton(authServiceMock.Object);
         builder.Services.AddAuthorizationBuilder()
@@ -63,7 +63,7 @@ public class ContentFiltersEndpointGroupTests
                 .RequireAssertion(_ => true)
                 .Build());
 
-        builder.Services.AddSingleton(_contentFilterRepositoryMock.Object);
+        builder.Services.AddSingleton(_contentFilterRepository.Object);
         builder.Services.AddSingleton<IApiEndpointGroup, ContentFiltersEndpointGroup>();
 
         var app = builder.Build();
@@ -94,9 +94,9 @@ public class ContentFiltersEndpointGroupTests
     public async Task GetAllContentFilters_ReturnsEmptyArray_WhenNoContentFilters()
     {
         // Arrange
-        _contentFilterRepositoryMock
-            .Setup(r => r.GetAllAsync(It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<IReadOnlyList<ContentFilter>>([]));
+        _contentFilterRepository
+            .Setup(m => m.ListAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
 
         // Act
         var response = await _client.GetAsync("/api/content-filters").ConfigureAwait(false);
@@ -105,7 +105,7 @@ public class ContentFiltersEndpointGroupTests
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+            Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
             Assert.That(content, Is.Not.Null);
             Assert.That(content, Is.Empty);
         }
@@ -115,19 +115,20 @@ public class ContentFiltersEndpointGroupTests
     public async Task GetAllContentFilters_ReturnsContentFilters()
     {
         // Arrange
-        var contentFilter = new ContentFilter(
-            Id: Guid.NewGuid(),
-            Name: "HD Movies",
-            Criteria: DefaultCriteria,
-            Tags: [],
-            CreatedAt: DateTimeOffset.UtcNow,
-            CreatedByUserId: null,
-            ModifiedAt: null,
-            ModifiedByUserId: null);
+        var contentFilter = new ContentFilter
+        {
+            Id = Guid.NewGuid(),
+            Name = "HD Movies",
+            Criteria = DefaultCriteria,
+            CreatedAt = DateTime.UtcNow,
+            CreatedByUserId = null,
+            ModifiedAt = null,
+            ModifiedByUserId = null
+        };
 
-        _contentFilterRepositoryMock
-            .Setup(r => r.GetAllAsync(It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<IReadOnlyList<ContentFilter>>([contentFilter]));
+        _contentFilterRepository
+            .Setup(m => m.ListAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([contentFilter]);
 
         // Act
         var response = await _client.GetAsync("/api/content-filters").ConfigureAwait(false);
@@ -136,7 +137,7 @@ public class ContentFiltersEndpointGroupTests
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+            Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
             Assert.That(content, Has.Length.EqualTo(1));
             Assert.That(content, Has.One.With.Property(nameof(ContentFilter.Name)).EqualTo("HD Movies"));
         }
@@ -147,19 +148,20 @@ public class ContentFiltersEndpointGroupTests
     {
         // Arrange
         var contentFilterId = Guid.NewGuid();
-        var contentFilter = new ContentFilter(
-            Id: contentFilterId,
-            Name: "TV Episodes",
-            Criteria: DefaultCriteria,
-            Tags: [],
-            CreatedAt: DateTimeOffset.UtcNow,
-            CreatedByUserId: null,
-            ModifiedAt: null,
-            ModifiedByUserId: null);
+        var contentFilter = new ContentFilter
+        {
+            Id = contentFilterId,
+            Name = "TV Episodes",
+            Criteria = DefaultCriteria,
+            CreatedAt = DateTime.UtcNow,
+            CreatedByUserId = null,
+            ModifiedAt = null,
+            ModifiedByUserId = null
+        };
 
-        _contentFilterRepositoryMock
-            .Setup(r => r.GetByIdAsync(contentFilterId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<ContentFilter?>(contentFilter));
+        _contentFilterRepository
+            .Setup(m => m.GetByIdAsync(contentFilterId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(contentFilter);
 
         // Act
         var response = await _client.GetAsync($"/api/content-filters/{contentFilterId}").ConfigureAwait(false);
@@ -168,9 +170,9 @@ public class ContentFiltersEndpointGroupTests
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
-            Assert.That(content, Has.Property(nameof(ContentFilter.Id)).EqualTo(contentFilterId));
-            Assert.That(content, Has.Property(nameof(ContentFilter.Name)).EqualTo("TV Episodes"));
+            Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
+            Assert.That(content, Has.Property(nameof(content.Id)).EqualTo(contentFilterId));
+            Assert.That(content, Has.Property(nameof(content.Name)).EqualTo("TV Episodes"));
         }
     }
 
@@ -179,34 +181,35 @@ public class ContentFiltersEndpointGroupTests
     {
         // Arrange
         var contentFilterId = Guid.NewGuid();
-        _contentFilterRepositoryMock
-            .Setup(r => r.GetByIdAsync(contentFilterId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<ContentFilter?>(null));
+        _contentFilterRepository
+            .Setup(m => m.GetByIdAsync(contentFilterId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(default(ContentFilter?));
 
         // Act
         var response = await _client.GetAsync($"/api/content-filters/{contentFilterId}").ConfigureAwait(false);
 
         // Assert
-        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.NotFound));
+        Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NotFound));
     }
 
     [Test]
     public async Task GetContentFilterByName_ReturnsContentFilter()
     {
         // Arrange
-        var contentFilter = new ContentFilter(
-            Id: Guid.NewGuid(),
-            Name: "Music Albums",
-            Criteria: DefaultCriteria,
-            Tags: [],
-            CreatedAt: DateTimeOffset.UtcNow,
-            CreatedByUserId: null,
-            ModifiedAt: null,
-            ModifiedByUserId: null);
+        var contentFilter = new ContentFilter
+        {
+            Id = Guid.NewGuid(),
+            Name = "Music Albums",
+            Criteria = DefaultCriteria,
+            CreatedAt = DateTime.UtcNow,
+            CreatedByUserId = null,
+            ModifiedAt = null,
+            ModifiedByUserId = null
+        };
 
-        _contentFilterRepositoryMock
-            .Setup(r => r.GetByNameAsync("Music Albums", It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<ContentFilter?>(contentFilter));
+        _contentFilterRepository
+            .Setup(m => m.GetByNameAsync("Music Albums", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(contentFilter);
 
         // Act
         var response = await _client.GetAsync("/api/content-filters/by-name/Music%20Albums").ConfigureAwait(false);
@@ -215,8 +218,8 @@ public class ContentFiltersEndpointGroupTests
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
-            Assert.That(content, Has.Property(nameof(ContentFilter.Name)).EqualTo("Music Albums"));
+            Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
+            Assert.That(content, Has.Property(nameof(content.Name)).EqualTo("Music Albums"));
         }
     }
 
@@ -224,44 +227,46 @@ public class ContentFiltersEndpointGroupTests
     public async Task GetContentFilterByName_ReturnsNotFound_WhenContentFilterDoesNotExist()
     {
         // Arrange
-        _contentFilterRepositoryMock
-            .Setup(r => r.GetByNameAsync("NonExistent", It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<ContentFilter?>(null));
+        _contentFilterRepository
+            .Setup(m => m.GetByNameAsync("NonExistent", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(default(ContentFilter?));
 
         // Act
         var response = await _client.GetAsync("/api/content-filters/by-name/NonExistent").ConfigureAwait(false);
 
         // Assert
-        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.NotFound));
+        Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NotFound));
     }
 
     [Test]
     public async Task GetContentFiltersByTag_ReturnsFilteredContentFilters()
     {
         // Arrange
-        var filter1 = new ContentFilter(
-            Id: Guid.NewGuid(),
-            Name: "Filter 1",
-            Criteria: DefaultCriteria,
-            Tags: ["automation"],
-            CreatedAt: DateTimeOffset.UtcNow,
-            CreatedByUserId: null,
-            ModifiedAt: null,
-            ModifiedByUserId: null);
+        var filter1 = new ContentFilter
+        {
+            Id = Guid.NewGuid(),
+            Name = "Filter 1",
+            Criteria = DefaultCriteria,
+            CreatedAt = DateTime.UtcNow,
+            CreatedByUserId = null,
+            ModifiedAt = null,
+            ModifiedByUserId = null
+        };
 
-        var filter2 = new ContentFilter(
-            Id: Guid.NewGuid(),
-            Name: "Filter 2",
-            Criteria: DefaultCriteria,
-            Tags: ["automation"],
-            CreatedAt: DateTimeOffset.UtcNow,
-            CreatedByUserId: null,
-            ModifiedAt: null,
-            ModifiedByUserId: null);
+        var filter2 = new ContentFilter
+        {
+            Id = Guid.NewGuid(),
+            Name = "Filter 2",
+            Criteria = DefaultCriteria,
+            CreatedAt = DateTime.UtcNow,
+            CreatedByUserId = null,
+            ModifiedAt = null,
+            ModifiedByUserId = null
+        };
 
-        _contentFilterRepositoryMock
-            .Setup(r => r.GetByTagAsync("automation", It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<IReadOnlyList<ContentFilter>>([filter1, filter2]));
+        _contentFilterRepository
+            .Setup(m => m.ListByTagAsync("automation", It.IsAny<CancellationToken>()))
+            .ReturnsAsync([filter1, filter2]);
 
         // Act
         var response = await _client.GetAsync("/api/content-filters/by-tag/automation").ConfigureAwait(false);
@@ -270,7 +275,7 @@ public class ContentFiltersEndpointGroupTests
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+            Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
             Assert.That(content, Has.Length.EqualTo(2));
         }
     }
@@ -279,19 +284,20 @@ public class ContentFiltersEndpointGroupTests
     public async Task CreateContentFilter_CreatesAndReturnsContentFilter()
     {
         // Arrange
-        var request = new ContentFilter(
-            Id: Guid.Empty,
-            Name: "New Filter",
-            Criteria: DefaultCriteria,
-            Tags: [],
-            CreatedAt: default,
-            CreatedByUserId: null,
-            ModifiedAt: null,
-            ModifiedByUserId: null);
+        var request = new ContentFilter
+        {
+            Id = Guid.Empty,
+            Name = "New Filter",
+            Criteria = DefaultCriteria,
+            CreatedAt = default,
+            CreatedByUserId = null,
+            ModifiedAt = null,
+            ModifiedByUserId = null
+        };
 
-        _contentFilterRepositoryMock
-            .Setup(r => r.CreateAsync(It.IsAny<ContentFilter>(), null, It.IsAny<CancellationToken>()))
-            .ReturnsAsync((ContentFilter cf, Guid? _, CancellationToken _) => Result.Success(cf));
+        _contentFilterRepository
+            .Setup(m => m.CreateAsync(It.IsAny<ContentFilter>(), null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((ContentFilter cf, Guid? _, CancellationToken _) => cf);
 
         // Act
         var response = await _client.PostAsJsonAsync("/api/content-filters", request).ConfigureAwait(false);
@@ -300,41 +306,8 @@ public class ContentFiltersEndpointGroupTests
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.Created));
-            Assert.That(content, Has.Property(nameof(ContentFilter.Name)).EqualTo("New Filter"));
-            Assert.That(content, Has.Property(nameof(ContentFilter.Tags)).Empty);
-            Assert.That(response.Headers.Location?.ToString(), Does.Contain($"/api/content-filters/{content!.Id}"));
-        }
-    }
-
-    [Test]
-    public async Task CreateContentFilter_WithTags_CreatesContentFilter()
-    {
-        // Arrange
-        var request = new ContentFilter(
-            Id: Guid.Empty,
-            Name: "Tagged Filter",
-            Criteria: DefaultCriteria,
-            Tags: ["tag1", "tag2"],
-            CreatedAt: default,
-            CreatedByUserId: null,
-            ModifiedAt: null,
-            ModifiedByUserId: null);
-
-        _contentFilterRepositoryMock
-            .Setup(r => r.CreateAsync(It.IsAny<ContentFilter>(), null, It.IsAny<CancellationToken>()))
-            .ReturnsAsync((ContentFilter cf, Guid? _, CancellationToken _) => Result.Success(cf));
-
-        // Act
-        var response = await _client.PostAsJsonAsync("/api/content-filters", request).ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<ContentFilter>().ConfigureAwait(false);
-
-        // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.Created));
-            Assert.That(content, Has.Property(nameof(ContentFilter.Name)).EqualTo("Tagged Filter"));
-            Assert.That(content, Has.Property(nameof(ContentFilter.Tags)).With.Count.EqualTo(2));
+            Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.Created));
+            Assert.That(content, Has.Property(nameof(content.Name)).EqualTo("New Filter"));
         }
     }
 
@@ -343,24 +316,21 @@ public class ContentFiltersEndpointGroupTests
     {
         // Arrange
         var contentFilterId = Guid.NewGuid();
-        var request = new ContentFilterPatch
-        {
-            Name = new FieldPatch<string>("Patched")
-        };
+        var request = new ContentFilterPatch(contentFilterId, Name: new ScalarPatch<string>("Patched"));
 
-        _contentFilterRepositoryMock
-            .Setup(r => r.PatchAsync(
+        _contentFilterRepository
+            .Setup(m => m.PatchAsync(
                 It.Is<ContentFilterPatch>(p => p.Id == contentFilterId && p.Name!.Value == "Patched"),
                 null,
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success(true));
+            .ReturnsAsync(true);
 
         // Act
         var response = await _client.PatchAsJsonAsync($"/api/content-filters/{contentFilterId}", request)
             .ConfigureAwait(false);
 
         // Assert
-        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.NoContent));
+        Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NoContent));
     }
 
     [Test]
@@ -368,27 +338,24 @@ public class ContentFiltersEndpointGroupTests
     {
         // Arrange
         var contentFilterId = Guid.NewGuid();
-        var request = new ContentFilterPatch
-        {
-            Tags = new SetPatch<string, string>(["new-tag"], null)
-        };
+        var request = new ContentFilterPatch(contentFilterId, Tags: new SetPatch<string, string>(["new-tag"], null));
 
-        _contentFilterRepositoryMock
-            .Setup(r => r.PatchAsync(
+        _contentFilterRepository
+            .Setup(m => m.PatchAsync(
                 It.Is<ContentFilterPatch>(p =>
                     p.Id == contentFilterId &&
                     p.Tags != null &&
                     p.Tags.Add != null),
                 null,
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success(true));
+            .ReturnsAsync(true);
 
         // Act
         var response = await _client.PatchAsJsonAsync($"/api/content-filters/{contentFilterId}", request)
             .ConfigureAwait(false);
 
         // Assert
-        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.NoContent));
+        Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NoContent));
     }
 
     [Test]
@@ -396,21 +363,18 @@ public class ContentFiltersEndpointGroupTests
     {
         // Arrange
         var contentFilterId = Guid.NewGuid();
-        var request = new ContentFilterPatch
-        {
-            Name = new FieldPatch<string>("Patched")
-        };
+        var request = new ContentFilterPatch(contentFilterId, Name: new ScalarPatch<string>("Patched"));
 
-        _contentFilterRepositoryMock
-            .Setup(r => r.PatchAsync(It.IsAny<ContentFilterPatch>(), null, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success(false));
+        _contentFilterRepository
+            .Setup(m => m.PatchAsync(It.IsAny<ContentFilterPatch>(), null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(false);
 
         // Act
         var response = await _client.PatchAsJsonAsync($"/api/content-filters/{contentFilterId}", request)
             .ConfigureAwait(false);
 
         // Assert
-        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.NotFound));
+        Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NotFound));
     }
 
     [Test]
@@ -419,15 +383,15 @@ public class ContentFiltersEndpointGroupTests
         // Arrange
         var contentFilterId = Guid.NewGuid();
 
-        _contentFilterRepositoryMock
-            .Setup(r => r.DeleteAsync(contentFilterId, null, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success(true));
+        _contentFilterRepository
+            .Setup(m => m.DeleteAsync(contentFilterId, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
 
         // Act
         var response = await _client.DeleteAsync($"/api/content-filters/{contentFilterId}").ConfigureAwait(false);
 
         // Assert
-        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.NoContent));
+        Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NoContent));
     }
 
     [Test]
@@ -436,14 +400,14 @@ public class ContentFiltersEndpointGroupTests
         // Arrange
         var contentFilterId = Guid.NewGuid();
 
-        _contentFilterRepositoryMock
-            .Setup(r => r.DeleteAsync(contentFilterId, null, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success(false));
+        _contentFilterRepository
+            .Setup(m => m.DeleteAsync(contentFilterId, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(false);
 
         // Act
         var response = await _client.DeleteAsync($"/api/content-filters/{contentFilterId}").ConfigureAwait(false);
 
         // Assert
-        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.NotFound));
+        Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NotFound));
     }
 }

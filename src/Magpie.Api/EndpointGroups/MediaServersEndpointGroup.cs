@@ -1,19 +1,17 @@
 using System;
-using System.Collections.Generic;
-using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions.Api;
-using Magpie.Abstractions.Data;
-using Magpie.Models.MediaServers;
-using Magpie.Models.Result;
+using Magpie.Abstractions.Repositories;
+using Magpie.Abstractions.Security;
+using Magpie.Models.Arguments;
+using Magpie.Models.Data;
+using Magpie.Models.Enums;
 
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
-
-using HttpResult = Microsoft.AspNetCore.Http.IResult;
 
 namespace Magpie.Api.EndpointGroups;
 
@@ -34,24 +32,6 @@ internal sealed class MediaServersEndpointGroup(IMediaServerRepository mediaServ
             .WithTags("MediaServers")
             .Produces<MediaServer>()
             .Produces(StatusCodes.Status404NotFound)
-            .RequireAuthorization();
-
-        builder.MapGet("/by-provider/{provider}", GetMediaServersByProvider)
-            .WithName("GetMediaServersByProvider")
-            .WithTags("MediaServers")
-            .Produces<MediaServer[]>()
-            .RequireAuthorization();
-
-        builder.MapGet("/by-status/{status}", GetMediaServersByStatus)
-            .WithName("GetMediaServersByStatus")
-            .WithTags("MediaServers")
-            .Produces<MediaServer[]>()
-            .RequireAuthorization();
-
-        builder.MapGet("/enabled", GetEnabledMediaServers)
-            .WithName("GetEnabledMediaServers")
-            .WithTags("MediaServers")
-            .Produces<MediaServer[]>()
             .RequireAuthorization();
 
         builder.MapPost("", CreateMediaServer)
@@ -77,132 +57,75 @@ internal sealed class MediaServersEndpointGroup(IMediaServerRepository mediaServ
             .RequireAuthorization();
     }
 
-    private async Task<HttpResult> GetAllMediaServers(CancellationToken cancellationToken)
+    private async Task<IResult> GetAllMediaServers(CancellationToken cancellationToken)
     {
-        var result = await mediaServerRepository.GetAllAsync(cancellationToken).ConfigureAwait(false);
+        var mediaServers = await mediaServerRepository.ListAllAsync(cancellationToken).ConfigureAwait(false);
 
-        return result switch
-        {
-            SuccessResult<IReadOnlyList<MediaServer>> success => Results.Ok(success.Value.ToArray()),
-            FailureResult<IReadOnlyList<MediaServer>> failure =>
-                Results.Problem(failure.Reason, statusCode: StatusCodes.Status500InternalServerError),
-            _ => Results.Problem("Unexpected result type", statusCode: StatusCodes.Status500InternalServerError)
-        };
+        return Results.Ok(mediaServers);
     }
 
-    private async Task<HttpResult> GetMediaServerById(Guid id, CancellationToken cancellationToken)
+    private async Task<IResult> GetMediaServerById(Guid id, CancellationToken cancellationToken)
     {
-        var result = await mediaServerRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
+        var mediaServer = await mediaServerRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
 
-        return result switch
-        {
-            SuccessResult<MediaServer?> { Value: null } => Results.NotFound(),
-            SuccessResult<MediaServer?> success => Results.Ok(success.Value),
-            FailureResult<MediaServer?> failure =>
-                Results.Problem(failure.Reason, statusCode: StatusCodes.Status500InternalServerError),
-            _ => Results.Problem("Unexpected result type", statusCode: StatusCodes.Status500InternalServerError)
-        };
+        return mediaServer is null
+            ? Results.NotFound()
+            : Results.Ok(mediaServer);
     }
 
-    private async Task<HttpResult> GetMediaServersByProvider(string provider, CancellationToken cancellationToken)
-    {
-        var result = await mediaServerRepository.GetByProviderAsync(provider, cancellationToken).ConfigureAwait(false);
-
-        return result switch
-        {
-            SuccessResult<IReadOnlyList<MediaServer>> success => Results.Ok(success.Value.ToArray()),
-            FailureResult<IReadOnlyList<MediaServer>> failure =>
-                Results.Problem(failure.Reason, statusCode: StatusCodes.Status500InternalServerError),
-            _ => Results.Problem("Unexpected result type", statusCode: StatusCodes.Status500InternalServerError)
-        };
-    }
-
-    private async Task<HttpResult> GetMediaServersByStatus(
-        MediaServerStatus status,
+    private async Task<IResult> CreateMediaServer(
+        HttpContext httpContext,
+        MediaServer request,
         CancellationToken cancellationToken)
     {
-        var result = await mediaServerRepository.GetByStatusAsync(status, cancellationToken).ConfigureAwait(false);
+        var currentUserId = httpContext.User.GetUserId();
 
-        return result switch
-        {
-            SuccessResult<IReadOnlyList<MediaServer>> success => Results.Ok(success.Value.ToArray()),
-            FailureResult<IReadOnlyList<MediaServer>> failure =>
-                Results.Problem(failure.Reason, statusCode: StatusCodes.Status500InternalServerError),
-            _ => Results.Problem("Unexpected result type", statusCode: StatusCodes.Status500InternalServerError)
-        };
-    }
-
-    private async Task<HttpResult> GetEnabledMediaServers(CancellationToken cancellationToken)
-    {
-        var result = await mediaServerRepository.GetEnabledAsync(cancellationToken).ConfigureAwait(false);
-
-        return result switch
-        {
-            SuccessResult<IReadOnlyList<MediaServer>> success => Results.Ok(success.Value.ToArray()),
-            FailureResult<IReadOnlyList<MediaServer>> failure =>
-                Results.Problem(failure.Reason, statusCode: StatusCodes.Status500InternalServerError),
-            _ => Results.Problem("Unexpected result type", statusCode: StatusCodes.Status500InternalServerError)
-        };
-    }
-
-    private async Task<HttpResult> CreateMediaServer(MediaServer request, CancellationToken cancellationToken)
-    {
         var mediaServer = request with
         {
             Id = Guid.NewGuid(),
             Status = MediaServerStatus.Unknown,
             LastChecked = null,
-            CreatedAt = DateTimeOffset.UtcNow,
-            CreatedByUserId = null,
+            CreatedAt = DateTime.UtcNow,
+            CreatedByUserId = currentUserId,
             ModifiedAt = null,
             ModifiedByUserId = null
         };
 
-        var result = await mediaServerRepository.CreateAsync(mediaServer, createdByUserId: null, cancellationToken)
+        var created = await mediaServerRepository.CreateAsync(mediaServer, currentUserId, cancellationToken)
             .ConfigureAwait(false);
 
-        return result switch
-        {
-            SuccessResult<MediaServer> success =>
-                Results.Created($"/api/media-servers/{success.Value.Id}", success.Value),
-            FailureResult<MediaServer> failure =>
-                Results.Problem(failure.Reason, statusCode: StatusCodes.Status400BadRequest),
-            _ =>
-                Results.Problem("Unexpected result type", statusCode: StatusCodes.Status500InternalServerError)
-        };
+        return Results.Created($"/api/media-servers/{created.Id}", created);
     }
 
-    private async Task<HttpResult> PatchMediaServer(
+    private async Task<IResult> PatchMediaServer(
+        HttpContext httpContext,
         Guid id,
         MediaServerPatch request,
         CancellationToken cancellationToken)
     {
+        var currentUserId = httpContext.User.GetUserId();
         var patch = request with { Id = id };
 
-        var result = await mediaServerRepository.PatchAsync(patch, modifiedByUserId: null, cancellationToken)
+        var updated = await mediaServerRepository.PatchAsync(patch, currentUserId, cancellationToken)
             .ConfigureAwait(false);
 
-        return result switch
-        {
-            SuccessResult<bool> { Value: false } => Results.NotFound(),
-            SuccessResult<bool> => Results.NoContent(),
-            FailureResult<bool> failure => Results.Problem(failure.Reason, statusCode: StatusCodes.Status400BadRequest),
-            _ => Results.Problem("Unexpected result type", statusCode: StatusCodes.Status500InternalServerError)
-        };
+        return updated
+            ? Results.NoContent()
+            : Results.NotFound();
     }
 
-    private async Task<HttpResult> DeleteMediaServer(Guid id, CancellationToken cancellationToken)
+    private async Task<IResult> DeleteMediaServer(
+        HttpContext httpContext,
+        Guid id,
+        CancellationToken cancellationToken)
     {
-        var result = await mediaServerRepository.DeleteAsync(id, deletedByUserId: null, cancellationToken)
+        var currentUserId = httpContext.User.GetUserId();
+
+        var deleted = await mediaServerRepository.DeleteAsync(id, currentUserId, cancellationToken)
             .ConfigureAwait(false);
 
-        return result switch
-        {
-            SuccessResult<bool> { Value: false } => Results.NotFound(),
-            SuccessResult<bool> => Results.NoContent(),
-            FailureResult<bool> failure =>
-                Results.Problem(failure.Reason, statusCode: StatusCodes.Status500InternalServerError),
-            _ => Results.Problem("Unexpected result type", statusCode: StatusCodes.Status500InternalServerError)
-        };
+        return deleted
+            ? Results.NoContent()
+            : Results.NotFound();
     }
 }

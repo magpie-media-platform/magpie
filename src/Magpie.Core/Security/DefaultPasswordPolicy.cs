@@ -2,9 +2,9 @@ using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 
-using Magpie.Models.Result;
+using Magpie.Abstractions.Security;
 
-using static Magpie.Core.Security.IPasswordPolicy;
+using static Magpie.Abstractions.Security.IPasswordPolicy;
 
 namespace Magpie.Core.Security;
 
@@ -14,7 +14,7 @@ namespace Magpie.Core.Security;
 public sealed class DefaultPasswordPolicy : IPasswordPolicy
 {
     /// <inheritdoc />
-    public Task<Result<PasswordPolicyResult>> ValidatePasswordAsync(
+    public Task<PasswordPolicyResult> ValidatePasswordAsync(
         string? password,
         CancellationToken cancellationToken = default)
     {
@@ -33,8 +33,6 @@ public sealed class DefaultPasswordPolicy : IPasswordPolicy
             validationErrors.Add("Password must be at least 8 characters long");
         }
 
-        return Task.FromResult(validationErrors.Count > 0
-            ? Result.Fail<PasswordPolicyResult>(string.Join(", ", validationErrors))
-            : Result.Success(new PasswordPolicyResult(true, validationErrors)));
+        return Task.FromResult(new PasswordPolicyResult(validationErrors.Count == 0, validationErrors));
     }
 }

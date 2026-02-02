@@ -1,44 +1,46 @@
 using System;
-using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions.Api;
+using Magpie.Abstractions.Repositories;
 using Magpie.Abstractions.Security;
-using Magpie.Core;
-using Magpie.Models;
-using Magpie.Models.Result;
-using Magpie.Models.Users;
+using Magpie.Models.Arguments;
+using Magpie.Models.Data;
+using Magpie.Models.Enums;
+using Magpie.Models.Paging;
+using Magpie.Models.Patch;
+using Magpie.Models.Sorting;
 
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 
-using HttpResult = Microsoft.AspNetCore.Http.IResult;
-
 namespace Magpie.Api.EndpointGroups;
 
-/// <summary>
-/// Endpoint group for user management endpoints.
-/// </summary>
-internal sealed class UsersEndpointGroup(IUserManager userManager) : IApiEndpointGroup
+internal sealed class UsersEndpointGroup(IUserRepository userRepository) : IApiEndpointGroup
 {
-    /// <inheritdoc />
     public string Name => "users";
 
-    /// <inheritdoc />
     public void MapEndpoints(IEndpointRouteBuilder builder)
     {
         builder.MapGet("", GetUsers)
             .WithName("GetUsers")
             .WithTags("Users")
-            .Produces<User[]>()
+            .Produces<PagedList<User>>()
             .RequireAuthorization();
 
         builder.MapGet("/{id:guid}", GetUser)
             .WithName("GetUser")
             .WithTags("Users")
             .Produces<User>()
+            .Produces(StatusCodes.Status404NotFound)
+            .RequireAuthorization();
+
+        builder.MapPatch("/{id:guid}", PatchUser)
+            .WithName("PatchUser")
+            .WithTags("Users")
+            .Produces(StatusCodes.Status204NoContent)
             .Produces(StatusCodes.Status404NotFound)
             .RequireAuthorization();
 
@@ -64,86 +66,96 @@ internal sealed class UsersEndpointGroup(IUserManager userManager) : IApiEndpoin
             .RequireAuthorization();
     }
 
-    private async Task<HttpResult> GetUsers(
-        Guid? authProviderId,
+    private async Task<IResult> GetUsers(
+        string? providerType,
         Role? role,
         bool? enabled,
+        int? page,
+        int? pageSize,
+        string? sortBy,
+        SortDirection? sortDirection,
         CancellationToken cancellationToken)
     {
-        var result = await userManager.GetUsersAsync(authProviderId, role, enabled, cancellationToken)
+        var query = new UserQuery(enabled, role, providerType);
+        var paging = page.HasValue || pageSize.HasValue
+            ? new PagingParameter(page ?? 1, pageSize ?? 25)
+            : null;
+        var sort = !string.IsNullOrEmpty(sortBy)
+            ? new SortParameter(sortBy, sortDirection ?? SortDirection.Ascending)
+            : null;
+
+        var result = await userRepository.QueryAsync(query, paging, sort, cancellationToken)
             .ConfigureAwait(false);
 
-        return result switch
-        {
-            SuccessResult<IEnumerable<User>> success =>
-                Results.Ok(success.Value),
-            FailureResult<IEnumerable<User>> failure =>
-                Results.Problem(failure.Reason, statusCode: StatusCodes.Status500InternalServerError),
-            _ => Results.Problem("Unexpected result type", statusCode: StatusCodes.Status500InternalServerError)
-        };
+        return Results.Ok(result);
     }
 
-    private async Task<HttpResult> GetUser(Guid id, CancellationToken cancellationToken)
+    private async Task<IResult> GetUser(Guid id, CancellationToken cancellationToken)
     {
-        var result = await userManager.GetUserAsync(id, cancellationToken).ConfigureAwait(false);
+        var user = await userRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
 
-        return result switch
-        {
-            SuccessResult<User?> { Value: null } => Results.NotFound(),
-            SuccessResult<User?> success => Results.Ok(success.Value),
-            FailureResult<User?> failure =>
-                Results.Problem(failure.Reason, statusCode: StatusCodes.Status500InternalServerError),
-            _ => Results.Problem("Unexpected result type", statusCode: StatusCodes.Status500InternalServerError)
-        };
+        return user is null
+            ? Results.NotFound()
+            : Results.Ok(user);
     }
 
-    private async Task<HttpResult> EnableUser(Guid id, CancellationToken cancellationToken)
+    private async Task<IResult> PatchUser(
+        HttpContext httpContext,
+        Guid id,
+        UserPatch request,
+        CancellationToken cancellationToken)
     {
-        var patch = new UserPatch { Id = id, Enabled = new FieldPatch<bool>(true) };
-        var result = await userManager.UpdateUserAsync(patch, Guid.Empty, cancellationToken)
+        var currentUserId = httpContext.User.GetUserId();
+        var patch = request with { Id = id };
+        var updated = await userRepository.PatchAsync(patch, currentUserId, cancellationToken).ConfigureAwait(false);
+
+        return updated
+            ? Results.NoContent()
+            : Results.NotFound();
+    }
+
+    private async Task<IResult> EnableUser(HttpContext httpContext, Guid id, CancellationToken cancellationToken)
+    {
+        var currentUserId = httpContext.User.GetUserId();
+        var existingUser = await userRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
+        if (existingUser is null)
+        {
+            return Results.NotFound();
+        }
+
+        var patch = new UserPatch(id, Enabled: new ScalarPatch<bool>(true));
+        await userRepository.PatchAsync(patch, currentUserId, cancellationToken)
             .ConfigureAwait(false);
 
-        return result switch
-        {
-            SuccessResult<User> success => Results.Ok(success.Value),
-            FailureResult<User> { ErrorCode: ErrorCodes.UserNotFound } => Results.NotFound(),
-            FailureResult<User> failure =>
-                Results.Problem(failure.Reason, statusCode: StatusCodes.Status500InternalServerError),
-            _ => Results.Problem("Unexpected result type", statusCode: StatusCodes.Status500InternalServerError)
-        };
+        var user = await userRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
+        return Results.Ok(user);
     }
 
-    private async Task<HttpResult> DisableUser(Guid id, CancellationToken cancellationToken)
+    private async Task<IResult> DisableUser(HttpContext httpContext, Guid id, CancellationToken cancellationToken)
     {
-        var patch = new UserPatch { Id = id, Enabled = new FieldPatch<bool>(false) };
-        var result = await userManager.UpdateUserAsync(patch, Guid.Empty, cancellationToken)
+        var currentUserId = httpContext.User.GetUserId();
+        var existingUser = await userRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
+        if (existingUser is null)
+        {
+            return Results.NotFound();
+        }
+
+        var patch = new UserPatch(id, Enabled: new ScalarPatch<bool>(false));
+        await userRepository.PatchAsync(patch, currentUserId, cancellationToken)
             .ConfigureAwait(false);
 
-        return result switch
-        {
-            SuccessResult<User> success => Results.Ok(success.Value),
-            FailureResult<User> { ErrorCode: ErrorCodes.UserNotFound } => Results.NotFound(),
-            FailureResult<User> failure =>
-                Results.Problem(failure.Reason, statusCode: StatusCodes.Status500InternalServerError),
-            _ => Results.Problem("Unexpected result type", statusCode: StatusCodes.Status500InternalServerError)
-        };
+        var user = await userRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
+        return Results.Ok(user);
     }
 
-    private async Task<HttpResult> DeleteUser(Guid id, CancellationToken cancellationToken)
+    private async Task<IResult> DeleteUser(HttpContext httpContext, Guid id, CancellationToken cancellationToken)
     {
-        var result = await userManager.DeleteUserAsync(id, deletedByUserId: null, cancellationToken)
+        var currentUserId = httpContext.User.GetUserId();
+        var deleted = await userRepository.DeleteAsync(id, currentUserId, cancellationToken)
             .ConfigureAwait(false);
 
-        return result switch
-        {
-            SuccessResult<bool> =>
-                Results.NoContent(),
-            FailureResult<bool> { ErrorCode: ErrorCodes.UserNotFound } =>
-                Results.NotFound(),
-            FailureResult<bool> failure =>
-                Results.Problem(failure.Reason, statusCode: StatusCodes.Status500InternalServerError),
-            _ =>
-                Results.Problem("Unexpected result type", statusCode: StatusCodes.Status500InternalServerError)
-        };
+        return deleted
+            ? Results.NoContent()
+            : Results.NotFound();
     }
 }

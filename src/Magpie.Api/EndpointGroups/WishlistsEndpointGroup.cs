@@ -1,19 +1,16 @@
 using System;
-using System.Collections.Generic;
-using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions.Api;
-using Magpie.Abstractions.Data;
-using Magpie.Models.Result;
-using Magpie.Models.Wishlists;
+using Magpie.Abstractions.Repositories;
+using Magpie.Abstractions.Security;
+using Magpie.Models.Arguments;
+using Magpie.Models.Data;
 
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
-
-using HttpResult = Microsoft.AspNetCore.Http.IResult;
 
 namespace Magpie.Api.EndpointGroups;
 
@@ -36,27 +33,8 @@ internal sealed class WishlistsEndpointGroup(IWishlistRepository wishlistReposit
             .Produces(StatusCodes.Status404NotFound)
             .RequireAuthorization();
 
-        builder.MapGet("/by-name/{name}", GetWishlistByName)
-            .WithName("GetWishlistByName")
-            .WithTags("Wishlists")
-            .Produces<Wishlist>()
-            .Produces(StatusCodes.Status404NotFound)
-            .RequireAuthorization();
-
         builder.MapGet("/by-user/{userId:guid}", GetWishlistsByUser)
             .WithName("GetWishlistsByUser")
-            .WithTags("Wishlists")
-            .Produces<Wishlist[]>()
-            .RequireAuthorization();
-
-        builder.MapGet("/by-tag/{tag}", GetWishlistsByTag)
-            .WithName("GetWishlistsByTag")
-            .WithTags("Wishlists")
-            .Produces<Wishlist[]>()
-            .RequireAuthorization();
-
-        builder.MapGet("/by-content-filter/{contentFilterId:guid}", GetWishlistsByContentFilter)
-            .WithName("GetWishlistsByContentFilter")
             .WithTags("Wishlists")
             .Produces<Wishlist[]>()
             .RequireAuthorization();
@@ -74,19 +52,20 @@ internal sealed class WishlistsEndpointGroup(IWishlistRepository wishlistReposit
             .ProducesProblem(StatusCodes.Status400BadRequest)
             .RequireAuthorization();
 
-        builder.MapPatch("/{id:guid}", PatchWishlist)
-            .WithName("PatchWishlist")
+        builder.MapPut("/{id:guid}", UpdateWishlist)
+            .WithName("UpdateWishlist")
             .WithTags("Wishlists")
             .Produces(StatusCodes.Status204NoContent)
             .Produces(StatusCodes.Status404NotFound)
             .ProducesProblem(StatusCodes.Status400BadRequest)
             .RequireAuthorization();
 
-        builder.MapPost("/{id:guid}/sync", UpdateLastSynced)
-            .WithName("UpdateWishlistLastSynced")
+        builder.MapPatch("/{id:guid}", PatchWishlist)
+            .WithName("PatchWishlist")
             .WithTags("Wishlists")
             .Produces(StatusCodes.Status204NoContent)
             .Produces(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status400BadRequest)
             .RequireAuthorization();
 
         builder.MapDelete("/{id:guid}", DeleteWishlist)
@@ -97,174 +76,109 @@ internal sealed class WishlistsEndpointGroup(IWishlistRepository wishlistReposit
             .RequireAuthorization();
     }
 
-    private async Task<HttpResult> GetAllWishlists(CancellationToken cancellationToken)
+    private async Task<IResult> GetAllWishlists(CancellationToken cancellationToken)
     {
-        var result = await wishlistRepository.GetAllAsync(cancellationToken).ConfigureAwait(false);
-
-        return result switch
-        {
-            SuccessResult<IReadOnlyList<Wishlist>> success => Results.Ok(success.Value.ToArray()),
-            FailureResult<IReadOnlyList<Wishlist>> failure =>
-                Results.Problem(failure.Reason, statusCode: StatusCodes.Status500InternalServerError),
-            _ => Results.Problem("Unexpected result type", statusCode: StatusCodes.Status500InternalServerError)
-        };
+        var wishlists = await wishlistRepository.ListAllAsync(cancellationToken).ConfigureAwait(false);
+        return Results.Ok(wishlists);
     }
 
-    private async Task<HttpResult> GetWishlistById(Guid id, CancellationToken cancellationToken)
+    private async Task<IResult> GetWishlistById(Guid id, CancellationToken cancellationToken)
     {
-        var result = await wishlistRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
-
-        return result switch
-        {
-            SuccessResult<Wishlist?> { Value: null } => Results.NotFound(),
-            SuccessResult<Wishlist?> success => Results.Ok(success.Value),
-            FailureResult<Wishlist?> failure =>
-                Results.Problem(failure.Reason, statusCode: StatusCodes.Status500InternalServerError),
-            _ => Results.Problem("Unexpected result type", statusCode: StatusCodes.Status500InternalServerError)
-        };
+        var wishlist = await wishlistRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
+        return wishlist is null ? Results.NotFound() : Results.Ok(wishlist);
     }
 
-    private async Task<HttpResult> GetWishlistByName(string name, CancellationToken cancellationToken)
+    private async Task<IResult> GetWishlistsByUser(Guid userId, CancellationToken cancellationToken)
     {
-        var result = await wishlistRepository.GetByNameAsync(name, cancellationToken).ConfigureAwait(false);
-
-        return result switch
-        {
-            SuccessResult<Wishlist?> { Value: null } => Results.NotFound(),
-            SuccessResult<Wishlist?> success => Results.Ok(success.Value),
-            FailureResult<Wishlist?> failure =>
-                Results.Problem(failure.Reason, statusCode: StatusCodes.Status500InternalServerError),
-            _ => Results.Problem("Unexpected result type", statusCode: StatusCodes.Status500InternalServerError)
-        };
+        var wishlists = await wishlistRepository.GetByUserIdAsync(userId, cancellationToken).ConfigureAwait(false);
+        return Results.Ok(wishlists);
     }
 
-    private async Task<HttpResult> GetWishlistsByUser(Guid userId, CancellationToken cancellationToken)
+    private async Task<IResult> GetMonitoredWishlists(CancellationToken cancellationToken)
     {
-        var result = await wishlistRepository.GetByUserIdAsync(userId, cancellationToken).ConfigureAwait(false);
-
-        return result switch
-        {
-            SuccessResult<IReadOnlyList<Wishlist>> success => Results.Ok(success.Value.ToArray()),
-            FailureResult<IReadOnlyList<Wishlist>> failure =>
-                Results.Problem(failure.Reason, statusCode: StatusCodes.Status500InternalServerError),
-            _ => Results.Problem("Unexpected result type", statusCode: StatusCodes.Status500InternalServerError)
-        };
+        var wishlists = await wishlistRepository.GetMonitoredAsync(cancellationToken).ConfigureAwait(false);
+        return Results.Ok(wishlists);
     }
 
-    private async Task<HttpResult> GetWishlistsByTag(string tag, CancellationToken cancellationToken)
-    {
-        var result = await wishlistRepository.GetByTagAsync(tag, cancellationToken).ConfigureAwait(false);
-
-        return result switch
-        {
-            SuccessResult<IReadOnlyList<Wishlist>> success => Results.Ok(success.Value.ToArray()),
-            FailureResult<IReadOnlyList<Wishlist>> failure =>
-                Results.Problem(failure.Reason, statusCode: StatusCodes.Status500InternalServerError),
-            _ => Results.Problem("Unexpected result type", statusCode: StatusCodes.Status500InternalServerError)
-        };
-    }
-
-    private async Task<HttpResult> GetWishlistsByContentFilter(
-        Guid contentFilterId,
+    private async Task<IResult> CreateWishlist(
+        HttpContext httpContext,
+        Wishlist request,
         CancellationToken cancellationToken)
     {
-        var result = await wishlistRepository.GetByContentFilterIdAsync(contentFilterId, cancellationToken)
-            .ConfigureAwait(false);
+        var currentUserId = httpContext.User.GetUserId();
 
-        return result switch
-        {
-            SuccessResult<IReadOnlyList<Wishlist>> success => Results.Ok(success.Value.ToArray()),
-            FailureResult<IReadOnlyList<Wishlist>> failure =>
-                Results.Problem(failure.Reason, statusCode: StatusCodes.Status500InternalServerError),
-            _ => Results.Problem("Unexpected result type", statusCode: StatusCodes.Status500InternalServerError)
-        };
-    }
-
-    private async Task<HttpResult> GetMonitoredWishlists(CancellationToken cancellationToken)
-    {
-        var result = await wishlistRepository.GetMonitoredAsync(cancellationToken).ConfigureAwait(false);
-
-        return result switch
-        {
-            SuccessResult<IReadOnlyList<Wishlist>> success => Results.Ok(success.Value.ToArray()),
-            FailureResult<IReadOnlyList<Wishlist>> failure =>
-                Results.Problem(failure.Reason, statusCode: StatusCodes.Status500InternalServerError),
-            _ => Results.Problem("Unexpected result type", statusCode: StatusCodes.Status500InternalServerError)
-        };
-    }
-
-    private async Task<HttpResult> CreateWishlist(Wishlist request, CancellationToken cancellationToken)
-    {
         var wishlist = request with
         {
             Id = Guid.NewGuid(),
             LastSyncedAt = null,
-            CreatedAt = DateTimeOffset.UtcNow,
-            CreatedByUserId = null,
+            CreatedAt = DateTime.UtcNow,
+            CreatedByUserId = currentUserId,
             ModifiedAt = null,
             ModifiedByUserId = null
         };
 
-        var result = await wishlistRepository.CreateAsync(wishlist, createdByUserId: null, cancellationToken)
+        var created = await wishlistRepository.CreateAsync(wishlist, currentUserId, cancellationToken)
             .ConfigureAwait(false);
 
-        return result switch
-        {
-            SuccessResult<Wishlist> success =>
-                Results.Created($"/api/wishlists/{success.Value.Id}", success.Value),
-            FailureResult<Wishlist> failure =>
-                Results.Problem(failure.Reason, statusCode: StatusCodes.Status400BadRequest),
-            _ =>
-                Results.Problem("Unexpected result type", statusCode: StatusCodes.Status500InternalServerError)
-        };
+        return Results.Created($"/api/wishlists/{created.Id}", created);
     }
 
-    private async Task<HttpResult> PatchWishlist(Guid id, WishlistPatch request, CancellationToken cancellationToken)
-    {
-        var patch = request with { Id = id };
-
-        var result = await wishlistRepository.PatchAsync(patch, modifiedByUserId: null, cancellationToken)
-            .ConfigureAwait(false);
-
-        return result switch
-        {
-            SuccessResult<bool> { Value: false } => Results.NotFound(),
-            SuccessResult<bool> => Results.NoContent(),
-            FailureResult<bool> failure => Results.Problem(failure.Reason, statusCode: StatusCodes.Status400BadRequest),
-            _ => Results.Problem("Unexpected result type", statusCode: StatusCodes.Status500InternalServerError)
-        };
-    }
-
-    private async Task<HttpResult> UpdateLastSynced(
+    private async Task<IResult> UpdateWishlist(
+        HttpContext httpContext,
         Guid id,
-        WishlistSyncUpdate request,
+        Wishlist request,
         CancellationToken cancellationToken)
     {
-        var result = await wishlistRepository.UpdateLastSyncedAsync(id, request.LastSyncedAt, cancellationToken)
+        var existing = await wishlistRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
+
+        if (existing is null)
+        {
+            return Results.NotFound();
+        }
+
+        var currentUserId = httpContext.User.GetUserId();
+
+        var wishlist = request with
+        {
+            Id = id,
+            LastSyncedAt = existing.LastSyncedAt,
+            CreatedAt = existing.CreatedAt,
+            CreatedByUserId = existing.CreatedByUserId,
+            ModifiedAt = DateTime.UtcNow,
+            ModifiedByUserId = currentUserId
+        };
+
+        await wishlistRepository.UpdateAsync(wishlist, currentUserId, cancellationToken)
             .ConfigureAwait(false);
 
-        return result switch
-        {
-            SuccessResult<bool> { Value: false } => Results.NotFound(),
-            SuccessResult<bool> => Results.NoContent(),
-            FailureResult<bool> failure =>
-                Results.Problem(failure.Reason, statusCode: StatusCodes.Status500InternalServerError),
-            _ => Results.Problem("Unexpected result type", statusCode: StatusCodes.Status500InternalServerError)
-        };
+        return Results.NoContent();
     }
 
-    private async Task<HttpResult> DeleteWishlist(Guid id, CancellationToken cancellationToken)
+    private async Task<IResult> PatchWishlist(
+        HttpContext httpContext,
+        Guid id,
+        WishlistPatch request,
+        CancellationToken cancellationToken)
     {
-        var result = await wishlistRepository.DeleteAsync(id, deletedByUserId: null, cancellationToken)
+        var currentUserId = httpContext.User.GetUserId();
+        var patch = request with { Id = id };
+
+        var patched = await wishlistRepository.PatchAsync(patch, currentUserId, cancellationToken)
             .ConfigureAwait(false);
 
-        return result switch
-        {
-            SuccessResult<bool> { Value: false } => Results.NotFound(),
-            SuccessResult<bool> => Results.NoContent(),
-            FailureResult<bool> failure =>
-                Results.Problem(failure.Reason, statusCode: StatusCodes.Status500InternalServerError),
-            _ => Results.Problem("Unexpected result type", statusCode: StatusCodes.Status500InternalServerError)
-        };
+        return patched ? Results.NoContent() : Results.NotFound();
+    }
+
+    private async Task<IResult> DeleteWishlist(
+        HttpContext httpContext,
+        Guid id,
+        CancellationToken cancellationToken)
+    {
+        var currentUserId = httpContext.User.GetUserId();
+
+        var deleted = await wishlistRepository.DeleteAsync(id, currentUserId, cancellationToken)
+            .ConfigureAwait(false);
+
+        return deleted ? Results.NoContent() : Results.NotFound();
     }
 }

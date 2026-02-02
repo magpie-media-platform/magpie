@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Json;
@@ -9,10 +8,11 @@ using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions.Api;
-using Magpie.Abstractions.Data;
+using Magpie.Abstractions.Repositories;
 using Magpie.Api.EndpointGroups;
-using Magpie.Models.Configuration;
-using Magpie.Models.Result;
+using Magpie.Models.Arguments;
+using Magpie.Models.Data;
+using Magpie.Models.Patch;
 using Magpie.Test.Shared;
 
 using Microsoft.AspNetCore.Authentication;
@@ -29,8 +29,6 @@ using Moq;
 
 using NUnit.Framework;
 
-using static Magpie.Abstractions.Data.ISettingsRepository;
-
 namespace Magpie.Test.Api.EndpointGroups;
 
 [TestFixture]
@@ -38,20 +36,19 @@ public class SettingsEndpointGroupTests
 {
     private IHost _host = null!;
     private HttpClient _client = null!;
-    private Mock<ISettingsRepository> _settingsRepositoryMock = null!;
-    private readonly Guid _extensionId = Guid.NewGuid();
+    private Mock<ISettingsRepository> _settingsRepository = null!;
 
     [SetUp]
     public void SetUp()
     {
-        _settingsRepositoryMock = new Mock<ISettingsRepository>();
+        _settingsRepository = new Mock<ISettingsRepository>();
 
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
         builder.Logging.ClearProviders().AddTestLogger();
         var authServiceMock = new Mock<IAuthenticationService>();
         authServiceMock
-            .Setup(x => x.AuthenticateAsync(It.IsAny<HttpContext>(), It.IsAny<string>()))
+            .Setup(m => m.AuthenticateAsync(It.IsAny<HttpContext>(), It.IsAny<string>()))
             .ReturnsAsync(AuthenticateResult.Success(new(new ClaimsPrincipal(new ClaimsIdentity("Test")), "Test")));
         builder.Services.AddSingleton(authServiceMock.Object);
         builder.Services.AddAuthorizationBuilder()
@@ -60,7 +57,7 @@ public class SettingsEndpointGroupTests
                 .RequireAssertion(_ => true)
                 .Build());
 
-        builder.Services.AddSingleton(_settingsRepositoryMock.Object);
+        builder.Services.AddSingleton(_settingsRepository.Object);
         builder.Services.AddSingleton<IApiEndpointGroup, SettingsEndpointGroup>();
 
         var app = builder.Build();
@@ -88,12 +85,12 @@ public class SettingsEndpointGroupTests
     }
 
     [Test]
-    public async Task GetAllSettingsGroups_ReturnsEmptyArray_WhenNoGroups()
+    public async Task GetAllSettingsGroups_ReturnsEmptyArray_WhenNoSettingsGroups()
     {
         // Arrange
-        _settingsRepositoryMock
-            .Setup(r => r.GetAllSettingsGroupsAsync(It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<IReadOnlyList<SettingsGroup>>([]));
+        _settingsRepository
+            .Setup(m => m.ListAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
 
         // Act
         var response = await _client.GetAsync("/api/settings/groups").ConfigureAwait(false);
@@ -102,21 +99,22 @@ public class SettingsEndpointGroupTests
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+            Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
             Assert.That(content, Is.Not.Null);
             Assert.That(content, Is.Empty);
         }
     }
 
     [Test]
-    public async Task GetAllSettingsGroups_ReturnsGroups()
+    public async Task GetAllSettingsGroups_ReturnsSettingsGroups()
     {
         // Arrange
-        var group = new SettingsGroup(Guid.NewGuid(), "TestGroup", _extensionId);
+        var group1 = new SettingsGroup { Name = "general", ExtensionId = null };
+        var group2 = new SettingsGroup { Name = "advanced", ExtensionId = Guid.NewGuid() };
 
-        _settingsRepositoryMock
-            .Setup(r => r.GetAllSettingsGroupsAsync(It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<IReadOnlyList<SettingsGroup>>([group]));
+        _settingsRepository
+            .Setup(m => m.ListAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([group1, group2]);
 
         // Act
         var response = await _client.GetAsync("/api/settings/groups").ConfigureAwait(false);
@@ -125,360 +123,198 @@ public class SettingsEndpointGroupTests
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
-            Assert.That(content, Has.Length.EqualTo(1));
-            Assert.That(content, Has.One.With.Property(nameof(SettingsGroup.Name)).EqualTo("TestGroup"));
-            Assert.That(content, Has.One.With.Property(nameof(SettingsGroup.ExtensionId)).EqualTo(_extensionId));
+            Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
+            Assert.That(content, Has.Length.EqualTo(2));
+            Assert.That(content, Has.One.With.Property(nameof(SettingsGroup.Name)).EqualTo("general"));
+            Assert.That(content, Has.One.With.Property(nameof(SettingsGroup.Name)).EqualTo("advanced"));
         }
     }
 
     [Test]
-    public async Task GetSettingsGroupByKey_ReturnsGroup()
+    public async Task GetSettingsGroupByKey_ReturnsSettingsGroup()
     {
         // Arrange
-        var group = new SettingsGroup(Guid.NewGuid(), "TestGroup", _extensionId);
+        var extensionId = Guid.NewGuid();
+        var group = new SettingsGroup { Name = "indexer-settings", ExtensionId = extensionId };
 
-        _settingsRepositoryMock
-            .Setup(r => r.GetSettingsGroupAsync(_extensionId, "TestGroup", It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<SettingsGroup?>(group));
+        _settingsRepository
+            .Setup(m => m.GetByIdAsync(
+                It.Is<SettingsGroupLookupKey>(k => k.ExtensionId == extensionId && k.Name == "indexer-settings"),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(group);
 
         // Act
-        var response = await _client.GetAsync($"/api/settings/groups/{_extensionId}/TestGroup").ConfigureAwait(false);
+        var response = await _client.GetAsync($"/api/settings/groups/{extensionId}/indexer-settings")
+            .ConfigureAwait(false);
         var content = await response.Content.ReadFromJsonAsync<SettingsGroup>().ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
-            Assert.That(content, Has.Property(nameof(SettingsGroup.Name)).EqualTo("TestGroup"));
-            Assert.That(content, Has.Property(nameof(SettingsGroup.ExtensionId)).EqualTo(_extensionId));
+            Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
+            Assert.That(content, Has.Property(nameof(content.Name)).EqualTo("indexer-settings"));
+            Assert.That(content, Has.Property(nameof(content.ExtensionId)).EqualTo(extensionId));
         }
     }
 
     [Test]
-    public async Task GetSettingsGroupByKey_ReturnsNotFound_WhenGroupDoesNotExist()
+    public async Task GetSettingsGroupByKey_ReturnsNotFound_WhenSettingsGroupDoesNotExist()
     {
         // Arrange
-        _settingsRepositoryMock
-            .Setup(r => r.GetSettingsGroupAsync(_extensionId, "NonExistent", It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<SettingsGroup?>(null));
+        var extensionId = Guid.NewGuid();
+        _settingsRepository
+            .Setup(m => m.GetByIdAsync(It.IsAny<SettingsGroupLookupKey>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(default(SettingsGroup?));
 
         // Act
-        var response = await _client.GetAsync($"/api/settings/groups/{_extensionId}/NonExistent").ConfigureAwait(false);
+        var response = await _client.GetAsync($"/api/settings/groups/{extensionId}/nonexistent")
+            .ConfigureAwait(false);
 
         // Assert
-        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.NotFound));
+        Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NotFound));
     }
 
     [Test]
-    public async Task GetSystemSettingsGroupByName_ReturnsGroup()
+    public async Task GetSystemSettingsGroupByName_ReturnsSettingsGroup()
     {
         // Arrange
-        var group = new SettingsGroup(Guid.NewGuid(), "SystemGroup", null);
+        var group = new SettingsGroup { Name = "system-settings", ExtensionId = null };
 
-        _settingsRepositoryMock
-            .Setup(r => r.GetSettingsGroupAsync(null, "SystemGroup", It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<SettingsGroup?>(group));
+        _settingsRepository
+            .Setup(m => m.GetByIdAsync(
+                It.Is<SettingsGroupLookupKey>(k => k.ExtensionId == null && k.Name == "system-settings"),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(group);
 
         // Act
-        var response = await _client.GetAsync("/api/settings/groups/system/SystemGroup").ConfigureAwait(false);
+        var response = await _client.GetAsync("/api/settings/groups/system/system-settings").ConfigureAwait(false);
         var content = await response.Content.ReadFromJsonAsync<SettingsGroup>().ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
-            Assert.That(content, Has.Property(nameof(SettingsGroup.Name)).EqualTo("SystemGroup"));
-            Assert.That(content, Has.Property(nameof(SettingsGroup.ExtensionId)).Null);
+            Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
+            Assert.That(content, Has.Property(nameof(content.Name)).EqualTo("system-settings"));
+            Assert.That(content, Has.Property(nameof(content.ExtensionId)).Null);
         }
     }
 
     [Test]
-    public async Task CreateSettingsGroup_CreatesAndReturnsGroup()
+    public async Task GetSystemSettingsGroupByName_ReturnsNotFound_WhenSettingsGroupDoesNotExist()
     {
         // Arrange
-        var request = new SettingsGroup(Guid.Empty, "NewGroup", _extensionId);
-
-        _settingsRepositoryMock
-            .Setup(r => r.CreateAsync(It.IsAny<SettingsGroup>(), null, It.IsAny<CancellationToken>()))
-            .ReturnsAsync((SettingsGroup g, Guid? _, CancellationToken _) => Result.Success(g));
+        _settingsRepository
+            .Setup(m => m.GetByIdAsync(It.IsAny<SettingsGroupLookupKey>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(default(SettingsGroup?));
 
         // Act
-        var response = await _client.PostAsJsonAsync("/api/settings/groups", request).ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<SettingsGroup>().ConfigureAwait(false);
+        var response = await _client.GetAsync("/api/settings/groups/system/nonexistent").ConfigureAwait(false);
 
         // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.Created));
-            Assert.That(content, Has.Property(nameof(SettingsGroup.Name)).EqualTo("NewGroup"));
-            Assert.That(content, Has.Property(nameof(SettingsGroup.ExtensionId)).EqualTo(_extensionId));
-            Assert.That(response.Headers.Location?.ToString(),
-                Does.Contain($"/api/settings/groups/{_extensionId}/NewGroup"));
-        }
+        Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NotFound));
     }
 
     [Test]
-    public async Task CreateSettingsGroup_CreatesSystemGroup_WhenExtensionIdIsNull()
+    public async Task PatchSettingsGroup_PatchesSettings()
     {
         // Arrange
-        var request = new SettingsGroup(Guid.Empty, "SystemGroup", null);
+        var extensionId = Guid.NewGuid();
+        var patch = new SettingsGroupPatch(
+            extensionId,
+            "config",
+            new DictionaryPatch<string, string, string>(
+                Add: new Dictionary<string, string> { ["key1"] = "value1" },
+                Remove: null,
+                Update: null));
 
-        _settingsRepositoryMock
-            .Setup(r => r.CreateAsync(It.IsAny<SettingsGroup>(), null, It.IsAny<CancellationToken>()))
-            .ReturnsAsync((SettingsGroup g, Guid? _, CancellationToken _) => Result.Success(g));
-
-        // Act
-        var response = await _client.PostAsJsonAsync("/api/settings/groups", request).ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<SettingsGroup>().ConfigureAwait(false);
-
-        // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.Created));
-            Assert.That(content, Has.Property(nameof(SettingsGroup.Name)).EqualTo("SystemGroup"));
-            Assert.That(content, Has.Property(nameof(SettingsGroup.ExtensionId)).Null);
-            Assert.That(response.Headers.Location?.ToString(), Does.Contain("/api/settings/groups/system/SystemGroup"));
-        }
-    }
-
-    [Test]
-    public async Task DeleteSettingsGroup_DeletesGroup()
-    {
-        // Arrange
-        _settingsRepositoryMock
-            .Setup(r => r.DeleteAsync(
-                It.Is<SettingsGroupKey>(k => k.ExtensionId == _extensionId && k.Name == "ToDelete"),
+        _settingsRepository
+            .Setup(m => m.PatchAsync(
+                It.Is<SettingsGroupPatch>(p => p.ExtensionId == extensionId && p.Name == "config"),
                 null,
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success(true));
+            .ReturnsAsync(true);
 
         // Act
-        var response = await _client.DeleteAsync($"/api/settings/groups/{_extensionId}/ToDelete").ConfigureAwait(false);
-
-        // Assert
-        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.NoContent));
-    }
-
-    [Test]
-    public async Task DeleteSettingsGroup_ReturnsNotFound_WhenGroupDoesNotExist()
-    {
-        // Arrange
-        _settingsRepositoryMock
-            .Setup(r => r.DeleteAsync(It.IsAny<SettingsGroupKey>(), null, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success(false));
-
-        // Act
-        var response = await _client.DeleteAsync($"/api/settings/groups/{_extensionId}/NonExistent")
+        var response = await _client.PatchAsJsonAsync($"/api/settings/groups/{extensionId}/config", patch)
             .ConfigureAwait(false);
 
         // Assert
-        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.NotFound));
+        Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NoContent));
     }
 
     [Test]
-    public async Task DeleteSystemSettingsGroup_DeletesGroup()
+    public async Task PatchSettingsGroup_ReturnsNotFound_WhenSettingsGroupDoesNotExist()
     {
         // Arrange
-        _settingsRepositoryMock
-            .Setup(r => r.DeleteAsync(
-                It.Is<SettingsGroupKey>(k => k.ExtensionId == null && k.Name == "SystemToDelete"),
-                null,
-                It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success(true));
+        var extensionId = Guid.NewGuid();
+        var patch = new SettingsGroupPatch(
+            extensionId,
+            "config",
+            new DictionaryPatch<string, string, string>(
+                Add: new Dictionary<string, string> { ["key1"] = "value1" },
+                Remove: null,
+                Update: null));
+
+        _settingsRepository
+            .Setup(m => m.PatchAsync(It.IsAny<SettingsGroupPatch>(), null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(false);
 
         // Act
-        var response = await _client.DeleteAsync("/api/settings/groups/system/SystemToDelete").ConfigureAwait(false);
-
-        // Assert
-        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.NoContent));
-    }
-
-    [Test]
-    public async Task GetSettings_ReturnsSettings()
-    {
-        // Arrange
-        var groupId = Guid.NewGuid();
-        var setting = new Setting(groupId, "TestKey", "TestValue");
-
-        _settingsRepositoryMock
-            .Setup(r => r.GetSettingsAsync(_extensionId, "TestGroup", It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<IReadOnlyList<Setting>>([setting]));
-
-        // Act
-        var response = await _client.GetAsync($"/api/settings/{_extensionId}/TestGroup").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<Setting[]>().ConfigureAwait(false);
-
-        // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
-            Assert.That(content, Has.Length.EqualTo(1));
-            Assert.That(content, Has.One.With.Property(nameof(Setting.Key)).EqualTo("TestKey"));
-            Assert.That(content, Has.One.With.Property(nameof(Setting.Value)).EqualTo("TestValue"));
-        }
-    }
-
-    [Test]
-    public async Task GetSystemSettings_ReturnsSettings()
-    {
-        // Arrange
-        var groupId = Guid.NewGuid();
-        var setting = new Setting(groupId, "SystemKey", "SystemValue");
-
-        _settingsRepositoryMock
-            .Setup(r => r.GetSettingsAsync(null, "SystemGroup", It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<IReadOnlyList<Setting>>([setting]));
-
-        // Act
-        var response = await _client.GetAsync("/api/settings/system/SystemGroup").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<Setting[]>().ConfigureAwait(false);
-
-        // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
-            Assert.That(content, Has.Length.EqualTo(1));
-            Assert.That(content, Has.One.With.Property(nameof(Setting.Key)).EqualTo("SystemKey"));
-        }
-    }
-
-    [Test]
-    public async Task GetSetting_ReturnsSetting()
-    {
-        // Arrange
-        var groupId = Guid.NewGuid();
-        var setting = new Setting(groupId, "TestKey", "TestValue");
-
-        _settingsRepositoryMock
-            .Setup(r => r.GetSettingAsync(_extensionId, "TestGroup", "TestKey", It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<Setting?>(setting));
-
-        // Act
-        var response = await _client.GetAsync($"/api/settings/{_extensionId}/TestGroup/TestKey").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<Setting>().ConfigureAwait(false);
-
-        // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
-            Assert.That(content, Has.Property(nameof(Setting.Key)).EqualTo("TestKey"));
-            Assert.That(content, Has.Property(nameof(Setting.Value)).EqualTo("TestValue"));
-        }
-    }
-
-    [Test]
-    public async Task GetSetting_ReturnsNotFound_WhenSettingDoesNotExist()
-    {
-        // Arrange
-        _settingsRepositoryMock
-            .Setup(r => r.GetSettingAsync(_extensionId, "TestGroup", "NonExistent", It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<Setting?>(null));
-
-        // Act
-        var response = await _client.GetAsync($"/api/settings/{_extensionId}/TestGroup/NonExistent")
+        var response = await _client.PatchAsJsonAsync($"/api/settings/groups/{extensionId}/config", patch)
             .ConfigureAwait(false);
 
         // Assert
-        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.NotFound));
+        Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NotFound));
     }
 
     [Test]
-    public async Task DeleteSetting_DeletesSetting()
+    public async Task PatchSystemSettingsGroup_PatchesSettings()
     {
         // Arrange
-        _settingsRepositoryMock
-            .Setup(r => r.DeleteAsync(
-                It.Is<SettingKey>(k =>
-                    k.ExtensionId == _extensionId &&
-                    k.GroupName == "TestGroup" &&
-                    k.Key == "ToDelete"),
+        var patch = new SettingsGroupPatch(
+            null,
+            "system-config",
+            new DictionaryPatch<string, string, string>(
+                Add: new Dictionary<string, string> { ["key1"] = "value1" },
+                Remove: null,
+                Update: null));
+
+        _settingsRepository
+            .Setup(m => m.PatchAsync(
+                It.Is<SettingsGroupPatch>(p => p.ExtensionId == null && p.Name == "system-config"),
                 null,
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success(true));
+            .ReturnsAsync(true);
 
         // Act
-        var response = await _client.DeleteAsync($"/api/settings/{_extensionId}/TestGroup/ToDelete")
+        var response = await _client.PatchAsJsonAsync("/api/settings/groups/system/system-config", patch)
             .ConfigureAwait(false);
 
         // Assert
-        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.NoContent));
+        Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NoContent));
     }
 
     [Test]
-    public async Task DeleteSetting_ReturnsNotFound_WhenSettingDoesNotExist()
+    public async Task PatchSystemSettingsGroup_ReturnsNotFound_WhenSettingsGroupDoesNotExist()
     {
         // Arrange
-        _settingsRepositoryMock
-            .Setup(r => r.DeleteAsync(It.IsAny<SettingKey>(), null, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success(false));
+        var patch = new SettingsGroupPatch(
+            null,
+            "system-config",
+            new DictionaryPatch<string, string, string>(
+                Add: new Dictionary<string, string> { ["key1"] = "value1" },
+                Remove: null,
+                Update: null));
+
+        _settingsRepository
+            .Setup(m => m.PatchAsync(It.IsAny<SettingsGroupPatch>(), null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(false);
 
         // Act
-        var response = await _client.DeleteAsync($"/api/settings/{_extensionId}/TestGroup/NonExistent")
+        var response = await _client.PatchAsJsonAsync("/api/settings/groups/system/system-config", patch)
             .ConfigureAwait(false);
 
         // Assert
-        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.NotFound));
-    }
-
-    [Test]
-    public async Task GetSystemSetting_ReturnsSetting()
-    {
-        // Arrange
-        var groupId = Guid.NewGuid();
-        var setting = new Setting(groupId, "SystemKey", "SystemValue");
-
-        _settingsRepositoryMock
-            .Setup(r => r.GetSettingsAsync(null, "SystemGroup", It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<IReadOnlyList<Setting>>([setting]));
-
-        // Act
-        var response = await _client.GetAsync("/api/settings/system/SystemGroup/SystemKey").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<Setting>().ConfigureAwait(false);
-
-        // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
-            Assert.That(content, Has.Property(nameof(Setting.Key)).EqualTo("SystemKey"));
-            Assert.That(content, Has.Property(nameof(Setting.Value)).EqualTo("SystemValue"));
-        }
-    }
-
-    [Test]
-    public async Task GetSystemSetting_ReturnsNotFound_WhenSettingDoesNotExist()
-    {
-        // Arrange
-        _settingsRepositoryMock
-            .Setup(r => r.GetSettingsAsync(null, "SystemGroup", It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<IReadOnlyList<Setting>>([]));
-
-        // Act
-        var response = await _client.GetAsync("/api/settings/system/SystemGroup/NonExistent").ConfigureAwait(false);
-
-        // Assert
-        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.NotFound));
-    }
-
-    [Test]
-    public async Task DeleteSystemSetting_DeletesSetting()
-    {
-        // Arrange
-        _settingsRepositoryMock
-            .Setup(r => r.PatchAsync(
-                It.Is<SettingsGroupPatch>(p =>
-                    p.ExtensionId == null &&
-                    p.Name == "SystemGroup" &&
-                    p.Settings.Remove != null &&
-                    p.Settings.Remove.Contains("SystemKey")),
-                null,
-                It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success(true));
-
-        // Act
-        var response = await _client.DeleteAsync("/api/settings/system/SystemGroup/SystemKey").ConfigureAwait(false);
-
-        // Assert
-        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.NoContent));
+        Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NotFound));
     }
 }

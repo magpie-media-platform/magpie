@@ -7,177 +7,139 @@ using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions.Auth;
-using Magpie.Abstractions.Data;
+using Magpie.Abstractions.Repositories;
 using Magpie.Abstractions.Security;
-using Magpie.Core;
-using Magpie.Models.Result;
+using Magpie.Core.Security;
+using Magpie.Models.Data;
 
-using Microsoft.Extensions.Logging;
 using Microsoft.IdentityModel.Tokens;
 
 using static Magpie.Abstractions.Auth.ITokenService;
 
-using UserModel = Magpie.Models.Users.User;
-
 namespace Magpie.Auth;
 
-/// <summary>
-/// Service for JWT token generation and validation.
-/// </summary>
-public sealed class TokenService(
+internal sealed class TokenService(
     TokenServiceOptions options,
-    IUserManager userManager,
     IRefreshTokenRepository refreshTokenRepository,
-    IKeyStore keyStore,
-    ILogger<TokenService> logger) : ITokenService
+    IKeyStore keyStore) : ITokenService
 {
     private const string JwtSigningKeyName = "jwt-signing";
 
     private readonly JwtSecurityTokenHandler _tokenHandler = new();
-    private readonly Lazy<Task<Result<SymmetricSecurityKey>>> _signingKeyTask = new(() => InitializeKeyAsync(keyStore));
+    private readonly Lazy<Task<SymmetricSecurityKey>> _signingKeyTask = new(() => InitializeKeyAsync(keyStore));
 
-    /// <inheritdoc />
-    public async Task<Result<AccessToken>> GenerateAccessTokenAsync(
-        UserModel user,
-        CancellationToken cancellationToken = default)
+    public async Task<AccessToken> GenerateAccessTokenAsync(
+        User user,
+        CancellationToken cancellationToken)
     {
-        if (user is null)
-        {
-            return Result.Fail<AccessToken>("user not found", ErrorCodes.TokenGenerationError);
-        }
-        return await userManager.CreatePrincipalAsync(user, cancellationToken)
-            .ZipAsync(_signingKeyTask.Value)
-            .MapAsync((principal, signingKey) =>
-            {
-                var issuedAt = DateTimeOffset.UtcNow;
-                var expiresAt = issuedAt.Add(options.AccessTokenLifetime);
-                var tokenDescriptor = new SecurityTokenDescriptor
-                {
-                    Subject = new ClaimsIdentity(
-                    [
-                        new Claim(ClaimTypes.NameIdentifier, user.Id.ToString()),
-                        new Claim(ClaimTypes.Name, user.Username),
-                        new Claim(ClaimTypes.Role, user.Role.ToString()),
-                        new Claim(MagpieClaims.AuthProviderId, user.AuthProviderId?.ToString() ?? string.Empty),
-                        new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString()),
-                        new Claim(
-                            JwtRegisteredClaimNames.Iat,
-                            issuedAt.ToUnixTimeSeconds().ToString(),
-                            ClaimValueTypes.Integer64)
-                    ]),
-                    Expires = expiresAt.UtcDateTime,
-                    Issuer = options.Issuer,
-                    Audience = options.Audience,
-                    SigningCredentials = new(signingKey, SecurityAlgorithms.HmacSha256Signature)
-                };
-                var token = _tokenHandler.CreateToken(tokenDescriptor);
+        ArgumentNullException.ThrowIfNull(user);
 
-                return new AccessToken(_tokenHandler.WriteToken(token), expiresAt);
-            });
+        var signingKey = await _signingKeyTask.Value.ConfigureAwait(false);
+        var issuedAt = DateTime.UtcNow;
+        var expiresAt = issuedAt.Add(options.AccessTokenLifetime);
+        var principal = user.ToPrincipal(
+        [
+            new(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString()),
+            new(JwtRegisteredClaimNames.Iat,
+                new DateTimeOffset(issuedAt).ToUnixTimeSeconds().ToString(),
+                ClaimValueTypes.Integer64)
+        ]);
+
+        var tokenDescriptor = new SecurityTokenDescriptor
+        {
+            Subject = principal.Identity as ClaimsIdentity,
+            Expires = expiresAt,
+            Issuer = options.Issuer,
+            Audience = options.Audience,
+            SigningCredentials = new(signingKey, SecurityAlgorithms.HmacSha256Signature)
+        };
+
+        var token = _tokenHandler.CreateToken(tokenDescriptor);
+        return new AccessToken(_tokenHandler.WriteToken(token), expiresAt);
     }
 
-    /// <inheritdoc />
-    public Task<Result<string>> GenerateRefreshTokenAsync(Guid userId, CancellationToken cancellationToken)
+    public async Task<string> GenerateRefreshTokenAsync(Guid userId, CancellationToken cancellationToken)
     {
-        using var rng = RandomNumberGenerator.Create();
-
-        var tokenBytes = new byte[64];
-        rng.GetBytes(tokenBytes);
-
+        var tokenBytes = RandomNumberGenerator.GetBytes(64);
         var token = Convert.ToBase64String(tokenBytes);
         var tokenHash = ComputeHash(token);
-        var expiresAt = DateTimeOffset.UtcNow.Add(options.RefreshTokenLifetime);
+        var now = DateTime.UtcNow;
 
-        return refreshTokenRepository.CreateAsync(userId, tokenHash, expiresAt, cancellationToken)
-            .MapAsync(_ => token);
+        await refreshTokenRepository.CreateAsync(new()
+        {
+            UserId = userId,
+            TokenHash = tokenHash,
+            ExpiresAt = now + options.RefreshTokenLifetime,
+            CreatedAt = now
+        }, cancellationToken).ConfigureAwait(false);
+
+        return token;
     }
 
     /// <inheritdoc />
-    public async Task<Result<Guid>> ValidateRefreshTokenAsync(string refreshToken, CancellationToken cancellationToken)
+    public async Task<Guid?> TryValidateRefreshTokenAsync(string refreshToken, CancellationToken cancellationToken)
     {
         var tokenHash = ComputeHash(refreshToken);
-
-        return await refreshTokenRepository.GetByHashAsync(tokenHash, cancellationToken)
-            .BindAsync(refreshToken => refreshToken switch
-            {
-                null =>
-                    Result.Fail<Guid>("refresh token not found", ErrorCodes.RefreshTokenNotFound),
-                { } r when r.ExpiresAt <= DateTimeOffset.UtcNow =>
-                    Result.Fail<Guid>("refresh token has expired", ErrorCodes.RefreshTokenExpired),
-                { UserId: var userId } =>
-                    Result.Success(userId),
-            })
+        var storedToken = await refreshTokenRepository.GetByHashAsync(tokenHash, cancellationToken)
             .ConfigureAwait(false);
+
+        if (storedToken is null)
+        {
+            return null;
+        }
+
+        if (storedToken.ExpiresAt <= DateTime.UtcNow)
+        {
+            return null;
+        }
+
+        return storedToken.UserId;
     }
 
-    /// <inheritdoc />
-    public async Task<Result<Unit>> RevokeRefreshTokenAsync(string refreshToken, CancellationToken cancellationToken)
+    public Task RevokeRefreshTokenAsync(string refreshToken, CancellationToken cancellationToken)
     {
-        var tokenHash = ComputeHash(refreshToken);
-
-        return await refreshTokenRepository.DeleteAsync(tokenHash, cancellationToken)
-            .MapAsync(_ => Unit.Default)
-            .ConfigureAwait(false);
+        return refreshTokenRepository.DeleteAsync(ComputeHash(refreshToken), cancellationToken);
     }
 
-    /// <inheritdoc />
-    public async Task<Result<ClaimsPrincipal>> ValidateAccessTokenAsync(
+    public async Task<ClaimsPrincipal?> TryValidateAccessTokenAsync(
         string accessToken,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken)
     {
-        return await _signingKeyTask.Value
-            .BindAsync(signingKey =>
+        var signingKey = await _signingKeyTask.Value.ConfigureAwait(false);
+        try
+        {
+            return _tokenHandler.ValidateToken(accessToken, new()
             {
-                try
-                {
-                    var validationParameters = new TokenValidationParameters
-                    {
-                        ValidateIssuer = true,
-                        ValidIssuer = options.Issuer,
-                        ValidateAudience = true,
-                        ValidAudience = options.Audience,
-                        ValidateIssuerSigningKey = true,
-                        IssuerSigningKey = signingKey,
-                        ValidateLifetime = true,
-                        ClockSkew = TimeSpan.Zero
-                    };
-
-                    var principal = _tokenHandler.ValidateToken(accessToken, validationParameters, out _);
-
-                    return Result.Success(principal);
-                }
-                catch (SecurityTokenExpiredException)
-                {
-                    return Result.Fail<ClaimsPrincipal>("Access token has expired", ErrorCodes.TokenValidationError);
-                }
-                catch (SecurityTokenException ex)
-                {
-                    logger.LogWarning(ex, "Token validation failed");
-                    return Result.Fail<ClaimsPrincipal>("Invalid access token", ErrorCodes.TokenValidationError);
-                }
-                catch (ArgumentException ex)
-                {
-                    logger.LogWarning(ex, "Token validation failed - malformed token");
-                    return Result.Fail<ClaimsPrincipal>("Invalid access token", ErrorCodes.TokenValidationError);
-                }
-            })
-            .ConfigureAwait(false);
+                ValidateIssuer = true,
+                ValidIssuer = options.Issuer,
+                ValidateAudience = true,
+                ValidAudience = options.Audience,
+                ValidateIssuerSigningKey = true,
+                IssuerSigningKey = signingKey,
+                ValidateLifetime = true,
+                ClockSkew = TimeSpan.Zero
+            }, out _);
+        }
+        catch (Exception ex) when (ex is SecurityTokenException or ArgumentException)
+        {
+            return null;
+        }
     }
 
-    private static async Task<Result<SymmetricSecurityKey>> InitializeKeyAsync(IKeyStore keyStore)
+    private static async Task<SymmetricSecurityKey> InitializeKeyAsync(IKeyStore keyStore)
     {
-        return await keyStore.KeyExistsAsync(JwtSigningKeyName)
-            .BindAsync(async exists => exists
-                ? Result.Success(Unit.Default)
-                : await keyStore.CreateSigningKeyAsync(JwtSigningKeyName).ConfigureAwait(false))
-            .BindAsync(_ => keyStore.GetPublicKeyAsync(JwtSigningKeyName))
-            .MapAsync(keyBytes => new SymmetricSecurityKey(keyBytes))
-            .ConfigureAwait(false);
+        var exists = await keyStore.KeyExistsAsync(JwtSigningKeyName).ConfigureAwait(false);
+        if (!exists)
+        {
+            await keyStore.CreateSigningKeyAsync(JwtSigningKeyName).ConfigureAwait(false);
+        }
+        var keyBytes = await keyStore.GetPublicKeyAsync(JwtSigningKeyName).ConfigureAwait(false);
+
+        return new SymmetricSecurityKey(keyBytes);
     }
 
     private static string ComputeHash(string token)
     {
-        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(token));
-        return Convert.ToBase64String(bytes);
+        return Convert.ToBase64String(SHA256.HashData(Encoding.UTF8.GetBytes(token)));
     }
 }

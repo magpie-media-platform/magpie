@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Json;
@@ -8,11 +7,11 @@ using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions.Api;
-using Magpie.Abstractions.Data;
+using Magpie.Abstractions.Repositories;
 using Magpie.Api.EndpointGroups;
-using Magpie.Models;
-using Magpie.Models.Result;
-using Magpie.Models.Wishlists;
+using Magpie.Models.Arguments;
+using Magpie.Models.Data;
+using Magpie.Models.Patch;
 using Magpie.Test.Shared;
 
 using Microsoft.AspNetCore.Authentication;
@@ -36,19 +35,19 @@ public class WishlistsEndpointGroupTests
 {
     private IHost _host = null!;
     private HttpClient _client = null!;
-    private Mock<IWishlistRepository> _wishlistRepositoryMock = null!;
+    private Mock<IWishlistRepository> _wishlistRepository = null!;
 
     [SetUp]
     public void SetUp()
     {
-        _wishlistRepositoryMock = new Mock<IWishlistRepository>();
+        _wishlistRepository = new Mock<IWishlistRepository>();
 
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
         builder.Logging.ClearProviders().AddTestLogger();
         var authServiceMock = new Mock<IAuthenticationService>();
         authServiceMock
-            .Setup(x => x.AuthenticateAsync(It.IsAny<HttpContext>(), It.IsAny<string>()))
+            .Setup(m => m.AuthenticateAsync(It.IsAny<HttpContext>(), It.IsAny<string>()))
             .ReturnsAsync(AuthenticateResult.Success(new(new ClaimsPrincipal(new ClaimsIdentity("Test")), "Test")));
         builder.Services.AddSingleton(authServiceMock.Object);
         builder.Services.AddAuthorizationBuilder()
@@ -57,7 +56,7 @@ public class WishlistsEndpointGroupTests
                 .RequireAssertion(_ => true)
                 .Build());
 
-        builder.Services.AddSingleton(_wishlistRepositoryMock.Object);
+        builder.Services.AddSingleton(_wishlistRepository.Object);
         builder.Services.AddSingleton<IApiEndpointGroup, WishlistsEndpointGroup>();
 
         var app = builder.Build();
@@ -87,16 +86,19 @@ public class WishlistsEndpointGroupTests
     [Test]
     public async Task GetAllWishlists_ReturnsEmptyArray_WhenNoWishlists()
     {
-        _wishlistRepositoryMock
-            .Setup(r => r.GetAllAsync(It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<IReadOnlyList<Wishlist>>([]));
+        // Arrange
+        _wishlistRepository
+            .Setup(m => m.ListAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
 
+        // Act
         var response = await _client.GetAsync("/api/wishlists").ConfigureAwait(false);
         var content = await response.Content.ReadFromJsonAsync<Wishlist[]>().ConfigureAwait(false);
 
+        // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+            Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
             Assert.That(content, Is.Not.Null);
             Assert.That(content, Is.Empty);
         }
@@ -105,18 +107,21 @@ public class WishlistsEndpointGroupTests
     [Test]
     public async Task GetAllWishlists_ReturnsWishlists()
     {
-        var wishlist = CreateWishlist("My Wishlist");
+        // Arrange
+        var wishlist = new Wishlist { Name = "My Wishlist", Enabled = true };
 
-        _wishlistRepositoryMock
-            .Setup(r => r.GetAllAsync(It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<IReadOnlyList<Wishlist>>([wishlist]));
+        _wishlistRepository
+            .Setup(m => m.ListAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([wishlist]);
 
+        // Act
         var response = await _client.GetAsync("/api/wishlists").ConfigureAwait(false);
         var content = await response.Content.ReadFromJsonAsync<Wishlist[]>().ConfigureAwait(false);
 
+        // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+            Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
             Assert.That(content, Has.Length.EqualTo(1));
             Assert.That(content, Has.One.With.Property(nameof(Wishlist.Name)).EqualTo("My Wishlist"));
         }
@@ -125,146 +130,85 @@ public class WishlistsEndpointGroupTests
     [Test]
     public async Task GetWishlistById_ReturnsWishlist()
     {
+        // Arrange
         var wishlistId = Guid.NewGuid();
-        var wishlist = CreateWishlist("Test Wishlist", wishlistId);
+        var wishlist = new Wishlist { Id = wishlistId, Name = "Test Wishlist", Enabled = true };
 
-        _wishlistRepositoryMock
-            .Setup(r => r.GetByIdAsync(wishlistId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<Wishlist?>(wishlist));
+        _wishlistRepository
+            .Setup(m => m.GetByIdAsync(wishlistId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(wishlist);
 
+        // Act
         var response = await _client.GetAsync($"/api/wishlists/{wishlistId}").ConfigureAwait(false);
         var content = await response.Content.ReadFromJsonAsync<Wishlist>().ConfigureAwait(false);
 
+        // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
-            Assert.That(content, Has.Property(nameof(Wishlist.Id)).EqualTo(wishlistId));
-            Assert.That(content, Has.Property(nameof(Wishlist.Name)).EqualTo("Test Wishlist"));
+            Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
+            Assert.That(content, Has.Property(nameof(content.Id)).EqualTo(wishlistId));
+            Assert.That(content, Has.Property(nameof(content.Name)).EqualTo("Test Wishlist"));
         }
     }
 
     [Test]
     public async Task GetWishlistById_ReturnsNotFound_WhenWishlistDoesNotExist()
     {
+        // Arrange
         var wishlistId = Guid.NewGuid();
-        _wishlistRepositoryMock
-            .Setup(r => r.GetByIdAsync(wishlistId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<Wishlist?>(null));
+        _wishlistRepository
+            .Setup(m => m.GetByIdAsync(wishlistId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(default(Wishlist?));
 
+        // Act
         var response = await _client.GetAsync($"/api/wishlists/{wishlistId}").ConfigureAwait(false);
 
-        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.NotFound));
-    }
-
-    [Test]
-    public async Task GetWishlistByName_ReturnsWishlist()
-    {
-        var wishlist = CreateWishlist("UniqueWishlistName");
-
-        _wishlistRepositoryMock
-            .Setup(r => r.GetByNameAsync("UniqueWishlistName", It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<Wishlist?>(wishlist));
-
-        var response = await _client.GetAsync("/api/wishlists/by-name/UniqueWishlistName").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<Wishlist>().ConfigureAwait(false);
-
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
-            Assert.That(content, Has.Property(nameof(Wishlist.Name)).EqualTo("UniqueWishlistName"));
-        }
-    }
-
-    [Test]
-    public async Task GetWishlistByName_ReturnsNotFound_WhenWishlistDoesNotExist()
-    {
-        _wishlistRepositoryMock
-            .Setup(r => r.GetByNameAsync("NonExistent", It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<Wishlist?>(null));
-
-        var response = await _client.GetAsync("/api/wishlists/by-name/NonExistent").ConfigureAwait(false);
-
-        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.NotFound));
+        // Assert
+        Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NotFound));
     }
 
     [Test]
     public async Task GetWishlistsByUser_ReturnsFilteredWishlists()
     {
+        // Arrange
         var userId = Guid.NewGuid();
-        var wishlist = CreateWishlist("UserWishlist", userId: userId);
+        var wishlist = new Wishlist { Name = "UserWishlist", OwnerUserId = userId, Enabled = true };
 
-        _wishlistRepositoryMock
-            .Setup(r => r.GetByUserIdAsync(userId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<IReadOnlyList<Wishlist>>([wishlist]));
+        _wishlistRepository
+            .Setup(m => m.GetByUserIdAsync(userId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync([wishlist]);
 
+        // Act
         var response = await _client.GetAsync($"/api/wishlists/by-user/{userId}").ConfigureAwait(false);
         var content = await response.Content.ReadFromJsonAsync<Wishlist[]>().ConfigureAwait(false);
 
+        // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+            Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
             Assert.That(content, Has.Length.EqualTo(1));
             Assert.That(content, Has.One.With.Property(nameof(Wishlist.Name)).EqualTo("UserWishlist"));
         }
     }
 
     [Test]
-    public async Task GetWishlistsByTag_ReturnsFilteredWishlists()
-    {
-        var wishlist = CreateWishlist("Wishlist1", tags: ["automation"]);
-
-        _wishlistRepositoryMock
-            .Setup(r => r.GetByTagAsync("automation", It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<IReadOnlyList<Wishlist>>([wishlist]));
-
-        var response = await _client.GetAsync("/api/wishlists/by-tag/automation").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<Wishlist[]>().ConfigureAwait(false);
-
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
-            Assert.That(content, Has.Length.EqualTo(1));
-            Assert.That(content, Has.One.With.Property(nameof(Wishlist.Name)).EqualTo("Wishlist1"));
-        }
-    }
-
-    [Test]
-    public async Task GetWishlistsByContentFilter_ReturnsFilteredWishlists()
-    {
-        var contentFilterId = Guid.NewGuid();
-        var wishlist = CreateWishlist("Wishlist1", contentFilterId: contentFilterId);
-
-        _wishlistRepositoryMock
-            .Setup(r => r.GetByContentFilterIdAsync(contentFilterId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<IReadOnlyList<Wishlist>>([wishlist]));
-
-        var response = await _client.GetAsync($"/api/wishlists/by-content-filter/{contentFilterId}")
-            .ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<Wishlist[]>().ConfigureAwait(false);
-
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
-            Assert.That(content, Has.Length.EqualTo(1));
-            Assert.That(content, Has.One.With.Property(nameof(Wishlist.Name)).EqualTo("Wishlist1"));
-        }
-    }
-
-    [Test]
     public async Task GetMonitoredWishlists_ReturnsOnlyMonitoredWishlists()
     {
-        var wishlist = CreateWishlist("MonitoredWishlist", monitored: true);
+        // Arrange
+        var wishlist = new Wishlist { Name = "MonitoredWishlist", Enabled = true };
 
-        _wishlistRepositoryMock
-            .Setup(r => r.GetMonitoredAsync(It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<IReadOnlyList<Wishlist>>([wishlist]));
+        _wishlistRepository
+            .Setup(m => m.GetMonitoredAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([wishlist]);
 
+        // Act
         var response = await _client.GetAsync("/api/wishlists/monitored").ConfigureAwait(false);
         var content = await response.Content.ReadFromJsonAsync<Wishlist[]>().ConfigureAwait(false);
 
+        // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+            Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
             Assert.That(content, Has.Length.EqualTo(1));
             Assert.That(content, Has.One.With.Property(nameof(Wishlist.Name)).EqualTo("MonitoredWishlist"));
         }
@@ -273,217 +217,139 @@ public class WishlistsEndpointGroupTests
     [Test]
     public async Task CreateWishlist_CreatesAndReturnsWishlist()
     {
+        // Arrange
         var contentFilterId = Guid.NewGuid();
-        var request = CreateWishlist("New Wishlist", contentFilterId: contentFilterId);
+        var request = new Wishlist { Name = "New Wishlist", ContentFilterId = contentFilterId, Enabled = true };
 
-        _wishlistRepositoryMock
-            .Setup(r => r.CreateAsync(It.IsAny<Wishlist>(), null, It.IsAny<CancellationToken>()))
-            .ReturnsAsync((Wishlist w, Guid? _, CancellationToken _) => Result.Success(w));
+        _wishlistRepository
+            .Setup(m => m.CreateAsync(It.IsAny<Wishlist>(), null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Wishlist w, Guid? _, CancellationToken _) => w);
 
+        // Act
         var response = await _client.PostAsJsonAsync("/api/wishlists", request).ConfigureAwait(false);
         var content = await response.Content.ReadFromJsonAsync<Wishlist>().ConfigureAwait(false);
 
+        // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.Created));
-            Assert.That(content, Has.Property(nameof(Wishlist.Name)).EqualTo("New Wishlist"));
-            Assert.That(content, Has.Property(nameof(Wishlist.Monitored)).True);
-            Assert.That(content, Has.Property(nameof(Wishlist.Tags)).Empty);
-            Assert.That(response.Headers.Location?.ToString(), Does.Contain($"/api/wishlists/{content!.Id}"));
-        }
-    }
-
-    [Test]
-    public async Task CreateWishlist_WithSyncProvider_CreatesWishlist()
-    {
-        var userId = Guid.NewGuid();
-        var contentFilterId = Guid.NewGuid();
-        var request = new Wishlist(
-            Id: Guid.Empty,
-            Name: "Trakt Wishlist",
-            UserId: userId,
-            OwnerLock: true,
-            ContentFilterId: contentFilterId,
-            QualityTierListId: null,
-            Monitored: true,
-            Tags: [],
-            SyncProvider: "trakt",
-            SyncListId: "watchlist",
-            SyncInterval: TimeSpan.FromHours(1),
-            LastSyncedAt: null,
-            CreatedAt: default,
-            CreatedByUserId: null,
-            ModifiedAt: null,
-            ModifiedByUserId: null);
-
-        _wishlistRepositoryMock
-            .Setup(r => r.CreateAsync(It.IsAny<Wishlist>(), null, It.IsAny<CancellationToken>()))
-            .ReturnsAsync((Wishlist w, Guid? _, CancellationToken _) => Result.Success(w));
-
-        var response = await _client.PostAsJsonAsync("/api/wishlists", request).ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<Wishlist>().ConfigureAwait(false);
-
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.Created));
-            Assert.That(content, Has.Property(nameof(Wishlist.SyncProvider)).EqualTo("trakt"));
-            Assert.That(content, Has.Property(nameof(Wishlist.SyncListId)).EqualTo("watchlist"));
-            Assert.That(content, Has.Property(nameof(Wishlist.SyncInterval)).EqualTo(TimeSpan.FromHours(1)));
+            Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.Created));
+            Assert.That(content, Has.Property(nameof(content.Name)).EqualTo("New Wishlist"));
+            Assert.That(content, Has.Property(nameof(content.Enabled)).True);
         }
     }
 
     [Test]
     public async Task PatchWishlist_PatchesNameField()
     {
+        // Arrange
         var wishlistId = Guid.NewGuid();
-        var request = new WishlistPatch { Name = new FieldPatch<string>("Patched") };
+        var request = new WishlistPatch(wishlistId, Name: new ScalarPatch<string>("Patched"));
 
-        _wishlistRepositoryMock
-            .Setup(r => r.PatchAsync(
+        _wishlistRepository
+            .Setup(m => m.PatchAsync(
                 It.Is<WishlistPatch>(p => p.Id == wishlistId && p.Name!.Value == "Patched"),
                 null,
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success(true));
+            .ReturnsAsync(true);
 
+        // Act
         var response = await _client.PatchAsJsonAsync($"/api/wishlists/{wishlistId}", request).ConfigureAwait(false);
 
-        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.NoContent));
+        // Assert
+        Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NoContent));
     }
 
     [Test]
-    public async Task PatchWishlist_PatchesMonitoredField()
+    public async Task PatchWishlist_PatchesOwnerLockField()
     {
+        // Arrange
         var wishlistId = Guid.NewGuid();
-        var request = new WishlistPatch { Monitored = new FieldPatch<bool>(false) };
+        var request = new WishlistPatch(wishlistId, OwnerLock: new ScalarPatch<bool>(true));
 
-        _wishlistRepositoryMock
-            .Setup(r => r.PatchAsync(
-                It.Is<WishlistPatch>(p => p.Id == wishlistId && p.Monitored!.Value == false),
+        _wishlistRepository
+            .Setup(m => m.PatchAsync(
+                It.Is<WishlistPatch>(p => p.Id == wishlistId && p.OwnerLock!.Value == true),
                 null,
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success(true));
+            .ReturnsAsync(true);
 
+        // Act
         var response = await _client.PatchAsJsonAsync($"/api/wishlists/{wishlistId}", request).ConfigureAwait(false);
 
-        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.NoContent));
+        // Assert
+        Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NoContent));
     }
 
     [Test]
     public async Task PatchWishlist_PatchesTags()
     {
+        // Arrange
         var wishlistId = Guid.NewGuid();
-        var request = new WishlistPatch { Tags = new SetPatch<string, string>(["new-tag"], null) };
+        var request = new WishlistPatch(wishlistId, Tags: new SetPatch<string, string>(["new-tag"], null));
 
-        _wishlistRepositoryMock
-            .Setup(r => r.PatchAsync(
+        _wishlistRepository
+            .Setup(m => m.PatchAsync(
                 It.Is<WishlistPatch>(p => p.Id == wishlistId && p.Tags != null),
                 null,
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success(true));
+            .ReturnsAsync(true);
 
+        // Act
         var response = await _client.PatchAsJsonAsync($"/api/wishlists/{wishlistId}", request).ConfigureAwait(false);
 
-        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.NoContent));
+        // Assert
+        Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NoContent));
     }
 
     [Test]
     public async Task PatchWishlist_ReturnsNotFound_WhenWishlistDoesNotExist()
     {
+        // Arrange
         var wishlistId = Guid.NewGuid();
-        var request = new WishlistPatch { Name = new FieldPatch<string>("Patched") };
+        var request = new WishlistPatch(wishlistId, Name: new ScalarPatch<string>("Patched"));
 
-        _wishlistRepositoryMock
-            .Setup(r => r.PatchAsync(It.IsAny<WishlistPatch>(), null, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success(false));
+        _wishlistRepository
+            .Setup(m => m.PatchAsync(It.IsAny<WishlistPatch>(), null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(false);
 
+        // Act
         var response = await _client.PatchAsJsonAsync($"/api/wishlists/{wishlistId}", request).ConfigureAwait(false);
 
-        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.NotFound));
-    }
-
-    [Test]
-    public async Task UpdateLastSynced_UpdatesTimestamp()
-    {
-        var wishlistId = Guid.NewGuid();
-        var syncTime = DateTimeOffset.UtcNow;
-        var request = new WishlistSyncUpdate(syncTime);
-
-        _wishlistRepositoryMock
-            .Setup(r => r.UpdateLastSyncedAsync(wishlistId, syncTime, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success(true));
-
-        var response = await _client.PostAsJsonAsync($"/api/wishlists/{wishlistId}/sync", request)
-            .ConfigureAwait(false);
-
-        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.NoContent));
-    }
-
-    [Test]
-    public async Task UpdateLastSynced_ReturnsNotFound_WhenWishlistDoesNotExist()
-    {
-        var wishlistId = Guid.NewGuid();
-        var request = new WishlistSyncUpdate(DateTimeOffset.UtcNow);
-
-        _wishlistRepositoryMock
-            .Setup(r => r.UpdateLastSyncedAsync(wishlistId, It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success(false));
-
-        var response = await _client.PostAsJsonAsync($"/api/wishlists/{wishlistId}/sync", request)
-            .ConfigureAwait(false);
-
-        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.NotFound));
+        // Assert
+        Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NotFound));
     }
 
     [Test]
     public async Task DeleteWishlist_DeletesWishlist()
     {
+        // Arrange
         var wishlistId = Guid.NewGuid();
 
-        _wishlistRepositoryMock
-            .Setup(r => r.DeleteAsync(wishlistId, null, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success(true));
+        _wishlistRepository
+            .Setup(m => m.DeleteAsync(wishlistId, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
 
+        // Act
         var response = await _client.DeleteAsync($"/api/wishlists/{wishlistId}").ConfigureAwait(false);
 
-        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.NoContent));
+        // Assert
+        Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NoContent));
     }
 
     [Test]
     public async Task DeleteWishlist_ReturnsNotFound_WhenWishlistDoesNotExist()
     {
+        // Arrange
         var wishlistId = Guid.NewGuid();
 
-        _wishlistRepositoryMock
-            .Setup(r => r.DeleteAsync(wishlistId, null, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success(false));
+        _wishlistRepository
+            .Setup(m => m.DeleteAsync(wishlistId, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(false);
 
+        // Act
         var response = await _client.DeleteAsync($"/api/wishlists/{wishlistId}").ConfigureAwait(false);
 
-        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.NotFound));
+        // Assert
+        Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NotFound));
     }
-
-    private static Wishlist CreateWishlist(
-        string name,
-        Guid? id = null,
-        Guid? userId = null,
-        Guid? contentFilterId = null,
-        bool monitored = true,
-        IReadOnlyList<string>? tags = null) =>
-        new(
-            Id: id ?? Guid.NewGuid(),
-            Name: name,
-            UserId: userId,
-            OwnerLock: false,
-            ContentFilterId: contentFilterId ?? Guid.NewGuid(),
-            QualityTierListId: null,
-            Monitored: monitored,
-            Tags: tags ?? [],
-            SyncProvider: null,
-            SyncListId: null,
-            SyncInterval: null,
-            LastSyncedAt: null,
-            CreatedAt: DateTimeOffset.UtcNow,
-            CreatedByUserId: null,
-            ModifiedAt: null,
-            ModifiedByUserId: null);
 }

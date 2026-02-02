@@ -1,0 +1,355 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
+
+using Magpie.Abstractions;
+using Magpie.Abstractions.Repositories;
+using Magpie.Data;
+using Magpie.Models;
+using Magpie.Models.Arguments;
+using Magpie.Models.Data;
+
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
+
+namespace Magpie.Core.Repositories;
+
+/// <summary>
+/// Repository for managing download client configurations.
+/// </summary>
+public sealed class DownloadClientRepository(
+    MagpieDbContext context,
+    IAuditRecordRepository auditRecordRepository,
+    ITransactionManager transactionManager,
+    ILogger<DownloadClientRepository> logger) : IDownloadClientRepository
+{
+    /// <inheritdoc />
+    public async Task<IEnumerable<DownloadClient>> ListAllAsync(CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            return await context.DownloadClients
+                .AsNoTracking()
+                .ToListAsync(cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Error listing download clients");
+            throw;
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task<DownloadClient?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            return await context.DownloadClients
+                .AsNoTracking()
+                .FirstOrDefaultAsync(c => c.Id == id, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Error getting download client {DownloadClientId}", id);
+            throw;
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task<DownloadClient> CreateAsync(
+        DownloadClient model,
+        Guid? createdByUserId,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            return await transactionManager.ExecuteWithTransactionAsync(async _ =>
+            {
+                model.CreatedAt = DateTime.UtcNow;
+                model.CreatedByUserId = createdByUserId;
+
+                context.DownloadClients.Add(model);
+                await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+
+                await auditRecordRepository.CreateAsync(new()
+                {
+                    Category = AuditCategories.Integrations,
+                    Operation = "Create",
+                    EntityId = model.Id.ToString(),
+                    EntityType = nameof(DownloadClient),
+                    Detail = $"Created download client {model.Name}",
+                    Timestamp = DateTime.UtcNow,
+                    UserId = createdByUserId
+                }, cancellationToken).ConfigureAwait(false);
+
+                return model;
+            }, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Error creating download client {DownloadClientName}", model.Name);
+            throw;
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task<bool> UpdateAsync(
+        DownloadClient model,
+        Guid? modifiedByUserId,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            return await transactionManager.ExecuteWithTransactionAsync(async _ =>
+            {
+                var now = DateTime.UtcNow;
+
+                var updated = await context.DownloadClients
+                    .Where(c => c.Id == model.Id)
+                    .ExecuteUpdateAsync(
+                        s => s
+                            .SetProperty(c => c.Name, model.Name)
+                            .SetProperty(c => c.ProviderType, model.ProviderType)
+                            .SetProperty(c => c.Enabled, model.Enabled)
+                            .SetProperty(c => c.Status, model.Status)
+                            .SetProperty(c => c.LastChecked, model.LastChecked)
+                            .SetProperty(c => c.Settings, model.Settings)
+                            .SetProperty(c => c.ModifiedAt, now)
+                            .SetProperty(c => c.ModifiedByUserId, modifiedByUserId),
+                        cancellationToken)
+                    .ConfigureAwait(false);
+
+                if (updated > 0)
+                {
+                    await auditRecordRepository.CreateAsync(new()
+                    {
+                        Category = AuditCategories.Integrations,
+                        Operation = "Update",
+                        EntityId = model.Id.ToString(),
+                        EntityType = nameof(DownloadClient),
+                        Detail = $"Updated download client {model.Name}",
+                        Timestamp = now,
+                        UserId = modifiedByUserId
+                    }, cancellationToken).ConfigureAwait(false);
+                }
+
+                return updated > 0;
+            }, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Error updating download client {DownloadClientId}", model.Id);
+            throw;
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task<bool> DeleteAsync(
+        Guid id,
+        Guid? deletedByUserId,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            return await transactionManager.ExecuteWithTransactionAsync(async _ =>
+            {
+                var model = await context.DownloadClients
+                    .AsNoTracking()
+                    .Where(c => c.Id == id)
+                    .Select(c => new { c.Name })
+                    .FirstOrDefaultAsync(cancellationToken)
+                    .ConfigureAwait(false);
+
+                if (model is null)
+                {
+                    return false;
+                }
+
+                var deleted = await context.DownloadClients
+                    .Where(c => c.Id == id)
+                    .ExecuteDeleteAsync(cancellationToken)
+                    .ConfigureAwait(false);
+
+                if (deleted > 0)
+                {
+                    await auditRecordRepository.CreateAsync(new()
+                    {
+                        Category = AuditCategories.Integrations,
+                        Operation = "Delete",
+                        EntityId = id.ToString(),
+                        EntityType = nameof(DownloadClient),
+                        Detail = $"Deleted download client {model.Name}",
+                        Timestamp = DateTime.UtcNow,
+                        UserId = deletedByUserId
+                    }, cancellationToken).ConfigureAwait(false);
+                }
+
+                return deleted > 0;
+            }, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Error deleting download client {DownloadClientId}", id);
+            throw;
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task<bool> PatchAsync(
+        DownloadClientPatch patch,
+        Guid? modifiedByUserId,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            return await transactionManager.ExecuteWithTransactionAsync(async _ =>
+            {
+                var model = await context.DownloadClients
+                    .FirstOrDefaultAsync(c => c.Id == patch.Id, cancellationToken)
+                    .ConfigureAwait(false);
+
+                if (model is null)
+                {
+                    return false;
+                }
+
+                var now = DateTime.UtcNow;
+                if (patch.Name is not null)
+                {
+                    model.Name = patch.Name.Value;
+                }
+                if (patch.Enabled is not null)
+                {
+                    model.Enabled = patch.Enabled.Value;
+                }
+                if (patch.Settings is not null)
+                {
+                    if (patch.Settings.Add is not null)
+                    {
+                        foreach (var (key, value) in patch.Settings.Add)
+                        {
+                            model.Settings[key] = value ?? string.Empty;
+                        }
+                    }
+                    if (patch.Settings.Update is not null)
+                    {
+                        foreach (var (key, value) in patch.Settings.Update)
+                        {
+                            if (model.Settings.ContainsKey(key))
+                            {
+                                model.Settings[key] = value ?? string.Empty;
+                            }
+                        }
+                    }
+                    if (patch.Settings.Remove is not null)
+                    {
+                        foreach (var key in patch.Settings.Remove)
+                        {
+                            model.Settings.Remove(key);
+                        }
+                    }
+                    context.Entry(model).Property(c => c.Settings).IsModified = true;
+                }
+
+                var tagsAdded = new List<string>();
+                var tagsRemoved = new List<string>();
+
+                if (patch.Tags is not null)
+                {
+                    if (patch.Tags.Add is not null)
+                    {
+                        foreach (var tagName in patch.Tags.Add)
+                        {
+                            var tag = await context.Tags
+                                .Include(t => t.DownloadClients)
+                                .FirstOrDefaultAsync(t => t.Name == tagName, cancellationToken)
+                                .ConfigureAwait(false);
+
+                            if (tag is null)
+                            {
+                                tag = new() { Name = tagName };
+                                context.Tags.Add(tag);
+                            }
+                            if (!tag.DownloadClients.Contains(model))
+                            {
+                                tag.DownloadClients.Add(model);
+                                tagsAdded.Add(tagName);
+                            }
+                        }
+                    }
+                    if (patch.Tags.Remove is not null)
+                    {
+                        foreach (var tagName in patch.Tags.Remove)
+                        {
+                            var tag = await context.Tags
+                                .Include(t => t.DownloadClients)
+                                .FirstOrDefaultAsync(t => t.Name == tagName, cancellationToken)
+                                .ConfigureAwait(false);
+
+                            if (tag is not null && tag.DownloadClients.Remove(model))
+                            {
+                                tagsRemoved.Add(tagName);
+                            }
+                        }
+                    }
+                }
+
+                model.ModifiedAt = now;
+                model.ModifiedByUserId = modifiedByUserId;
+
+                var updated = await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+                if (updated > 0)
+                {
+                    await auditRecordRepository.CreateAsync(new()
+                    {
+                        Category = AuditCategories.Integrations,
+                        Operation = "Patch",
+                        EntityId = patch.Id.ToString(),
+                        EntityType = nameof(DownloadClient),
+                        Detail = $"Patched download client {model.Name}",
+                        Timestamp = now,
+                        UserId = modifiedByUserId
+                    }, cancellationToken).ConfigureAwait(false);
+
+                    foreach (var tagName in tagsAdded)
+                    {
+                        await auditRecordRepository.CreateAsync(new()
+                        {
+                            Category = AuditCategories.Integrations,
+                            Operation = "AddTag",
+                            EntityId = patch.Id.ToString(),
+                            EntityType = nameof(DownloadClient),
+                            Detail = $"Added tag '{tagName}' to download client {model.Name}",
+                            Timestamp = now,
+                            UserId = modifiedByUserId
+                        }, cancellationToken).ConfigureAwait(false);
+                    }
+                    foreach (var tagName in tagsRemoved)
+                    {
+                        await auditRecordRepository.CreateAsync(new()
+                        {
+                            Category = AuditCategories.Integrations,
+                            Operation = "RemoveTag",
+                            EntityId = patch.Id.ToString(),
+                            EntityType = nameof(DownloadClient),
+                            Detail = $"Removed tag '{tagName}' from download client {model.Name}",
+                            Timestamp = now,
+                            UserId = modifiedByUserId
+                        }, cancellationToken).ConfigureAwait(false);
+                    }
+                }
+
+                return updated > 0;
+            }, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Error patching download client {DownloadClientId}", patch.Id);
+            throw;
+        }
+    }
+}

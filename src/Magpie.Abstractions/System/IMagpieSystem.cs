@@ -9,4 +9,9 @@ public interface IMagpieSystem
     /// The root directory for the Magpie installation.
     /// </summary>
     string SystemRoot { get; }
+
+    /// <summary>
+    /// The unique id for this node.
+    /// </summary>
+    string NodeId { get; }
 }

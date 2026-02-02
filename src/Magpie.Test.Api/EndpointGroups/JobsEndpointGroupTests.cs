@@ -8,10 +8,14 @@ using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions.Api;
-using Magpie.Abstractions.Data;
+using Magpie.Abstractions.Jobs;
 using Magpie.Api.EndpointGroups;
-using Magpie.Models.Jobs;
-using Magpie.Models.Result;
+using Magpie.Models.Api;
+using Magpie.Models.Arguments;
+using Magpie.Models.Data;
+using Magpie.Models.Enums;
+using Magpie.Models.Paging;
+using Magpie.Models.Sorting;
 using Magpie.Test.Shared;
 
 using Microsoft.AspNetCore.Authentication;
@@ -35,28 +39,37 @@ public class JobsEndpointGroupTests
 {
     private IHost _host = null!;
     private HttpClient _client = null!;
-    private Mock<IJobExecutionRepository> _repositoryMock = null!;
+    private Mock<IJobManager> _jobManager = null!;
 
     [SetUp]
     public void SetUp()
     {
-        _repositoryMock = new Mock<IJobExecutionRepository>();
+        _jobManager = new Mock<IJobManager>();
 
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
         builder.Logging.ClearProviders().AddTestLogger();
         var authServiceMock = new Mock<IAuthenticationService>();
         authServiceMock
-            .Setup(x => x.AuthenticateAsync(It.IsAny<HttpContext>(), It.IsAny<string>()))
-            .ReturnsAsync(AuthenticateResult.Success(new(new ClaimsPrincipal(new ClaimsIdentity("Test")), "Test")));
+            .Setup(m => m.AuthenticateAsync(It.IsAny<HttpContext>(), It.IsAny<string>()))
+            .ReturnsAsync(AuthenticateResult.Success(new(
+                new ClaimsPrincipal(new ClaimsIdentity(
+                    [
+                        new Claim(ClaimTypes.NameIdentifier, Guid.NewGuid().ToString()),
+                        new Claim(ClaimTypes.Role, "Admin")
+                    ],
+                    "Test")),
+                "Test")));
         builder.Services.AddSingleton(authServiceMock.Object);
         builder.Services.AddAuthorizationBuilder()
             .SetFallbackPolicy(null)
             .SetDefaultPolicy(new AuthorizationPolicyBuilder()
                 .RequireAssertion(_ => true)
-                .Build());
+                .Build())
+            .AddPolicy(nameof(Role.Viewer), policy => policy.RequireAssertion(_ => true))
+            .AddPolicy(nameof(Role.Manager), policy => policy.RequireAssertion(_ => true));
 
-        builder.Services.AddSingleton(_repositoryMock.Object);
+        builder.Services.AddSingleton(_jobManager.Object);
         builder.Services.AddSingleton<IApiEndpointGroup, JobsEndpointGroup>();
 
         var app = builder.Build();
@@ -84,552 +97,212 @@ public class JobsEndpointGroupTests
     }
 
     [Test]
-    public async Task GetAllJobExecutions_ReturnsEmptyArray_WhenNoExecutions()
+    public async Task QueryJobExecutions_ReturnsEmptyList_WhenNoExecutions()
     {
-        _repositoryMock
-            .Setup(r => r.GetAllAsync(It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<IReadOnlyList<JobExecution>>([]));
+        // Arrange
+        _jobManager
+            .Setup(m => m.QueryExecutionsAsync(
+                It.IsAny<JobExecutionQuery>(),
+                It.IsAny<PagingParameter?>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<JobExecution>([], 1, 10, 0));
 
+        // Act
         var response = await _client.GetAsync("/api/jobs").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<JobExecution[]>().ConfigureAwait(false);
+        var content = await response.Content.ReadFromJsonAsync<PagedList<JobExecution>>().ConfigureAwait(false);
 
+        // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+            Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
             Assert.That(content, Is.Not.Null);
-            Assert.That(content, Is.Empty);
+            Assert.That(content, Has.Property(nameof(content.Items)).Empty);
         }
     }
 
     [Test]
-    public async Task GetAllJobExecutions_ReturnsExecutions()
+    public async Task QueryJobExecutions_ReturnsExecutions()
     {
-        var jobTemplateId = Guid.NewGuid();
-        var executions = new List<JobExecution>
-        {
-            new(
-                Id: Guid.NewGuid(),
-                JobTemplateId: jobTemplateId,
-                ScheduleTriggerId: null,
-                EventTriggerId: null,
-                EventId: null,
-                Status: JobExecutionStatus.Running,
-                Progress: 0.5,
-                Message: "Processing",
-                Parameters: new Dictionary<string, string?>(),
-                StartedAt: DateTimeOffset.UtcNow,
-                CompletedAt: null,
-                CreatedAt: DateTimeOffset.UtcNow,
-                CreatedByUserId: null,
-                ModifiedAt: null,
-                ModifiedByUserId: null)
-        };
+        // Arrange
+        var execution = new JobExecution { JobType = "TestJob", Status = JobExecutionStatus.Running, Progress = 0.5 };
 
-        _repositoryMock
-            .Setup(r => r.GetAllAsync(It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<IReadOnlyList<JobExecution>>(executions));
+        _jobManager
+            .Setup(m => m.QueryExecutionsAsync(
+                It.IsAny<JobExecutionQuery>(),
+                It.IsAny<PagingParameter?>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<JobExecution>([execution], 1, 10, 1));
 
+        // Act
         var response = await _client.GetAsync("/api/jobs").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<JobExecution[]>().ConfigureAwait(false);
+        var content = await response.Content.ReadFromJsonAsync<PagedList<JobExecution>>().ConfigureAwait(false);
 
+        // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+            Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
             Assert.That(content, Is.Not.Null);
-            Assert.That(content, Has.Length.EqualTo(1));
-            Assert.That(content, Has.One
+            Assert.That(content, Has.Property(nameof(content.Items)).With.Count.EqualTo(1));
+            Assert.That(content, Has.Property(nameof(content.Items)).With.One
                 .With.Property(nameof(JobExecution.Status)).EqualTo(JobExecutionStatus.Running));
-            Assert.That(content, Has.One
+            Assert.That(content, Has.Property(nameof(content.Items)).With.One
                 .With.Property(nameof(JobExecution.Progress)).EqualTo(0.5));
-            Assert.That(content, Has.One
-                .With.Property(nameof(JobExecution.Message)).EqualTo("Processing"));
         }
     }
 
     [Test]
     public async Task GetJobExecutionById_ReturnsExecution()
     {
+        // Arrange
         var id = Guid.NewGuid();
-        var jobTemplateId = Guid.NewGuid();
-        var execution = new JobExecution(
-            Id: id,
-            JobTemplateId: jobTemplateId,
-            ScheduleTriggerId: null,
-            EventTriggerId: null,
-            EventId: null,
-            Status: JobExecutionStatus.Completed,
-            Progress: 1.0,
-            Message: "Done",
-            Parameters: new Dictionary<string, string?>(),
-            StartedAt: DateTimeOffset.UtcNow,
-            CompletedAt: DateTimeOffset.UtcNow,
-            CreatedAt: DateTimeOffset.UtcNow,
-            CreatedByUserId: null,
-            ModifiedAt: null,
-            ModifiedByUserId: null);
+        var execution = new JobExecution
+        {
+            Id = id,
+            JobType = "TestJob",
+            Status = JobExecutionStatus.Completed,
+            Progress = 100
+        };
 
-        _repositoryMock
-            .Setup(r => r.GetByIdAsync(id, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<JobExecution?>(execution));
+        _jobManager
+            .Setup(m => m.GetExecutionAsync(id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(execution);
 
+        // Act
         var response = await _client.GetAsync($"/api/jobs/{id}").ConfigureAwait(false);
         var content = await response.Content.ReadFromJsonAsync<JobExecution>().ConfigureAwait(false);
 
+        // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+            Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
             Assert.That(content, Is.Not.Null);
-            Assert.That(content, Has.Property(nameof(JobExecution.Id)).EqualTo(id));
-            Assert.That(content, Has.Property(nameof(JobExecution.Status)).EqualTo(JobExecutionStatus.Completed));
+            Assert.That(content, Has.Property(nameof(content.Id)).EqualTo(id));
+            Assert.That(content, Has.Property(nameof(content.Status)).EqualTo(JobExecutionStatus.Completed));
         }
     }
 
     [Test]
     public async Task GetJobExecutionById_ReturnsNotFound_WhenExecutionDoesNotExist()
     {
+        // Arrange
         var id = Guid.NewGuid();
 
-        _repositoryMock
-            .Setup(r => r.GetByIdAsync(id, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<JobExecution?>(null));
+        _jobManager
+            .Setup(m => m.GetExecutionAsync(id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(default(JobExecution?));
 
+        // Act
         var response = await _client.GetAsync($"/api/jobs/{id}").ConfigureAwait(false);
 
-        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.NotFound));
+        // Assert
+        Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NotFound));
     }
 
     [Test]
-    public async Task GetJobExecutionById_ReturnsParameters()
+    public async Task RunJob_ReturnsAccepted()
     {
-        var id = Guid.NewGuid();
-        var jobTemplateId = Guid.NewGuid();
-        var parameters = new Dictionary<string, string?> { ["key1"] = "value1", ["key2"] = "value2" };
-        var execution = new JobExecution(
-            Id: id,
-            JobTemplateId: jobTemplateId,
-            ScheduleTriggerId: null,
-            EventTriggerId: null,
-            EventId: null,
-            Status: JobExecutionStatus.Running,
-            Progress: null,
-            Message: null,
-            Parameters: parameters,
-            StartedAt: DateTimeOffset.UtcNow,
-            CompletedAt: null,
-            CreatedAt: DateTimeOffset.UtcNow,
-            CreatedByUserId: null,
-            ModifiedAt: null,
-            ModifiedByUserId: null);
+        // Arrange
+        var executionId = Guid.NewGuid();
+        var request = new RunJobRequest(
+            JobType: "TestJob",
+            ExtensionId: null,
+            Parameters: new Dictionary<string, string> { ["key1"] = "value1" },
+            Mode: JobExecutionMode.Queue);
 
-        _repositoryMock
-            .Setup(r => r.GetByIdAsync(id, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<JobExecution?>(execution));
+        _jobManager
+            .Setup(m => m.ExecuteAsync(
+                request.JobType,
+                request.ExtensionId,
+                It.IsAny<IReadOnlyDictionary<string, string>?>(),
+                request.Mode,
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(executionId);
 
-        var response = await _client.GetAsync($"/api/jobs/{id}").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<JobExecution>().ConfigureAwait(false);
+        // Act
+        var response = await _client.PostAsJsonAsync("/api/jobs", request).ConfigureAwait(false);
+        var content = await response.Content.ReadFromJsonAsync<Guid>().ConfigureAwait(false);
 
+        // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
-            Assert.That(content, Is.Not.Null);
-            Assert.That(content!.Parameters, Has.Count.EqualTo(2));
-            Assert.That(content.Parameters["key1"], Is.EqualTo("value1"));
-            Assert.That(content.Parameters["key2"], Is.EqualTo("value2"));
+            Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.Accepted));
+            Assert.That(content, Is.EqualTo(executionId));
         }
     }
 
     [Test]
-    public async Task GetJobExecutionsByJobTemplate_ReturnsFilteredExecutions()
+    public async Task RequestCancellation_ReturnsNoContent()
     {
-        var jobTemplateId = Guid.NewGuid();
-        var executions = new List<JobExecution>
-        {
-            new(
-                Id: Guid.NewGuid(),
-                JobTemplateId: jobTemplateId,
-                ScheduleTriggerId: null,
-                EventTriggerId: null,
-                EventId: null,
-                Status: JobExecutionStatus.Running,
-                Progress: null,
-                Message: null,
-                Parameters: new Dictionary<string, string?>(),
-                StartedAt: DateTimeOffset.UtcNow,
-                CompletedAt: null,
-                CreatedAt: DateTimeOffset.UtcNow,
-                CreatedByUserId: null,
-                ModifiedAt: null,
-                ModifiedByUserId: null)
-        };
+        // Arrange
+        var id = Guid.NewGuid();
 
-        _repositoryMock
-            .Setup(r => r.GetByJobTemplateIdAsync(jobTemplateId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<IReadOnlyList<JobExecution>>(executions));
+        _jobManager
+            .Setup(m => m.RequestCancellationAsync(id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
 
-        var response = await _client.GetAsync($"/api/jobs/by-job-template/{jobTemplateId}").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<JobExecution[]>().ConfigureAwait(false);
+        // Act
+        var response = await _client.PostAsync($"/api/jobs/{id}/cancel", null).ConfigureAwait(false);
 
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
-            Assert.That(content, Is.Not.Null);
-            Assert.That(content, Has.Length.EqualTo(1));
-            Assert.That(content, Has.One.With.Property(nameof(JobExecution.JobTemplateId)).EqualTo(jobTemplateId));
-        }
+        // Assert
+        Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NoContent));
     }
 
     [Test]
-    public async Task GetJobExecutionsByScheduleTrigger_ReturnsFilteredExecutions()
+    public async Task RequestCancellation_ReturnsNotFound_WhenExecutionDoesNotExist()
     {
+        // Arrange
+        var id = Guid.NewGuid();
+
+        _jobManager
+            .Setup(m => m.RequestCancellationAsync(id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(false);
+
+        // Act
+        var response = await _client.PostAsync($"/api/jobs/{id}/cancel", null).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NotFound));
+    }
+
+    [Test]
+    public async Task QueryJobExecutions_WithFilters_PassesFiltersToManager()
+    {
+        // Arrange
+        var extensionId = Guid.NewGuid();
         var scheduleTriggerId = Guid.NewGuid();
-        var jobTemplateId = Guid.NewGuid();
-        var executions = new List<JobExecution>
-        {
-            new(
-                Id: Guid.NewGuid(),
-                JobTemplateId: jobTemplateId,
-                ScheduleTriggerId: scheduleTriggerId,
-                EventTriggerId: null,
-                EventId: null,
-                Status: JobExecutionStatus.Completed,
-                Progress: null,
-                Message: null,
-                Parameters: new Dictionary<string, string?>(),
-                StartedAt: DateTimeOffset.UtcNow,
-                CompletedAt: null,
-                CreatedAt: DateTimeOffset.UtcNow,
-                CreatedByUserId: null,
-                ModifiedAt: null,
-                ModifiedByUserId: null)
-        };
 
-        _repositoryMock
-            .Setup(r => r.GetByScheduleTriggerIdAsync(scheduleTriggerId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<IReadOnlyList<JobExecution>>(executions));
+        _jobManager
+            .Setup(m => m.QueryExecutionsAsync(
+                It.Is<JobExecutionQuery>(q =>
+                    q.JobType == "TestJob" &&
+                    q.ExtensionId == extensionId &&
+                    q.ScheduleTriggerId == scheduleTriggerId &&
+                    q.Status == JobExecutionStatus.Running),
+                It.IsAny<PagingParameter?>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<JobExecution>([], 1, 10, 0));
 
-        var response = await _client
-            .GetAsync($"/api/jobs/by-schedule-trigger/{scheduleTriggerId}")
+        // Act
+        var response = await _client.GetAsync(
+            $"/api/jobs?jobType=TestJob&extensionId={extensionId}&scheduleTriggerId={scheduleTriggerId}&status=Running")
             .ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<JobExecution[]>().ConfigureAwait(false);
 
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
-            Assert.That(content, Is.Not.Null);
-            Assert.That(content, Has.Length.EqualTo(1));
-            Assert.That(content, Has.One
-                .With.Property(nameof(JobExecution.ScheduleTriggerId)).EqualTo(scheduleTriggerId));
-        }
-    }
-
-    [Test]
-    public async Task GetJobExecutionsByEventTrigger_ReturnsFilteredExecutions()
-    {
-        var eventTriggerId = Guid.NewGuid();
-        var jobTemplateId = Guid.NewGuid();
-        var executions = new List<JobExecution>
-        {
-            new(
-                Id: Guid.NewGuid(),
-                JobTemplateId: jobTemplateId,
-                ScheduleTriggerId: null,
-                EventTriggerId: eventTriggerId,
-                EventId: null,
-                Status: JobExecutionStatus.Completed,
-                Progress: null,
-                Message: null,
-                Parameters: new Dictionary<string, string?>(),
-                StartedAt: DateTimeOffset.UtcNow,
-                CompletedAt: null,
-                CreatedAt: DateTimeOffset.UtcNow,
-                CreatedByUserId: null,
-                ModifiedAt: null,
-                ModifiedByUserId: null)
-        };
-
-        _repositoryMock
-            .Setup(r => r.GetByEventTriggerIdAsync(eventTriggerId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<IReadOnlyList<JobExecution>>(executions));
-
-        var response = await _client.GetAsync($"/api/jobs/by-event-trigger/{eventTriggerId}").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<JobExecution[]>().ConfigureAwait(false);
-
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
-            Assert.That(content, Is.Not.Null);
-            Assert.That(content, Has.Length.EqualTo(1));
-            Assert.That(content, Has.One.With.Property(nameof(JobExecution.EventTriggerId)).EqualTo(eventTriggerId));
-        }
-    }
-
-    [Test]
-    public async Task GetJobExecutionsByStatus_ReturnsFilteredExecutions()
-    {
-        var jobTemplateId = Guid.NewGuid();
-        var executions = new List<JobExecution>
-        {
-            new(
-                Id: Guid.NewGuid(),
-                JobTemplateId: jobTemplateId,
-                ScheduleTriggerId: null,
-                EventTriggerId: null,
-                EventId: null,
-                Status: JobExecutionStatus.Running,
-                Progress: null,
-                Message: null,
-                Parameters: new Dictionary<string, string?>(),
-                StartedAt: DateTimeOffset.UtcNow,
-                CompletedAt: null,
-                CreatedAt: DateTimeOffset.UtcNow,
-                CreatedByUserId: null,
-                ModifiedAt: null,
-                ModifiedByUserId: null),
-            new(
-                Id: Guid.NewGuid(),
-                JobTemplateId: jobTemplateId,
-                ScheduleTriggerId: null,
-                EventTriggerId: null,
-                EventId: null,
-                Status: JobExecutionStatus.Running,
-                Progress: null,
-                Message: null,
-                Parameters: new Dictionary<string, string?>(),
-                StartedAt: DateTimeOffset.UtcNow,
-                CompletedAt: null,
-                CreatedAt: DateTimeOffset.UtcNow,
-                CreatedByUserId: null,
-                ModifiedAt: null,
-                ModifiedByUserId: null)
-        };
-
-        _repositoryMock
-            .Setup(r => r.GetByStatusAsync(JobExecutionStatus.Running, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<IReadOnlyList<JobExecution>>(executions));
-
-        var response = await _client.GetAsync("/api/jobs/by-status/Running").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<JobExecution[]>().ConfigureAwait(false);
-
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
-            Assert.That(content, Is.Not.Null);
-            Assert.That(content, Has.Length.EqualTo(2));
-            Assert.That(content, Has.All
-                .With.Property(nameof(JobExecution.Status)).EqualTo(JobExecutionStatus.Running));
-        }
-    }
-
-    [Test]
-    public async Task CreateJobExecution_CreatesAndReturnsExecution()
-    {
-        var jobTemplateId = Guid.NewGuid();
-        var request = new JobExecution(
-            Id: Guid.Empty,
-            JobTemplateId: jobTemplateId,
-            ScheduleTriggerId: null,
-            EventTriggerId: null,
-            EventId: null,
-            Status: default,
-            Progress: null,
-            Message: null,
-            Parameters: null!,
-            StartedAt: default,
-            CompletedAt: null,
-            CreatedAt: default,
-            CreatedByUserId: null,
-            ModifiedAt: null,
-            ModifiedByUserId: null);
-
-        _repositoryMock
-            .Setup(r => r.CreateAsync(It.IsAny<JobExecution>(), null, It.IsAny<CancellationToken>()))
-            .ReturnsAsync((JobExecution je, Guid? _, CancellationToken _) => Result.Success(je));
-
-        var response = await _client.PostAsJsonAsync("/api/jobs", request).ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<JobExecution>().ConfigureAwait(false);
-
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.Created));
-            Assert.That(content, Is.Not.Null);
-            Assert.That(content, Has.Property(nameof(JobExecution.JobTemplateId)).EqualTo(jobTemplateId));
-            Assert.That(content, Has.Property(nameof(JobExecution.Status)).EqualTo(JobExecutionStatus.Queued));
-            Assert.That(response.Headers.Location?.ToString(), Does.Contain($"/api/jobs/{content!.Id}"));
-        }
-    }
-
-    [Test]
-    public async Task CreateJobExecution_WithParameters_CreatesExecution()
-    {
-        var jobTemplateId = Guid.NewGuid();
-        var parameters = new Dictionary<string, string?> { ["key1"] = "value1", ["key2"] = "value2" };
-        var request = new JobExecution(
-            Id: Guid.Empty,
-            JobTemplateId: jobTemplateId,
-            ScheduleTriggerId: null,
-            EventTriggerId: null,
-            EventId: null,
-            Status: JobExecutionStatus.Running,
-            Progress: 0.25,
-            Message: "Processing",
-            Parameters: parameters,
-            StartedAt: DateTimeOffset.UtcNow,
-            CompletedAt: null,
-            CreatedAt: default,
-            CreatedByUserId: null,
-            ModifiedAt: null,
-            ModifiedByUserId: null);
-
-        _repositoryMock
-            .Setup(r => r.CreateAsync(It.IsAny<JobExecution>(), null, It.IsAny<CancellationToken>()))
-            .ReturnsAsync((JobExecution je, Guid? _, CancellationToken _) => Result.Success(je));
-
-        var response = await _client.PostAsJsonAsync("/api/jobs", request).ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<JobExecution>().ConfigureAwait(false);
-
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.Created));
-            Assert.That(content, Is.Not.Null);
-            Assert.That(content, Has.Property(nameof(JobExecution.Status)).EqualTo(JobExecutionStatus.Running));
-            Assert.That(content, Has.Property(nameof(JobExecution.Progress)).EqualTo(0.25));
-            Assert.That(content, Has.Property(nameof(JobExecution.Message)).EqualTo("Processing"));
-            Assert.That(content!.Parameters, Has.Count.EqualTo(2));
-            Assert.That(content.Parameters["key1"], Is.EqualTo("value1"));
-        }
-    }
-
-    [Test]
-    public async Task PatchJobExecution_UpdatesExecution()
-    {
-        var id = Guid.NewGuid();
-        var jobTemplateId = Guid.NewGuid();
-        var existing = new JobExecution(
-            Id: id,
-            JobTemplateId: jobTemplateId,
-            ScheduleTriggerId: null,
-            EventTriggerId: null,
-            EventId: null,
-            Status: JobExecutionStatus.Queued,
-            Progress: null,
-            Message: null,
-            Parameters: new Dictionary<string, string?>(),
-            StartedAt: DateTimeOffset.UtcNow,
-            CompletedAt: null,
-            CreatedAt: DateTimeOffset.UtcNow,
-            CreatedByUserId: null,
-            ModifiedAt: null,
-            ModifiedByUserId: null);
-
-        var request = new JobExecution(
-            Id: Guid.Empty,
-            JobTemplateId: jobTemplateId,
-            ScheduleTriggerId: null,
-            EventTriggerId: null,
-            EventId: null,
-            Status: JobExecutionStatus.Running,
-            Progress: 0.5,
-            Message: "Processing",
-            Parameters: null!,
-            StartedAt: existing.StartedAt,
-            CompletedAt: null,
-            CreatedAt: default,
-            CreatedByUserId: null,
-            ModifiedAt: null,
-            ModifiedByUserId: null);
-
-        _repositoryMock
-            .Setup(r => r.GetByIdAsync(id, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<JobExecution?>(existing));
-
-        _repositoryMock
-            .Setup(r => r.UpdateAsync(It.IsAny<JobExecution>(), null, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success(true));
-
-        var response = await _client.PatchAsJsonAsync($"/api/jobs/{id}", request).ConfigureAwait(false);
-
-        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.NoContent));
-        _repositoryMock.Verify(r => r.UpdateAsync(
-            It.Is<JobExecution>(je => je.Status == JobExecutionStatus.Running && je.Progress == 0.5),
-            null,
-            It.IsAny<CancellationToken>()), Times.Once);
-    }
-
-    [Test]
-    public async Task PatchJobExecution_ReturnsNotFound_WhenExecutionDoesNotExist()
-    {
-        var id = Guid.NewGuid();
-        var jobTemplateId = Guid.NewGuid();
-        var request = new JobExecution(
-            Id: Guid.Empty,
-            JobTemplateId: jobTemplateId,
-            ScheduleTriggerId: null,
-            EventTriggerId: null,
-            EventId: null,
-            Status: JobExecutionStatus.Running,
-            Progress: null,
-            Message: null,
-            Parameters: null!,
-            StartedAt: DateTimeOffset.UtcNow,
-            CompletedAt: null,
-            CreatedAt: default,
-            CreatedByUserId: null,
-            ModifiedAt: null,
-            ModifiedByUserId: null);
-
-        _repositoryMock
-            .Setup(r => r.GetByIdAsync(id, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<JobExecution?>(null));
-
-        var response = await _client.PatchAsJsonAsync($"/api/jobs/{id}", request).ConfigureAwait(false);
-
-        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.NotFound));
-    }
-
-    [Test]
-    public async Task DeleteJobExecution_DeletesExecution()
-    {
-        var id = Guid.NewGuid();
-
-        _repositoryMock
-            .Setup(r => r.DeleteAsync(id, null, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success(true));
-
-        var response = await _client.DeleteAsync($"/api/jobs/{id}").ConfigureAwait(false);
-
-        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.NoContent));
-    }
-
-    [Test]
-    public async Task DeleteJobExecution_ReturnsNotFound_WhenExecutionDoesNotExist()
-    {
-        var id = Guid.NewGuid();
-
-        _repositoryMock
-            .Setup(r => r.DeleteAsync(id, null, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success(false));
-
-        var response = await _client.DeleteAsync($"/api/jobs/{id}").ConfigureAwait(false);
-
-        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.NotFound));
-    }
-
-    [Test]
-    public async Task DeleteJobExecutionsByJobTemplate_DeletesAllExecutions()
-    {
-        var jobTemplateId = Guid.NewGuid();
-
-        _repositoryMock
-            .Setup(r => r.DeleteByJobTemplateIdAsync(jobTemplateId, null, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success(2));
-
-        var response = await _client.DeleteAsync($"/api/jobs/by-job-template/{jobTemplateId}").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<int>().ConfigureAwait(false);
-
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
-            Assert.That(content, Is.EqualTo(2));
-        }
+        // Assert
+        Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
+        _jobManager.Verify(
+            m => m.QueryExecutionsAsync(
+                It.Is<JobExecutionQuery>(q =>
+                    q.JobType == "TestJob" &&
+                    q.ExtensionId == extensionId &&
+                    q.ScheduleTriggerId == scheduleTriggerId &&
+                    q.Status == JobExecutionStatus.Running),
+                It.IsAny<PagingParameter?>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
     }
 }

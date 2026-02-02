@@ -1,20 +1,16 @@
 using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Security.Claims;
 using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions.Api;
-using Magpie.Abstractions.Data;
-using Magpie.Models.Filters;
-using Magpie.Models.Result;
+using Magpie.Abstractions.Repositories;
+using Magpie.Abstractions.Security;
+using Magpie.Models.Arguments;
+using Magpie.Models.Data;
 
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
-
-using HttpResult = Microsoft.AspNetCore.Http.IResult;
 
 namespace Magpie.Api.EndpointGroups;
 
@@ -63,6 +59,14 @@ internal sealed class ContentFiltersEndpointGroup(IContentFilterRepository conte
             .ProducesProblem(StatusCodes.Status400BadRequest)
             .RequireAuthorization();
 
+        builder.MapPut("/{id:guid}", UpdateContentFilter)
+            .WithName("UpdateContentFilter")
+            .WithTags("ContentFilters")
+            .Produces(StatusCodes.Status204NoContent)
+            .Produces(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status400BadRequest)
+            .RequireAuthorization();
+
         builder.MapPatch("/{id:guid}", PatchContentFilter)
             .WithName("PatchContentFilter")
             .WithTags("ContentFilters")
@@ -79,135 +83,116 @@ internal sealed class ContentFiltersEndpointGroup(IContentFilterRepository conte
             .RequireAuthorization();
     }
 
-    private async Task<HttpResult> GetMyContentFilters(HttpContext httpContext, CancellationToken cancellationToken)
+    private async Task<IResult> GetMyContentFilters(HttpContext httpContext, CancellationToken cancellationToken)
     {
-        var userIdClaim = httpContext.User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
-        if (string.IsNullOrEmpty(userIdClaim) || !Guid.TryParse(userIdClaim, out var userId))
+        var userId = httpContext.User.GetUserId();
+        if (userId is null)
         {
             return Results.Problem("User not authenticated", statusCode: StatusCodes.Status401Unauthorized);
         }
-
-        var result = await contentFilterRepository.GetByUserIdAsync(userId, cancellationToken).ConfigureAwait(false);
-
-        return result switch
-        {
-            SuccessResult<IReadOnlyList<ContentFilter>> success => Results.Ok(success.Value.ToArray()),
-            FailureResult<IReadOnlyList<ContentFilter>> failure =>
-                Results.Problem(failure.Reason, statusCode: StatusCodes.Status500InternalServerError),
-            _ => Results.Problem("Unexpected result type", statusCode: StatusCodes.Status500InternalServerError)
-        };
+        var filters = await contentFilterRepository.ListByUserIdAsync(userId.Value, cancellationToken)
+            .ConfigureAwait(false);
+        return Results.Ok(filters);
     }
 
-    private async Task<HttpResult> GetAllContentFilters(CancellationToken cancellationToken)
+    private async Task<IResult> GetAllContentFilters(CancellationToken cancellationToken)
     {
-        var result = await contentFilterRepository.GetAllAsync(cancellationToken).ConfigureAwait(false);
-
-        return result switch
-        {
-            SuccessResult<IReadOnlyList<ContentFilter>> success => Results.Ok(success.Value.ToArray()),
-            FailureResult<IReadOnlyList<ContentFilter>> failure =>
-                Results.Problem(failure.Reason, statusCode: StatusCodes.Status500InternalServerError),
-            _ => Results.Problem("Unexpected result type", statusCode: StatusCodes.Status500InternalServerError)
-        };
+        var filters = await contentFilterRepository.ListAllAsync(cancellationToken).ConfigureAwait(false);
+        return Results.Ok(filters);
     }
 
-    private async Task<HttpResult> GetContentFilterById(Guid id, CancellationToken cancellationToken)
+    private async Task<IResult> GetContentFilterById(Guid id, CancellationToken cancellationToken)
     {
-        var result = await contentFilterRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
-
-        return result switch
-        {
-            SuccessResult<ContentFilter?> { Value: null } => Results.NotFound(),
-            SuccessResult<ContentFilter?> success => Results.Ok(success.Value),
-            FailureResult<ContentFilter?> failure =>
-                Results.Problem(failure.Reason, statusCode: StatusCodes.Status500InternalServerError),
-            _ => Results.Problem("Unexpected result type", statusCode: StatusCodes.Status500InternalServerError)
-        };
+        var filter = await contentFilterRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
+        return filter is null ? Results.NotFound() : Results.Ok(filter);
     }
 
-    private async Task<HttpResult> GetContentFilterByName(string name, CancellationToken cancellationToken)
+    private async Task<IResult> GetContentFilterByName(string name, CancellationToken cancellationToken)
     {
-        var result = await contentFilterRepository.GetByNameAsync(name, cancellationToken).ConfigureAwait(false);
-
-        return result switch
-        {
-            SuccessResult<ContentFilter?> { Value: null } => Results.NotFound(),
-            SuccessResult<ContentFilter?> success => Results.Ok(success.Value),
-            FailureResult<ContentFilter?> failure =>
-                Results.Problem(failure.Reason, statusCode: StatusCodes.Status500InternalServerError),
-            _ => Results.Problem("Unexpected result type", statusCode: StatusCodes.Status500InternalServerError)
-        };
+        var filter = await contentFilterRepository.GetByNameAsync(name, cancellationToken).ConfigureAwait(false);
+        return filter is null ? Results.NotFound() : Results.Ok(filter);
     }
 
-    private async Task<HttpResult> GetContentFiltersByTag(string tag, CancellationToken cancellationToken)
+    private async Task<IResult> GetContentFiltersByTag(string tag, CancellationToken cancellationToken)
     {
-        var result = await contentFilterRepository.GetByTagAsync(tag, cancellationToken).ConfigureAwait(false);
-
-        return result switch
-        {
-            SuccessResult<IReadOnlyList<ContentFilter>> success => Results.Ok(success.Value.ToArray()),
-            FailureResult<IReadOnlyList<ContentFilter>> failure =>
-                Results.Problem(failure.Reason, statusCode: StatusCodes.Status500InternalServerError),
-            _ => Results.Problem("Unexpected result type", statusCode: StatusCodes.Status500InternalServerError)
-        };
+        var filters = await contentFilterRepository.ListByTagAsync(tag, cancellationToken).ConfigureAwait(false);
+        return Results.Ok(filters);
     }
 
-    private async Task<HttpResult> CreateContentFilter(ContentFilter request, CancellationToken cancellationToken)
+    private async Task<IResult> CreateContentFilter(
+        HttpContext httpContext,
+        ContentFilter request,
+        CancellationToken cancellationToken)
     {
-        var contentFilter = request with
+        var currentUserId = httpContext.User.GetUserId();
+        var filter = request with
         {
             Id = Guid.NewGuid(),
-            CreatedAt = DateTimeOffset.UtcNow,
-            CreatedByUserId = null,
+            CreatedAt = DateTime.UtcNow,
+            CreatedByUserId = currentUserId,
             ModifiedAt = null,
             ModifiedByUserId = null
         };
 
-        var result = await contentFilterRepository.CreateAsync(contentFilter, createdByUserId: null, cancellationToken)
+        var created = await contentFilterRepository.CreateAsync(filter, currentUserId, cancellationToken)
             .ConfigureAwait(false);
 
-        return result switch
-        {
-            SuccessResult<ContentFilter> success =>
-                Results.Created($"/api/content-filters/{success.Value.Id}", success.Value),
-            FailureResult<ContentFilter> failure =>
-                Results.Problem(failure.Reason, statusCode: StatusCodes.Status400BadRequest),
-            _ =>
-                Results.Problem("Unexpected result type", statusCode: StatusCodes.Status500InternalServerError)
-        };
+        return Results.Created($"/api/content-filters/{created.Id}", created);
     }
 
-    private async Task<HttpResult> PatchContentFilter(
+    private async Task<IResult> UpdateContentFilter(
+        HttpContext httpContext,
+        Guid id,
+        ContentFilter request,
+        CancellationToken cancellationToken)
+    {
+        var currentUserId = httpContext.User.GetUserId();
+        var existing = await contentFilterRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
+
+        if (existing is null)
+        {
+            return Results.NotFound();
+        }
+
+        var filter = request with
+        {
+            Id = id,
+            CreatedAt = existing.CreatedAt,
+            CreatedByUserId = existing.CreatedByUserId,
+            ModifiedAt = DateTime.UtcNow,
+            ModifiedByUserId = currentUserId
+        };
+
+        await contentFilterRepository.UpdateAsync(filter, currentUserId, cancellationToken)
+            .ConfigureAwait(false);
+
+        return Results.NoContent();
+    }
+
+    private async Task<IResult> PatchContentFilter(
+        HttpContext httpContext,
         Guid id,
         ContentFilterPatch request,
         CancellationToken cancellationToken)
     {
+        var currentUserId = httpContext.User.GetUserId();
         var patch = request with { Id = id };
 
-        var result = await contentFilterRepository.PatchAsync(patch, modifiedByUserId: null, cancellationToken)
+        var patched = await contentFilterRepository.PatchAsync(patch, currentUserId, cancellationToken)
             .ConfigureAwait(false);
 
-        return result switch
-        {
-            SuccessResult<bool> { Value: false } => Results.NotFound(),
-            SuccessResult<bool> => Results.NoContent(),
-            FailureResult<bool> failure => Results.Problem(failure.Reason, statusCode: StatusCodes.Status400BadRequest),
-            _ => Results.Problem("Unexpected result type", statusCode: StatusCodes.Status500InternalServerError)
-        };
+        return patched ? Results.NoContent() : Results.NotFound();
     }
 
-    private async Task<HttpResult> DeleteContentFilter(Guid id, CancellationToken cancellationToken)
+    private async Task<IResult> DeleteContentFilter(
+        HttpContext httpContext,
+        Guid id,
+        CancellationToken cancellationToken)
     {
-        var result = await contentFilterRepository.DeleteAsync(id, deletedByUserId: null, cancellationToken)
+        var currentUserId = httpContext.User.GetUserId();
+        var deleted = await contentFilterRepository.DeleteAsync(id, currentUserId, cancellationToken)
             .ConfigureAwait(false);
 
-        return result switch
-        {
-            SuccessResult<bool> { Value: false } => Results.NotFound(),
-            SuccessResult<bool> => Results.NoContent(),
-            FailureResult<bool> failure =>
-                Results.Problem(failure.Reason, statusCode: StatusCodes.Status500InternalServerError),
-            _ => Results.Problem("Unexpected result type", statusCode: StatusCodes.Status500InternalServerError)
-        };
+        return deleted ? Results.NoContent() : Results.NotFound();
     }
 }

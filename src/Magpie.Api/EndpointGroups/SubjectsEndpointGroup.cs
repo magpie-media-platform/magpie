@@ -1,19 +1,17 @@
 using System;
-using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions.Api;
-using Magpie.Abstractions.Data;
-using Magpie.Models.Content;
-using Magpie.Models.Result;
+using Magpie.Abstractions.Repositories;
+using Magpie.Abstractions.Security;
+using Magpie.Models.Arguments;
+using Magpie.Models.Data;
 
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
-
-using HttpResult = Microsoft.AspNetCore.Http.IResult;
 
 namespace Magpie.Api.EndpointGroups;
 
@@ -71,113 +69,89 @@ internal sealed class SubjectsEndpointGroup(ISubjectRepository subjectRepository
             .RequireAuthorization();
     }
 
-    private async Task<HttpResult> GetAllSubjects(CancellationToken cancellationToken)
+    private async Task<IResult> GetAllSubjects(CancellationToken cancellationToken)
     {
-        var result = await subjectRepository.GetAllAsync(cancellationToken).ConfigureAwait(false);
-
-        return result switch
-        {
-            SuccessResult<IReadOnlyList<Subject>> success => Results.Ok(success.Value.ToArray()),
-            FailureResult<IReadOnlyList<Subject>> failure =>
-                Results.Problem(failure.Reason, statusCode: StatusCodes.Status500InternalServerError),
-            _ => Results.Problem("Unexpected result type", statusCode: StatusCodes.Status500InternalServerError)
-        };
+        var subjects = await subjectRepository.ListAllAsync(cancellationToken).ConfigureAwait(false);
+        return Results.Ok(subjects.ToArray());
     }
 
-    private async Task<HttpResult> GetSubjectById(Guid id, CancellationToken cancellationToken)
+    private async Task<IResult> GetSubjectById(Guid id, CancellationToken cancellationToken)
     {
-        var result = await subjectRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
+        var subject = await subjectRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
 
-        return result switch
+        if (subject is null)
         {
-            SuccessResult<Subject?> { Value: null } => Results.NotFound(),
-            SuccessResult<Subject?> success => Results.Ok(success.Value),
-            FailureResult<Subject?> failure =>
-                Results.Problem(failure.Reason, statusCode: StatusCodes.Status500InternalServerError),
-            _ => Results.Problem("Unexpected result type", statusCode: StatusCodes.Status500InternalServerError)
-        };
+            return Results.NotFound();
+        }
+
+        return Results.Ok(subject);
     }
 
-    private async Task<HttpResult> GetSubjectsByKind(string kind, CancellationToken cancellationToken)
+    private async Task<IResult> GetSubjectsByKind(string kind, CancellationToken cancellationToken)
     {
-        var result = await subjectRepository.GetByKindAsync(kind, cancellationToken).ConfigureAwait(false);
-
-        return result switch
-        {
-            SuccessResult<IReadOnlyList<Subject>> success => Results.Ok(success.Value.ToArray()),
-            FailureResult<IReadOnlyList<Subject>> failure =>
-                Results.Problem(failure.Reason, statusCode: StatusCodes.Status500InternalServerError),
-            _ => Results.Problem("Unexpected result type", statusCode: StatusCodes.Status500InternalServerError)
-        };
+        var subjects = await subjectRepository.GetByKindAsync(kind, cancellationToken).ConfigureAwait(false);
+        return Results.Ok(subjects.ToArray());
     }
 
-    private async Task<HttpResult> GetSubjectsByTag(string tag, CancellationToken cancellationToken)
+    private async Task<IResult> GetSubjectsByTag(string tag, CancellationToken cancellationToken)
     {
-        var result = await subjectRepository.GetByTagAsync(tag, cancellationToken).ConfigureAwait(false);
-
-        return result switch
-        {
-            SuccessResult<IReadOnlyList<Subject>> success => Results.Ok(success.Value.ToArray()),
-            FailureResult<IReadOnlyList<Subject>> failure =>
-                Results.Problem(failure.Reason, statusCode: StatusCodes.Status500InternalServerError),
-            _ => Results.Problem("Unexpected result type", statusCode: StatusCodes.Status500InternalServerError)
-        };
+        var subjects = await subjectRepository.GetByTagAsync(tag, cancellationToken).ConfigureAwait(false);
+        return Results.Ok(subjects.ToArray());
     }
 
-    private async Task<HttpResult> CreateSubject(Subject request, CancellationToken cancellationToken)
+    private async Task<IResult> CreateSubject(
+        HttpContext httpContext,
+        Subject request,
+        CancellationToken cancellationToken)
     {
+        var currentUserId = httpContext.User.GetUserId();
         var subject = request with
         {
             Id = Guid.NewGuid(),
             DateLastRefreshed = null,
-            CreatedAt = DateTimeOffset.UtcNow,
-            CreatedByUserId = null,
+            CreatedAt = DateTime.UtcNow,
+            CreatedByUserId = currentUserId,
             ModifiedAt = null,
             ModifiedByUserId = null
         };
 
-        var result = await subjectRepository.CreateAsync(subject, createdByUserId: null, cancellationToken)
+        var created = await subjectRepository.CreateAsync(subject, currentUserId, cancellationToken)
             .ConfigureAwait(false);
 
-        return result switch
-        {
-            SuccessResult<Subject> success =>
-                Results.Created($"/api/subjects/{success.Value.Id}", success.Value),
-            FailureResult<Subject> failure =>
-                Results.Problem(failure.Reason, statusCode: StatusCodes.Status400BadRequest),
-            _ =>
-                Results.Problem("Unexpected result type", statusCode: StatusCodes.Status500InternalServerError)
-        };
+        return Results.Created($"/api/subjects/{created.Id}", created);
     }
 
-    private async Task<HttpResult> PatchSubject(Guid id, SubjectPatch request, CancellationToken cancellationToken)
+    private async Task<IResult> PatchSubject(
+        HttpContext httpContext,
+        Guid id,
+        TagsPatch request,
+        CancellationToken cancellationToken)
     {
+        var currentUserId = httpContext.User.GetUserId();
         var patch = request with { Id = id };
 
-        var result = await subjectRepository.PatchAsync(patch, modifiedByUserId: null, cancellationToken)
+        var updated = await subjectRepository.PatchAsync(patch, currentUserId, cancellationToken)
             .ConfigureAwait(false);
 
-        return result switch
+        if (!updated)
         {
-            SuccessResult<bool> { Value: false } => Results.NotFound(),
-            SuccessResult<bool> => Results.NoContent(),
-            FailureResult<bool> failure => Results.Problem(failure.Reason, statusCode: StatusCodes.Status400BadRequest),
-            _ => Results.Problem("Unexpected result type", statusCode: StatusCodes.Status500InternalServerError)
-        };
+            return Results.NotFound();
+        }
+
+        return Results.NoContent();
     }
 
-    private async Task<HttpResult> DeleteSubject(Guid id, CancellationToken cancellationToken)
+    private async Task<IResult> DeleteSubject(HttpContext httpContext, Guid id, CancellationToken cancellationToken)
     {
-        var result = await subjectRepository.DeleteAsync(id, deletedByUserId: null, cancellationToken)
+        var currentUserId = httpContext.User.GetUserId();
+        var deleted = await subjectRepository.DeleteAsync(id, currentUserId, cancellationToken)
             .ConfigureAwait(false);
 
-        return result switch
+        if (!deleted)
         {
-            SuccessResult<bool> { Value: false } => Results.NotFound(),
-            SuccessResult<bool> => Results.NoContent(),
-            FailureResult<bool> failure =>
-                Results.Problem(failure.Reason, statusCode: StatusCodes.Status500InternalServerError),
-            _ => Results.Problem("Unexpected result type", statusCode: StatusCodes.Status500InternalServerError)
-        };
+            return Results.NotFound();
+        }
+
+        return Results.NoContent();
     }
 }

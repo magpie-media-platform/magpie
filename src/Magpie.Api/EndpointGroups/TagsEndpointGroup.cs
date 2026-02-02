@@ -1,18 +1,14 @@
-using System.Collections.Generic;
-using System.Linq;
+using System;
 using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions.Api;
-using Magpie.Abstractions.Data;
-using Magpie.Models;
-using Magpie.Models.Result;
+using Magpie.Abstractions.Repositories;
+using Magpie.Models.Data;
 
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
-
-using HttpResult = Microsoft.AspNetCore.Http.IResult;
 
 namespace Magpie.Api.EndpointGroups;
 
@@ -33,31 +29,32 @@ internal sealed class TagsEndpointGroup(ITagRepository tagRepository) : IApiEndp
             .WithTags("Tags")
             .Produces<Tag[]>()
             .RequireAuthorization();
+
+        builder.MapGet("/by-entity/{entityId:guid}", GetTagsByEntity)
+            .WithName("GetTagsByEntity")
+            .WithTags("Tags")
+            .Produces<Tag[]>()
+            .RequireAuthorization();
     }
 
-    private async Task<HttpResult> GetAllTags(CancellationToken cancellationToken)
+    private async Task<IResult> GetAllTags(CancellationToken cancellationToken)
     {
-        var result = await tagRepository.GetAllAsync(cancellationToken).ConfigureAwait(false);
+        var tags = await tagRepository.ListAllAsync(cancellationToken).ConfigureAwait(false);
 
-        return result switch
-        {
-            SuccessResult<IReadOnlyList<Tag>> success => Results.Ok(success.Value.ToArray()),
-            FailureResult<IReadOnlyList<Tag>> failure =>
-                Results.Problem(failure.Reason, statusCode: StatusCodes.Status500InternalServerError),
-            _ => Results.Problem("Unexpected result type", statusCode: StatusCodes.Status500InternalServerError)
-        };
+        return Results.Ok(tags);
     }
 
-    private async Task<HttpResult> GetTagsByPrefix(string prefix, CancellationToken cancellationToken)
+    private async Task<IResult> GetTagsByPrefix(string prefix, CancellationToken cancellationToken)
     {
-        var result = await tagRepository.GetByPrefixAsync(prefix, cancellationToken).ConfigureAwait(false);
+        var tags = await tagRepository.GetByPrefixAsync(prefix, cancellationToken).ConfigureAwait(false);
 
-        return result switch
-        {
-            SuccessResult<IReadOnlyList<Tag>> success => Results.Ok(success.Value.ToArray()),
-            FailureResult<IReadOnlyList<Tag>> failure =>
-                Results.Problem(failure.Reason, statusCode: StatusCodes.Status500InternalServerError),
-            _ => Results.Problem("Unexpected result type", statusCode: StatusCodes.Status500InternalServerError)
-        };
+        return Results.Ok(tags);
+    }
+
+    private async Task<IResult> GetTagsByEntity(Guid entityId, CancellationToken cancellationToken)
+    {
+        var tags = await tagRepository.GetTagsByEntityAsync(entityId, cancellationToken).ConfigureAwait(false);
+
+        return Results.Ok(tags);
     }
 }

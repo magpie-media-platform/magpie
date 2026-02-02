@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Json;
@@ -8,11 +7,9 @@ using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions.Api;
-using Magpie.Abstractions.Data;
+using Magpie.Abstractions.Repositories;
 using Magpie.Api.EndpointGroups;
-using Magpie.Models;
-using Magpie.Models.Result;
-using Magpie.Models.RootFolders;
+using Magpie.Models.Data;
 using Magpie.Test.Shared;
 
 using Microsoft.AspNetCore.Authentication;
@@ -36,19 +33,19 @@ public class RootFoldersEndpointGroupTests
 {
     private IHost _host = null!;
     private HttpClient _client = null!;
-    private Mock<IRootFolderRepository> _rootFolderRepositoryMock = null!;
+    private Mock<IRootFolderRepository> _rootFolderRepository = null!;
 
     [SetUp]
     public void SetUp()
     {
-        _rootFolderRepositoryMock = new Mock<IRootFolderRepository>();
+        _rootFolderRepository = new Mock<IRootFolderRepository>();
 
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
         builder.Logging.ClearProviders().AddTestLogger();
         var authServiceMock = new Mock<IAuthenticationService>();
         authServiceMock
-            .Setup(x => x.AuthenticateAsync(It.IsAny<HttpContext>(), It.IsAny<string>()))
+            .Setup(m => m.AuthenticateAsync(It.IsAny<HttpContext>(), It.IsAny<string>()))
             .ReturnsAsync(AuthenticateResult.Success(new(new ClaimsPrincipal(new ClaimsIdentity("Test")), "Test")));
         builder.Services.AddSingleton(authServiceMock.Object);
         builder.Services.AddAuthorizationBuilder()
@@ -57,7 +54,7 @@ public class RootFoldersEndpointGroupTests
                 .RequireAssertion(_ => true)
                 .Build());
 
-        builder.Services.AddSingleton(_rootFolderRepositoryMock.Object);
+        builder.Services.AddSingleton(_rootFolderRepository.Object);
         builder.Services.AddSingleton<IApiEndpointGroup, RootFoldersEndpointGroup>();
 
         var app = builder.Build();
@@ -88,9 +85,9 @@ public class RootFoldersEndpointGroupTests
     public async Task GetAllRootFolders_ReturnsEmptyArray_WhenNoRootFolders()
     {
         // Arrange
-        _rootFolderRepositoryMock
-            .Setup(r => r.GetAllAsync(It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<IReadOnlyList<RootFolder>>([]));
+        _rootFolderRepository
+            .Setup(m => m.ListAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
 
         // Act
         var response = await _client.GetAsync("/api/root-folders").ConfigureAwait(false);
@@ -99,7 +96,7 @@ public class RootFoldersEndpointGroupTests
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+            Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
             Assert.That(content, Is.Not.Null);
             Assert.That(content, Is.Empty);
         }
@@ -110,19 +107,11 @@ public class RootFoldersEndpointGroupTests
     {
         // Arrange
         var contentTypeId = Guid.NewGuid();
-        var rootFolder = new RootFolder(
-            Id: Guid.NewGuid(),
-            Name: "Movies",
-            Path: "/media/movies",
-            ContentTypeId: contentTypeId,
-            CreatedAt: DateTimeOffset.UtcNow,
-            CreatedByUserId: null,
-            ModifiedAt: null,
-            ModifiedByUserId: null);
+        var rootFolder = new RootFolder { Name = "Movies", Path = "/media/movies", ContentTypeId = contentTypeId };
 
-        _rootFolderRepositoryMock
-            .Setup(r => r.GetAllAsync(It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<IReadOnlyList<RootFolder>>([rootFolder]));
+        _rootFolderRepository
+            .Setup(m => m.ListAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([rootFolder]);
 
         // Act
         var response = await _client.GetAsync("/api/root-folders").ConfigureAwait(false);
@@ -131,7 +120,7 @@ public class RootFoldersEndpointGroupTests
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+            Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
             Assert.That(content, Has.Length.EqualTo(1));
             Assert.That(content, Has.One.With.Property(nameof(RootFolder.Name)).EqualTo("Movies"));
             Assert.That(content, Has.One.With.Property(nameof(RootFolder.Path)).EqualTo("/media/movies"));
@@ -145,19 +134,17 @@ public class RootFoldersEndpointGroupTests
         // Arrange
         var rootFolderId = Guid.NewGuid();
         var contentTypeId = Guid.NewGuid();
-        var rootFolder = new RootFolder(
-            Id: rootFolderId,
-            Name: "TV Shows",
-            Path: "/media/tv",
-            ContentTypeId: contentTypeId,
-            CreatedAt: DateTimeOffset.UtcNow,
-            CreatedByUserId: null,
-            ModifiedAt: null,
-            ModifiedByUserId: null);
+        var rootFolder = new RootFolder
+        {
+            Id = rootFolderId,
+            Name = "TV Shows",
+            Path = "/media/tv",
+            ContentTypeId = contentTypeId,
+        };
 
-        _rootFolderRepositoryMock
-            .Setup(r => r.GetByIdAsync(rootFolderId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<RootFolder?>(rootFolder));
+        _rootFolderRepository
+            .Setup(m => m.GetByIdAsync(rootFolderId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(rootFolder);
 
         // Act
         var response = await _client.GetAsync($"/api/root-folders/{rootFolderId}").ConfigureAwait(false);
@@ -166,10 +153,10 @@ public class RootFoldersEndpointGroupTests
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
-            Assert.That(content, Has.Property(nameof(RootFolder.Id)).EqualTo(rootFolderId));
-            Assert.That(content, Has.Property(nameof(RootFolder.Name)).EqualTo("TV Shows"));
-            Assert.That(content, Has.Property(nameof(RootFolder.Path)).EqualTo("/media/tv"));
+            Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
+            Assert.That(content, Has.Property(nameof(content.Id)).EqualTo(rootFolderId));
+            Assert.That(content, Has.Property(nameof(content.Name)).EqualTo("TV Shows"));
+            Assert.That(content, Has.Property(nameof(content.Path)).EqualTo("/media/tv"));
         }
     }
 
@@ -178,59 +165,15 @@ public class RootFoldersEndpointGroupTests
     {
         // Arrange
         var rootFolderId = Guid.NewGuid();
-        _rootFolderRepositoryMock
-            .Setup(r => r.GetByIdAsync(rootFolderId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<RootFolder?>(null));
+        _rootFolderRepository
+            .Setup(m => m.GetByIdAsync(rootFolderId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(default(RootFolder?));
 
         // Act
         var response = await _client.GetAsync($"/api/root-folders/{rootFolderId}").ConfigureAwait(false);
 
         // Assert
-        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.NotFound));
-    }
-
-    [Test]
-    public async Task GetRootFoldersByContentType_ReturnsFilteredRootFolders()
-    {
-        // Arrange
-        var contentTypeId = Guid.NewGuid();
-
-        var rootFolder1 = new RootFolder(
-            Id: Guid.NewGuid(),
-            Name: "Movies 1",
-            Path: "/media/movies1",
-            ContentTypeId: contentTypeId,
-            CreatedAt: DateTimeOffset.UtcNow,
-            CreatedByUserId: null,
-            ModifiedAt: null,
-            ModifiedByUserId: null);
-
-        var rootFolder2 = new RootFolder(
-            Id: Guid.NewGuid(),
-            Name: "Movies 2",
-            Path: "/media/movies2",
-            ContentTypeId: contentTypeId,
-            CreatedAt: DateTimeOffset.UtcNow,
-            CreatedByUserId: null,
-            ModifiedAt: null,
-            ModifiedByUserId: null);
-
-        _rootFolderRepositoryMock
-            .Setup(r => r.GetByContentTypeIdAsync(contentTypeId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<IReadOnlyList<RootFolder>>([rootFolder1, rootFolder2]));
-
-        // Act
-        var response = await _client.GetAsync($"/api/root-folders/by-content-type/{contentTypeId}")
-            .ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<RootFolder[]>().ConfigureAwait(false);
-
-        // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
-            Assert.That(content, Has.Length.EqualTo(2));
-            Assert.That(content, Has.All.With.Property(nameof(RootFolder.ContentTypeId)).EqualTo(contentTypeId));
-        }
+        Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NotFound));
     }
 
     [Test]
@@ -238,19 +181,11 @@ public class RootFoldersEndpointGroupTests
     {
         // Arrange
         var contentTypeId = Guid.NewGuid();
-        var request = new RootFolder(
-            Id: Guid.Empty,
-            Name: "New Movies",
-            Path: "/media/new-movies",
-            ContentTypeId: contentTypeId,
-            CreatedAt: default,
-            CreatedByUserId: null,
-            ModifiedAt: null,
-            ModifiedByUserId: null);
+        var request = new RootFolder { Name = "New Movies", Path = "/media/new-movies", ContentTypeId = contentTypeId };
 
-        _rootFolderRepositoryMock
-            .Setup(r => r.CreateAsync(It.IsAny<RootFolder>(), null, It.IsAny<CancellationToken>()))
-            .ReturnsAsync((RootFolder rf, Guid? _, CancellationToken _) => Result.Success(rf));
+        _rootFolderRepository
+            .Setup(m => m.CreateAsync(It.IsAny<RootFolder>(), null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((RootFolder rf, Guid? _, CancellationToken _) => rf);
 
         // Act
         var response = await _client.PostAsJsonAsync("/api/root-folders", request).ConfigureAwait(false);
@@ -259,98 +194,61 @@ public class RootFoldersEndpointGroupTests
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.Created));
-            Assert.That(content, Has.Property(nameof(RootFolder.Name)).EqualTo("New Movies"));
-            Assert.That(content, Has.Property(nameof(RootFolder.Path)).EqualTo("/media/new-movies"));
-            Assert.That(content, Has.Property(nameof(RootFolder.ContentTypeId)).EqualTo(contentTypeId));
-            Assert.That(response.Headers.Location?.ToString(), Does.Contain($"/api/root-folders/{content!.Id}"));
+            Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.Created));
+            Assert.That(content, Has.Property(nameof(content.Name)).EqualTo("New Movies"));
+            Assert.That(content, Has.Property(nameof(content.Path)).EqualTo("/media/new-movies"));
+            Assert.That(content, Has.Property(nameof(content.ContentTypeId)).EqualTo(contentTypeId));
         }
     }
 
     [Test]
-    public async Task PatchRootFolder_PatchesNameField()
+    public async Task UpdateRootFolder_UpdatesRootFolder()
     {
         // Arrange
         var rootFolderId = Guid.NewGuid();
-        var request = new RootFolderPatch { Name = new FieldPatch<string>("Patched") };
+        var contentTypeId = Guid.NewGuid();
+        var request = new RootFolder
+        {
+            Name = "Updated Movies",
+            Path = "/media/updated-movies",
+            ContentTypeId = contentTypeId,
+        };
 
-        _rootFolderRepositoryMock
-            .Setup(r => r.PatchAsync(
-                It.Is<RootFolderPatch>(p => p.Id == rootFolderId && p.Name!.Value == "Patched"),
-                null,
-                It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success(true));
+        _rootFolderRepository
+            .Setup(m => m.UpdateAsync(It.IsAny<RootFolder>(), null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
 
         // Act
-        var response = await _client.PatchAsJsonAsync($"/api/root-folders/{rootFolderId}", request)
+        var response = await _client.PutAsJsonAsync($"/api/root-folders/{rootFolderId}", request)
             .ConfigureAwait(false);
 
         // Assert
-        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.NoContent));
+        Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NoContent));
     }
 
     [Test]
-    public async Task PatchRootFolder_PatchesPathField()
+    public async Task UpdateRootFolder_ReturnsNotFound_WhenRootFolderDoesNotExist()
     {
         // Arrange
         var rootFolderId = Guid.NewGuid();
-        var request = new RootFolderPatch { Path = new FieldPatch<string>("/media/patched") };
+        var contentTypeId = Guid.NewGuid();
+        var request = new RootFolder
+        {
+            Name = "Updated Movies",
+            Path = "/media/updated-movies",
+            ContentTypeId = contentTypeId,
+        };
 
-        _rootFolderRepositoryMock
-            .Setup(r => r.PatchAsync(
-                It.Is<RootFolderPatch>(p => p.Id == rootFolderId && p.Path!.Value == "/media/patched"),
-                null,
-                It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success(true));
+        _rootFolderRepository
+            .Setup(m => m.UpdateAsync(It.IsAny<RootFolder>(), null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(false);
 
         // Act
-        var response = await _client.PatchAsJsonAsync($"/api/root-folders/{rootFolderId}", request)
+        var response = await _client.PutAsJsonAsync($"/api/root-folders/{rootFolderId}", request)
             .ConfigureAwait(false);
 
         // Assert
-        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.NoContent));
-    }
-
-    [Test]
-    public async Task PatchRootFolder_PatchesContentTypeIdField()
-    {
-        // Arrange
-        var rootFolderId = Guid.NewGuid();
-        var newContentTypeId = Guid.NewGuid();
-        var request = new RootFolderPatch { ContentTypeId = new FieldPatch<Guid>(newContentTypeId) };
-
-        _rootFolderRepositoryMock
-            .Setup(r => r.PatchAsync(
-                It.Is<RootFolderPatch>(p => p.Id == rootFolderId && p.ContentTypeId!.Value == newContentTypeId),
-                null,
-                It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success(true));
-
-        // Act
-        var response = await _client.PatchAsJsonAsync($"/api/root-folders/{rootFolderId}", request)
-            .ConfigureAwait(false);
-
-        // Assert
-        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.NoContent));
-    }
-
-    [Test]
-    public async Task PatchRootFolder_ReturnsNotFound_WhenRootFolderDoesNotExist()
-    {
-        // Arrange
-        var rootFolderId = Guid.NewGuid();
-        var request = new RootFolderPatch { Name = new FieldPatch<string>("Patched") };
-
-        _rootFolderRepositoryMock
-            .Setup(r => r.PatchAsync(It.IsAny<RootFolderPatch>(), null, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success(false));
-
-        // Act
-        var response = await _client.PatchAsJsonAsync($"/api/root-folders/{rootFolderId}", request)
-            .ConfigureAwait(false);
-
-        // Assert
-        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.NotFound));
+        Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NotFound));
     }
 
     [Test]
@@ -359,15 +257,15 @@ public class RootFoldersEndpointGroupTests
         // Arrange
         var rootFolderId = Guid.NewGuid();
 
-        _rootFolderRepositoryMock
-            .Setup(r => r.DeleteAsync(rootFolderId, null, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success(true));
+        _rootFolderRepository
+            .Setup(m => m.DeleteAsync(rootFolderId, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
 
         // Act
         var response = await _client.DeleteAsync($"/api/root-folders/{rootFolderId}").ConfigureAwait(false);
 
         // Assert
-        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.NoContent));
+        Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NoContent));
     }
 
     [Test]
@@ -376,14 +274,14 @@ public class RootFoldersEndpointGroupTests
         // Arrange
         var rootFolderId = Guid.NewGuid();
 
-        _rootFolderRepositoryMock
-            .Setup(r => r.DeleteAsync(rootFolderId, null, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success(false));
+        _rootFolderRepository
+            .Setup(m => m.DeleteAsync(rootFolderId, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(false);
 
         // Act
         var response = await _client.DeleteAsync($"/api/root-folders/{rootFolderId}").ConfigureAwait(false);
 
         // Assert
-        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.NotFound));
+        Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NotFound));
     }
 }

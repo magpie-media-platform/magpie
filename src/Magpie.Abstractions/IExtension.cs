@@ -16,9 +16,14 @@ namespace Magpie.Abstractions;
 public interface IExtension
 {
     /// <summary>
-    /// The unique identifier of the extension.
+    /// The unique id of the extension.
     /// </summary>
     Guid Id { get; }
+
+    /// <summary>
+    /// The version of the extension.
+    /// </summary>
+    Version Version { get; }
 
     /// <summary>
     /// The friendly display name of the extension.

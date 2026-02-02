@@ -2,33 +2,28 @@ using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 
-using Magpie.Models.Metadata;
-using Magpie.Models.Result;
+using Magpie.Models;
+using Magpie.Models.Enums;
 
 namespace Magpie.Abstractions.Content;
 
 /// <summary>
-/// Searches for subjects in an external metadata source using advanced criteria.
+/// Provides external subject metadata search capabilities using advanced search criteria.
 /// </summary>
-public interface ISubjectMetadataAdvancedSearcher
+public interface ISubjectMetadataAdvancedSearcher : ISubjectMetadataSearcher
 {
     /// <summary>
-    /// Gets the subject kinds supported by the searcher.
+    /// Perform an advanced search for subjects.
     /// </summary>
-    IReadOnlyList<string> SupportedSubjectKinds { get; }
-
-    /// <summary>
-    /// Searches for subjects by advanced criteria.
-    /// </summary>
-    /// <param name="subjectKind">The subject kind to search within.</param>
+    /// <param name="subjectType">The subject type to search.</param>
     /// <param name="criteria">The criteria to search by, mapped to metadata fields.</param>
     /// <param name="customFieldCriteria">The custom field criteria to search by.</param>
     /// <param name="defaultLanguagePreference">The default language preference to use for search results.</param>
     /// <param name="cancellationToken">The cancellation token.</param>
-    Task<Result<IReadOnlyList<MetadataSearchResult>>> SearchAsync(
-        string subjectKind,
+    Task<IEnumerable<MetadataSearchResultItem>> AdvancedSearchAsync(
+        string subjectType,
         IReadOnlyDictionary<MetadataField, string> criteria,
         IReadOnlyDictionary<string, string> customFieldCriteria,
         string defaultLanguagePreference,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken = default);
 }

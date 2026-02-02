@@ -8,11 +8,11 @@
     <ProjectReference Include="..\Magpie.Abstractions\Magpie.Abstractions.csproj" />
     <ProjectReference Include="..\Magpie.Api\Magpie.Api.csproj" />
     <ProjectReference Include="..\Magpie.Core\Magpie.Core.csproj" />
-    <ProjectReference Include="..\Magpie.Data.Database\Magpie.Data.Database.csproj" />
-    <ProjectReference Include="..\Magpie.Data.Database.SQLite\Magpie.Data.Database.SQLite.csproj" />
-    <ProjectReference Include="..\Magpie.Data.Database.PostgreSQL\Magpie.Data.Database.PostgreSQL.csproj" />
-    <ProjectReference Include="..\Magpie.Data.Database.MySQL\Magpie.Data.Database.MySQL.csproj" />
-    <ProjectReference Include="..\Magpie.Data.Database.SqlServer\Magpie.Data.Database.SqlServer.csproj" />
+    <ProjectReference Include="..\Magpie.Data\Magpie.Data.csproj" />
+    <ProjectReference Include="..\Magpie.Data.SQLite\Magpie.Data.SQLite.csproj" />
+    <ProjectReference Include="..\Magpie.Data.PostgreSQL\Magpie.Data.PostgreSQL.csproj" />
+    <ProjectReference Include="..\Magpie.Data.MySQL\Magpie.Data.MySQL.csproj" />
+    <ProjectReference Include="..\Magpie.Data.SqlServer\Magpie.Data.SqlServer.csproj" />
     <ProjectReference Include="..\Magpie.Auth\Magpie.Auth.csproj" />
   </ItemGroup>
 

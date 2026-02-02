@@ -16,8 +16,10 @@
   <ItemGroup>
     <ProjectReference Include="..\Magpie.Abstractions.Api\Magpie.Abstractions.Api.csproj" />
     <ProjectReference Include="..\Magpie.Abstractions\Magpie.Abstractions.csproj" />
+    <ProjectReference Include="..\Magpie.Auth\Magpie.Auth.csproj" />
     <ProjectReference Include="..\Magpie.Core\Magpie.Core.csproj" />
-    <ProjectReference Include="..\Magpie.Data.Database\Magpie.Data.Database.csproj" />
+    <ProjectReference Include="..\Magpie.Data\Magpie.Data.csproj" />
+    <ProjectReference Include="..\Magpie.Models.Api\Magpie.Models.Api.csproj" />
   </ItemGroup>
 
 </Project>

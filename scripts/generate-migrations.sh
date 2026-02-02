@@ -17,7 +17,7 @@ dotnet build src/Magpie.sln -v q
 
 for p in "${providers[@]}"; do
     echo "Generating migration '$name' for $p..."
-    dotnet ef migrations add "$name" --project "src/Magpie.Data.Database.${projects[$p]}" --output-dir Migrations --no-build &
+    dotnet ef migrations add "$name" --project "src/Magpie.Data.${projects[$p]}" --output-dir Migrations --no-build &
 done
 
 wait

@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Json;
@@ -8,10 +7,12 @@ using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions.Api;
-using Magpie.Abstractions.Data;
+using Magpie.Abstractions.Repositories;
 using Magpie.Api.EndpointGroups;
-using Magpie.Models.Indexers;
-using Magpie.Models.Result;
+using Magpie.Models.Arguments;
+using Magpie.Models.Data;
+using Magpie.Models.Paging;
+using Magpie.Models.Sorting;
 using Magpie.Test.Shared;
 
 using Microsoft.AspNetCore.Authentication;
@@ -35,21 +36,19 @@ public class ReleasesEndpointGroupTests
 {
     private IHost _host = null!;
     private HttpClient _client = null!;
-    private Mock<IReleaseRepository> _releaseRepositoryMock = null!;
-    private Guid _indexerId;
+    private Mock<IReleaseRepository> _repository = null!;
 
     [SetUp]
     public void SetUp()
     {
-        _releaseRepositoryMock = new Mock<IReleaseRepository>();
-        _indexerId = Guid.NewGuid();
+        _repository = new Mock<IReleaseRepository>();
 
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
         builder.Logging.ClearProviders().AddTestLogger();
         var authServiceMock = new Mock<IAuthenticationService>();
         authServiceMock
-            .Setup(x => x.AuthenticateAsync(It.IsAny<HttpContext>(), It.IsAny<string>()))
+            .Setup(m => m.AuthenticateAsync(It.IsAny<HttpContext>(), It.IsAny<string>()))
             .ReturnsAsync(AuthenticateResult.Success(new(new ClaimsPrincipal(new ClaimsIdentity("Test")), "Test")));
         builder.Services.AddSingleton(authServiceMock.Object);
         builder.Services.AddAuthorizationBuilder()
@@ -58,7 +57,7 @@ public class ReleasesEndpointGroupTests
                 .RequireAssertion(_ => true)
                 .Build());
 
-        builder.Services.AddSingleton(_releaseRepositoryMock.Object);
+        builder.Services.AddSingleton(_repository.Object);
         builder.Services.AddSingleton<IApiEndpointGroup, ReleasesEndpointGroup>();
 
         var app = builder.Build();
@@ -88,16 +87,19 @@ public class ReleasesEndpointGroupTests
     [Test]
     public async Task GetAllReleases_ReturnsEmptyArray_WhenNoReleases()
     {
-        _releaseRepositoryMock
-            .Setup(r => r.GetAllAsync(It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<IReadOnlyList<Release>>([]));
+        // Arrange
+        _repository
+            .Setup(m => m.ListAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
 
+        // Act
         var response = await _client.GetAsync("/api/releases").ConfigureAwait(false);
         var content = await response.Content.ReadFromJsonAsync<Release[]>().ConfigureAwait(false);
 
+        // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+            Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
             Assert.That(content, Is.Not.Null);
             Assert.That(content, Is.Empty);
         }
@@ -106,305 +108,266 @@ public class ReleasesEndpointGroupTests
     [Test]
     public async Task GetAllReleases_ReturnsReleases()
     {
-        var release = CreateRelease("Test Release");
+        // Arrange
+        var release = new Release
+        {
+            Title = "Test.Movie.2024.1080p.BluRay",
+            Protocol = "torrent",
+            PublishDate = DateTime.UtcNow,
+        };
 
-        _releaseRepositoryMock
-            .Setup(r => r.GetAllAsync(It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<IReadOnlyList<Release>>([release]));
+        _repository
+            .Setup(m => m.ListAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([release]);
 
+        // Act
         var response = await _client.GetAsync("/api/releases").ConfigureAwait(false);
         var content = await response.Content.ReadFromJsonAsync<Release[]>().ConfigureAwait(false);
 
+        // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+            Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
             Assert.That(content, Has.Length.EqualTo(1));
-            Assert.That(content, Has.One.With.Property(nameof(Release.Title)).EqualTo("Test Release"));
+            Assert.That(content, Has.One
+                .With.Property(nameof(Release.Title)).EqualTo("Test.Movie.2024.1080p.BluRay"));
+            Assert.That(content, Has.One.With.Property(nameof(Release.Protocol)).EqualTo("torrent"));
         }
     }
 
     [Test]
     public async Task GetReleaseById_ReturnsRelease()
     {
+        // Arrange
         var releaseId = Guid.NewGuid();
-        var release = CreateRelease("Found Release", releaseId);
+        var release = new Release
+        {
+            Id = releaseId,
+            Title = "Test.Show.S01E01.720p.WEB-DL",
+            Protocol = "usenet",
+            PublishDate = DateTime.UtcNow,
+        };
 
-        _releaseRepositoryMock
-            .Setup(r => r.GetByIdAsync(releaseId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<Release?>(release));
+        _repository
+            .Setup(m => m.GetByIdAsync(releaseId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(release);
 
+        // Act
         var response = await _client.GetAsync($"/api/releases/{releaseId}").ConfigureAwait(false);
         var content = await response.Content.ReadFromJsonAsync<Release>().ConfigureAwait(false);
 
+        // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
-            Assert.That(content, Has.Property(nameof(Release.Id)).EqualTo(releaseId));
-            Assert.That(content, Has.Property(nameof(Release.Title)).EqualTo("Found Release"));
+            Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
+            Assert.That(content, Has.Property(nameof(content.Id)).EqualTo(releaseId));
+            Assert.That(content, Has.Property(nameof(content.Title)).EqualTo("Test.Show.S01E01.720p.WEB-DL"));
+            Assert.That(content, Has.Property(nameof(content.Protocol)).EqualTo("usenet"));
         }
     }
 
     [Test]
     public async Task GetReleaseById_ReturnsNotFound_WhenReleaseDoesNotExist()
     {
+        // Arrange
         var releaseId = Guid.NewGuid();
-        _releaseRepositoryMock
-            .Setup(r => r.GetByIdAsync(releaseId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<Release?>(null));
+        _repository
+            .Setup(m => m.GetByIdAsync(releaseId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(default(Release?));
 
+        // Act
         var response = await _client.GetAsync($"/api/releases/{releaseId}").ConfigureAwait(false);
 
-        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.NotFound));
+        // Assert
+        Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NotFound));
     }
 
     [Test]
-    public async Task GetReleasesByIndexer_ReturnsFilteredReleases()
+    public async Task QueryReleases_ReturnsPagedResults()
     {
-        var release1 = CreateRelease("Indexer Release 1");
-        var release2 = CreateRelease("Indexer Release 2");
-
-        _releaseRepositoryMock
-            .Setup(r => r.GetByIndexerIdAsync(_indexerId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<IReadOnlyList<Release>>([release1, release2]));
-
-        var response = await _client.GetAsync($"/api/releases/by-indexer/{_indexerId}").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<Release[]>().ConfigureAwait(false);
-
-        using (Assert.EnterMultipleScope())
+        // Arrange
+        var release1 = new Release
         {
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
-            Assert.That(content, Has.Length.EqualTo(2));
-            Assert.That(content, Has.All.With.Property(nameof(Release.IndexerId)).EqualTo(_indexerId));
-        }
-    }
+            Title = "Movie.One.2024.1080p",
+            Protocol = "torrent",
+            PublishDate = DateTime.UtcNow,
+        };
+        var release2 = new Release
+        {
+            Title = "Movie.Two.2024.720p",
+            Protocol = "usenet",
+            PublishDate = DateTime.UtcNow,
+        };
+        var pagedResult = new PagedList<Release>([release1, release2], 1, 10, 2);
 
-    [Test]
-    public async Task GetReleaseByExternalId_ReturnsRelease()
-    {
-        var release = CreateRelease("External Release");
+        _repository
+            .Setup(m => m.QueryAsync(
+                It.IsAny<ReleaseQuery>(),
+                It.IsAny<PagingParameter?>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(pagedResult);
 
-        _releaseRepositoryMock
-            .Setup(r => r.GetByExternalIdAsync(_indexerId, "ext-123", It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<Release?>(release));
-
-        var response = await _client
-            .GetAsync($"/api/releases/by-external-id/{_indexerId}/ext-123")
+        // Act
+        var response = await _client.PostAsJsonAsync("/api/releases/query", new ReleaseQuery())
             .ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<Release>().ConfigureAwait(false);
+        var content = await response.Content.ReadFromJsonAsync<PagedList<Release>>().ConfigureAwait(false);
 
+        // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
-            Assert.That(content, Has.Property(nameof(Release.Title)).EqualTo("External Release"));
-            Assert.That(content, Has.Property(nameof(Release.ExternalId)).EqualTo("ext-123"));
-        }
-    }
-
-    [Test]
-    public async Task GetReleaseByExternalId_ReturnsNotFound_WhenReleaseDoesNotExist()
-    {
-        _releaseRepositoryMock
-            .Setup(r => r.GetByExternalIdAsync(_indexerId, "nonexistent", It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<Release?>(null));
-
-        var response = await _client.GetAsync(
-            $"/api/releases/by-external-id/{_indexerId}/nonexistent").ConfigureAwait(false);
-
-        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.NotFound));
-    }
-
-    [Test]
-    public async Task GetReleasesByProvider_ReturnsFilteredReleases()
-    {
-        var release = CreateRelease("Torrent Release", provider: "torrent");
-
-        _releaseRepositoryMock
-            .Setup(r => r.GetByProviderAsync("torrent", It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<IReadOnlyList<Release>>([release]));
-
-        var response = await _client.GetAsync("/api/releases/by-provider/torrent").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<Release[]>().ConfigureAwait(false);
-
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
-            Assert.That(content, Has.Length.EqualTo(1));
-            Assert.That(content, Has.One.With.Property(nameof(Release.Provider)).EqualTo("torrent"));
-        }
-    }
-
-    [Test]
-    public async Task GetReleasesByInfoHash_ReturnsFilteredReleases()
-    {
-        var release = CreateRelease("Hash Release", infoHash: "abc123");
-
-        _releaseRepositoryMock
-            .Setup(r => r.GetByInfoHashAsync("abc123", It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<IReadOnlyList<Release>>([release]));
-
-        var response = await _client.GetAsync("/api/releases/by-info-hash/abc123").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<Release[]>().ConfigureAwait(false);
-
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
-            Assert.That(content, Has.Length.EqualTo(1));
-            Assert.That(content, Has.One.With.Property(nameof(Release.InfoHash)).EqualTo("abc123"));
-        }
-    }
-
-    [Test]
-    public async Task GetReleasesByTag_ReturnsFilteredReleases()
-    {
-        var release = CreateRelease("Tagged Release", tags: ["hdr", "4k"]);
-
-        _releaseRepositoryMock
-            .Setup(r => r.GetByTagAsync("hdr", It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<IReadOnlyList<Release>>([release]));
-
-        var response = await _client.GetAsync("/api/releases/by-tag/hdr").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<Release[]>().ConfigureAwait(false);
-
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
-            Assert.That(content, Has.Length.EqualTo(1));
-            Assert.That(content, Has.One.With.Property(nameof(Release.Title)).EqualTo("Tagged Release"));
+            Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
+            Assert.That(content, Is.Not.Null);
+            Assert.That(content, Has.Property(nameof(content.TotalItems)).EqualTo(2));
+            Assert.That(content, Has.Property(nameof(content.Items)).With.Count.EqualTo(2));
         }
     }
 
     [Test]
     public async Task CreateRelease_CreatesAndReturnsRelease()
     {
-        var request = CreateRelease("New Release");
+        // Arrange
+        var request = new Release
+        {
+            Title = "New.Release.2024.HDRip",
+            Protocol = "torrent",
+            PublishDate = DateTime.UtcNow,
+            Categories = ["Movies", "HD"],
+            Languages = ["English"]
+        };
 
-        _releaseRepositoryMock
-            .Setup(r => r.CreateAsync(It.IsAny<Release>(), null, It.IsAny<CancellationToken>()))
-            .ReturnsAsync((Release r, Guid? _, CancellationToken _) => Result.Success(r));
+        _repository
+            .Setup(m => m.CreateAsync(It.IsAny<Release>(), null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Release r, Guid? _, CancellationToken _) => r);
 
+        // Act
         var response = await _client.PostAsJsonAsync("/api/releases", request).ConfigureAwait(false);
         var content = await response.Content.ReadFromJsonAsync<Release>().ConfigureAwait(false);
 
+        // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.Created));
-            Assert.That(content, Has.Property(nameof(Release.Title)).EqualTo("New Release"));
-            Assert.That(content, Has.Property(nameof(Release.Provider)).EqualTo("torrent"));
-            Assert.That(response.Headers.Location?.ToString(), Does.Contain($"/api/releases/{content!.Id}"));
+            Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.Created));
+            Assert.That(content, Has.Property(nameof(content.Title)).EqualTo("New.Release.2024.HDRip"));
+            Assert.That(content, Has.Property(nameof(content.Protocol)).EqualTo("torrent"));
         }
     }
 
     [Test]
-    public async Task PatchRelease_UpdatesRelease()
+    public async Task UpdateRelease_UpdatesRelease()
     {
+        // Arrange
         var releaseId = Guid.NewGuid();
-        var existingRelease = CreateRelease("Original Title", releaseId);
-        var request = CreateRelease("Updated Title", releaseId);
+        var request = new Release
+        {
+            Title = "Updated.Release.Title",
+            Protocol = "usenet",
+            PublishDate = DateTime.UtcNow
+        };
 
-        _releaseRepositoryMock
-            .Setup(r => r.GetByIdAsync(releaseId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<Release?>(existingRelease));
+        _repository
+            .Setup(m => m.UpdateAsync(It.IsAny<Release>(), null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
 
-        _releaseRepositoryMock
-            .Setup(r => r.UpdateAsync(It.IsAny<Release>(), null, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success(true));
+        // Act
+        var response = await _client.PutAsJsonAsync($"/api/releases/{releaseId}", request).ConfigureAwait(false);
 
-        var response = await _client.PatchAsJsonAsync($"/api/releases/{releaseId}", request).ConfigureAwait(false);
-
-        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.NoContent));
-        _releaseRepositoryMock.Verify(
+        // Assert
+        Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NoContent));
+        _repository.Verify(
             r => r.UpdateAsync(
-                It.Is<Release>(rel => rel.Id == releaseId && rel.Title == "Updated Title"),
+                It.Is<Release>(rel =>
+                    rel.Id == releaseId &&
+                    rel.Title == "Updated.Release.Title" &&
+                    rel.Protocol == "usenet"),
                 null,
                 It.IsAny<CancellationToken>()),
             Times.Once);
     }
 
     [Test]
-    public async Task PatchRelease_ReturnsNotFound_WhenReleaseDoesNotExist()
+    public async Task UpdateRelease_ReturnsNotFound_WhenReleaseDoesNotExist()
     {
+        // Arrange
         var releaseId = Guid.NewGuid();
-        var request = CreateRelease("Updated Title", releaseId);
+        var request = new Release
+        {
+            Title = "Updated.Title",
+            Protocol = "torrent",
+            PublishDate = DateTime.UtcNow
+        };
 
-        _releaseRepositoryMock
-            .Setup(r => r.GetByIdAsync(releaseId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<Release?>(null));
+        _repository
+            .Setup(m => m.UpdateAsync(It.IsAny<Release>(), null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(false);
 
-        var response = await _client.PatchAsJsonAsync($"/api/releases/{releaseId}", request).ConfigureAwait(false);
+        // Act
+        var response = await _client.PutAsJsonAsync($"/api/releases/{releaseId}", request).ConfigureAwait(false);
 
-        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.NotFound));
+        // Assert
+        Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NotFound));
     }
 
     [Test]
     public async Task DeleteRelease_DeletesRelease()
     {
+        // Arrange
         var releaseId = Guid.NewGuid();
 
-        _releaseRepositoryMock
-            .Setup(r => r.DeleteAsync(releaseId, null, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success(true));
+        _repository
+            .Setup(m => m.DeleteAsync(releaseId, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
 
+        // Act
         var response = await _client.DeleteAsync($"/api/releases/{releaseId}").ConfigureAwait(false);
 
-        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.NoContent));
+        // Assert
+        Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NoContent));
     }
 
     [Test]
     public async Task DeleteRelease_ReturnsNotFound_WhenReleaseDoesNotExist()
     {
+        // Arrange
         var releaseId = Guid.NewGuid();
 
-        _releaseRepositoryMock
-            .Setup(r => r.DeleteAsync(releaseId, null, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success(false));
+        _repository
+            .Setup(m => m.DeleteAsync(releaseId, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(false);
 
+        // Act
         var response = await _client.DeleteAsync($"/api/releases/{releaseId}").ConfigureAwait(false);
 
-        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.NotFound));
+        // Assert
+        Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NotFound));
     }
 
     [Test]
-    public async Task DeleteReleasesByIndexer_ReturnsDeletedCount()
+    public async Task QueryReleases_WithFilterParameters()
     {
-        _releaseRepositoryMock
-            .Setup(r => r.DeleteByIndexerIdAsync(_indexerId, null, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success(5));
+        // Arrange
+        var indexerId = Guid.NewGuid();
+        var query = new ReleaseQuery { IndexerId = indexerId };
 
-        var response = await _client.DeleteAsync($"/api/releases/by-indexer/{_indexerId}").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<int>().ConfigureAwait(false);
+        _repository
+            .Setup(m => m.QueryAsync(
+                It.Is<ReleaseQuery>(q => q.IndexerId == indexerId),
+                It.IsAny<PagingParameter?>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<Release>([], 1, 10, 0));
 
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
-            Assert.That(content, Is.EqualTo(5));
-        }
-    }
+        // Act
+        var response = await _client.PostAsJsonAsync("/api/releases/query", query).ConfigureAwait(false);
 
-    private Release CreateRelease(
-        string title,
-        Guid? id = null,
-        string provider = "torrent",
-        string? infoHash = null,
-        string[]? tags = null)
-    {
-        return new(
-            Id: id ?? Guid.NewGuid(),
-            IndexerId: _indexerId,
-            ExternalId: "ext-123",
-            Provider: provider,
-            Title: title,
-            PublishDate: DateTimeOffset.UtcNow,
-            Size: 1024,
-            InfoHash: infoHash,
-            Categories: ["Movies"],
-            DownloadUrl: new Uri("https://example.com/download"),
-            InfoUrl: new Uri("https://example.com/info"),
-            Properties: new Dictionary<string, string?> { ["seeders"] = "10" },
-            Languages: ["en"],
-            Tags: tags ?? [],
-            CreatedAt: DateTimeOffset.UtcNow,
-            CreatedByUserId: null,
-            ModifiedAt: null,
-            ModifiedByUserId: null);
+        // Assert
+        Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
+        _repository.Verify(
+            r => r.QueryAsync(
+                It.Is<ReleaseQuery>(q => q.IndexerId == indexerId),
+                It.IsAny<PagingParameter?>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
     }
 }

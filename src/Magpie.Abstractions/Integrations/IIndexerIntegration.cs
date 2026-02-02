@@ -2,8 +2,7 @@ using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 
-using Magpie.Models.Indexers;
-using Magpie.Models.Result;
+using Magpie.Models.Data;
 
 namespace Magpie.Abstractions.Integrations;
 
@@ -13,7 +12,7 @@ namespace Magpie.Abstractions.Integrations;
 public interface IIndexerIntegration
 {
     /// <summary>
-    /// Gets the slug of the type of the indexer integration.
+    /// Get the slug of the type of the indexer integration.
     /// </summary>
     string IndexerType { get; }
 
@@ -24,16 +23,15 @@ public interface IIndexerIntegration
     /// <param name="categories">Optional category filters.</param>
     /// <param name="cancellationToken">The cancellation token.</param>
     /// <returns>The result containing a list of matching releases on success, or an error on failure.</returns>
-    Task<Result<IReadOnlyList<TrackedRelease>>> SearchAsync(
+    Task<IEnumerable<Release>> SearchAsync(
         string query,
-        IReadOnlyList<string>? categories,
-        CancellationToken cancellationToken
-    );
+        IEnumerable<string>? categories,
+        CancellationToken cancellationToken);
 
     /// <summary>
     /// Tests the connection to the indexer.
     /// </summary>
     /// <param name="cancellationToken">The cancellation token.</param>
     /// <returns>The result indicating success or failure with an error reason.</returns>
-    Task<Result<bool>> TestConnectionAsync(CancellationToken cancellationToken);
+    Task<bool> TestConnectionAsync(CancellationToken cancellationToken = default);
 }

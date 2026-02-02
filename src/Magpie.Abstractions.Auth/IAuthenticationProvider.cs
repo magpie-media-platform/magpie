@@ -2,8 +2,6 @@ using System.Security.Claims;
 using System.Threading;
 using System.Threading.Tasks;
 
-using Magpie.Models.Result;
-
 using Microsoft.AspNetCore.Http;
 
 namespace Magpie.Abstractions.Auth;
@@ -14,7 +12,7 @@ namespace Magpie.Abstractions.Auth;
 public interface IAuthenticationProvider
 {
     /// <summary>
-    /// The provider type identifier
+    /// The unique provider type identifier. 
     /// </summary>
     string ProviderType { get; }
 
@@ -23,17 +21,12 @@ public interface IAuthenticationProvider
     /// </summary>
     /// <param name="context">The HTTP context.</param>
     /// <param name="cancellationToken">The cancellation token.</param>
-    /// <returns>
-    /// A successful result containing the authenticated principal, <see langword="null"/> if this provider
-    /// does not apply to the request, or a failure result if authentication failed.
-    /// </returns>
-    Task<Result<ClaimsPrincipal?>> TryAuthenticateAsync(
-        HttpContext context,
-        CancellationToken cancellationToken = default);
+    Task<ClaimsPrincipal?> TryAuthenticateAsync(HttpContext context, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Adds challenge information to the response (e.g., WWW-Authenticate header).
+    /// Add challenge information to the response.
     /// </summary>
     /// <param name="context">The HTTP context.</param>
-    void Challenge(HttpContext context);
+    /// <param name="cancellationToken">The cancellation token.</param>
+    Task ChallengeAsync(HttpContext context, CancellationToken cancellationToken = default);
 }

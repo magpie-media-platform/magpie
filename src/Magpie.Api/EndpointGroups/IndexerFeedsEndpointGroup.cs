@@ -1,19 +1,15 @@
 using System;
-using System.Collections.Generic;
-using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions.Api;
-using Magpie.Abstractions.Data;
-using Magpie.Models.Indexers;
-using Magpie.Models.Result;
+using Magpie.Abstractions.Repositories;
+using Magpie.Abstractions.Security;
+using Magpie.Models.Data;
 
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
-
-using HttpResult = Microsoft.AspNetCore.Http.IResult;
 
 namespace Magpie.Api.EndpointGroups;
 
@@ -36,25 +32,6 @@ internal sealed class IndexerFeedsEndpointGroup(IIndexerFeedRepository indexerFe
             .Produces(StatusCodes.Status404NotFound)
             .RequireAuthorization();
 
-        builder.MapGet("/by-name/{name}", GetIndexerFeedByName)
-            .WithName("GetIndexerFeedByName")
-            .WithTags("IndexerFeeds")
-            .Produces<IndexerFeed>()
-            .Produces(StatusCodes.Status404NotFound)
-            .RequireAuthorization();
-
-        builder.MapGet("/by-provider/{provider}", GetIndexerFeedsByProvider)
-            .WithName("GetIndexerFeedsByProvider")
-            .WithTags("IndexerFeeds")
-            .Produces<IndexerFeed[]>()
-            .RequireAuthorization();
-
-        builder.MapGet("/enabled", GetEnabledIndexerFeeds)
-            .WithName("GetEnabledIndexerFeeds")
-            .WithTags("IndexerFeeds")
-            .Produces<IndexerFeed[]>()
-            .RequireAuthorization();
-
         builder.MapPost("", CreateIndexerFeed)
             .WithName("CreateIndexerFeed")
             .WithTags("IndexerFeeds")
@@ -62,8 +39,8 @@ internal sealed class IndexerFeedsEndpointGroup(IIndexerFeedRepository indexerFe
             .ProducesProblem(StatusCodes.Status400BadRequest)
             .RequireAuthorization();
 
-        builder.MapPatch("/{id:guid}", PatchIndexerFeed)
-            .WithName("PatchIndexerFeed")
+        builder.MapPut("/{id:guid}", UpdateIndexerFeed)
+            .WithName("UpdateIndexerFeed")
             .WithTags("IndexerFeeds")
             .Produces(StatusCodes.Status204NoContent)
             .Produces(StatusCodes.Status404NotFound)
@@ -78,131 +55,82 @@ internal sealed class IndexerFeedsEndpointGroup(IIndexerFeedRepository indexerFe
             .RequireAuthorization();
     }
 
-    private async Task<HttpResult> GetAllIndexerFeeds(CancellationToken cancellationToken)
+    private async Task<IResult> GetAllIndexerFeeds(CancellationToken cancellationToken)
     {
-        var result = await indexerFeedRepository.GetAllAsync(cancellationToken).ConfigureAwait(false);
-
-        return result switch
-        {
-            SuccessResult<IReadOnlyList<IndexerFeed>> success => Results.Ok(success.Value.ToArray()),
-            FailureResult<IReadOnlyList<IndexerFeed>> failure =>
-                Results.Problem(failure.Reason, statusCode: StatusCodes.Status500InternalServerError),
-            _ => Results.Problem("Unexpected result type", statusCode: StatusCodes.Status500InternalServerError)
-        };
+        var feeds = await indexerFeedRepository.ListAllAsync(cancellationToken).ConfigureAwait(false);
+        return Results.Ok(feeds);
     }
 
-    private async Task<HttpResult> GetIndexerFeedById(Guid id, CancellationToken cancellationToken)
+    private async Task<IResult> GetIndexerFeedById(Guid id, CancellationToken cancellationToken)
     {
-        var result = await indexerFeedRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
-
-        return result switch
-        {
-            SuccessResult<IndexerFeed?> { Value: null } => Results.NotFound(),
-            SuccessResult<IndexerFeed?> success => Results.Ok(success.Value),
-            FailureResult<IndexerFeed?> failure =>
-                Results.Problem(failure.Reason, statusCode: StatusCodes.Status500InternalServerError),
-            _ => Results.Problem("Unexpected result type", statusCode: StatusCodes.Status500InternalServerError)
-        };
+        var feed = await indexerFeedRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
+        return feed is null ? Results.NotFound() : Results.Ok(feed);
     }
 
-    private async Task<HttpResult> GetIndexerFeedByName(string name, CancellationToken cancellationToken)
+    private async Task<IResult> CreateIndexerFeed(
+        HttpContext httpContext,
+        IndexerFeed request,
+        CancellationToken cancellationToken)
     {
-        var result = await indexerFeedRepository.GetByNameAsync(name, cancellationToken).ConfigureAwait(false);
+        var currentUserId = httpContext.User.GetUserId();
 
-        return result switch
-        {
-            SuccessResult<IndexerFeed?> { Value: null } => Results.NotFound(),
-            SuccessResult<IndexerFeed?> success => Results.Ok(success.Value),
-            FailureResult<IndexerFeed?> failure =>
-                Results.Problem(failure.Reason, statusCode: StatusCodes.Status500InternalServerError),
-            _ => Results.Problem("Unexpected result type", statusCode: StatusCodes.Status500InternalServerError)
-        };
-    }
-
-    private async Task<HttpResult> GetIndexerFeedsByProvider(string provider, CancellationToken cancellationToken)
-    {
-        var result = await indexerFeedRepository.GetByProviderAsync(provider, cancellationToken)
-            .ConfigureAwait(false);
-
-        return result switch
-        {
-            SuccessResult<IReadOnlyList<IndexerFeed>> success => Results.Ok(success.Value.ToArray()),
-            FailureResult<IReadOnlyList<IndexerFeed>> failure =>
-                Results.Problem(failure.Reason, statusCode: StatusCodes.Status500InternalServerError),
-            _ => Results.Problem("Unexpected result type", statusCode: StatusCodes.Status500InternalServerError)
-        };
-    }
-
-    private async Task<HttpResult> GetEnabledIndexerFeeds(CancellationToken cancellationToken)
-    {
-        var result = await indexerFeedRepository.GetEnabledAsync(cancellationToken).ConfigureAwait(false);
-
-        return result switch
-        {
-            SuccessResult<IReadOnlyList<IndexerFeed>> success => Results.Ok(success.Value.ToArray()),
-            FailureResult<IReadOnlyList<IndexerFeed>> failure =>
-                Results.Problem(failure.Reason, statusCode: StatusCodes.Status500InternalServerError),
-            _ => Results.Problem("Unexpected result type", statusCode: StatusCodes.Status500InternalServerError)
-        };
-    }
-
-    private async Task<HttpResult> CreateIndexerFeed(IndexerFeed request, CancellationToken cancellationToken)
-    {
-        var indexerFeed = request with
+        var feed = request with
         {
             Id = Guid.NewGuid(),
             LastSync = null,
-            CreatedAt = DateTimeOffset.UtcNow,
-            CreatedByUserId = null,
+            CreatedAt = DateTime.UtcNow,
+            CreatedByUserId = currentUserId,
             ModifiedAt = null,
             ModifiedByUserId = null
         };
 
-        var result = await indexerFeedRepository.CreateAsync(indexerFeed, createdByUserId: null, cancellationToken)
+        var created = await indexerFeedRepository.CreateAsync(feed, currentUserId, cancellationToken)
             .ConfigureAwait(false);
 
-        return result switch
-        {
-            SuccessResult<IndexerFeed> success =>
-                Results.Created($"/api/indexer-feeds/{success.Value.Id}", success.Value),
-            FailureResult<IndexerFeed> failure =>
-                Results.Problem(failure.Reason, statusCode: StatusCodes.Status400BadRequest),
-            _ => Results.Problem("Unexpected result type", statusCode: StatusCodes.Status500InternalServerError)
-        };
+        return Results.Created($"/api/indexer-feeds/{created.Id}", created);
     }
 
-    private async Task<HttpResult> PatchIndexerFeed(
+    private async Task<IResult> UpdateIndexerFeed(
+        HttpContext httpContext,
         Guid id,
-        IndexerFeedPatch request,
+        IndexerFeed request,
         CancellationToken cancellationToken)
     {
-        var patch = request with { Id = id };
+        var existing = await indexerFeedRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
 
-        var result = await indexerFeedRepository.PatchAsync(patch, modifiedByUserId: null, cancellationToken)
+        if (existing is null)
+        {
+            return Results.NotFound();
+        }
+
+        var currentUserId = httpContext.User.GetUserId();
+
+        var feed = request with
+        {
+            Id = id,
+            LastSync = existing.LastSync,
+            CreatedAt = existing.CreatedAt,
+            CreatedByUserId = existing.CreatedByUserId,
+            ModifiedAt = DateTime.UtcNow,
+            ModifiedByUserId = currentUserId
+        };
+
+        await indexerFeedRepository.UpdateAsync(feed, currentUserId, cancellationToken)
             .ConfigureAwait(false);
 
-        return result switch
-        {
-            SuccessResult<bool> { Value: false } => Results.NotFound(),
-            SuccessResult<bool> => Results.NoContent(),
-            FailureResult<bool> failure =>
-                Results.Problem(failure.Reason, statusCode: StatusCodes.Status400BadRequest),
-            _ => Results.Problem("Unexpected result type", statusCode: StatusCodes.Status500InternalServerError)
-        };
+        return Results.NoContent();
     }
 
-    private async Task<HttpResult> DeleteIndexerFeed(Guid id, CancellationToken cancellationToken)
+    private async Task<IResult> DeleteIndexerFeed(
+        HttpContext httpContext,
+        Guid id,
+        CancellationToken cancellationToken)
     {
-        var result = await indexerFeedRepository.DeleteAsync(id, deletedByUserId: null, cancellationToken)
+        var currentUserId = httpContext.User.GetUserId();
+
+        var deleted = await indexerFeedRepository.DeleteAsync(id, currentUserId, cancellationToken)
             .ConfigureAwait(false);
 
-        return result switch
-        {
-            SuccessResult<bool> { Value: false } => Results.NotFound(),
-            SuccessResult<bool> => Results.NoContent(),
-            FailureResult<bool> failure =>
-                Results.Problem(failure.Reason, statusCode: StatusCodes.Status500InternalServerError),
-            _ => Results.Problem("Unexpected result type", statusCode: StatusCodes.Status500InternalServerError)
-        };
+        return deleted ? Results.NoContent() : Results.NotFound();
     }
 }

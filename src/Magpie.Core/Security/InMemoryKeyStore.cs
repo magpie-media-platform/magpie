@@ -5,7 +5,6 @@ using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions.Security;
-using Magpie.Models.Result;
 
 using Microsoft.Extensions.Logging;
 
@@ -14,9 +13,6 @@ namespace Magpie.Core.Security;
 /// <summary>
 /// In-memory key store implementation.
 /// </summary>
-/// <remarks>
-/// Initializes a new instance of the <see cref="InMemoryKeyStore"/> class.
-/// </remarks>
 public sealed class InMemoryKeyStore(ILogger<InMemoryKeyStore> logger) : IKeyStore
 {
     private enum KeyType { Signing, Hmac, Encryption }
@@ -26,157 +22,128 @@ public sealed class InMemoryKeyStore(ILogger<InMemoryKeyStore> logger) : IKeySto
     private sealed record KeyEntry(byte[] KeyMaterial, KeyType Type);
 
     /// <inheritdoc />
-    public Task<Result<bool>> KeyExistsAsync(string keyName, CancellationToken cancellationToken = default)
+    public Task<bool> KeyExistsAsync(string keyName, CancellationToken cancellationToken = default)
     {
-        return Result.SuccessAsync(_keys.ContainsKey(keyName));
+        return Task.FromResult(_keys.ContainsKey(keyName));
     }
 
     /// <inheritdoc />
-    public Task<Result<bool>> DeleteKeyAsync(string keyName, CancellationToken cancellationToken = default)
+    public Task<bool> DeleteKeyAsync(string keyName, CancellationToken cancellationToken = default)
     {
         var removed = _keys.TryRemove(keyName, out _);
-        return Result.SuccessAsync(removed);
+        return Task.FromResult(removed);
     }
 
     /// <inheritdoc />
-    public Task<Result<Unit>> CreateSigningKeyAsync(string keyName, CancellationToken cancellationToken = default)
+    public Task CreateSigningKeyAsync(string keyName, CancellationToken cancellationToken = default)
     {
-        return CreateKey(keyName, KeyType.Signing, 32);
+        CreateKey(keyName, KeyType.Signing, 32);
+        return Task.CompletedTask;
     }
 
     /// <inheritdoc />
-    public Task<Result<byte[]>> SignAsync(string keyName, byte[] data, CancellationToken cancellationToken = default)
+    public Task<byte[]> SignAsync(string keyName, byte[] data, CancellationToken cancellationToken = default)
     {
-        if (!TryGetKey<byte[]>(keyName, KeyType.Signing, out var entry, out var error))
-        {
-            return Task.FromResult(error!);
-        }
-        using var hmac = new HMACSHA256(entry!.KeyMaterial);
-
+        var entry = GetKeyOrThrow(keyName, KeyType.Signing);
+        using var hmac = new HMACSHA256(entry.KeyMaterial);
         var signature = hmac.ComputeHash(data);
-
-        return Result.SuccessAsync(signature);
+        return Task.FromResult(signature);
     }
 
     /// <inheritdoc />
-    public Task<Result<bool>> VerifySignatureAsync(
+    public Task<bool> VerifySignatureAsync(
         string keyName,
         byte[] data,
         byte[] signature,
         CancellationToken cancellationToken = default)
     {
-        if (!TryGetKey<bool>(keyName, KeyType.Signing, out var entry, out var error))
-        {
-            return Task.FromResult(error!);
-        }
-        using var hmac = new HMACSHA256(entry!.KeyMaterial);
-
+        var entry = GetKeyOrThrow(keyName, KeyType.Signing);
+        using var hmac = new HMACSHA256(entry.KeyMaterial);
         var computed = hmac.ComputeHash(data);
         var valid = CryptographicOperations.FixedTimeEquals(computed, signature);
-
-        return Result.SuccessAsync(valid);
+        return Task.FromResult(valid);
     }
 
     /// <inheritdoc />
-    public Task<Result<byte[]>> GetPublicKeyAsync(string keyName, CancellationToken cancellationToken = default)
+    public Task<byte[]> GetPublicKeyAsync(string keyName, CancellationToken cancellationToken = default)
     {
-        if (!TryGetKey<byte[]>(keyName, KeyType.Signing, out var entry, out var error))
-        {
-            return Task.FromResult(error!);
-        }
-        return Result.SuccessAsync(entry!.KeyMaterial);
+        var entry = GetKeyOrThrow(keyName, KeyType.Signing);
+        return Task.FromResult(entry.KeyMaterial);
     }
 
     /// <inheritdoc />
-    public Task<Result<Unit>> CreateHmacKeyAsync(string keyName, CancellationToken cancellationToken = default)
+    public Task CreateHmacKeyAsync(string keyName, CancellationToken cancellationToken = default)
     {
-        return CreateKey(keyName, KeyType.Hmac, 32);
+        CreateKey(keyName, KeyType.Hmac, 32);
+        return Task.CompletedTask;
     }
 
     /// <inheritdoc />
-    public Task<Result<byte[]>> ComputeHmacAsync(
+    public Task<byte[]> ComputeHmacAsync(
         string keyName,
         byte[] data,
         CancellationToken cancellationToken = default)
     {
-        if (!TryGetKey<byte[]>(keyName, KeyType.Hmac, out var entry, out var error))
-        {
-            return Task.FromResult(error!);
-        }
-        using var hmac = new HMACSHA256(entry!.KeyMaterial);
-
+        var entry = GetKeyOrThrow(keyName, KeyType.Hmac);
+        using var hmac = new HMACSHA256(entry.KeyMaterial);
         var hash = hmac.ComputeHash(data);
-
-        return Result.SuccessAsync(hash);
+        return Task.FromResult(hash);
     }
 
     /// <inheritdoc />
-    public Task<Result<bool>> VerifyHmacAsync(
+    public Task<bool> VerifyHmacAsync(
         string keyName,
         byte[] data,
         byte[] hmac,
         CancellationToken cancellationToken = default)
     {
-        if (!TryGetKey<bool>(keyName, KeyType.Hmac, out var entry, out var error))
-        {
-            return Task.FromResult(error!);
-        }
-        using var hmacAlg = new HMACSHA256(entry!.KeyMaterial);
-
+        var entry = GetKeyOrThrow(keyName, KeyType.Hmac);
+        using var hmacAlg = new HMACSHA256(entry.KeyMaterial);
         var computed = hmacAlg.ComputeHash(data);
         var valid = CryptographicOperations.FixedTimeEquals(computed, hmac);
-
-        return Result.SuccessAsync(valid);
+        return Task.FromResult(valid);
     }
 
     /// <inheritdoc />
-    public Task<Result<Unit>> CreateEncryptionKeyAsync(string keyName, CancellationToken cancellationToken = default)
+    public Task CreateEncryptionKeyAsync(string keyName, CancellationToken cancellationToken = default)
     {
-        return CreateKey(keyName, KeyType.Encryption, 32);
+        CreateKey(keyName, KeyType.Encryption, 32);
+        return Task.CompletedTask;
     }
 
     /// <inheritdoc />
-    public Task<Result<byte[]>> EncryptAsync(
+    public Task<byte[]> EncryptAsync(
         string keyName,
         byte[] plaintext,
         CancellationToken cancellationToken = default)
     {
-        if (!TryGetKey<byte[]>(keyName, KeyType.Encryption, out var entry, out var error))
-        {
-            return Task.FromResult(error!);
-        }
+        var entry = GetKeyOrThrow(keyName, KeyType.Encryption);
         using var aes = Aes.Create();
-        using var encryptor = aes.CreateEncryptor();
-
-        aes.Key = entry!.KeyMaterial;
+        aes.Key = entry.KeyMaterial;
         aes.GenerateIV();
 
+        using var encryptor = aes.CreateEncryptor();
         var encrypted = encryptor.TransformFinalBlock(plaintext, 0, plaintext.Length);
         var result = new byte[aes.IV.Length + encrypted.Length];
 
         aes.IV.CopyTo(result, 0);
         encrypted.CopyTo(result, aes.IV.Length);
 
-        return Result.SuccessAsync(result);
+        return Task.FromResult(result);
     }
 
     /// <inheritdoc />
-    public Task<Result<byte[]>> DecryptAsync(
+    public Task<byte[]> DecryptAsync(
         string keyName,
         byte[] ciphertext,
         CancellationToken cancellationToken = default)
     {
-        if (!TryGetKey<byte[]>(keyName, KeyType.Encryption, out var entry, out var error))
-        {
-            return Task.FromResult(error!);
-        }
+        var entry = GetKeyOrThrow(keyName, KeyType.Encryption);
 
         try
         {
             using var aes = Aes.Create();
-            using var decryptor = aes.CreateDecryptor();
-
-            aes.Key = entry!.KeyMaterial;
+            aes.Key = entry.KeyMaterial;
 
             var iv = new byte[aes.BlockSize / 8];
             Array.Copy(ciphertext, 0, iv, 0, iv.Length);
@@ -185,14 +152,15 @@ public sealed class InMemoryKeyStore(ILogger<InMemoryKeyStore> logger) : IKeySto
             var encrypted = new byte[ciphertext.Length - iv.Length];
             Array.Copy(ciphertext, iv.Length, encrypted, 0, encrypted.Length);
 
+            using var decryptor = aes.CreateDecryptor();
             var plaintext = decryptor.TransformFinalBlock(encrypted, 0, encrypted.Length);
 
-            return Result.SuccessAsync(plaintext);
+            return Task.FromResult(plaintext);
         }
         catch (CryptographicException ex)
         {
             logger.LogWarning(ex, "Decryption failed for key '{KeyName}'", keyName);
-            return Result.FailAsync<byte[]>("Decryption failed", ErrorCodes.DecryptionFailed);
+            throw new InvalidOperationException($"Decryption failed for key '{keyName}'", ex);
         }
     }
 
@@ -220,33 +188,29 @@ public sealed class InMemoryKeyStore(ILogger<InMemoryKeyStore> logger) : IKeySto
         _keys[keyName] = new KeyEntry(keyMaterial, KeyType.Encryption);
     }
 
-    private Task<Result<Unit>> CreateKey(string keyName, KeyType type, int sizeBytes)
+    private void CreateKey(string keyName, KeyType type, int sizeBytes)
     {
         var keyBytes = new byte[sizeBytes];
         RandomNumberGenerator.Fill(keyBytes);
 
         if (!_keys.TryAdd(keyName, new KeyEntry(keyBytes, type)))
         {
-            return Result.FailAsync<Unit>($"Key '{keyName}' already exists", ErrorCodes.KeyAlreadyExists);
+            throw new InvalidOperationException($"Key '{keyName}' already exists");
         }
-
-        return Result.SuccessAsync();
     }
 
-    private bool TryGetKey<T>(string keyName, KeyType expectedType, out KeyEntry? entry, out Result<T>? error)
+    private KeyEntry GetKeyOrThrow(string keyName, KeyType expectedType)
     {
-        if (!_keys.TryGetValue(keyName, out entry))
+        if (!_keys.TryGetValue(keyName, out var entry))
         {
-            error = Result.Fail<T>($"Key '{keyName}' not found", ErrorCodes.KeyNotFound);
-            return false;
+            throw new InvalidOperationException($"Key '{keyName}' not found");
         }
+
         if (entry.Type != expectedType)
         {
-            error = Result.Fail<T>($"Key '{keyName}' type mismatch", ErrorCodes.KeyTypeMismatch);
-            entry = null;
-            return false;
+            throw new InvalidOperationException($"Key '{keyName}' type mismatch");
         }
-        error = null;
-        return true;
+
+        return entry;
     }
 }

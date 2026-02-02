@@ -1,7 +1,6 @@
 using System.Threading;
 using System.Threading.Tasks;
 
-using Magpie.Models.Result;
 
 namespace Magpie.Abstractions.Security;
 
@@ -13,69 +12,69 @@ public interface IKeyStore
     /// <summary>
     /// Checks if a key exists.
     /// </summary>
-    Task<Result<bool>> KeyExistsAsync(string keyName, CancellationToken cancellationToken = default);
+    Task<bool> KeyExistsAsync(string keyName, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Creates a new signing key for digital signatures.
+    /// Create a new signing key for digital signatures.
     /// </summary>
-    Task<Result<Unit>> CreateSigningKeyAsync(string keyName, CancellationToken cancellationToken = default);
+    Task CreateSigningKeyAsync(string keyName, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Creates a new HMAC key.
+    /// Create a new HMAC key.
     /// </summary>
-    Task<Result<Unit>> CreateHmacKeyAsync(string keyName, CancellationToken cancellationToken = default);
+    Task CreateHmacKeyAsync(string keyName, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Creates a new encryption key.
+    /// Create a new encryption key.
     /// </summary>
-    Task<Result<Unit>> CreateEncryptionKeyAsync(string keyName, CancellationToken cancellationToken = default);
+    Task CreateEncryptionKeyAsync(string keyName, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Signs data using a signing key.
     /// </summary>
-    Task<Result<byte[]>> SignAsync(string keyName, byte[] data, CancellationToken cancellationToken = default);
+    Task<byte[]> SignAsync(string keyName, byte[] data, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Verifies a signature.
+    /// Verify a signature.
     /// </summary>
-    Task<Result<bool>> VerifySignatureAsync(
+    Task<bool> VerifySignatureAsync(
         string keyName,
         byte[] data,
         byte[] signature,
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Computes an HMAC.
+    /// Compute an HMAC.
     /// </summary>
-    Task<Result<byte[]>> ComputeHmacAsync(string keyName, byte[] data, CancellationToken cancellationToken = default);
+    Task<byte[]> ComputeHmacAsync(string keyName, byte[] data, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Verifies an HMAC.
+    /// Verify an HMAC.
     /// </summary>
-    Task<Result<bool>> VerifyHmacAsync(
+    Task<bool> VerifyHmacAsync(
         string keyName,
         byte[] data,
         byte[] hmac,
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Gets the public key material for external signature verification.
+    /// Get the public key material for external signature verification.
     /// </summary>
-    Task<Result<byte[]>> GetPublicKeyAsync(string keyName, CancellationToken cancellationToken = default);
+    Task<byte[]> GetPublicKeyAsync(string keyName, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Encrypts data.
     /// </summary>
-    Task<Result<byte[]>> EncryptAsync(string keyName, byte[] clearText, CancellationToken cancellationToken = default);
+    Task<byte[]> EncryptAsync(string keyName, byte[] clearText, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Decrypts data.
     /// </summary>
-    Task<Result<byte[]>> DecryptAsync(string keyName, byte[] cipherText, CancellationToken cancellationToken = default);
+    Task<byte[]> DecryptAsync(string keyName, byte[] cipherText, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Deletes a key.
+    /// Delete a key.
     /// </summary>
     /// <returns><see langword="true"/> if the key was deleted, <see langword="false"/> if not found.</returns>
-    Task<Result<bool>> DeleteKeyAsync(string keyName, CancellationToken cancellationToken = default);
+    Task<bool> DeleteKeyAsync(string keyName, CancellationToken cancellationToken = default);
 }

@@ -7,10 +7,9 @@ using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions.Api;
-using Magpie.Abstractions.Data;
+using Magpie.Abstractions.Repositories;
 using Magpie.Api.EndpointGroups;
-using Magpie.Models;
-using Magpie.Models.Result;
+using Magpie.Models.Data;
 using Magpie.Test.Shared;
 
 using Microsoft.AspNetCore.Authentication;
@@ -34,19 +33,19 @@ public class TagsEndpointGroupTests
 {
     private IHost _host = null!;
     private HttpClient _client = null!;
-    private Mock<ITagRepository> _tagRepositoryMock = null!;
+    private Mock<ITagRepository> _tagRepository = null!;
 
     [SetUp]
     public void SetUp()
     {
-        _tagRepositoryMock = new Mock<ITagRepository>();
+        _tagRepository = new Mock<ITagRepository>();
 
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
         builder.Logging.ClearProviders().AddTestLogger();
         var authServiceMock = new Mock<IAuthenticationService>();
         authServiceMock
-            .Setup(x => x.AuthenticateAsync(It.IsAny<HttpContext>(), It.IsAny<string>()))
+            .Setup(m => m.AuthenticateAsync(It.IsAny<HttpContext>(), It.IsAny<string>()))
             .ReturnsAsync(AuthenticateResult.Success(new(new ClaimsPrincipal(new ClaimsIdentity("Test")), "Test")));
         builder.Services.AddSingleton(authServiceMock.Object);
         builder.Services.AddAuthorizationBuilder()
@@ -55,7 +54,7 @@ public class TagsEndpointGroupTests
                 .RequireAssertion(_ => true)
                 .Build());
 
-        builder.Services.AddSingleton(_tagRepositoryMock.Object);
+        builder.Services.AddSingleton(_tagRepository.Object);
         builder.Services.AddSingleton<IApiEndpointGroup, TagsEndpointGroup>();
 
         var app = builder.Build();
@@ -86,9 +85,9 @@ public class TagsEndpointGroupTests
     public async Task GetAllTags_ReturnsEmptyArray_WhenNoTags()
     {
         // Arrange
-        _tagRepositoryMock
-            .Setup(r => r.GetAllAsync(It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<IReadOnlyList<Tag>>([]));
+        _tagRepository
+            .Setup(m => m.ListAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
 
         // Act
         var response = await _client.GetAsync("/api/tags").ConfigureAwait(false);
@@ -97,7 +96,7 @@ public class TagsEndpointGroupTests
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+            Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
             Assert.That(content, Is.Not.Null);
             Assert.That(content, Is.Empty);
         }
@@ -109,14 +108,14 @@ public class TagsEndpointGroupTests
         // Arrange
         var tags = new List<Tag>
         {
-            new("action"),
-            new("comedy"),
-            new("drama")
+            new Tag { Name = "action" },
+            new Tag { Name = "comedy" },
+            new Tag { Name = "drama" }
         };
 
-        _tagRepositoryMock
-            .Setup(r => r.GetAllAsync(It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<IReadOnlyList<Tag>>(tags));
+        _tagRepository
+            .Setup(m => m.ListAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(tags);
 
         // Act
         var response = await _client.GetAsync("/api/tags").ConfigureAwait(false);
@@ -125,7 +124,7 @@ public class TagsEndpointGroupTests
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+            Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
             Assert.That(content, Is.Not.Null);
             Assert.That(content, Has.Length.EqualTo(3));
             Assert.That(content, Has.One.With.Property(nameof(Tag.Name)).EqualTo("action"));
@@ -140,14 +139,14 @@ public class TagsEndpointGroupTests
         // Arrange
         var matchingTags = new List<Tag>
         {
-            new("genre:action"),
-            new("genre:comedy"),
-            new("genre:drama")
+            new Tag { Name = "genre:action" },
+            new Tag { Name = "genre:comedy" },
+            new Tag { Name = "genre:drama" }
         };
 
-        _tagRepositoryMock
-            .Setup(r => r.GetByPrefixAsync("genre:", It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<IReadOnlyList<Tag>>(matchingTags));
+        _tagRepository
+            .Setup(m => m.GetByPrefixAsync("genre:", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(matchingTags);
 
         // Act
         var response = await _client.GetAsync("/api/tags/by-prefix/genre:").ConfigureAwait(false);
@@ -156,7 +155,7 @@ public class TagsEndpointGroupTests
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+            Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
             Assert.That(content, Is.Not.Null);
             Assert.That(content, Has.Length.EqualTo(3));
             Assert.That(content, Has.All.With.Property(nameof(Tag.Name)).StartsWith("genre:"));
@@ -167,9 +166,9 @@ public class TagsEndpointGroupTests
     public async Task GetTagsByPrefix_ReturnsEmptyArray_WhenNoMatchingTags()
     {
         // Arrange
-        _tagRepositoryMock
-            .Setup(r => r.GetByPrefixAsync("rating:", It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<IReadOnlyList<Tag>>([]));
+        _tagRepository
+            .Setup(m => m.GetByPrefixAsync("rating:", It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
 
         // Act
         var response = await _client.GetAsync("/api/tags/by-prefix/rating:").ConfigureAwait(false);
@@ -178,7 +177,7 @@ public class TagsEndpointGroupTests
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+            Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
             Assert.That(content, Is.Not.Null);
             Assert.That(content, Is.Empty);
         }
@@ -188,9 +187,9 @@ public class TagsEndpointGroupTests
     public async Task GetTagsByPrefix_ReturnsEmptyArray_WhenNoTags()
     {
         // Arrange
-        _tagRepositoryMock
-            .Setup(r => r.GetByPrefixAsync("genre:", It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<IReadOnlyList<Tag>>([]));
+        _tagRepository
+            .Setup(m => m.GetByPrefixAsync("genre:", It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
 
         // Act
         var response = await _client.GetAsync("/api/tags/by-prefix/genre:").ConfigureAwait(false);
@@ -199,7 +198,7 @@ public class TagsEndpointGroupTests
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+            Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
             Assert.That(content, Is.Not.Null);
             Assert.That(content, Is.Empty);
         }

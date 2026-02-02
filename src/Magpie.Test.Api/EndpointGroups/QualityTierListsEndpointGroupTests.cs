@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Json;
@@ -8,10 +7,11 @@ using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions.Api;
-using Magpie.Abstractions.Data;
+using Magpie.Abstractions.Repositories;
 using Magpie.Api.EndpointGroups;
-using Magpie.Models.QualityTiers;
-using Magpie.Models.Result;
+using Magpie.Models.Arguments;
+using Magpie.Models.Data;
+using Magpie.Models.Patch;
 using Magpie.Test.Shared;
 
 using Microsoft.AspNetCore.Authentication;
@@ -35,19 +35,19 @@ public class QualityTierListsEndpointGroupTests
 {
     private IHost _host = null!;
     private HttpClient _client = null!;
-    private Mock<IQualityTierListRepository> _repositoryMock = null!;
+    private Mock<IQualityTierListRepository> _repository = null!;
 
     [SetUp]
     public void SetUp()
     {
-        _repositoryMock = new Mock<IQualityTierListRepository>();
+        _repository = new Mock<IQualityTierListRepository>();
 
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
         builder.Logging.ClearProviders().AddTestLogger();
         var authServiceMock = new Mock<IAuthenticationService>();
         authServiceMock
-            .Setup(x => x.AuthenticateAsync(It.IsAny<HttpContext>(), It.IsAny<string>()))
+            .Setup(m => m.AuthenticateAsync(It.IsAny<HttpContext>(), It.IsAny<string>()))
             .ReturnsAsync(AuthenticateResult.Success(new(new ClaimsPrincipal(new ClaimsIdentity("Test")), "Test")));
         builder.Services.AddSingleton(authServiceMock.Object);
         builder.Services.AddAuthorizationBuilder()
@@ -56,7 +56,7 @@ public class QualityTierListsEndpointGroupTests
                 .RequireAssertion(_ => true)
                 .Build());
 
-        builder.Services.AddSingleton(_repositoryMock.Object);
+        builder.Services.AddSingleton(_repository.Object);
         builder.Services.AddSingleton<IApiEndpointGroup, QualityTierListsEndpointGroup>();
 
         var app = builder.Build();
@@ -87,9 +87,9 @@ public class QualityTierListsEndpointGroupTests
     public async Task GetAllQualityTierLists_ReturnsEmptyArray_WhenNoQualityTierLists()
     {
         // Arrange
-        _repositoryMock
-            .Setup(r => r.GetAllAsync(It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<IReadOnlyList<QualityTierList>>([]));
+        _repository
+            .Setup(m => m.ListAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
 
         // Act
         var response = await _client.GetAsync("/api/quality-tier-lists").ConfigureAwait(false);
@@ -98,7 +98,7 @@ public class QualityTierListsEndpointGroupTests
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+            Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
             Assert.That(content, Is.Not.Null);
             Assert.That(content, Is.Empty);
         }
@@ -108,10 +108,10 @@ public class QualityTierListsEndpointGroupTests
     public async Task GetAllQualityTierLists_ReturnsQualityTierLists()
     {
         // Arrange
-        var qualityTierList = CreateQualityTierList("HD Quality");
-        _repositoryMock
-            .Setup(r => r.GetAllAsync(It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<IReadOnlyList<QualityTierList>>([qualityTierList]));
+        var qualityTierList = new QualityTierList { Name = "HD Quality", UpgradeAllowed = true };
+        _repository
+            .Setup(m => m.ListAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([qualityTierList]);
 
         // Act
         var response = await _client.GetAsync("/api/quality-tier-lists").ConfigureAwait(false);
@@ -120,7 +120,7 @@ public class QualityTierListsEndpointGroupTests
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+            Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
             Assert.That(content, Is.Not.Null);
             Assert.That(content, Has.Length.EqualTo(1));
             Assert.That(content, Has.One.With.Property(nameof(QualityTierList.Name)).EqualTo("HD Quality"));
@@ -132,10 +132,10 @@ public class QualityTierListsEndpointGroupTests
     public async Task GetQualityTierListById_ReturnsQualityTierList()
     {
         // Arrange
-        var qualityTierList = CreateQualityTierList("HD Quality");
-        _repositoryMock
-            .Setup(r => r.GetByIdAsync(qualityTierList.Id, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<QualityTierList?>(qualityTierList));
+        var qualityTierList = new QualityTierList { Name = "HD Quality", UpgradeAllowed = true };
+        _repository
+            .Setup(m => m.GetByIdAsync(qualityTierList.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(qualityTierList);
 
         // Act
         var response = await _client.GetAsync($"/api/quality-tier-lists/{qualityTierList.Id}").ConfigureAwait(false);
@@ -144,11 +144,10 @@ public class QualityTierListsEndpointGroupTests
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+            Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
             Assert.That(content, Is.Not.Null);
-            Assert.That(content, Has.Property(nameof(QualityTierList.Id)).EqualTo(qualityTierList.Id));
-            Assert.That(content, Has.Property(nameof(QualityTierList.Name)).EqualTo("HD Quality"));
-            Assert.That(content, Has.Property(nameof(QualityTierList.Tiers)).With.Count.EqualTo(1));
+            Assert.That(content, Has.Property(nameof(content.Id)).EqualTo(qualityTierList.Id));
+            Assert.That(content, Has.Property(nameof(content.Name)).EqualTo("HD Quality"));
         }
     }
 
@@ -157,52 +156,99 @@ public class QualityTierListsEndpointGroupTests
     {
         // Arrange
         var id = Guid.NewGuid();
-        _repositoryMock
-            .Setup(r => r.GetByIdAsync(id, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<QualityTierList?>(null));
+        _repository
+            .Setup(m => m.GetByIdAsync(id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(default(QualityTierList?));
 
         // Act
         var response = await _client.GetAsync($"/api/quality-tier-lists/{id}").ConfigureAwait(false);
 
         // Assert
-        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.NotFound));
+        Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NotFound));
     }
 
     [Test]
-    public async Task GetQualityTierListByName_ReturnsQualityTierList()
+    public async Task GetQualityTierListsByTag_ReturnsQualityTierLists()
     {
         // Arrange
-        var qualityTierList = CreateQualityTierList("HD Quality");
-        _repositoryMock
-            .Setup(r => r.GetByNameAsync("HD Quality", It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<QualityTierList?>(qualityTierList));
+        var qualityTierList = new QualityTierList { Name = "HD Quality", UpgradeAllowed = true };
+        _repository
+            .Setup(m => m.ListByTagAsync("hd", It.IsAny<CancellationToken>()))
+            .ReturnsAsync([qualityTierList]);
 
         // Act
-        var response = await _client.GetAsync("/api/quality-tier-lists/by-name/HD%20Quality").ConfigureAwait(false);
+        var response = await _client.GetAsync("/api/quality-tier-lists/by-tag/hd").ConfigureAwait(false);
+        var content = await response.Content.ReadFromJsonAsync<QualityTierList[]>().ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
+            Assert.That(content, Is.Not.Null);
+            Assert.That(content, Has.Length.EqualTo(1));
+            Assert.That(content, Has.One.With.Property(nameof(QualityTierList.Name)).EqualTo("HD Quality"));
+        }
+    }
+
+    [Test]
+    public async Task CreateQualityTierList_CreatesAndReturnsQualityTierList()
+    {
+        // Arrange
+        var request = new QualityTierList { Name = "New Quality Profile", UpgradeAllowed = true };
+
+        _repository
+            .Setup(m => m.CreateAsync(It.IsAny<QualityTierList>(), null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((QualityTierList q, Guid? _, CancellationToken _) => q);
+
+        // Act
+        var response = await _client.PostAsJsonAsync("/api/quality-tier-lists", request).ConfigureAwait(false);
         var content = await response.Content.ReadFromJsonAsync<QualityTierList>().ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
-            Assert.That(content, Is.Not.Null);
-            Assert.That(content, Has.Property(nameof(QualityTierList.Name)).EqualTo("HD Quality"));
+            Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.Created));
+            Assert.That(content, Has.Property(nameof(content.Name)).EqualTo("New Quality Profile"));
         }
     }
 
     [Test]
-    public async Task GetQualityTierListByName_ReturnsNotFound_WhenQualityTierListDoesNotExist()
+    public async Task PatchQualityTierList_PatchesNameField()
     {
         // Arrange
-        _repositoryMock
-            .Setup(r => r.GetByNameAsync("NonExistent", It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<QualityTierList?>(null));
+        var id = Guid.NewGuid();
+        var request = new QualityTierListPatch(id, Name: new ScalarPatch<string>("Patched"));
+
+        _repository
+            .Setup(m => m.PatchAsync(
+                It.Is<QualityTierListPatch>(p => p.Id == id && p.Name!.Value == "Patched"),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
 
         // Act
-        var response = await _client.GetAsync("/api/quality-tier-lists/by-name/NonExistent").ConfigureAwait(false);
+        var response = await _client.PatchAsJsonAsync($"/api/quality-tier-lists/{id}", request).ConfigureAwait(false);
 
         // Assert
-        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.NotFound));
+        Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NoContent));
+    }
+
+    [Test]
+    public async Task PatchQualityTierList_ReturnsNotFound_WhenQualityTierListDoesNotExist()
+    {
+        // Arrange
+        var id = Guid.NewGuid();
+        var request = new QualityTierListPatch(id, Name: new ScalarPatch<string>("Patched"));
+
+        _repository
+            .Setup(m => m.PatchAsync(It.IsAny<QualityTierListPatch>(), null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(false);
+
+        // Act
+        var response = await _client.PatchAsJsonAsync($"/api/quality-tier-lists/{id}", request).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NotFound));
     }
 
     [Test]
@@ -210,16 +256,16 @@ public class QualityTierListsEndpointGroupTests
     {
         // Arrange
         var id = Guid.NewGuid();
-        _repositoryMock
-            .Setup(r => r.DeleteAsync(id, null, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success(true));
+        _repository
+            .Setup(m => m.DeleteAsync(id, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
 
         // Act
         var response = await _client.DeleteAsync($"/api/quality-tier-lists/{id}").ConfigureAwait(false);
 
         // Assert
-        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.NoContent));
-        _repositoryMock.Verify(r => r.DeleteAsync(id, null, It.IsAny<CancellationToken>()), Times.Once);
+        Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NoContent));
+        _repository.Verify(m => m.DeleteAsync(id, null, It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Test]
@@ -227,46 +273,14 @@ public class QualityTierListsEndpointGroupTests
     {
         // Arrange
         var id = Guid.NewGuid();
-        _repositoryMock
-            .Setup(r => r.DeleteAsync(id, null, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success(false));
+        _repository
+            .Setup(m => m.DeleteAsync(id, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(false);
 
         // Act
         var response = await _client.DeleteAsync($"/api/quality-tier-lists/{id}").ConfigureAwait(false);
 
         // Assert
-        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.NotFound));
-    }
-
-    private static QualityTierList CreateQualityTierList(string name)
-    {
-        var tierId = Guid.NewGuid();
-        var criterionId = Guid.NewGuid();
-
-        return new(
-            Id: Guid.NewGuid(),
-            Name: name,
-            Tiers:
-            [
-                new QualityTier(
-                    Id: tierId,
-                    Ordinal: 0,
-                    Name: "Bluray-1080p",
-                    IsCutoff: true,
-                    Criteria:
-                    [
-                        new QualityCriterion(
-                            Id: criterionId,
-                            Field: "resolution",
-                            Operator: QualityCriterionOperator.Equals,
-                            Value: "1080p")
-                    ])
-            ],
-            UpgradeAllowed: true,
-            Tags: [],
-            CreatedAt: DateTimeOffset.UtcNow,
-            CreatedByUserId: null,
-            ModifiedAt: null,
-            ModifiedByUserId: null);
+        Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NotFound));
     }
 }

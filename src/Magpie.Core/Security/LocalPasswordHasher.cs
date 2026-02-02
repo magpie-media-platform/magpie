@@ -5,7 +5,6 @@ using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions.Security;
-using Magpie.Models.Result;
 
 using static Magpie.Abstractions.Security.IPasswordHasher;
 
@@ -21,13 +20,17 @@ public sealed class LocalPasswordHasher(IKeyStore keyStore) : IPasswordHasher
     private const int HashSize = 32;
     private const int Iterations = 100_000;
 
-    private readonly Lazy<Task<Result<Unit>>> _ensureKeyTask = new(() => keyStore.KeyExistsAsync(ApiKeyHmacKeyName)
-        .BindAsync(exists => exists
-            ? Result.SuccessAsync()
-            : keyStore.CreateHmacKeyAsync(ApiKeyHmacKeyName)));
+    private readonly Lazy<Task> _ensureKeyTask = new(async () =>
+    {
+        var exists = await keyStore.KeyExistsAsync(ApiKeyHmacKeyName).ConfigureAwait(false);
+        if (!exists)
+        {
+            await keyStore.CreateHmacKeyAsync(ApiKeyHmacKeyName).ConfigureAwait(false);
+        }
+    });
 
     /// <inheritdoc />
-    public Task<Result<HashedPassword>> HashPasswordAsync(string password, CancellationToken cancellationToken)
+    public Task<HashedPassword> HashPasswordAsync(string password, CancellationToken cancellationToken)
     {
         var salt = RandomNumberGenerator.GetBytes(SaltSize);
         var hash = Rfc2898DeriveBytes.Pbkdf2(
@@ -37,13 +40,13 @@ public sealed class LocalPasswordHasher(IKeyStore keyStore) : IPasswordHasher
             HashAlgorithmName.SHA256,
             HashSize);
 
-        return Result.SuccessAsync(new HashedPassword(
+        return Task.FromResult(new HashedPassword(
             Convert.ToBase64String(hash),
             Convert.ToBase64String(salt)));
     }
 
     /// <inheritdoc />
-    public Task<Result<bool>> VerifyPasswordAsync(
+    public Task<bool> VerifyPasswordAsync(
         string password,
         string hash,
         string salt,
@@ -59,23 +62,24 @@ public sealed class LocalPasswordHasher(IKeyStore keyStore) : IPasswordHasher
             HashAlgorithmName.SHA256,
             HashSize);
 
-        return Result.SuccessAsync(CryptographicOperations.FixedTimeEquals(computedHash, hashBytes));
+        return Task.FromResult(CryptographicOperations.FixedTimeEquals(computedHash, hashBytes));
     }
 
     /// <inheritdoc />
-    public Task<Result<string>> HashPasswordUnsaltedAsync(string password, CancellationToken cancellationToken)
+    public async Task<string> HashPasswordUnsaltedAsync(string password, CancellationToken cancellationToken)
     {
-        return _ensureKeyTask.Value
-            .BindAsync(_ => keyStore.ComputeHmacAsync(
-                ApiKeyHmacKeyName,
-                Encoding.UTF8.GetBytes(password),
-                cancellationToken))
-            .MapAsync(Convert.ToBase64String);
+        await _ensureKeyTask.Value.ConfigureAwait(false);
 
+        var hmac = await keyStore.ComputeHmacAsync(
+            ApiKeyHmacKeyName,
+            Encoding.UTF8.GetBytes(password),
+            cancellationToken).ConfigureAwait(false);
+
+        return Convert.ToBase64String(hmac);
     }
 
     /// <inheritdoc />
-    public Task<Result<bool>> VerifyPasswordUnsaltedAsync(
+    public Task<bool> VerifyPasswordUnsaltedAsync(
         string passphrase,
         string hash,
         CancellationToken cancellationToken)

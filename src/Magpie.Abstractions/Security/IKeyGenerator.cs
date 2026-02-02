@@ -6,7 +6,7 @@ namespace Magpie.Abstractions.Security;
 public interface IKeyGenerator
 {
     /// <summary>
-    /// Generates a new random key.
+    /// Generate a new random key.
     /// </summary>
     /// <param name="prefix">The prefix to use for the key.</param>
     /// <param name="length">The length of the key to generate.</param>

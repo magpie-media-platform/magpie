@@ -1,19 +1,19 @@
 using System;
-using System.Collections.Generic;
-using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions.Api;
-using Magpie.Abstractions.Data;
-using Magpie.Models.Downloads;
-using Magpie.Models.Result;
+using Magpie.Abstractions.Repositories;
+using Magpie.Abstractions.Security;
+using Magpie.Models.Arguments;
+using Magpie.Models.Data;
+using Magpie.Models.Enums;
+using Magpie.Models.Paging;
+using Magpie.Models.Sorting;
 
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
-
-using HttpResult = Microsoft.AspNetCore.Http.IResult;
 
 namespace Magpie.Api.EndpointGroups;
 
@@ -23,10 +23,10 @@ internal sealed class DownloadsEndpointGroup(IDownloadRepository downloadReposit
 
     public void MapEndpoints(IEndpointRouteBuilder builder)
     {
-        builder.MapGet("", GetAllDownloads)
-            .WithName("GetAllDownloads")
+        builder.MapGet("", QueryDownloads)
+            .WithName("QueryDownloads")
             .WithTags("Downloads")
-            .Produces<Download[]>()
+            .Produces<PagedList<Download>>()
             .RequireAuthorization();
 
         builder.MapGet("/{id:guid}", GetDownloadById)
@@ -36,43 +36,10 @@ internal sealed class DownloadsEndpointGroup(IDownloadRepository downloadReposit
             .Produces(StatusCodes.Status404NotFound)
             .RequireAuthorization();
 
-        builder.MapGet("/by-content-item/{contentItemId:guid}", GetDownloadsByContentItem)
-            .WithName("GetDownloadsByContentItem")
-            .WithTags("Downloads")
-            .Produces<Download[]>()
-            .RequireAuthorization();
-
-        builder.MapGet("/by-download-client/{downloadClientId:guid}", GetDownloadsByDownloadClient)
-            .WithName("GetDownloadsByDownloadClient")
-            .WithTags("Downloads")
-            .Produces<Download[]>()
-            .RequireAuthorization();
-
-        builder.MapGet("/by-external-id/{downloadClientId:guid}/{externalId}", GetDownloadByExternalId)
-            .WithName("GetDownloadByExternalId")
-            .WithTags("Downloads")
-            .Produces<Download>()
-            .Produces(StatusCodes.Status404NotFound)
-            .RequireAuthorization();
-
-        builder.MapGet("/by-state/{state}", GetDownloadsByState)
-            .WithName("GetDownloadsByState")
-            .WithTags("Downloads")
-            .Produces<Download[]>()
-            .RequireAuthorization();
-
         builder.MapPost("", CreateDownload)
             .WithName("CreateDownload")
             .WithTags("Downloads")
             .Produces<Download>(StatusCodes.Status201Created)
-            .ProducesProblem(StatusCodes.Status400BadRequest)
-            .RequireAuthorization();
-
-        builder.MapPatch("/{id:guid}/state", UpdateDownloadState)
-            .WithName("UpdateDownloadState")
-            .WithTags("Downloads")
-            .Produces(StatusCodes.Status204NoContent)
-            .Produces(StatusCodes.Status404NotFound)
             .ProducesProblem(StatusCodes.Status400BadRequest)
             .RequireAuthorization();
 
@@ -82,186 +49,81 @@ internal sealed class DownloadsEndpointGroup(IDownloadRepository downloadReposit
             .Produces(StatusCodes.Status204NoContent)
             .Produces(StatusCodes.Status404NotFound)
             .RequireAuthorization();
-
-        builder.MapDelete("/by-download-client/{downloadClientId:guid}", DeleteDownloadsByDownloadClient)
-            .WithName("DeleteDownloadsByDownloadClient")
-            .WithTags("Downloads")
-            .Produces<int>()
-            .RequireAuthorization();
     }
 
-    private async Task<HttpResult> GetAllDownloads(CancellationToken cancellationToken)
-    {
-        var result = await downloadRepository.GetAllAsync(cancellationToken).ConfigureAwait(false);
-
-        return result switch
-        {
-            SuccessResult<IReadOnlyList<Download>> success =>
-                Results.Ok(success.Value.ToArray()),
-            FailureResult<IReadOnlyList<Download>> failure =>
-                Results.Problem(failure.Reason, statusCode: StatusCodes.Status500InternalServerError),
-            _ => Results.Problem("Unexpected result type", statusCode: StatusCodes.Status500InternalServerError)
-        };
-    }
-
-    private async Task<HttpResult> GetDownloadById(Guid id, CancellationToken cancellationToken)
-    {
-        var result = await downloadRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
-
-        return result switch
-        {
-            SuccessResult<Download?> { Value: null } => Results.NotFound(),
-            SuccessResult<Download?> success => Results.Ok(success.Value),
-            FailureResult<Download?> failure =>
-                Results.Problem(failure.Reason, statusCode: StatusCodes.Status500InternalServerError),
-            _ => Results.Problem("Unexpected result type", statusCode: StatusCodes.Status500InternalServerError)
-        };
-    }
-
-    private async Task<HttpResult> GetDownloadsByContentItem(Guid contentItemId, CancellationToken cancellationToken)
-    {
-        var result = await downloadRepository.GetByContentItemIdAsync(contentItemId, cancellationToken)
-            .ConfigureAwait(false);
-
-        return result switch
-        {
-            SuccessResult<IReadOnlyList<Download>> success =>
-                Results.Ok(success.Value.ToArray()),
-            FailureResult<IReadOnlyList<Download>> failure =>
-                Results.Problem(failure.Reason, statusCode: StatusCodes.Status500InternalServerError),
-            _ => Results.Problem("Unexpected result type", statusCode: StatusCodes.Status500InternalServerError)
-        };
-    }
-
-    private async Task<HttpResult> GetDownloadsByDownloadClient(
-        Guid downloadClientId,
+    private async Task<IResult> QueryDownloads(
+        Guid? releaseId,
+        Guid? downloadClientId,
+        DownloadStatus? status,
+        int? pageNumber,
+        int? pageSize,
+        string? sortBy,
+        SortDirection? sortDirection,
         CancellationToken cancellationToken)
     {
-        var result = await downloadRepository.GetByDownloadClientIdAsync(downloadClientId, cancellationToken)
+        var query = new DownloadQuery(
+            ReleaseId: releaseId,
+            DownloadClientId: downloadClientId,
+            Status: status);
+
+        var paging = pageNumber.HasValue && pageSize.HasValue
+            ? new PagingParameter(pageNumber.Value, pageSize.Value)
+            : null;
+
+        var sort = !string.IsNullOrEmpty(sortBy)
+            ? new SortParameter(sortBy, sortDirection ?? SortDirection.Ascending)
+            : null;
+
+        var result = await downloadRepository.QueryAsync(query, paging, sort, cancellationToken)
             .ConfigureAwait(false);
 
-        return result switch
-        {
-            SuccessResult<IReadOnlyList<Download>> success =>
-                Results.Ok(success.Value.ToArray()),
-            FailureResult<IReadOnlyList<Download>> failure =>
-                Results.Problem(failure.Reason, statusCode: StatusCodes.Status500InternalServerError),
-            _ => Results.Problem("Unexpected result type", statusCode: StatusCodes.Status500InternalServerError)
-        };
+        return Results.Ok(result);
     }
 
-    private async Task<HttpResult> GetDownloadByExternalId(
-        Guid downloadClientId,
-        string externalId,
-        CancellationToken cancellationToken)
+    private async Task<IResult> GetDownloadById(Guid id, CancellationToken cancellationToken)
     {
-        var result = await downloadRepository.GetByExternalIdAsync(downloadClientId, externalId, cancellationToken)
-            .ConfigureAwait(false);
+        var download = await downloadRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
 
-        return result switch
-        {
-            SuccessResult<Download?> { Value: null } => Results.NotFound(),
-            SuccessResult<Download?> success => Results.Ok(success.Value),
-            FailureResult<Download?> failure =>
-                Results.Problem(failure.Reason, statusCode: StatusCodes.Status500InternalServerError),
-            _ => Results.Problem("Unexpected result type", statusCode: StatusCodes.Status500InternalServerError)
-        };
+        return download is null
+            ? Results.NotFound()
+            : Results.Ok(download);
     }
 
-    private async Task<HttpResult> GetDownloadsByState(DownloadState state, CancellationToken cancellationToken)
-    {
-        var result = await downloadRepository.GetByStateAsync(state, cancellationToken).ConfigureAwait(false);
-
-        return result switch
-        {
-            SuccessResult<IReadOnlyList<Download>> success =>
-                Results.Ok(success.Value.ToArray()),
-            FailureResult<IReadOnlyList<Download>> failure =>
-                Results.Problem(failure.Reason, statusCode: StatusCodes.Status500InternalServerError),
-            _ => Results.Problem("Unexpected result type", statusCode: StatusCodes.Status500InternalServerError)
-        };
-    }
-
-    private async Task<HttpResult> CreateDownload(
+    private async Task<IResult> CreateDownload(
+        HttpContext httpContext,
         Download request,
         CancellationToken cancellationToken)
     {
+        var currentUserId = httpContext.User.GetUserId();
+
         var download = request with
         {
             Id = Guid.NewGuid(),
-            State = request.State == default ? DownloadState.Grabbed : request.State,
-            CreatedAt = DateTimeOffset.UtcNow,
-            CreatedByUserId = null,
+            Status = request.Status == default ? DownloadStatus.Grabbed : request.Status,
+            CreatedAt = DateTime.UtcNow,
+            CreatedByUserId = currentUserId,
             ModifiedAt = null,
             ModifiedByUserId = null
         };
 
-        var result = await downloadRepository.CreateAsync(download, createdByUserId: null, cancellationToken)
+        var created = await downloadRepository.CreateAsync(download, currentUserId, cancellationToken)
             .ConfigureAwait(false);
 
-        return result switch
-        {
-            SuccessResult<Download> success =>
-                Results.Created($"/api/downloads/{success.Value.Id}", success.Value),
-            FailureResult<Download> failure =>
-                Results.Problem(failure.Reason, statusCode: StatusCodes.Status400BadRequest),
-            _ =>
-                Results.Problem("Unexpected result type", statusCode: StatusCodes.Status500InternalServerError)
-        };
+        return Results.Created($"/api/downloads/{created.Id}", created);
     }
 
-    private async Task<HttpResult> UpdateDownloadState(
+    private async Task<IResult> DeleteDownload(
+        HttpContext httpContext,
         Guid id,
-        DownloadStatePatch request,
         CancellationToken cancellationToken)
     {
-        var result = await downloadRepository.UpdateStateAsync(
-            id,
-            request.State,
-            request.OutputPath,
-            request.FailureReason,
-            request.DateCompleted,
-            modifiedByUserId: null,
-            cancellationToken).ConfigureAwait(false);
+        var currentUserId = httpContext.User.GetUserId();
 
-        return result switch
-        {
-            SuccessResult<bool> { Value: false } => Results.NotFound(),
-            SuccessResult<bool> => Results.NoContent(),
-            FailureResult<bool> failure => Results.Problem(failure.Reason, statusCode: StatusCodes.Status400BadRequest),
-            _ => Results.Problem("Unexpected result type", statusCode: StatusCodes.Status500InternalServerError)
-        };
-    }
-
-    private async Task<HttpResult> DeleteDownload(Guid id, CancellationToken cancellationToken)
-    {
-        var result = await downloadRepository.DeleteAsync(id, deletedByUserId: null, cancellationToken)
+        var deleted = await downloadRepository.DeleteAsync(id, currentUserId, cancellationToken)
             .ConfigureAwait(false);
 
-        return result switch
-        {
-            SuccessResult<bool> { Value: false } => Results.NotFound(),
-            SuccessResult<bool> => Results.NoContent(),
-            FailureResult<bool> failure =>
-                Results.Problem(failure.Reason, statusCode: StatusCodes.Status500InternalServerError),
-            _ => Results.Problem("Unexpected result type", statusCode: StatusCodes.Status500InternalServerError)
-        };
-    }
-
-    private async Task<HttpResult> DeleteDownloadsByDownloadClient(
-        Guid downloadClientId,
-        CancellationToken cancellationToken)
-    {
-        var result = await downloadRepository
-            .DeleteByDownloadClientIdAsync(downloadClientId, deletedByUserId: null, cancellationToken)
-            .ConfigureAwait(false);
-
-        return result switch
-        {
-            SuccessResult<int> success => Results.Ok(success.Value),
-            FailureResult<int> failure =>
-                Results.Problem(failure.Reason, statusCode: StatusCodes.Status500InternalServerError),
-            _ => Results.Problem("Unexpected result type", statusCode: StatusCodes.Status500InternalServerError)
-        };
+        return deleted
+            ? Results.NoContent()
+            : Results.NotFound();
     }
 }

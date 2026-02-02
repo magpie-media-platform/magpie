@@ -7,7 +7,7 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Magpie.Abstractions", "Magp
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Magpie.Core", "Magpie.Core\Magpie.Core.csproj", "{6F585853-9E47-4649-B59E-732E787614D7}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Magpie.Data.Database", "Magpie.Data.Database\Magpie.Data.Database.csproj", "{A0C044B0-2D9F-45AD-A5FF-23DD794BEDB7}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Magpie.Data", "Magpie.Data\Magpie.Data.csproj", "{A0C044B0-2D9F-45AD-A5FF-23DD794BEDB7}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Magpie.Api", "Magpie.Api\Magpie.Api.csproj", "{1C872AE7-7227-4356-9530-6488FEFD091F}"
 EndProject
@@ -15,15 +15,13 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Magpie.App", "Magpie.App\Ma
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Magpie.Models", "Magpie.Models\Magpie.Models.csproj", "{D9359DF1-A6A9-43B2-AC9D-07598C0F9462}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Magpie.Data.Database.SQLite", "Magpie.Data.Database.SQLite\Magpie.Data.Database.SQLite.csproj", "{5D0BA892-CF3F-48F6-9A3B-B5ED4E64B802}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Magpie.Data.SQLite", "Magpie.Data.SQLite\Magpie.Data.SQLite.csproj", "{5D0BA892-CF3F-48F6-9A3B-B5ED4E64B802}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Magpie.Data.Database.Entities", "Magpie.Data.Database.Entities\Magpie.Data.Database.Entities.csproj", "{DC2F6AC9-E0F3-41D6-94F9-C203E32CE653}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Magpie.Data.SqlServer", "Magpie.Data.SqlServer\Magpie.Data.SqlServer.csproj", "{B7A0F741-4E03-4EF6-A12E-8C2529164B26}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Magpie.Data.Database.SqlServer", "Magpie.Data.Database.SqlServer\Magpie.Data.Database.SqlServer.csproj", "{B7A0F741-4E03-4EF6-A12E-8C2529164B26}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Magpie.Data.PostgreSQL", "Magpie.Data.PostgreSQL\Magpie.Data.PostgreSQL.csproj", "{68403131-4AF7-4740-B557-5CF46E052D4C}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Magpie.Data.Database.PostgreSQL", "Magpie.Data.Database.PostgreSQL\Magpie.Data.Database.PostgreSQL.csproj", "{68403131-4AF7-4740-B557-5CF46E052D4C}"
-EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Magpie.Data.Database.MySQL", "Magpie.Data.Database.MySQL\Magpie.Data.Database.MySQL.csproj", "{87D7277A-BD9E-4A94-AFF5-BE4B96C62580}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Magpie.Data.MySQL", "Magpie.Data.MySQL\Magpie.Data.MySQL.csproj", "{87D7277A-BD9E-4A94-AFF5-BE4B96C62580}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Magpie.Test.Core", "Magpie.Test.Core\Magpie.Test.Core.csproj", "{98D41F69-8BFC-442B-95BB-F74E4C8F4329}"
 EndProject
@@ -38,6 +36,8 @@ EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Magpie.Abstractions.Auth", "Magpie.Abstractions.Auth\Magpie.Abstractions.Auth.csproj", "{79EAE7EE-410B-4C05-8F1D-E7A457128FDF}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Magpie.Test.Shared", "Magpie.Test.Shared\Magpie.Test.Shared.csproj", "{346C0567-4BC8-4338-922E-846E41C3E535}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Magpie.Models.Api", "Magpie.Models.Api\Magpie.Models.Api.csproj", "{38F89E6F-EDA0-4532-9EE9-284FBB7666AB}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -133,18 +133,6 @@ Global
 		{5D0BA892-CF3F-48F6-9A3B-B5ED4E64B802}.Release|x64.Build.0 = Release|Any CPU
 		{5D0BA892-CF3F-48F6-9A3B-B5ED4E64B802}.Release|x86.ActiveCfg = Release|Any CPU
 		{5D0BA892-CF3F-48F6-9A3B-B5ED4E64B802}.Release|x86.Build.0 = Release|Any CPU
-		{DC2F6AC9-E0F3-41D6-94F9-C203E32CE653}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{DC2F6AC9-E0F3-41D6-94F9-C203E32CE653}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{DC2F6AC9-E0F3-41D6-94F9-C203E32CE653}.Debug|x64.ActiveCfg = Debug|Any CPU
-		{DC2F6AC9-E0F3-41D6-94F9-C203E32CE653}.Debug|x64.Build.0 = Debug|Any CPU
-		{DC2F6AC9-E0F3-41D6-94F9-C203E32CE653}.Debug|x86.ActiveCfg = Debug|Any CPU
-		{DC2F6AC9-E0F3-41D6-94F9-C203E32CE653}.Debug|x86.Build.0 = Debug|Any CPU
-		{DC2F6AC9-E0F3-41D6-94F9-C203E32CE653}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{DC2F6AC9-E0F3-41D6-94F9-C203E32CE653}.Release|Any CPU.Build.0 = Release|Any CPU
-		{DC2F6AC9-E0F3-41D6-94F9-C203E32CE653}.Release|x64.ActiveCfg = Release|Any CPU
-		{DC2F6AC9-E0F3-41D6-94F9-C203E32CE653}.Release|x64.Build.0 = Release|Any CPU
-		{DC2F6AC9-E0F3-41D6-94F9-C203E32CE653}.Release|x86.ActiveCfg = Release|Any CPU
-		{DC2F6AC9-E0F3-41D6-94F9-C203E32CE653}.Release|x86.Build.0 = Release|Any CPU
 		{B7A0F741-4E03-4EF6-A12E-8C2529164B26}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{B7A0F741-4E03-4EF6-A12E-8C2529164B26}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{B7A0F741-4E03-4EF6-A12E-8C2529164B26}.Debug|x64.ActiveCfg = Debug|Any CPU
@@ -265,6 +253,18 @@ Global
 		{346C0567-4BC8-4338-922E-846E41C3E535}.Release|x64.Build.0 = Release|Any CPU
 		{346C0567-4BC8-4338-922E-846E41C3E535}.Release|x86.ActiveCfg = Release|Any CPU
 		{346C0567-4BC8-4338-922E-846E41C3E535}.Release|x86.Build.0 = Release|Any CPU
+		{38F89E6F-EDA0-4532-9EE9-284FBB7666AB}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{38F89E6F-EDA0-4532-9EE9-284FBB7666AB}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{38F89E6F-EDA0-4532-9EE9-284FBB7666AB}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{38F89E6F-EDA0-4532-9EE9-284FBB7666AB}.Debug|x64.Build.0 = Debug|Any CPU
+		{38F89E6F-EDA0-4532-9EE9-284FBB7666AB}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{38F89E6F-EDA0-4532-9EE9-284FBB7666AB}.Debug|x86.Build.0 = Debug|Any CPU
+		{38F89E6F-EDA0-4532-9EE9-284FBB7666AB}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{38F89E6F-EDA0-4532-9EE9-284FBB7666AB}.Release|Any CPU.Build.0 = Release|Any CPU
+		{38F89E6F-EDA0-4532-9EE9-284FBB7666AB}.Release|x64.ActiveCfg = Release|Any CPU
+		{38F89E6F-EDA0-4532-9EE9-284FBB7666AB}.Release|x64.Build.0 = Release|Any CPU
+		{38F89E6F-EDA0-4532-9EE9-284FBB7666AB}.Release|x86.ActiveCfg = Release|Any CPU
+		{38F89E6F-EDA0-4532-9EE9-284FBB7666AB}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

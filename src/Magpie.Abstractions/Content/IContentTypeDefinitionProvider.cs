@@ -1,6 +1,6 @@
 using System.Collections.Generic;
 
-using Magpie.Models.Content;
+using Magpie.Models;
 
 namespace Magpie.Abstractions.Content;
 
@@ -10,7 +10,7 @@ namespace Magpie.Abstractions.Content;
 public interface IContentTypeDefinitionProvider
 {
     /// <summary>
-    /// Gets the content type definitions.
+    ///  List custom content type definitions.
     /// </summary>
-    IReadOnlyList<ContentTypeDefinition> GetContentTypeDefinitions();
+    IEnumerable<ContentTypeDefinition> GetContentTypeDefinitions();
 }

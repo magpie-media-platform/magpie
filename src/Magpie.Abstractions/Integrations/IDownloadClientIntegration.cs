@@ -1,10 +1,9 @@
-using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 
-using Magpie.Models.Downloads;
-using Magpie.Models.Result;
+using Magpie.Models;
+using Magpie.Models.Data;
 
 namespace Magpie.Abstractions.Integrations;
 
@@ -14,64 +13,42 @@ namespace Magpie.Abstractions.Integrations;
 public interface IDownloadClientIntegration
 {
     /// <summary>
-    /// Gets the slug of the type of the download client integration.
+    /// The provider type of the download client.
     /// </summary>
-    public string DownloadClientType { get; }
+    string ProviderType { get; }
+
+    /// <summary>
+    /// The supported protocols of the download client.
+    /// </summary>
+    IEnumerable<string> SupportedProtocols { get; }
 
     /// <summary>
     /// Adds a download to the client.
     /// </summary>
-    /// <param name="downloadUrl">The download URL or magnet URI.</param>
-    /// <param name="category">Optional category for the download.</param>
-    /// <param name="destinationPath">Optional destination path for the download.</param>
+    /// <param name="release">The release to download.</param>
     /// <param name="cancellationToken">The cancellation token.</param>
-    /// <returns>
-    /// The result containing the unique identifier assigned to the download on success, or an error on failure.
-    /// </returns>
-    Task<Result<string>> AddDownloadAsync(
-        Uri downloadUrl,
-        string? category,
-        string? destinationPath,
-        CancellationToken cancellationToken
-    );
+    Task<DownloadInfo> DownloadReleaseAsync(Release release, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Gets the status of a download.
+    /// Get the state of a download.
     /// </summary>
-    /// <param name="downloadId">The unique identifier of the download.</param>
+    /// <param name="externalId">The external id of the download.</param>
     /// <param name="cancellationToken">The cancellation token.</param>
     /// <returns>The result containing the download status on success, or an error on failure.</returns>
-    Task<Result<DownloadStatus>> GetDownloadStatusAsync(
-        string downloadId,
-        CancellationToken cancellationToken
-    );
+    Task<DownloadInfo> GetDownloadAsync(string externalId, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Gets all active downloads.
+    /// Remove a download from the client.
     /// </summary>
-    /// <param name="cancellationToken">The cancellation token.</param>
-    /// <returns>The result containing a list of active downloads on success, or an error on failure.</returns>
-    Task<Result<IReadOnlyList<DownloadStatus>>> GetActiveDownloadsAsync(
-        CancellationToken cancellationToken
-    );
-
-    /// <summary>
-    /// Removes a download from the client.
-    /// </summary>
-    /// <param name="downloadId">The unique identifier of the download.</param>
+    /// <param name="downloadId">The unique id of the download.</param>
     /// <param name="deleteFiles">Whether to delete the downloaded files.</param>
     /// <param name="cancellationToken">The cancellation token.</param>
     /// <returns>The result indicating success or failure with an error reason.</returns>
-    Task<Result<bool>> RemoveDownloadAsync(
-        string downloadId,
-        bool deleteFiles,
-        CancellationToken cancellationToken
-    );
+    Task<bool> RemoveDownloadAsync(string downloadId, bool deleteFiles, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Tests the connection to the download client.
     /// </summary>
     /// <param name="cancellationToken">The cancellation token.</param>
-    /// <returns>The result indicating success or failure with an error reason.</returns>
-    Task<Result<bool>> TestConnectionAsync(CancellationToken cancellationToken);
+    Task<bool> TestConnectionAsync(CancellationToken cancellationToken = default);
 }

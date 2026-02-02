@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Json;
@@ -10,9 +9,8 @@ using System.Threading.Tasks;
 using Magpie.Abstractions.Api;
 using Magpie.Abstractions.Security;
 using Magpie.Api.EndpointGroups;
-using Magpie.Core;
-using Magpie.Models.Result;
-using Magpie.Models.Users;
+using Magpie.Models.Api;
+using Magpie.Models.Data;
 using Magpie.Test.Shared;
 
 using Microsoft.AspNetCore.Authentication;
@@ -36,21 +34,21 @@ public class ApiKeysEndpointGroupTests
 {
     private IHost _host = null!;
     private HttpClient _client = null!;
-    private Mock<IApiKeyManager> _apiKeyManagerMock = null!;
+    private Mock<IApiKeyManager> _apiKeyManager = null!;
     private Guid _userId;
 
     [SetUp]
     public void SetUp()
     {
         _userId = Guid.NewGuid();
-        _apiKeyManagerMock = new Mock<IApiKeyManager>();
+        _apiKeyManager = new Mock<IApiKeyManager>();
 
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
         builder.Logging.ClearProviders().AddTestLogger();
         var authServiceMock = new Mock<IAuthenticationService>();
         authServiceMock
-            .Setup(x => x.AuthenticateAsync(It.IsAny<HttpContext>(), It.IsAny<string>()))
+            .Setup(m => m.AuthenticateAsync(It.IsAny<HttpContext>(), It.IsAny<string>()))
             .ReturnsAsync(AuthenticateResult.Success(new(new ClaimsPrincipal(new ClaimsIdentity("Test")), "Test")));
         builder.Services.AddSingleton(authServiceMock.Object);
         builder.Services.AddAuthorizationBuilder()
@@ -59,7 +57,7 @@ public class ApiKeysEndpointGroupTests
                 .RequireAssertion(_ => true)
                 .Build());
 
-        builder.Services.AddSingleton(_apiKeyManagerMock.Object);
+        builder.Services.AddSingleton(_apiKeyManager.Object);
         builder.Services.AddSingleton<IApiEndpointGroup, ApiKeysEndpointGroup>();
 
         var app = builder.Build();
@@ -90,18 +88,18 @@ public class ApiKeysEndpointGroupTests
     public async Task GetAllApiKeys_ReturnsEmptyArray_WhenNoApiKeys()
     {
         // Arrange
-        _apiKeyManagerMock
-            .Setup(m => m.GetApiKeysAsync(null, null, null, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<IEnumerable<ApiKey>>([]));
+        _apiKeyManager
+            .Setup(m => m.ListApiKeysAsync(null, null, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
 
         // Act
         var response = await _client.GetAsync("/api/api-keys").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<ApiKey[]>().ConfigureAwait(false);
+        var content = await response.Content.ReadFromJsonAsync<ApiKeyResponse[]>().ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+            Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
             Assert.That(content, Is.Not.Null);
             Assert.That(content, Is.Empty);
         }
@@ -111,34 +109,36 @@ public class ApiKeysEndpointGroupTests
     public async Task GetAllApiKeys_ReturnsApiKeys()
     {
         // Arrange
-        var apiKey = new ApiKey(
-            Id: Guid.NewGuid(),
-            UserId: _userId,
-            Name: "TestKey",
-            KeyPrefix: "mgp_test",
-            Enabled: true,
-            ExpiresAt: null,
-            LastUsedAt: null,
-            CreatedAt: DateTimeOffset.UtcNow,
-            CreatedByUserId: null,
-            ModifiedAt: null,
-            ModifiedByUserId: null);
+        var apiKey = new ApiKey
+        {
+            Id = Guid.NewGuid(),
+            UserId = _userId,
+            Name = "TestKey",
+            KeyPrefix = "mgp_test",
+            Enabled = true,
+            ExpiresAt = null,
+            LastUsedAt = null,
+            CreatedAt = DateTime.UtcNow,
+            CreatedByUserId = null,
+            ModifiedAt = null,
+            ModifiedByUserId = null
+        };
 
-        _apiKeyManagerMock
-            .Setup(m => m.GetApiKeysAsync(null, null, null, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<IEnumerable<ApiKey>>([apiKey]));
+        _apiKeyManager
+            .Setup(m => m.ListApiKeysAsync(null, null, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync([apiKey]);
 
         // Act
         var response = await _client.GetAsync("/api/api-keys").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<ApiKey[]>().ConfigureAwait(false);
+        var content = await response.Content.ReadFromJsonAsync<ApiKeyResponse[]>().ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+            Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
             Assert.That(content, Has.Length.EqualTo(1));
-            Assert.That(content, Has.One.With.Property(nameof(ApiKey.Name)).EqualTo("TestKey"));
-            Assert.That(content, Has.One.With.Property(nameof(ApiKey.KeyPrefix)).EqualTo("mgp_test"));
+            Assert.That(content, Has.One.With.Property(nameof(ApiKeyResponse.Name)).EqualTo("TestKey"));
+            Assert.That(content, Has.One.With.Property(nameof(ApiKeyResponse.KeyPrefix)).EqualTo("mgp_test"));
         }
     }
 
@@ -146,31 +146,33 @@ public class ApiKeysEndpointGroupTests
     public async Task GetAllApiKeys_FiltersByUserId()
     {
         // Arrange
-        var apiKey = new ApiKey(
-            Id: Guid.NewGuid(),
-            UserId: _userId,
-            Name: "TestKey",
-            KeyPrefix: "mgp_test",
-            Enabled: true,
-            ExpiresAt: null,
-            LastUsedAt: null,
-            CreatedAt: DateTimeOffset.UtcNow,
-            CreatedByUserId: null,
-            ModifiedAt: null,
-            ModifiedByUserId: null);
+        var apiKey = new ApiKey
+        {
+            Id = Guid.NewGuid(),
+            UserId = _userId,
+            Name = "TestKey",
+            KeyPrefix = "mgp_test",
+            Enabled = true,
+            ExpiresAt = null,
+            LastUsedAt = null,
+            CreatedAt = DateTime.UtcNow,
+            CreatedByUserId = null,
+            ModifiedAt = null,
+            ModifiedByUserId = null
+        };
 
-        _apiKeyManagerMock
-            .Setup(m => m.GetApiKeysAsync(_userId, null, null, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<IEnumerable<ApiKey>>([apiKey]));
+        _apiKeyManager
+            .Setup(m => m.ListApiKeysAsync(_userId, null, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync([apiKey]);
 
         // Act
         var response = await _client.GetAsync($"/api/api-keys?userId={_userId}").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<ApiKey[]>().ConfigureAwait(false);
+        var content = await response.Content.ReadFromJsonAsync<ApiKeyResponse[]>().ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+            Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
             Assert.That(content, Has.Length.EqualTo(1));
         }
     }
@@ -180,34 +182,36 @@ public class ApiKeysEndpointGroupTests
     {
         // Arrange
         var apiKeyId = Guid.NewGuid();
-        var apiKey = new ApiKey(
-            Id: apiKeyId,
-            UserId: _userId,
-            Name: "TestKey",
-            KeyPrefix: "mgp_test",
-            Enabled: true,
-            ExpiresAt: null,
-            LastUsedAt: null,
-            CreatedAt: DateTimeOffset.UtcNow,
-            CreatedByUserId: null,
-            ModifiedAt: null,
-            ModifiedByUserId: null);
+        var apiKey = new ApiKey
+        {
+            Id = apiKeyId,
+            UserId = _userId,
+            Name = "TestKey",
+            KeyPrefix = "mgp_test",
+            Enabled = true,
+            ExpiresAt = null,
+            LastUsedAt = null,
+            CreatedAt = DateTime.UtcNow,
+            CreatedByUserId = null,
+            ModifiedAt = null,
+            ModifiedByUserId = null
+        };
 
-        _apiKeyManagerMock
+        _apiKeyManager
             .Setup(m => m.GetApiKeyAsync(apiKeyId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<ApiKey?>(apiKey));
+            .ReturnsAsync(apiKey);
 
         // Act
         var response = await _client.GetAsync($"/api/api-keys/{apiKeyId}").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<ApiKey>().ConfigureAwait(false);
+        var content = await response.Content.ReadFromJsonAsync<ApiKeyResponse>().ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
-            Assert.That(content, Has.Property(nameof(ApiKey.Id)).EqualTo(apiKeyId));
-            Assert.That(content, Has.Property(nameof(ApiKey.Name)).EqualTo("TestKey"));
-            Assert.That(content, Has.Property(nameof(ApiKey.UserId)).EqualTo(_userId));
+            Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
+            Assert.That(content, Has.Property(nameof(content.Id)).EqualTo(apiKeyId));
+            Assert.That(content, Has.Property(nameof(content.Name)).EqualTo("TestKey"));
+            Assert.That(content, Has.Property(nameof(content.UserId)).EqualTo(_userId));
         }
     }
 
@@ -216,15 +220,15 @@ public class ApiKeysEndpointGroupTests
     {
         // Arrange
         var apiKeyId = Guid.NewGuid();
-        _apiKeyManagerMock
+        _apiKeyManager
             .Setup(m => m.GetApiKeyAsync(apiKeyId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<ApiKey?>(null));
+            .ReturnsAsync(default(ApiKey?));
 
         // Act
         var response = await _client.GetAsync($"/api/api-keys/{apiKeyId}").ConfigureAwait(false);
 
         // Assert
-        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.NotFound));
+        Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NotFound));
     }
 
     [Test]
@@ -232,34 +236,36 @@ public class ApiKeysEndpointGroupTests
     {
         // Arrange
         var apiKeyId = Guid.NewGuid();
-        var apiKey = new ApiKey(
-            Id: apiKeyId,
-            UserId: _userId,
-            Name: "NewKey",
-            KeyPrefix: "mgp_new",
-            Enabled: true,
-            ExpiresAt: null,
-            LastUsedAt: null,
-            CreatedAt: DateTimeOffset.UtcNow,
-            CreatedByUserId: null,
-            ModifiedAt: null,
-            ModifiedByUserId: null);
-        var apiKeyWithKey = new ApiKeyWithKey(apiKey, "mgp_new_fullkeyvalue");
+        var apiKey = new ApiKey
+        {
+            Id = apiKeyId,
+            UserId = _userId,
+            Name = "NewKey",
+            KeyPrefix = "mgp_new",
+            Enabled = true,
+            ExpiresAt = null,
+            LastUsedAt = null,
+            CreatedAt = DateTime.UtcNow,
+            CreatedByUserId = null,
+            ModifiedAt = null,
+            ModifiedByUserId = null
+        };
+        var apiKeyWithKey = new ApiKeyWithPlaintextKey(apiKey, "mgp_new_fullkeyvalue");
 
-        _apiKeyManagerMock
-            .Setup(m => m.CreateApiKeyAsync(_userId, "NewKey", null, null, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success(apiKeyWithKey));
+        _apiKeyManager
+            .Setup(m => m.CreateApiKeyAsync(_userId, "NewKey", null, It.IsAny<Guid?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(apiKeyWithKey);
 
         // Act
-        var request = new { UserId = _userId, Name = "NewKey", ExpiresAt = (DateTimeOffset?)null };
+        var request = new CreateApiKeyRequest(_userId, "NewKey", null);
         var response = await _client.PostAsJsonAsync("/api/api-keys", request).ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<ApiKeyWithKey>().ConfigureAwait(false);
+        var content = await response.Content.ReadFromJsonAsync<ApiKeyCreatedResponse>().ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.Created));
-            Assert.That(content, Has.Property(nameof(ApiKeyWithKey.Key)).EqualTo("mgp_new_fullkeyvalue"));
+            Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.Created));
+            Assert.That(content, Has.Property(nameof(content.Key)).EqualTo("mgp_new_fullkeyvalue"));
         }
     }
 
@@ -268,33 +274,53 @@ public class ApiKeysEndpointGroupTests
     {
         // Arrange
         var apiKeyId = Guid.NewGuid();
-        var apiKey = new ApiKey(
-            Id: apiKeyId,
-            UserId: _userId,
-            Name: "TestKey",
-            KeyPrefix: "mgp_rotated",
-            Enabled: true,
-            ExpiresAt: null,
-            LastUsedAt: null,
-            CreatedAt: DateTimeOffset.UtcNow,
-            CreatedByUserId: null,
-            ModifiedAt: DateTimeOffset.UtcNow,
-            ModifiedByUserId: null);
-        var apiKeyWithKey = new ApiKeyWithKey(apiKey, "mgp_rotated_fullkeyvalue");
+        var existingApiKey = new ApiKey
+        {
+            Id = apiKeyId,
+            UserId = _userId,
+            Name = "TestKey",
+            KeyPrefix = "mgp_test",
+            Enabled = true,
+            ExpiresAt = null,
+            LastUsedAt = null,
+            CreatedAt = DateTime.UtcNow,
+            CreatedByUserId = null,
+            ModifiedAt = null,
+            ModifiedByUserId = null
+        };
+        var rotatedApiKey = new ApiKey
+        {
+            Id = apiKeyId,
+            UserId = _userId,
+            Name = "TestKey",
+            KeyPrefix = "mgp_rotated",
+            Enabled = true,
+            ExpiresAt = null,
+            LastUsedAt = null,
+            CreatedAt = DateTime.UtcNow,
+            CreatedByUserId = null,
+            ModifiedAt = DateTime.UtcNow,
+            ModifiedByUserId = null
+        };
+        var apiKeyWithKey = new ApiKeyWithPlaintextKey(rotatedApiKey, "mgp_rotated_fullkeyvalue");
 
-        _apiKeyManagerMock
-            .Setup(m => m.RotateApiKeyAsync(apiKeyId, null, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success(apiKeyWithKey));
+        _apiKeyManager
+            .Setup(m => m.GetApiKeyAsync(apiKeyId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(existingApiKey);
+
+        _apiKeyManager
+            .Setup(m => m.RotateApiKeyAsync(apiKeyId, It.IsAny<Guid?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(apiKeyWithKey);
 
         // Act
         var response = await _client.PostAsync($"/api/api-keys/{apiKeyId}/rotate", null).ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<ApiKeyWithKey>().ConfigureAwait(false);
+        var content = await response.Content.ReadFromJsonAsync<ApiKeyCreatedResponse>().ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
-            Assert.That(content, Has.Property(nameof(ApiKeyWithKey.Key)).EqualTo("mgp_rotated_fullkeyvalue"));
+            Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
+            Assert.That(content, Has.Property(nameof(content.Key)).EqualTo("mgp_rotated_fullkeyvalue"));
         }
     }
 
@@ -303,15 +329,15 @@ public class ApiKeysEndpointGroupTests
     {
         // Arrange
         var apiKeyId = Guid.NewGuid();
-        _apiKeyManagerMock
-            .Setup(m => m.RotateApiKeyAsync(apiKeyId, null, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Fail<ApiKeyWithKey>("API key not found", ErrorCodes.ApiKeyNotFound));
+        _apiKeyManager
+            .Setup(m => m.GetApiKeyAsync(apiKeyId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(default(ApiKey?));
 
         // Act
         var response = await _client.PostAsync($"/api/api-keys/{apiKeyId}/rotate", null).ConfigureAwait(false);
 
         // Assert
-        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.NotFound));
+        Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NotFound));
     }
 
     [Test]
@@ -319,32 +345,52 @@ public class ApiKeysEndpointGroupTests
     {
         // Arrange
         var apiKeyId = Guid.NewGuid();
-        var apiKey = new ApiKey(
-            Id: apiKeyId,
-            UserId: _userId,
-            Name: "TestKey",
-            KeyPrefix: "mgp_test",
-            Enabled: true,
-            ExpiresAt: null,
-            LastUsedAt: null,
-            CreatedAt: DateTimeOffset.UtcNow,
-            CreatedByUserId: null,
-            ModifiedAt: DateTimeOffset.UtcNow,
-            ModifiedByUserId: null);
+        var existingApiKey = new ApiKey
+        {
+            Id = apiKeyId,
+            UserId = _userId,
+            Name = "TestKey",
+            KeyPrefix = "mgp_test",
+            Enabled = false,
+            ExpiresAt = null,
+            LastUsedAt = null,
+            CreatedAt = DateTime.UtcNow,
+            CreatedByUserId = null,
+            ModifiedAt = null,
+            ModifiedByUserId = null
+        };
+        var enabledApiKey = new ApiKey
+        {
+            Id = apiKeyId,
+            UserId = _userId,
+            Name = "TestKey",
+            KeyPrefix = "mgp_test",
+            Enabled = true,
+            ExpiresAt = null,
+            LastUsedAt = null,
+            CreatedAt = DateTime.UtcNow,
+            CreatedByUserId = null,
+            ModifiedAt = DateTime.UtcNow,
+            ModifiedByUserId = null
+        };
 
-        _apiKeyManagerMock
-            .Setup(m => m.EnableApiKeyAsync(apiKeyId, null, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success(apiKey));
+        _apiKeyManager
+            .Setup(m => m.GetApiKeyAsync(apiKeyId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(existingApiKey);
+
+        _apiKeyManager
+            .Setup(m => m.EnableApiKeyAsync(apiKeyId, It.IsAny<Guid?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(enabledApiKey);
 
         // Act
         var response = await _client.PostAsync($"/api/api-keys/{apiKeyId}/enable", null).ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<ApiKey>().ConfigureAwait(false);
+        var content = await response.Content.ReadFromJsonAsync<ApiKeyResponse>().ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
-            Assert.That(content, Has.Property(nameof(ApiKey.Enabled)).True);
+            Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
+            Assert.That(content, Has.Property(nameof(content.Enabled)).True);
         }
     }
 
@@ -353,15 +399,15 @@ public class ApiKeysEndpointGroupTests
     {
         // Arrange
         var apiKeyId = Guid.NewGuid();
-        _apiKeyManagerMock
-            .Setup(m => m.EnableApiKeyAsync(apiKeyId, null, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Fail<ApiKey>("API key not found", ErrorCodes.ApiKeyNotFound));
+        _apiKeyManager
+            .Setup(m => m.GetApiKeyAsync(apiKeyId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(default(ApiKey?));
 
         // Act
         var response = await _client.PostAsync($"/api/api-keys/{apiKeyId}/enable", null).ConfigureAwait(false);
 
         // Assert
-        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.NotFound));
+        Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NotFound));
     }
 
     [Test]
@@ -369,28 +415,48 @@ public class ApiKeysEndpointGroupTests
     {
         // Arrange
         var apiKeyId = Guid.NewGuid();
-        var disabledApiKey = new ApiKey(
-            Id: apiKeyId,
-            UserId: _userId,
-            Name: "TestKey",
-            KeyPrefix: "mgp_test",
-            Enabled: false,
-            ExpiresAt: null,
-            LastUsedAt: null,
-            CreatedAt: DateTimeOffset.UtcNow,
-            CreatedByUserId: null,
-            ModifiedAt: null,
-            ModifiedByUserId: null);
+        var existingApiKey = new ApiKey
+        {
+            Id = apiKeyId,
+            UserId = _userId,
+            Name = "TestKey",
+            KeyPrefix = "mgp_test",
+            Enabled = true,
+            ExpiresAt = null,
+            LastUsedAt = null,
+            CreatedAt = DateTime.UtcNow,
+            CreatedByUserId = null,
+            ModifiedAt = null,
+            ModifiedByUserId = null
+        };
+        var disabledApiKey = new ApiKey
+        {
+            Id = apiKeyId,
+            UserId = _userId,
+            Name = "TestKey",
+            KeyPrefix = "mgp_test",
+            Enabled = false,
+            ExpiresAt = null,
+            LastUsedAt = null,
+            CreatedAt = DateTime.UtcNow,
+            CreatedByUserId = null,
+            ModifiedAt = null,
+            ModifiedByUserId = null
+        };
 
-        _apiKeyManagerMock
-            .Setup(m => m.DisableApiKeyAsync(apiKeyId, null, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success(disabledApiKey));
+        _apiKeyManager
+            .Setup(m => m.GetApiKeyAsync(apiKeyId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(existingApiKey);
+
+        _apiKeyManager
+            .Setup(m => m.DisableApiKeyAsync(apiKeyId, It.IsAny<Guid?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(disabledApiKey);
 
         // Act
         var response = await _client.PostAsync($"/api/api-keys/{apiKeyId}/disable", null).ConfigureAwait(false);
 
         // Assert
-        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+        Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
     }
 
     [Test]
@@ -398,15 +464,15 @@ public class ApiKeysEndpointGroupTests
     {
         // Arrange
         var apiKeyId = Guid.NewGuid();
-        _apiKeyManagerMock
-            .Setup(m => m.DisableApiKeyAsync(apiKeyId, null, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Fail<ApiKey>("API key not found", ErrorCodes.ApiKeyNotFound));
+        _apiKeyManager
+            .Setup(m => m.GetApiKeyAsync(apiKeyId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(default(ApiKey?));
 
         // Act
         var response = await _client.PostAsync($"/api/api-keys/{apiKeyId}/disable", null).ConfigureAwait(false);
 
         // Assert
-        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.NotFound));
+        Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NotFound));
     }
 
     [Test]
@@ -415,15 +481,15 @@ public class ApiKeysEndpointGroupTests
         // Arrange
         var apiKeyId = Guid.NewGuid();
 
-        _apiKeyManagerMock
-            .Setup(m => m.DeleteApiKeyAsync(apiKeyId, null, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success(true));
+        _apiKeyManager
+            .Setup(m => m.DeleteApiKeyAsync(apiKeyId, It.IsAny<Guid?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
 
         // Act
         var response = await _client.DeleteAsync($"/api/api-keys/{apiKeyId}").ConfigureAwait(false);
 
         // Assert
-        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.NoContent));
+        Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NoContent));
     }
 
     [Test]
@@ -432,14 +498,14 @@ public class ApiKeysEndpointGroupTests
         // Arrange
         var apiKeyId = Guid.NewGuid();
 
-        _apiKeyManagerMock
-            .Setup(m => m.DeleteApiKeyAsync(apiKeyId, null, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Fail<bool>("API key not found", ErrorCodes.ApiKeyNotFound));
+        _apiKeyManager
+            .Setup(m => m.DeleteApiKeyAsync(apiKeyId, It.IsAny<Guid?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(false);
 
         // Act
         var response = await _client.DeleteAsync($"/api/api-keys/{apiKeyId}").ConfigureAwait(false);
 
         // Assert
-        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.NotFound));
+        Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NotFound));
     }
 }

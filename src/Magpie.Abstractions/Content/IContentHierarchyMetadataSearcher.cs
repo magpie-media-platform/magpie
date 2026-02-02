@@ -2,32 +2,35 @@ using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 
-using Magpie.Models.Content;
-using Magpie.Models.Metadata;
-using Magpie.Models.Result;
+using Magpie.Models;
 
 namespace Magpie.Abstractions.Content;
 
 /// <summary>
-/// Searches for content hierarchy items in an external metadata source.
+/// Provides external metadata search capabilities.
 /// </summary>
 public interface IContentHierarchyMetadataSearcher
 {
     /// <summary>
-    /// Gets the content type slugs supported by the searcher.
+    /// The unique type identifier for the searcher.
     /// </summary>
-    IReadOnlyList<string> SupportedContentTypes { get; }
+    public string ProviderType { get; }
 
     /// <summary>
-    /// Searches for content hierarchy items by search term.
+    /// Get the content type slugs supported by the searcher.
     /// </summary>
-    /// <param name="levelDefinition">The content hierarchy level definition to search for.</param>
-    /// <param name="searchTerm">The search term text.</param>
+    IEnumerable<string> SupportedContentTypes { get; }
+
+    /// <summary>
+    /// Search for content hierarchy items by search term.
+    /// </summary>
+    /// <param name="levelDefinition">The content hierarchy level definition to search.</param>
+    /// <param name="searchTerm">The text search term.</param>
     /// <param name="defaultLanguagePreference">The default language preference to use for search results.</param>
     /// <param name="cancellationToken">The cancellation token.</param>
-    Task<Result<IReadOnlyList<MetadataSearchResult>>> SearchAsync(
+    Task<IEnumerable<MetadataSearchResultItem>> SearchAsync(
         ContentHierarchyLevelDefinition levelDefinition,
         string searchTerm,
         string defaultLanguagePreference,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken = default);
 }

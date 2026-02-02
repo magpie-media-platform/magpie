@@ -2,7 +2,7 @@ using System;
 using System.Threading;
 using System.Threading.Tasks;
 
-using Magpie.Models.Events;
+using Magpie.Models;
 
 namespace Magpie.Abstractions.Events;
 
@@ -12,14 +12,14 @@ namespace Magpie.Abstractions.Events;
 public interface IEventProvider
 {
     /// <summary>
-    /// The observable stream of events.
+    /// An observable stream of events.
     /// </summary>
     IObservable<MagpieEvent> Events { get; }
 
     /// <summary>
-    /// Publishes an event.
+    /// Publish an event.
     /// </summary>
     /// <param name="magpieEvent">The event to publish.</param>
     /// <param name="cancellationToken">The cancellation token.</param>
-    Task PublishAsync(MagpieEvent magpieEvent, CancellationToken cancellationToken);
+    Task PublishAsync(MagpieEvent magpieEvent, CancellationToken cancellationToken = default);
 }

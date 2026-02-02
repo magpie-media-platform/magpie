@@ -2,8 +2,7 @@ using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 
-using Magpie.Models.Indexers;
-using Magpie.Models.Result;
+using Magpie.Models.Data;
 
 namespace Magpie.Abstractions.Integrations;
 
@@ -23,9 +22,9 @@ public interface IIndexerFeedProvider
     /// <param name="feed">The feed configuration.</param>
     /// <param name="cancellationToken">The cancellation token.</param>
     /// <returns>The result containing the discovered definitions on success, or an error on failure.</returns>
-    Task<Result<IReadOnlyList<IndexerDefinition>>> SyncAsync(
+    Task<IEnumerable<Indexer>> SyncAsync(
         IndexerFeed feed,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Tests the connection to the feed source.
@@ -33,7 +32,7 @@ public interface IIndexerFeedProvider
     /// <param name="feed">The feed configuration.</param>
     /// <param name="cancellationToken">The cancellation token.</param>
     /// <returns>The result indicating success or failure with an error reason.</returns>
-    Task<Result<bool>> TestConnectionAsync(
+    Task<bool> TestConnectionAsync(
         IndexerFeed feed,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken = default);
 }

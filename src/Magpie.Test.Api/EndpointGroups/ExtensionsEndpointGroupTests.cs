@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Json;
@@ -8,10 +7,9 @@ using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions.Api;
-using Magpie.Abstractions.Data;
+using Magpie.Abstractions.Repositories;
 using Magpie.Api.EndpointGroups;
-using Magpie.Models.Extensions;
-using Magpie.Models.Result;
+using Magpie.Models.Data;
 using Magpie.Test.Shared;
 
 using Microsoft.AspNetCore.Authentication;
@@ -35,19 +33,19 @@ public class ExtensionsEndpointGroupTests
 {
     private IHost _host = null!;
     private HttpClient _client = null!;
-    private Mock<IExtensionRepository> _extensionRepositoryMock = null!;
+    private Mock<IExtensionRepository> _extensionRepository = null!;
 
     [SetUp]
     public void SetUp()
     {
-        _extensionRepositoryMock = new Mock<IExtensionRepository>();
+        _extensionRepository = new Mock<IExtensionRepository>();
 
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
         builder.Logging.ClearProviders().AddTestLogger();
         var authServiceMock = new Mock<IAuthenticationService>();
         authServiceMock
-            .Setup(x => x.AuthenticateAsync(It.IsAny<HttpContext>(), It.IsAny<string>()))
+            .Setup(m => m.AuthenticateAsync(It.IsAny<HttpContext>(), It.IsAny<string>()))
             .ReturnsAsync(AuthenticateResult.Success(new(new ClaimsPrincipal(new ClaimsIdentity("Test")), "Test")));
         builder.Services.AddSingleton(authServiceMock.Object);
         builder.Services.AddAuthorizationBuilder()
@@ -56,7 +54,7 @@ public class ExtensionsEndpointGroupTests
                 .RequireAssertion(_ => true)
                 .Build());
 
-        builder.Services.AddSingleton(_extensionRepositoryMock.Object);
+        builder.Services.AddSingleton(_extensionRepository.Object);
         builder.Services.AddSingleton<IApiEndpointGroup, ExtensionsEndpointGroup>();
 
         var app = builder.Build();
@@ -87,9 +85,9 @@ public class ExtensionsEndpointGroupTests
     public async Task GetAllExtensions_ReturnsEmptyArray_WhenNoExtensions()
     {
         // Arrange
-        _extensionRepositoryMock
-            .Setup(r => r.GetAllAsync(It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<IReadOnlyList<Extension>>([]));
+        _extensionRepository
+            .Setup(m => m.ListAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
 
         // Act
         var response = await _client.GetAsync("/api/extensions").ConfigureAwait(false);
@@ -98,7 +96,7 @@ public class ExtensionsEndpointGroupTests
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+            Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
             Assert.That(content, Is.Not.Null);
             Assert.That(content, Is.Empty);
         }
@@ -108,14 +106,18 @@ public class ExtensionsEndpointGroupTests
     public async Task GetAllExtensions_ReturnsExtensions()
     {
         // Arrange
-        var extensions = new List<Extension>
+        var extension = new Extension
         {
-            CreateExtension(name: "Magpie.Extensions.Episodes", version: "1.0.0", enabled: true)
+            Name = "Magpie.Extensions.Episodes",
+            Version = "1.0.0",
+            Enabled = true,
+            FilePath = "extensions/episodes.dll",
+            AssemblyName = "Magpie.Extensions.Episodes"
         };
 
-        _extensionRepositoryMock
-            .Setup(r => r.GetAllAsync(It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<IReadOnlyList<Extension>>(extensions));
+        _extensionRepository
+            .Setup(m => m.ListAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([extension]);
 
         // Act
         var response = await _client.GetAsync("/api/extensions").ConfigureAwait(false);
@@ -124,7 +126,7 @@ public class ExtensionsEndpointGroupTests
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+            Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
             Assert.That(content, Is.Not.Null);
             Assert.That(content, Has.Length.EqualTo(1));
             Assert.That(content, Has.One.With.Property(nameof(Extension.Name)).EqualTo("Magpie.Extensions.Episodes"));
@@ -138,11 +140,19 @@ public class ExtensionsEndpointGroupTests
     {
         // Arrange
         var extensionId = Guid.NewGuid();
-        var extension = CreateExtension(id: extensionId, name: "Magpie.Extensions.Movies");
+        var extension = new Extension
+        {
+            Id = extensionId,
+            Name = "Magpie.Extensions.Movies",
+            Version = "1.0.0",
+            Enabled = true,
+            FilePath = "extensions/movies.dll",
+            AssemblyName = "Magpie.Extensions.Movies"
+        };
 
-        _extensionRepositoryMock
-            .Setup(r => r.GetByIdAsync(extensionId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<Extension?>(extension));
+        _extensionRepository
+            .Setup(m => m.GetByIdAsync(extensionId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(extension);
 
         // Act
         var response = await _client.GetAsync($"/api/extensions/{extensionId}").ConfigureAwait(false);
@@ -151,10 +161,10 @@ public class ExtensionsEndpointGroupTests
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+            Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
             Assert.That(content, Is.Not.Null);
-            Assert.That(content, Has.Property(nameof(Extension.Id)).EqualTo(extensionId));
-            Assert.That(content, Has.Property(nameof(Extension.Name)).EqualTo("Magpie.Extensions.Movies"));
+            Assert.That(content, Has.Property(nameof(content.Id)).EqualTo(extensionId));
+            Assert.That(content, Has.Property(nameof(content.Name)).EqualTo("Magpie.Extensions.Movies"));
         }
     }
 
@@ -164,185 +174,14 @@ public class ExtensionsEndpointGroupTests
         // Arrange
         var extensionId = Guid.NewGuid();
 
-        _extensionRepositoryMock
-            .Setup(r => r.GetByIdAsync(extensionId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<Extension?>(null));
+        _extensionRepository
+            .Setup(m => m.GetByIdAsync(extensionId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(default(Extension?));
 
         // Act
         var response = await _client.GetAsync($"/api/extensions/{extensionId}").ConfigureAwait(false);
 
         // Assert
-        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.NotFound));
-    }
-
-    [Test]
-    public async Task GetExtensionByName_ReturnsExtension()
-    {
-        // Arrange
-        var extension = CreateExtension(name: "Magpie.Extensions.Books");
-
-        _extensionRepositoryMock
-            .Setup(r => r.GetByNameAsync("Magpie.Extensions.Books", It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<Extension?>(extension));
-
-        // Act
-        var response = await _client.GetAsync("/api/extensions/by-name/Magpie.Extensions.Books").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<Extension>().ConfigureAwait(false);
-
-        // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
-            Assert.That(content, Is.Not.Null);
-            Assert.That(content, Has.Property(nameof(Extension.Name)).EqualTo("Magpie.Extensions.Books"));
-        }
-    }
-
-    [Test]
-    public async Task GetExtensionByName_ReturnsNotFound_WhenExtensionDoesNotExist()
-    {
-        // Arrange
-        _extensionRepositoryMock
-            .Setup(r => r.GetByNameAsync("NonExistent", It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<Extension?>(null));
-
-        // Act
-        var response = await _client.GetAsync("/api/extensions/by-name/NonExistent").ConfigureAwait(false);
-
-        // Assert
-        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.NotFound));
-    }
-
-    [Test]
-    public async Task GetExtensionByAssemblyName_ReturnsExtension()
-    {
-        // Arrange
-        var assemblyName = "Magpie.Extensions.Music, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null";
-        var extension = CreateExtension(name: "Magpie.Extensions.Music", assemblyName: assemblyName);
-
-        _extensionRepositoryMock
-            .Setup(r => r.GetByAssemblyNameAsync(assemblyName, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<Extension?>(extension));
-
-        // Act
-        var response = await _client.GetAsync($"/api/extensions/by-assembly/{Uri.EscapeDataString(assemblyName)}")
-            .ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<Extension>().ConfigureAwait(false);
-
-        // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
-            Assert.That(content, Is.Not.Null);
-            Assert.That(content, Has.Property(nameof(Extension.AssemblyName)).EqualTo(assemblyName));
-        }
-    }
-
-    [Test]
-    public async Task GetExtensionByAssemblyName_ReturnsNotFound_WhenExtensionDoesNotExist()
-    {
-        // Arrange
-        _extensionRepositoryMock
-            .Setup(r => r.GetByAssemblyNameAsync("NonExistent", It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<Extension?>(null));
-
-        // Act
-        var response = await _client.GetAsync("/api/extensions/by-assembly/NonExistent").ConfigureAwait(false);
-
-        // Assert
-        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.NotFound));
-    }
-
-    [Test]
-    public async Task GetEnabledExtensions_ReturnsOnlyEnabledExtensions()
-    {
-        // Arrange
-        var enabledExtensions = new List<Extension>
-        {
-            CreateExtension(name: "EnabledExtension", enabled: true)
-        };
-
-        _extensionRepositoryMock
-            .Setup(r => r.GetEnabledAsync(It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<IReadOnlyList<Extension>>(enabledExtensions));
-
-        // Act
-        var response = await _client.GetAsync("/api/extensions/enabled").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<Extension[]>().ConfigureAwait(false);
-
-        // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
-            Assert.That(content, Is.Not.Null);
-            Assert.That(content, Has.Length.EqualTo(1));
-            Assert.That(content, Has.One.With.Property(nameof(Extension.Name)).EqualTo("EnabledExtension"));
-            Assert.That(content, Has.One.With.Property(nameof(Extension.Enabled)).True);
-        }
-    }
-
-    [Test]
-    public async Task GetManagedExtensions_ReturnsOnlyManagedExtensions()
-    {
-        // Arrange
-        var managedExtensions = new List<Extension>
-        {
-            CreateExtension(name: "ManagedExtension", managed: true, nuGetId: "ManagedExtension")
-        };
-
-        _extensionRepositoryMock
-            .Setup(r => r.GetManagedAsync(It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<IReadOnlyList<Extension>>(managedExtensions));
-
-        // Act
-        var response = await _client.GetAsync("/api/extensions/managed").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<Extension[]>().ConfigureAwait(false);
-
-        // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
-            Assert.That(content, Is.Not.Null);
-            Assert.That(content, Has.Length.EqualTo(1));
-            Assert.That(content, Has.One.With.Property(nameof(Extension.Name)).EqualTo("ManagedExtension"));
-            Assert.That(content, Has.One.With.Property(nameof(Extension.Managed)).True);
-        }
-    }
-
-    private static Extension CreateExtension(
-        Guid? id = null,
-        string name = "TestExtension",
-        string version = "1.0.0",
-        string? targetAbi = null,
-        string? filePath = null,
-        string? assemblyName = null,
-        bool enabled = true,
-        string? disabledReason = null,
-        int loadOrder = 100,
-        bool managed = false,
-        string? nuGetId = null,
-        string? packageRepository = null,
-        bool autoUpgrade = false)
-    {
-        var extensionId = id ?? Guid.NewGuid();
-        return new(
-            Id: extensionId,
-            Version: version,
-            Name: name,
-            TargetABI: targetAbi,
-            FilePath: filePath ?? $"plugins/{name.ToLowerInvariant()}/{name}.dll",
-            AssemblyName: assemblyName ?? $"{name}, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null",
-            Enabled: enabled,
-            DisabledReason: disabledReason,
-            LoadOrder: loadOrder,
-            Managed: managed,
-            NuGetId: nuGetId,
-            PackageRepository: packageRepository,
-            AutoUpgrade: autoUpgrade,
-            LastChecked: null,
-            CreatedAt: DateTimeOffset.UtcNow,
-            CreatedByUserId: null,
-            ModifiedAt: null,
-            ModifiedByUserId: null);
+        Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NotFound));
     }
 }

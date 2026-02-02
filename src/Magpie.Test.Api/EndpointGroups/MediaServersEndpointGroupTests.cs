@@ -8,11 +8,11 @@ using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions.Api;
-using Magpie.Abstractions.Data;
+using Magpie.Abstractions.Repositories;
 using Magpie.Api.EndpointGroups;
-using Magpie.Models;
-using Magpie.Models.MediaServers;
-using Magpie.Models.Result;
+using Magpie.Models.Arguments;
+using Magpie.Models.Data;
+using Magpie.Models.Patch;
 using Magpie.Test.Shared;
 
 using Microsoft.AspNetCore.Authentication;
@@ -36,19 +36,19 @@ public class MediaServersEndpointGroupTests
 {
     private IHost _host = null!;
     private HttpClient _client = null!;
-    private Mock<IMediaServerRepository> _repositoryMock = null!;
+    private Mock<IMediaServerRepository> _repository = null!;
 
     [SetUp]
     public void SetUp()
     {
-        _repositoryMock = new Mock<IMediaServerRepository>();
+        _repository = new Mock<IMediaServerRepository>();
 
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
         builder.Logging.ClearProviders().AddTestLogger();
         var authServiceMock = new Mock<IAuthenticationService>();
         authServiceMock
-            .Setup(x => x.AuthenticateAsync(It.IsAny<HttpContext>(), It.IsAny<string>()))
+            .Setup(m => m.AuthenticateAsync(It.IsAny<HttpContext>(), It.IsAny<string>()))
             .ReturnsAsync(AuthenticateResult.Success(new(new ClaimsPrincipal(new ClaimsIdentity("Test")), "Test")));
         builder.Services.AddSingleton(authServiceMock.Object);
         builder.Services.AddAuthorizationBuilder()
@@ -57,7 +57,7 @@ public class MediaServersEndpointGroupTests
                 .RequireAssertion(_ => true)
                 .Build());
 
-        builder.Services.AddSingleton(_repositoryMock.Object);
+        builder.Services.AddSingleton(_repository.Object);
         builder.Services.AddSingleton<IApiEndpointGroup, MediaServersEndpointGroup>();
 
         var app = builder.Build();
@@ -87,16 +87,19 @@ public class MediaServersEndpointGroupTests
     [Test]
     public async Task GetAllMediaServers_ReturnsEmptyArray_WhenNoMediaServers()
     {
-        _repositoryMock
-            .Setup(r => r.GetAllAsync(It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<IReadOnlyList<MediaServer>>([]));
+        // Arrange
+        _repository
+            .Setup(m => m.ListAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
 
+        // Act
         var response = await _client.GetAsync("/api/media-servers").ConfigureAwait(false);
         var content = await response.Content.ReadFromJsonAsync<MediaServer[]>().ConfigureAwait(false);
 
+        // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+            Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
             Assert.That(content, Is.Not.Null);
             Assert.That(content, Is.Empty);
         }
@@ -105,32 +108,24 @@ public class MediaServersEndpointGroupTests
     [Test]
     public async Task GetAllMediaServers_ReturnsMediaServers()
     {
-        var server = new MediaServer(
-            Id: Guid.NewGuid(),
-            Name: "Plex Server",
-            Provider: "plex",
-            Enabled: true,
-            Settings: new Dictionary<string, string?>(),
-            Status: MediaServerStatus.Healthy,
-            LastChecked: null,
-            CreatedAt: DateTimeOffset.UtcNow,
-            CreatedByUserId: null,
-            ModifiedAt: null,
-            ModifiedByUserId: null);
+        // Arrange
+        var server = new MediaServer { Name = "Plex Server", ProviderType = "plex", Enabled = true };
 
-        _repositoryMock
-            .Setup(r => r.GetAllAsync(It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<IReadOnlyList<MediaServer>>([server]));
+        _repository
+            .Setup(m => m.ListAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([server]);
 
+        // Act
         var response = await _client.GetAsync("/api/media-servers").ConfigureAwait(false);
         var content = await response.Content.ReadFromJsonAsync<MediaServer[]>().ConfigureAwait(false);
 
+        // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+            Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
             Assert.That(content, Has.Length.EqualTo(1));
             Assert.That(content, Has.One.With.Property(nameof(MediaServer.Name)).EqualTo("Plex Server"));
-            Assert.That(content, Has.One.With.Property(nameof(MediaServer.Provider)).EqualTo("plex"));
+            Assert.That(content, Has.One.With.Property(nameof(MediaServer.ProviderType)).EqualTo("plex"));
             Assert.That(content, Has.One.With.Property(nameof(MediaServer.Enabled)).True);
         }
     }
@@ -138,268 +133,173 @@ public class MediaServersEndpointGroupTests
     [Test]
     public async Task GetMediaServerById_ReturnsMediaServer()
     {
+        // Arrange
         var serverId = Guid.NewGuid();
-        var server = new MediaServer(
-            Id: serverId,
-            Name: "Jellyfin Server",
-            Provider: "jellyfin",
-            Enabled: true,
-            Settings: new Dictionary<string, string?>(),
-            Status: MediaServerStatus.Unknown,
-            LastChecked: null,
-            CreatedAt: DateTimeOffset.UtcNow,
-            CreatedByUserId: null,
-            ModifiedAt: null,
-            ModifiedByUserId: null);
+        var server = new MediaServer
+        {
+            Id = serverId,
+            Name = "Jellyfin Server",
+            ProviderType = "jellyfin",
+            Enabled = true,
+        };
 
-        _repositoryMock
-            .Setup(r => r.GetByIdAsync(serverId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<MediaServer?>(server));
+        _repository
+            .Setup(m => m.GetByIdAsync(serverId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(server);
 
+        // Act
         var response = await _client.GetAsync($"/api/media-servers/{serverId}").ConfigureAwait(false);
         var content = await response.Content.ReadFromJsonAsync<MediaServer>().ConfigureAwait(false);
 
+        // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
-            Assert.That(content, Has.Property(nameof(MediaServer.Id)).EqualTo(serverId));
-            Assert.That(content, Has.Property(nameof(MediaServer.Name)).EqualTo("Jellyfin Server"));
-            Assert.That(content, Has.Property(nameof(MediaServer.Provider)).EqualTo("jellyfin"));
+            Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
+            Assert.That(content, Has.Property(nameof(content.Id)).EqualTo(serverId));
+            Assert.That(content, Has.Property(nameof(content.Name)).EqualTo("Jellyfin Server"));
+            Assert.That(content, Has.Property(nameof(content.ProviderType)).EqualTo("jellyfin"));
         }
     }
 
     [Test]
     public async Task GetMediaServerById_ReturnsNotFound_WhenMediaServerDoesNotExist()
     {
+        // Arrange
         var serverId = Guid.NewGuid();
-        _repositoryMock
-            .Setup(r => r.GetByIdAsync(serverId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<MediaServer?>(null));
+        _repository
+            .Setup(m => m.GetByIdAsync(serverId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(default(MediaServer?));
 
+        // Act
         var response = await _client.GetAsync($"/api/media-servers/{serverId}").ConfigureAwait(false);
 
-        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.NotFound));
-    }
-
-    [Test]
-    public async Task GetMediaServersByProvider_ReturnsFilteredMediaServers()
-    {
-        var server1 = new MediaServer(
-            Id: Guid.NewGuid(),
-            Name: "Plex 1",
-            Provider: "plex",
-            Enabled: true,
-            Settings: new Dictionary<string, string?>(),
-            Status: MediaServerStatus.Healthy,
-            LastChecked: null,
-            CreatedAt: DateTimeOffset.UtcNow,
-            CreatedByUserId: null,
-            ModifiedAt: null,
-            ModifiedByUserId: null);
-
-        var server2 = new MediaServer(
-            Id: Guid.NewGuid(),
-            Name: "Plex 2",
-            Provider: "plex",
-            Enabled: true,
-            Settings: new Dictionary<string, string?>(),
-            Status: MediaServerStatus.Healthy,
-            LastChecked: null,
-            CreatedAt: DateTimeOffset.UtcNow,
-            CreatedByUserId: null,
-            ModifiedAt: null,
-            ModifiedByUserId: null);
-
-        _repositoryMock
-            .Setup(r => r.GetByProviderAsync("plex", It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<IReadOnlyList<MediaServer>>([server1, server2]));
-
-        var response = await _client.GetAsync("/api/media-servers/by-provider/plex").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<MediaServer[]>().ConfigureAwait(false);
-
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
-            Assert.That(content, Has.Length.EqualTo(2));
-            Assert.That(content, Has.All.With.Property(nameof(MediaServer.Provider)).EqualTo("plex"));
-        }
-    }
-
-    [Test]
-    public async Task GetMediaServersByStatus_ReturnsFilteredMediaServers()
-    {
-        var server = new MediaServer(
-            Id: Guid.NewGuid(),
-            Name: "Healthy Server",
-            Provider: "plex",
-            Enabled: true,
-            Settings: new Dictionary<string, string?>(),
-            Status: MediaServerStatus.Healthy,
-            LastChecked: null,
-            CreatedAt: DateTimeOffset.UtcNow,
-            CreatedByUserId: null,
-            ModifiedAt: null,
-            ModifiedByUserId: null);
-
-        _repositoryMock
-            .Setup(r => r.GetByStatusAsync(MediaServerStatus.Healthy, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<IReadOnlyList<MediaServer>>([server]));
-
-        var response = await _client.GetAsync("/api/media-servers/by-status/1").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<MediaServer[]>().ConfigureAwait(false);
-
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
-            Assert.That(content, Has.Length.EqualTo(1));
-            Assert.That(content, Has.One.With.Property(nameof(MediaServer.Name)).EqualTo("Healthy Server"));
-            Assert.That(content, Has.One.With.Property(nameof(MediaServer.Status)).EqualTo(MediaServerStatus.Healthy));
-        }
-    }
-
-    [Test]
-    public async Task GetEnabledMediaServers_ReturnsOnlyEnabledServers()
-    {
-        var server = new MediaServer(
-            Id: Guid.NewGuid(),
-            Name: "Enabled Server",
-            Provider: "plex",
-            Enabled: true,
-            Settings: new Dictionary<string, string?>(),
-            Status: MediaServerStatus.Healthy,
-            LastChecked: null,
-            CreatedAt: DateTimeOffset.UtcNow,
-            CreatedByUserId: null,
-            ModifiedAt: null,
-            ModifiedByUserId: null);
-
-        _repositoryMock
-            .Setup(r => r.GetEnabledAsync(It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success<IReadOnlyList<MediaServer>>([server]));
-
-        var response = await _client.GetAsync("/api/media-servers/enabled").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<MediaServer[]>().ConfigureAwait(false);
-
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
-            Assert.That(content, Has.Length.EqualTo(1));
-            Assert.That(content, Has.One.With.Property(nameof(MediaServer.Name)).EqualTo("Enabled Server"));
-            Assert.That(content, Has.One.With.Property(nameof(MediaServer.Enabled)).True);
-        }
+        // Assert
+        Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NotFound));
     }
 
     [Test]
     public async Task CreateMediaServer_CreatesAndReturnsMediaServer()
     {
-        var request = new MediaServer(
-            Id: Guid.Empty,
-            Name: "New Plex Server",
-            Provider: "plex",
-            Enabled: true,
-            Settings: new Dictionary<string, string?> { ["host"] = "192.168.1.100", ["port"] = "32400" },
-            Status: MediaServerStatus.Unknown,
-            LastChecked: null,
-            CreatedAt: default,
-            CreatedByUserId: null,
-            ModifiedAt: null,
-            ModifiedByUserId: null);
+        // Arrange
+        var request = new MediaServer
+        {
+            Name = "New Plex Server",
+            ProviderType = "plex",
+            Enabled = true,
+            Settings = new Dictionary<string, string> { ["host"] = "192.168.1.100", ["port"] = "32400" }
+        };
 
-        _repositoryMock
-            .Setup(r => r.CreateAsync(It.IsAny<MediaServer>(), null, It.IsAny<CancellationToken>()))
-            .ReturnsAsync((MediaServer m, Guid? _, CancellationToken _) => Result.Success(m));
+        _repository
+            .Setup(m => m.CreateAsync(It.IsAny<MediaServer>(), null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((MediaServer m, Guid? _, CancellationToken _) => m);
 
+        // Act
         var response = await _client.PostAsJsonAsync("/api/media-servers", request).ConfigureAwait(false);
         var content = await response.Content.ReadFromJsonAsync<MediaServer>().ConfigureAwait(false);
 
+        // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.Created));
-            Assert.That(content, Has.Property(nameof(MediaServer.Name)).EqualTo("New Plex Server"));
-            Assert.That(content, Has.Property(nameof(MediaServer.Provider)).EqualTo("plex"));
-            Assert.That(content, Has.Property(nameof(MediaServer.Enabled)).True);
-            Assert.That(content!.Settings, Does.ContainKey("host"));
-            Assert.That(content.Settings["host"], Is.EqualTo("192.168.1.100"));
-            Assert.That(response.Headers.Location?.ToString(), Does.Contain($"/api/media-servers/{content.Id}"));
+            Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.Created));
+            Assert.That(content, Has.Property(nameof(content.Name)).EqualTo("New Plex Server"));
+            Assert.That(content, Has.Property(nameof(content.ProviderType)).EqualTo("plex"));
+            Assert.That(content, Has.Property(nameof(content.Enabled)).True);
+            Assert.That(content, Has.Property(nameof(content.Settings)).ContainKey("host"));
+            Assert.That(content, Has.Property(nameof(content.Settings)).ContainValue("192.168.1.100"));
         }
     }
 
     [Test]
     public async Task PatchMediaServer_PatchesNameField()
     {
+        // Arrange
         var serverId = Guid.NewGuid();
-        var request = new MediaServerPatch { Name = new FieldPatch<string>("Patched") };
+        var request = new MediaServerPatch(serverId, Name: new ScalarPatch<string>("Patched"));
 
-        _repositoryMock
-            .Setup(r => r.PatchAsync(
+        _repository
+            .Setup(m => m.PatchAsync(
                 It.Is<MediaServerPatch>(p => p.Id == serverId && p.Name!.Value == "Patched"),
                 null,
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success(true));
+            .ReturnsAsync(true);
 
+        // Act
         var response = await _client.PatchAsJsonAsync($"/api/media-servers/{serverId}", request).ConfigureAwait(false);
 
-        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.NoContent));
+        // Assert
+        Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NoContent));
     }
 
     [Test]
     public async Task PatchMediaServer_PatchesEnabledField()
     {
+        // Arrange
         var serverId = Guid.NewGuid();
-        var request = new MediaServerPatch { Enabled = new FieldPatch<bool>(false) };
+        var request = new MediaServerPatch(serverId, Enabled: new ScalarPatch<bool>(false));
 
-        _repositoryMock
-            .Setup(r => r.PatchAsync(
+        _repository
+            .Setup(m => m.PatchAsync(
                 It.Is<MediaServerPatch>(p => p.Id == serverId && p.Enabled!.Value == false),
                 null,
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success(true));
+            .ReturnsAsync(true);
 
+        // Act
         var response = await _client.PatchAsJsonAsync($"/api/media-servers/{serverId}", request).ConfigureAwait(false);
 
-        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.NoContent));
+        // Assert
+        Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NoContent));
     }
 
     [Test]
     public async Task PatchMediaServer_ReturnsNotFound_WhenMediaServerDoesNotExist()
     {
+        // Arrange
         var serverId = Guid.NewGuid();
-        var request = new MediaServerPatch { Name = new FieldPatch<string>("Patched") };
+        var request = new MediaServerPatch(serverId, Name: new ScalarPatch<string>("Patched"));
 
-        _repositoryMock
-            .Setup(r => r.PatchAsync(It.IsAny<MediaServerPatch>(), null, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success(false));
+        _repository
+            .Setup(m => m.PatchAsync(It.IsAny<MediaServerPatch>(), null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(false);
 
+        // Act
         var response = await _client.PatchAsJsonAsync($"/api/media-servers/{serverId}", request).ConfigureAwait(false);
 
-        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.NotFound));
+        // Assert
+        Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NotFound));
     }
 
     [Test]
     public async Task DeleteMediaServer_DeletesMediaServer()
     {
+        // Arrange
         var serverId = Guid.NewGuid();
 
-        _repositoryMock
-            .Setup(r => r.DeleteAsync(serverId, null, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success(true));
+        _repository
+            .Setup(m => m.DeleteAsync(serverId, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
 
+        // Act
         var response = await _client.DeleteAsync($"/api/media-servers/{serverId}").ConfigureAwait(false);
 
-        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.NoContent));
+        // Assert
+        Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NoContent));
     }
 
     [Test]
     public async Task DeleteMediaServer_ReturnsNotFound_WhenMediaServerDoesNotExist()
     {
+        // Arrange
         var serverId = Guid.NewGuid();
 
-        _repositoryMock
-            .Setup(r => r.DeleteAsync(serverId, null, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Success(false));
+        _repository
+            .Setup(m => m.DeleteAsync(serverId, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(false);
 
+        // Act
         var response = await _client.DeleteAsync($"/api/media-servers/{serverId}").ConfigureAwait(false);
 
-        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.NotFound));
+        // Assert
+        Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NotFound));
     }
 }

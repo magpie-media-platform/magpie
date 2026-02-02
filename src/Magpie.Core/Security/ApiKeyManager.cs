@@ -4,12 +4,9 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
-using Magpie.Abstractions.Data;
+using Magpie.Abstractions.Repositories;
 using Magpie.Abstractions.Security;
-using Magpie.Models.Result;
-using Magpie.Models.Users;
-
-using static Magpie.Models.Result.ResultExtensions;
+using Magpie.Models.Data;
 
 namespace Magpie.Core.Security;
 
@@ -24,115 +21,132 @@ public sealed class ApiKeyManager(
     private const int PrefixDisplayLength = 8;
 
     /// <inheritdoc />
-    public Task<Result<ApiKeyWithKey>> CreateApiKeyAsync(
+    public async Task<ApiKeyWithPlaintextKey> CreateApiKeyAsync(
         Guid userId,
         string name,
-        DateTimeOffset? expiresAt,
+        DateTime? expiresAt,
         Guid? createdByUserId,
         CancellationToken cancellationToken = default)
     {
         var plaintextKey = keyGenerator.GenerateKey(KeyPrefix, KeyLength);
         var keyPrefix = plaintextKey[..PrefixDisplayLength];
+        var keyHash = await passwordHasher.HashPasswordUnsaltedAsync(plaintextKey, cancellationToken)
+            .ConfigureAwait(false);
 
-        return passwordHasher.HashPasswordUnsaltedAsync(plaintextKey, cancellationToken)
-            .BindAsync(keyHash => apiKeyRepository
-                .CreateAsync(
-                    userId,
-                    name,
-                    keyPrefix,
-                    keyHash,
-                    expiresAt,
-                    createdByUserId,
-                    cancellationToken))
-            .MapAsync(apiKey => new ApiKeyWithKey(apiKey, plaintextKey));
+        var apiKey = new ApiKey
+        {
+            Id = Guid.NewGuid(),
+            UserId = userId,
+            Name = name,
+            KeyPrefix = keyPrefix,
+            KeyHash = keyHash,
+            Enabled = true,
+            ExpiresAt = expiresAt,
+        };
+
+        var created = await apiKeyRepository.CreateAsync(apiKey, createdByUserId, cancellationToken)
+            .ConfigureAwait(false);
+
+        return new ApiKeyWithPlaintextKey(created, plaintextKey);
     }
 
     /// <inheritdoc />
-    public Task<Result<ApiKeyWithKey>> RotateApiKeyAsync(
+    public async Task<ApiKeyWithPlaintextKey> RotateApiKeyAsync(
         Guid id,
         Guid? modifiedByUserId,
         CancellationToken cancellationToken = default)
     {
+        var existing = await apiKeyRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false)
+            ?? throw new InvalidOperationException("API key not found");
+
         var plaintextKey = keyGenerator.GenerateKey(KeyPrefix, KeyLength);
         var keyPrefix = plaintextKey[..PrefixDisplayLength];
+        var keyHash = await passwordHasher.HashPasswordUnsaltedAsync(plaintextKey, cancellationToken)
+            .ConfigureAwait(false);
 
-        return apiKeyRepository.GetByIdAsync(id, cancellationToken)
-            .BindAsync(existing => existing is not null
-                ? Result.Success(existing)
-                : Result.Fail<ApiKey>("invalid api key", ErrorCodes.ApiKeyNotFound))
-            .ZipAsync(passwordHasher.HashPasswordUnsaltedAsync(plaintextKey, cancellationToken))
-            .BindAsync((existing, keyHash) =>
-                apiKeyRepository
-                    .DeleteAsync(id, modifiedByUserId, cancellationToken)
-                    .BindAsync(_ => apiKeyRepository.CreateAsync(
-                        existing.UserId,
-                        existing.Name,
-                        keyPrefix,
-                        keyHash,
-                        existing.ExpiresAt,
-                        modifiedByUserId,
-                        cancellationToken))
-                    .MapAsync(apiKey => new ApiKeyWithKey(apiKey, plaintextKey)));
+        await apiKeyRepository.DeleteAsync(id, modifiedByUserId, cancellationToken).ConfigureAwait(false);
+
+        var newApiKey = new ApiKey
+        {
+            Id = Guid.NewGuid(),
+            UserId = existing.UserId,
+            Name = existing.Name,
+            KeyPrefix = keyPrefix,
+            KeyHash = keyHash,
+            Enabled = true,
+            ExpiresAt = existing.ExpiresAt,
+        };
+
+        var created = await apiKeyRepository.CreateAsync(newApiKey, modifiedByUserId, cancellationToken)
+            .ConfigureAwait(false);
+
+        return new ApiKeyWithPlaintextKey(created, plaintextKey);
     }
 
     /// <inheritdoc />
-    public Task<Result<IEnumerable<ApiKey>>> GetApiKeysAsync(
+    public async Task<IEnumerable<ApiKey>> ListApiKeysAsync(
         Guid? userId = null,
         bool? enabled = null,
         bool? expired = null,
         CancellationToken cancellationToken = default)
     {
-        var now = DateTimeOffset.UtcNow;
+        var now = DateTime.UtcNow;
 
-        return (userId.HasValue
-                ? apiKeyRepository.GetByUserIdAsync(userId.Value, cancellationToken)
-                : apiKeyRepository.GetAllAsync(cancellationToken))
-            .MapAsync(keys => enabled is null
-                ? keys
-                : keys.Where(k => k.Enabled == enabled.Value))
-            .MapAsync(keys => expired is null
-                ? keys
-                : keys.Where(k => k.ExpiresAt <= now));
+        var keys = userId.HasValue
+            ? await apiKeyRepository.GetByUserIdAsync(userId.Value, cancellationToken).ConfigureAwait(false)
+            : await apiKeyRepository.ListAllAsync(cancellationToken).ConfigureAwait(false);
+
+        if (enabled.HasValue)
+        {
+            keys = keys.Where(k => k.Enabled == enabled.Value);
+        }
+
+        if (expired.HasValue)
+        {
+            keys = keys.Where(k => k.ExpiresAt <= now);
+        }
+
+        return keys;
     }
 
     /// <inheritdoc />
-    public Task<Result<ApiKey?>> GetApiKeyAsync(Guid id, CancellationToken cancellationToken = default)
+    public Task<ApiKey?> GetApiKeyAsync(Guid id, CancellationToken cancellationToken = default)
     {
         return apiKeyRepository.GetByIdAsync(id, cancellationToken);
     }
 
     /// <inheritdoc />
-    public Task<Result<ApiKey>> EnableApiKeyAsync(
+    public async Task<ApiKey> EnableApiKeyAsync(
         Guid id,
         Guid? modifiedByUserId,
         CancellationToken cancellationToken = default)
     {
-        return apiKeyRepository.PatchAsync(new() { Id = id, Enabled = new(true) }, modifiedByUserId, cancellationToken)
-            .BindAsync(async patched => patched
-                ? await apiKeyRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false)
-                : Result.Fail<ApiKey?>("API key not found", ErrorCodes.ApiKeyNotFound))
-            .BindAsync(apiKey => apiKey is not null
-                ? Result.Success(apiKey)
-                : Result.Fail<ApiKey>("API key not found", ErrorCodes.ApiKeyNotFound));
+        var apiKey = await apiKeyRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false)
+            ?? throw new InvalidOperationException("API key not found");
+
+        apiKey = apiKey with { Enabled = true };
+        await apiKeyRepository.UpdateAsync(apiKey, modifiedByUserId, cancellationToken).ConfigureAwait(false);
+
+        return apiKey;
     }
 
     /// <inheritdoc />
-    public Task<Result<ApiKey>> DisableApiKeyAsync(
+    public async Task<ApiKey> DisableApiKeyAsync(
         Guid id,
         Guid? modifiedByUserId,
         CancellationToken cancellationToken = default)
     {
-        return apiKeyRepository.PatchAsync(new() { Id = id, Enabled = new(false) }, modifiedByUserId, cancellationToken)
-            .BindAsync(async patched => patched
-                ? await apiKeyRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false)
-                : Result.Fail<ApiKey?>("invalid api key", ErrorCodes.ApiKeyNotFound))
-            .BindAsync(apiKey => apiKey is not null
-                ? Result.Success(apiKey)
-                : Result.Fail<ApiKey>("invalid api key", ErrorCodes.ApiKeyNotFound));
+        var apiKey = await apiKeyRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false)
+            ?? throw new InvalidOperationException("API key not found");
+
+        apiKey = apiKey with { Enabled = false };
+        await apiKeyRepository.UpdateAsync(apiKey, modifiedByUserId, cancellationToken).ConfigureAwait(false);
+
+        return apiKey;
     }
 
     /// <inheritdoc />
-    public Task<Result<bool>> DeleteApiKeyAsync(
+    public Task<bool> DeleteApiKeyAsync(
         Guid id,
         Guid? deletedByUserId,
         CancellationToken cancellationToken = default)
@@ -141,23 +155,29 @@ public sealed class ApiKeyManager(
     }
 
     /// <inheritdoc />
-    public Task<Result<ApiKey>> ValidateApiKeyAsync(string apiKey, CancellationToken cancellationToken = default)
+    public async Task<ApiKey?> TryValidateApiKeyAsync(string apiKey, CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(apiKey) || !apiKey.StartsWith(KeyPrefix, StringComparison.Ordinal))
         {
-            return Result.FailAsync<ApiKey>("invalid api key", ErrorCodes.ApiKeyInvalid);
+            return null;
         }
 
-        return passwordHasher.HashPasswordUnsaltedAsync(apiKey, cancellationToken)
-            .BindAsync(keyHash => apiKeyRepository.GetByKeyHashAsync(keyHash, cancellationToken))
-            .BindAsync(key => key switch
-            {
-                { Enabled: false } =>
-                    Result.Fail<ApiKey>("invalid api key", ErrorCodes.ApiKeyDisabled),
-                { ExpiresAt: { } exp } when exp < DateTimeOffset.UtcNow =>
-                    Result.Fail<ApiKey>("invalid api key", ErrorCodes.ApiKeyExpired),
-                _ =>
-                    Result.Success(key)
-            });
+        var keyHash = await passwordHasher.HashPasswordUnsaltedAsync(apiKey, cancellationToken)
+            .ConfigureAwait(false);
+
+        var key = await apiKeyRepository.GetByKeyHashAsync(keyHash, cancellationToken).ConfigureAwait(false)
+            ?? throw new InvalidOperationException("API key not found");
+
+        if (!key.Enabled)
+        {
+            throw new InvalidOperationException("API key is disabled");
+        }
+
+        if (key.ExpiresAt.HasValue && key.ExpiresAt.Value < DateTime.UtcNow)
+        {
+            throw new InvalidOperationException("API key has expired");
+        }
+
+        return key;
     }
 }
