@@ -9,7 +9,6 @@ using Magpie.Data;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
-using Magpie.Models.Patch;
 using Magpie.Test.Shared;
 
 using Microsoft.EntityFrameworkCore;
@@ -488,9 +487,11 @@ public class ContentFilterRepositoryTests
         _context.ContentFilters.Add(entity);
         await _context.SaveChangesAsync();
 
-        var patch = new ContentFilterPatch(
-            entity.Id,
-            Name: new ScalarPatch<string>("PatchedName"));
+        var patch = new ContentFilterPatch
+        {
+            Id = entity.Id,
+            Name = new() { Value = "PatchedName" }
+        };
 
         // Act
         var result = await _subject.PatchAsync(patch, _userId);
@@ -524,9 +525,11 @@ public class ContentFilterRepositoryTests
         await _context.SaveChangesAsync();
 
         var newCriteria = new ContentFilterCriteria();
-        var patch = new ContentFilterPatch(
-            entity.Id,
-            Criteria: new ScalarPatch<ContentFilterCriteria>(newCriteria));
+        var patch = new ContentFilterPatch
+        {
+            Id = entity.Id,
+            Criteria = new() { Value = newCriteria }
+        };
 
         // Act
         var result = await _subject.PatchAsync(patch, _userId);
@@ -558,9 +561,11 @@ public class ContentFilterRepositoryTests
         _context.ContentFilters.Add(entity);
         await _context.SaveChangesAsync();
 
-        var patch = new ContentFilterPatch(
-            entity.Id,
-            OwnerLock: new ScalarPatch<bool?>(true));
+        var patch = new ContentFilterPatch
+        {
+            Id = entity.Id,
+            OwnerLock = new() { Value = true }
+        };
 
         // Act
         var result = await _subject.PatchAsync(patch, _userId);
@@ -597,9 +602,11 @@ public class ContentFilterRepositoryTests
         _context.ContentFilters.Add(entity);
         await _context.SaveChangesAsync();
 
-        var patch = new ContentFilterPatch(
-            entity.Id,
-            Tags: new SetPatch<string, string>(Add: ["newTag1", "newTag2"], Remove: null));
+        var patch = new ContentFilterPatch
+        {
+            Id = entity.Id,
+            Tags = new() { Add = ["newTag1", "newTag2"] }
+        };
 
         // Act
         var result = await _subject.PatchAsync(patch, _userId);
@@ -639,9 +646,11 @@ public class ContentFilterRepositoryTests
         _context.ContentFilters.Add(entity);
         await _context.SaveChangesAsync();
 
-        var patch = new ContentFilterPatch(
-            entity.Id,
-            Tags: new SetPatch<string, string>(Add: null, Remove: ["removeMe"]));
+        var patch = new ContentFilterPatch
+        {
+            Id = entity.Id,
+            Tags = new() { Remove = ["removeMe"] }
+        };
 
         // Act
         var result = await _subject.PatchAsync(patch, _userId);
@@ -681,9 +690,11 @@ public class ContentFilterRepositoryTests
         _context.ContentFilters.Add(entity);
         await _context.SaveChangesAsync();
 
-        var patch = new ContentFilterPatch(
-            entity.Id,
-            Tags: new SetPatch<string, string>(Add: ["toAdd"], Remove: ["toRemove"]));
+        var patch = new ContentFilterPatch
+        {
+            Id = entity.Id,
+            Tags = new() { Add = ["toAdd"], Remove = ["toRemove"] }
+        };
 
         // Act
         var result = await _subject.PatchAsync(patch, _userId);
@@ -717,9 +728,11 @@ public class ContentFilterRepositoryTests
         _context.ContentFilters.Add(entity);
         await _context.SaveChangesAsync();
 
-        var patch = new ContentFilterPatch(
-            entity.Id,
-            Tags: new SetPatch<string, string>(Add: ["brandNewTag"], Remove: null));
+        var patch = new ContentFilterPatch
+        {
+            Id = entity.Id,
+            Tags = new() { Add = ["brandNewTag"] }
+        };
 
         // Act
         var result = await _subject.PatchAsync(patch, _userId);
@@ -742,9 +755,11 @@ public class ContentFilterRepositoryTests
     public async Task PatchAsync_ReturnsFalse_WhenNotFound()
     {
         // Arrange
-        var patch = new ContentFilterPatch(
-            Guid.NewGuid(),
-            Name: new ScalarPatch<string>("NewName"));
+        var patch = new ContentFilterPatch
+        {
+            Id = Guid.NewGuid(),
+            Name = new() { Value = "NewName" }
+        };
 
         // Act
         var result = await _subject.PatchAsync(patch, _userId);

@@ -8,17 +8,25 @@ namespace Magpie.Models.Arguments;
 /// <summary>
 /// Patch for <see cref="Wishlist"/>.
 /// </summary>
-/// <param name="Id">The <see cref="Wishlist.Id"/> of the item to patch.</param>
-/// <param name="ContentFilterId">The <see cref="Wishlist.ContentFilterId"/> patch</param>
-/// <param name="QualityTierListId">The <see cref="Wishlist.QualityTierListId"/> patch</param>
-/// <param name="Name">The <see cref="Wishlist.Name"/> patch</param>
-/// <param name="OwnerLock">The <see cref="Wishlist.OwnerLock"/> patch</param>
-/// <param name="Tags">The <see cref="Tag"/>s patch</param>
-public sealed record WishlistPatch(
-    Guid Id,
-    ScalarPatch<Guid>? ContentFilterId = null,
-    ScalarPatch<Guid?>? QualityTierListId = null,
-    ScalarPatch<string>? Name = null,
-    ScalarPatch<bool>? OwnerLock = null,
-    SetPatch<string, string>? Tags = null) : TagsPatch(Id, Tags);
+public sealed record WishlistPatch : TagsPatch
+{
+    /// <summary>
+    /// The <see cref="Wishlist.ContentFilterId"/> to patch.
+    /// </summary>
+    public ScalarPatch<Guid>? ContentFilterId { get; init; }
 
+    /// <summary>
+    /// The <see cref="Wishlist.QualityTierListId"/> to patch.
+    /// </summary>
+    public ScalarPatch<Guid?>? QualityTierListId { get; init; }
+
+    /// <summary>
+    /// The <see cref="Wishlist.Name"/> to patch.
+    /// </summary>
+    public ScalarPatch<string>? Name { get; init; }
+
+    /// <summary>
+    /// The <see cref="Wishlist.OwnerLock"/> to patch.
+    /// </summary>
+    public ScalarPatch<bool>? OwnerLock { get; init; }
+}

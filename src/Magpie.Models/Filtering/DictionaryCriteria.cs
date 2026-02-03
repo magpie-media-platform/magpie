@@ -9,7 +9,7 @@ namespace Magpie.Models.Filtering;
 public record DictionaryCriteria<TCriteria>
 {
     /// <summary>
-    /// The criteria to match entries against, keyed by dictionary key.
+    /// The criteria to apply to items in the dictionary.
     /// </summary>
-    public Dictionary<string, TCriteria> Criteria { get; init; } = [];
+    public Dictionary<string, TCriteria> Items { get; init; } = [];
 }

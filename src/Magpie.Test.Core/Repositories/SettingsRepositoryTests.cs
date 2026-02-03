@@ -10,7 +10,6 @@ using Magpie.Data;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
-using Magpie.Models.Patch;
 using Magpie.Test.Shared;
 
 using Microsoft.EntityFrameworkCore;
@@ -267,10 +266,11 @@ public class SettingsRepositoryTests
     public async Task PatchAsync_CreatesSettingsGroup_WhenNotExists()
     {
         // Arrange
-        var patch = new SettingsGroupPatch(
-            null,
-            "NewGroup",
-            new DictionaryPatch<string, string, string>(null, null, null));
+        var patch = new SettingsGroupPatch()
+        {
+            ExtensionId = null,
+            Name = "NewGroup",
+        };
 
         // Act
         var result = await _subject.PatchAsync(patch, _userId);
@@ -292,10 +292,12 @@ public class SettingsRepositoryTests
     public async Task PatchAsync_CreatesSettingsGroup_WithExtensionId()
     {
         // Arrange
-        var patch = new SettingsGroupPatch(
-            _extensionId,
-            "ExtensionGroup",
-            new DictionaryPatch<string, string, string>(null, null, null));
+        var patch = new SettingsGroupPatch
+        {
+            ExtensionId = _extensionId,
+            Name = "ExtensionGroup",
+            Settings = new()
+        };
 
         // Act
         var result = await _subject.PatchAsync(patch, _userId);
@@ -321,10 +323,12 @@ public class SettingsRepositoryTests
             { "Key1", "Value1" },
             { "Key2", "Value2" }
         };
-        var patch = new SettingsGroupPatch(
-            null,
-            "GroupWithNewSettings",
-            new DictionaryPatch<string, string, string>(settingsToAdd, null, null));
+        var patch = new SettingsGroupPatch
+        {
+            ExtensionId = null,
+            Name = "GroupWithNewSettings",
+            Settings = new() { Add = settingsToAdd }
+        };
 
         // Act
         var result = await _subject.PatchAsync(patch, _userId);
@@ -363,10 +367,12 @@ public class SettingsRepositoryTests
         {
             { "NewKey", "NewValue" }
         };
-        var patch = new SettingsGroupPatch(
-            null,
-            "ExistingGroup",
-            new DictionaryPatch<string, string, string>(settingsToAdd, null, null));
+        var patch = new SettingsGroupPatch
+        {
+            ExtensionId = null,
+            Name = "ExistingGroup",
+            Settings = new() { Add = settingsToAdd }
+        };
 
         // Act
         var result = await _subject.PatchAsync(patch, _userId);
@@ -414,10 +420,12 @@ public class SettingsRepositoryTests
         {
             { "UpdateKey", "UpdatedValue" }
         };
-        var patch = new SettingsGroupPatch(
-            null,
-            "GroupToUpdate",
-            new DictionaryPatch<string, string, string>(null, null, settingsToUpdate));
+        var patch = new SettingsGroupPatch
+        {
+            ExtensionId = null,
+            Name = "GroupToUpdate",
+            Settings = new() { Update = settingsToUpdate }
+        };
 
         // Act
         var result = await _subject.PatchAsync(patch, _userId);
@@ -464,10 +472,12 @@ public class SettingsRepositoryTests
         _context.Settings.AddRange(setting1, setting2);
         await _context.SaveChangesAsync();
 
-        var patch = new SettingsGroupPatch(
-            null,
-            "GroupToRemoveFrom",
-            new DictionaryPatch<string, string, string>(null, ["RemoveKey"], null));
+        var patch = new SettingsGroupPatch
+        {
+            ExtensionId = null,
+            Name = "GroupToRemoveFrom",
+            Settings = new() { Remove = ["RemoveKey"] }
+        };
 
         // Act
         var result = await _subject.PatchAsync(patch, _userId);
@@ -500,10 +510,12 @@ public class SettingsRepositoryTests
         _context.SettingsGroups.Add(group);
         await _context.SaveChangesAsync();
 
-        var patch = new SettingsGroupPatch(
-            null,
-            "GroupToModify",
-            new DictionaryPatch<string, string, string>(null, null, null));
+        var patch = new SettingsGroupPatch
+        {
+            ExtensionId = null,
+            Name = "GroupToModify",
+            Settings = new()
+        };
 
         // Act
         var result = await _subject.PatchAsync(patch, _userId);
@@ -523,10 +535,12 @@ public class SettingsRepositoryTests
     public async Task PatchAsync_CreatesAuditRecord_ForNewGroup()
     {
         // Arrange
-        var patch = new SettingsGroupPatch(
-            null,
-            "AuditedNewGroup",
-            new DictionaryPatch<string, string, string>(null, null, null));
+        var patch = new SettingsGroupPatch
+        {
+            ExtensionId = null,
+            Name = "AuditedNewGroup",
+            Settings = new()
+        };
 
         // Act
         await _subject.PatchAsync(patch, _userId);
@@ -549,10 +563,12 @@ public class SettingsRepositoryTests
         {
             { "AuditKey", "AuditValue" }
         };
-        var patch = new SettingsGroupPatch(
-            null,
-            "GroupWithAuditedSetting",
-            new DictionaryPatch<string, string, string>(settingsToAdd, null, null));
+        var patch = new SettingsGroupPatch
+        {
+            ExtensionId = null,
+            Name = "GroupWithAuditedSetting",
+            Settings = new() { Add = settingsToAdd }
+        };
 
         // Act
         await _subject.PatchAsync(patch, _userId);
@@ -594,10 +610,12 @@ public class SettingsRepositoryTests
         {
             { "AuditUpdateKey", "NewValue" }
         };
-        var patch = new SettingsGroupPatch(
-            null,
-            "GroupForUpdateAudit",
-            new DictionaryPatch<string, string, string>(null, null, settingsToUpdate));
+        var patch = new SettingsGroupPatch
+        {
+            ExtensionId = null,
+            Name = "GroupForUpdateAudit",
+            Settings = new() { Update = settingsToUpdate }
+        };
 
         // Act
         await _subject.PatchAsync(patch, _userId);
@@ -634,10 +652,12 @@ public class SettingsRepositoryTests
         _context.Settings.Add(setting);
         await _context.SaveChangesAsync();
 
-        var patch = new SettingsGroupPatch(
-            null,
-            "GroupForDeleteAudit",
-            new DictionaryPatch<string, string, string>(null, ["AuditDeleteKey"], null));
+        var patch = new SettingsGroupPatch
+        {
+            ExtensionId = null,
+            Name = "GroupForDeleteAudit",
+            Settings = new() { Remove = ["AuditDeleteKey"] }
+        };
 
         // Act
         await _subject.PatchAsync(patch, _userId);
@@ -659,10 +679,12 @@ public class SettingsRepositoryTests
         {
             { "NullValueKey", null }
         };
-        var patch = new SettingsGroupPatch(
-            null,
-            "GroupWithNullValue",
-            new DictionaryPatch<string, string, string>(settingsToAdd!, null, null));
+        var patch = new SettingsGroupPatch
+        {
+            ExtensionId = null,
+            Name = "GroupWithNullValue",
+            Settings = new() { Add = settingsToAdd! }
+        };
 
         // Act
         var result = await _subject.PatchAsync(patch, _userId);
@@ -701,10 +723,12 @@ public class SettingsRepositoryTests
         {
             { "NullUpdateKey", null }
         };
-        var patch = new SettingsGroupPatch(
-            null,
-            "GroupForNullUpdate",
-            new DictionaryPatch<string, string, string>(null, null, settingsToUpdate!));
+        var patch = new SettingsGroupPatch
+        {
+            ExtensionId = null,
+            Name = "GroupForNullUpdate",
+            Settings = new() { Update = settingsToUpdate! }
+        };
 
         // Act
         var result = await _subject.PatchAsync(patch, _userId);
@@ -733,10 +757,12 @@ public class SettingsRepositoryTests
         {
             { "NonExistentKey", "SomeValue" }
         };
-        var patch = new SettingsGroupPatch(
-            null,
-            "GroupForNonExistentUpdate",
-            new DictionaryPatch<string, string, string>(null, null, settingsToUpdate));
+        var patch = new SettingsGroupPatch
+        {
+            ExtensionId = null,
+            Name = "GroupForNonExistentUpdate",
+            Settings = new() { Update = settingsToUpdate }
+        };
 
         // Act
         var result = await _subject.PatchAsync(patch, _userId);
@@ -761,10 +787,12 @@ public class SettingsRepositoryTests
         _context.SettingsGroups.Add(group);
         await _context.SaveChangesAsync();
 
-        var patch = new SettingsGroupPatch(
-            null,
-            "GroupForNonExistentRemove",
-            new DictionaryPatch<string, string, string>(null, ["NonExistentKey"], null));
+        var patch = new SettingsGroupPatch
+        {
+            ExtensionId = null,
+            Name = "GroupForNonExistentRemove",
+            Settings = new() { Remove = ["NonExistentKey"] }
+        };
 
         // Act
         var result = await _subject.PatchAsync(patch, _userId);
@@ -803,13 +831,17 @@ public class SettingsRepositoryTests
         _context.Settings.AddRange(setting1, setting2);
         await _context.SaveChangesAsync();
 
-        var patch = new SettingsGroupPatch(
-            null,
-            "GroupForCombinedPatch",
-            new DictionaryPatch<string, string, string>(
-                new Dictionary<string, string> { { "AddMe", "AddValue" } },
-                ["DeleteMe"],
-                new Dictionary<string, string> { { "UpdateMe", "NewValue" } }));
+        var patch = new SettingsGroupPatch
+        {
+            ExtensionId = null,
+            Name = "GroupForCombinedPatch",
+            Settings = new()
+            {
+                Add = new() { { "AddMe", "AddValue" } },
+                Remove = ["DeleteMe"],
+                Update = new() { { "UpdateMe", "NewValue" } }
+            }
+        };
 
         // Act
         var result = await _subject.PatchAsync(patch, _userId);
@@ -818,8 +850,8 @@ public class SettingsRepositoryTests
         Assert.That(result, Is.True);
 
         var updatedGroup = await _context.SettingsGroups
-            .Include(sg => sg.Settings)
-            .FirstOrDefaultAsync(sg => sg.Name == "GroupForCombinedPatch");
+        .Include(sg => sg.Settings)
+        .FirstOrDefaultAsync(sg => sg.Name == "GroupForCombinedPatch");
         using (Assert.EnterMultipleScope())
         {
             Assert.That(updatedGroup, Has.Property(nameof(updatedGroup.Settings)).With.Count.EqualTo(2));

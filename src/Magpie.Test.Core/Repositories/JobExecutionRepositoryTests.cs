@@ -1,12 +1,10 @@
 using System;
-using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions.Repositories;
 using Magpie.Core;
 using Magpie.Core.Repositories;
 using Magpie.Data;
-using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Test.Shared;
@@ -128,7 +126,7 @@ public class JobExecutionRepositoryTests
         await _context.SaveChangesAsync();
 
         // Act
-        var result = await _subject.ListAllAsync(CancellationToken.None);
+        var result = await _subject.ListAllAsync();
 
         // Assert
         Assert.That(result, Has.Exactly(2).Items);
@@ -138,7 +136,7 @@ public class JobExecutionRepositoryTests
     public async Task ListAllAsync_ReturnsEmptyList_WhenNoExecutions()
     {
         // Act
-        var result = await _subject.ListAllAsync(CancellationToken.None);
+        var result = await _subject.ListAllAsync();
 
         // Assert
         Assert.That(result, Is.Empty);
@@ -176,11 +174,7 @@ public class JobExecutionRepositoryTests
         await _context.SaveChangesAsync();
 
         // Act
-        var result = await _subject.QueryAsync(
-            new JobExecutionQuery(Status: JobExecutionStatus.Running),
-            null,
-            null,
-            CancellationToken.None);
+        var result = await _subject.QueryAsync(new() { Status = JobExecutionStatus.Running }, null, null);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -244,11 +238,7 @@ public class JobExecutionRepositoryTests
         await _context.SaveChangesAsync();
 
         // Act
-        var result = await _subject.QueryAsync(
-            new JobExecutionQuery(ScheduleTriggerId: trigger1.Id),
-            null,
-            null,
-            CancellationToken.None);
+        var result = await _subject.QueryAsync(new() { ScheduleTriggerId = trigger1.Id }, null, null);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -304,11 +294,7 @@ public class JobExecutionRepositoryTests
         await _context.SaveChangesAsync();
 
         // Act
-        var result = await _subject.QueryAsync(
-            new JobExecutionQuery(EventTriggerId: trigger1.Id),
-            null,
-            null,
-            CancellationToken.None);
+        var result = await _subject.QueryAsync(new() { EventTriggerId = trigger1.Id }, null, null);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -323,11 +309,7 @@ public class JobExecutionRepositoryTests
     public async Task QueryAsync_ReturnsEmptyResult_WhenNoMatches()
     {
         // Act
-        var result = await _subject.QueryAsync(
-            new JobExecutionQuery(Status: JobExecutionStatus.Failed),
-            null,
-            null,
-            CancellationToken.None);
+        var result = await _subject.QueryAsync(new() { Status = JobExecutionStatus.Failed }, null, null);
 
         // Assert
         Assert.That(result, Has.Property(nameof(result.Items)).Empty);
@@ -351,7 +333,6 @@ public class JobExecutionRepositoryTests
         var entity = await _context.JobExecutions
             .AsNoTracking()
             .FirstOrDefaultAsync(e => e.JobType == "NewJob");
-
         using (Assert.EnterMultipleScope())
         {
             Assert.That(result, Has.Property(nameof(result.JobType)).EqualTo("NewJob"));
@@ -429,7 +410,6 @@ public class JobExecutionRepositoryTests
         var entity = await _context.JobExecutions
             .AsNoTracking()
             .FirstOrDefaultAsync(e => e.JobType == "FullJob");
-
         using (Assert.EnterMultipleScope())
         {
             Assert.That(entity, Has.Property(nameof(entity.ScheduleTriggerId)).EqualTo(scheduleTrigger.Id));

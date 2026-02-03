@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Json;
@@ -14,7 +13,6 @@ using Magpie.Api.EndpointGroups;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
-using Magpie.Models.Patch;
 using Magpie.Test.Shared;
 
 using Microsoft.AspNetCore.Authentication;
@@ -104,9 +102,9 @@ public class ScheduleTriggersEndpointGroupTests
 
         // Act
         var response = await _client.GetAsync("/api/schedule-triggers").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<ScheduleTrigger[]>().ConfigureAwait(false);
 
         // Assert
+        var content = await response.Content.ReadFromJsonAsync<ScheduleTrigger[]>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
@@ -133,9 +131,9 @@ public class ScheduleTriggersEndpointGroupTests
 
         // Act
         var response = await _client.GetAsync("/api/schedule-triggers").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<ScheduleTrigger[]>().ConfigureAwait(false);
 
         // Assert
+        var content = await response.Content.ReadFromJsonAsync<ScheduleTrigger[]>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
@@ -165,9 +163,9 @@ public class ScheduleTriggersEndpointGroupTests
 
         // Act
         var response = await _client.GetAsync($"/api/schedule-triggers/{triggerId}").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<ScheduleTrigger>().ConfigureAwait(false);
 
         // Assert
+        var content = await response.Content.ReadFromJsonAsync<ScheduleTrigger>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
@@ -206,7 +204,7 @@ public class ScheduleTriggersEndpointGroupTests
             Schedule = "0 0 * * *",
             ExecutionMode = JobExecutionMode.Queue,
             Enabled = true,
-            Parameters = new Dictionary<string, string> { ["libraryId"] = "123" }
+            Parameters = new() { ["libraryId"] = "123" }
         };
 
         var createdTrigger = new ScheduleTrigger
@@ -223,9 +221,9 @@ public class ScheduleTriggersEndpointGroupTests
 
         // Act
         var response = await _client.PostAsJsonAsync("/api/schedule-triggers", request).ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<ScheduleTrigger>().ConfigureAwait(false);
 
         // Assert
+        var content = await response.Content.ReadFromJsonAsync<ScheduleTrigger>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.Created));
@@ -239,7 +237,7 @@ public class ScheduleTriggersEndpointGroupTests
     {
         // Arrange
         var triggerId = Guid.NewGuid();
-        var request = new ScheduleTriggerPatch(triggerId, Name: new ScalarPatch<string>("Patched"));
+        var request = new ScheduleTriggerPatch { Id = triggerId, Name = new() { Value = "Patched" } };
 
         _jobManager
             .Setup(m => m.UpdateScheduleTriggerAsync(
@@ -261,7 +259,7 @@ public class ScheduleTriggersEndpointGroupTests
     {
         // Arrange
         var triggerId = Guid.NewGuid();
-        var request = new ScheduleTriggerPatch(triggerId, Enabled: new ScalarPatch<bool>(false));
+        var request = new ScheduleTriggerPatch { Id = triggerId, Enabled = new() { Value = false } };
 
         _jobManager
             .Setup(m => m.UpdateScheduleTriggerAsync(
@@ -283,7 +281,7 @@ public class ScheduleTriggersEndpointGroupTests
     {
         // Arrange
         var triggerId = Guid.NewGuid();
-        var request = new ScheduleTriggerPatch(triggerId, Schedule: new ScalarPatch<string>("0 12 * * *"));
+        var request = new ScheduleTriggerPatch { Id = triggerId, Schedule = new() { Value = "0 12 * * *" } };
 
         _jobManager
             .Setup(m => m.UpdateScheduleTriggerAsync(
@@ -305,7 +303,7 @@ public class ScheduleTriggersEndpointGroupTests
     {
         // Arrange
         var triggerId = Guid.NewGuid();
-        var request = new ScheduleTriggerPatch(triggerId, Name: new ScalarPatch<string>("Patched"));
+        var request = new ScheduleTriggerPatch { Id = triggerId, Name = new() { Value = "Patched" } };
 
         _jobManager
             .Setup(m => m

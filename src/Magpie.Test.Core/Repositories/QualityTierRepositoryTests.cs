@@ -9,7 +9,6 @@ using Magpie.Data;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
-using Magpie.Models.Patch;
 using Magpie.Test.Shared;
 
 using Microsoft.EntityFrameworkCore;
@@ -81,9 +80,9 @@ public class QualityTierRepositoryTests
             Name = "HD",
             Criteria = new()
             {
-                All = [new()
+                And = [new()
                 {
-                    Criteria = new()
+                    Items = new()
                     {
                         ["resolution"] = new() { Operator = CriteriaValueOperator.Equals, Values = ["1080p"] }
                     }
@@ -122,13 +121,13 @@ public class QualityTierRepositoryTests
         var qualityTier1 = new QualityTier
         {
             Name = "HD",
-            Criteria = new QualityTierCriteria { All = [] },
+            Criteria = new() { And = [] },
             CreatedAt = DateTime.UtcNow
         };
         var qualityTier2 = new QualityTier
         {
             Name = "4K",
-            Criteria = new QualityTierCriteria { All = [] },
+            Criteria = new() { And = [] },
             CreatedAt = DateTime.UtcNow
         };
         _context.QualityTiers.AddRange(qualityTier1, qualityTier2);
@@ -160,9 +159,9 @@ public class QualityTierRepositoryTests
             Name = "SD",
             Criteria = new()
             {
-                All = [new()
+                And = [new()
                 {
-                    Criteria = new()
+                    Items = new()
                     {
                         ["resolution"] = new() { Operator = CriteriaValueOperator.Equals, Values = ["480p"] }
                     }
@@ -190,7 +189,7 @@ public class QualityTierRepositoryTests
         var qualityTier = new QualityTier
         {
             Name = "AuditedTier",
-            Criteria = new QualityTierCriteria { All = [] }
+            Criteria = new() { And = [] }
         };
 
         // Act
@@ -214,7 +213,7 @@ public class QualityTierRepositoryTests
         var qualityTier = new QualityTier
         {
             Name = "OriginalTier",
-            Criteria = new QualityTierCriteria { All = [] },
+            Criteria = new() { And = [] },
             CreatedAt = DateTime.UtcNow
         };
         _context.QualityTiers.Add(qualityTier);
@@ -223,9 +222,9 @@ public class QualityTierRepositoryTests
         qualityTier.Name = "UpdatedTier";
         qualityTier.Criteria = new()
         {
-            All = [new()
+            And = [new()
             {
-                Criteria = new()
+                Items = new()
                 {
                     ["codec"] = new() { Operator = CriteriaValueOperator.Equals, Values = ["x265"] }
                 }
@@ -255,7 +254,7 @@ public class QualityTierRepositoryTests
         {
             Id = Guid.NewGuid(),
             Name = "NonExistent",
-            Criteria = new QualityTierCriteria { All = [] }
+            Criteria = new() { And = [] }
         };
 
         // Act
@@ -272,7 +271,7 @@ public class QualityTierRepositoryTests
         var qualityTier = new QualityTier
         {
             Name = "ToUpdate",
-            Criteria = new QualityTierCriteria { All = [] },
+            Criteria = new() { And = [] },
             CreatedAt = DateTime.UtcNow
         };
         _context.QualityTiers.Add(qualityTier);
@@ -300,7 +299,7 @@ public class QualityTierRepositoryTests
         var qualityTier = new QualityTier
         {
             Name = "ToDelete",
-            Criteria = new QualityTierCriteria { All = [] },
+            Criteria = new() { And = [] },
             CreatedAt = DateTime.UtcNow
         };
         _context.QualityTiers.Add(qualityTier);
@@ -333,7 +332,7 @@ public class QualityTierRepositoryTests
         var qualityTier = new QualityTier
         {
             Name = "DeleteAudit",
-            Criteria = new QualityTierCriteria { All = [] },
+            Criteria = new() { And = [] },
             CreatedAt = DateTime.UtcNow
         };
         _context.QualityTiers.Add(qualityTier);
@@ -360,13 +359,13 @@ public class QualityTierRepositoryTests
         var qualityTier = new QualityTier
         {
             Name = "OriginalName",
-            Criteria = new QualityTierCriteria { All = [] },
+            Criteria = new() { And = [] },
             CreatedAt = DateTime.UtcNow
         };
         _context.QualityTiers.Add(qualityTier);
         await _context.SaveChangesAsync();
 
-        var patch = new QualityTierPatch(qualityTier.Id, Name: new ScalarPatch<string>("PatchedName"));
+        var patch = new QualityTierPatch { Id = qualityTier.Id, Name = new() { Value = "PatchedName" } };
 
         // Act
         var result = await _subject.PatchAsync(patch, _userId);
@@ -387,7 +386,7 @@ public class QualityTierRepositoryTests
     public async Task PatchAsync_ReturnsFalse_WhenNotExists()
     {
         // Arrange
-        var patch = new QualityTierPatch(Guid.NewGuid(), Name: new ScalarPatch<string>("NonExistent"));
+        var patch = new QualityTierPatch { Id = Guid.NewGuid(), Name = new() { Value = "NonExistent" } };
 
         // Act
         var result = await _subject.PatchAsync(patch, _userId);
@@ -403,13 +402,13 @@ public class QualityTierRepositoryTests
         var qualityTier = new QualityTier
         {
             Name = "PatchAudit",
-            Criteria = new QualityTierCriteria { All = [] },
+            Criteria = new() { And = [] },
             CreatedAt = DateTime.UtcNow
         };
         _context.QualityTiers.Add(qualityTier);
         await _context.SaveChangesAsync();
 
-        var patch = new QualityTierPatch(qualityTier.Id, Name: new ScalarPatch<string>("Patched"));
+        var patch = new QualityTierPatch { Id = qualityTier.Id, Name = new() { Value = "Patched" } };
 
         // Act
         await _subject.PatchAsync(patch, _userId);
@@ -429,7 +428,7 @@ public class QualityTierRepositoryTests
     public async Task PatchAsync_DoesNotCreateAuditRecord_WhenNotExists()
     {
         // Arrange
-        var patch = new QualityTierPatch(Guid.NewGuid(), Name: new ScalarPatch<string>("NonExistent"));
+        var patch = new QualityTierPatch { Id = Guid.NewGuid(), Name = new() { Value = "NonExistent" } };
 
         // Act
         await _subject.PatchAsync(patch, _userId);
@@ -448,9 +447,9 @@ public class QualityTierRepositoryTests
             Name = "PreserveTest",
             Criteria = new()
             {
-                All = [new()
+                And = [new()
                 {
-                    Criteria = new()
+                    Items = new()
                     {
                         ["resolution"] = new() { Operator = CriteriaValueOperator.Equals, Values = ["720p"] }
                     }
@@ -461,7 +460,7 @@ public class QualityTierRepositoryTests
         _context.QualityTiers.Add(qualityTier);
         await _context.SaveChangesAsync();
 
-        var patch = new QualityTierPatch(qualityTier.Id, Name: new("NewName"));
+        var patch = new QualityTierPatch { Id = qualityTier.Id, Name = new() { Value = "NewName" } };
 
         // Act
         await _subject.PatchAsync(patch, _userId);
@@ -472,7 +471,7 @@ public class QualityTierRepositoryTests
         {
             Assert.That(patched, Has.Property(nameof(patched.Name)).EqualTo("NewName"));
             Assert.That(patched, Has.Property(nameof(patched.Criteria))
-                .With.Property(nameof(QualityTierCriteria.All)).With.Count.EqualTo(1));
+                .With.Property(nameof(QualityTierCriteria.And)).With.Count.EqualTo(1));
         }
     }
 }

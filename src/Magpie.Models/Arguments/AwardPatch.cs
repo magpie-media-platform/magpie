@@ -8,22 +8,50 @@ namespace Magpie.Models.Arguments;
 /// <summary>
 /// Patch for <see cref="Award"/>.
 /// </summary>
-/// <param name="Id">The <see cref="Award.Id"/> of the item to patch.</param>
-/// <param name="Ordinal">The <see cref="Award.Ordinal"/> patch</param>
-/// <param name="AwardBody">The <see cref="Award.AwardBody"/> patch</param>
-/// <param name="Name">The <see cref="Award.Name"/> patch</param>
-/// <param name="Category">The <see cref="Award.Category"/> patch</param>
-/// <param name="Status">The <see cref="Award.Status"/> patch</param>
-/// <param name="Year">The <see cref="Award.Year"/> patch</param>
-/// <param name="Language">The <see cref="Award.Language"/> patch</param>
-/// <param name="Country">The <see cref="Award.Country"/> patch</param>
-public sealed record AwardPatch(
-    Guid Id,
-    ScalarPatch<int>? Ordinal = null,
-    ScalarPatch<string>? AwardBody = null,
-    ScalarPatch<string>? Name = null,
-    ScalarPatch<string?>? Category = null,
-    ScalarPatch<string?>? Status = null,
-    ScalarPatch<int?>? Year = null,
-    ScalarPatch<string?>? Language = null,
-    ScalarPatch<string?>? Country = null);
+public sealed record AwardPatch
+{
+    /// <summary>
+    /// The <see cref="Award.Id"/> of the item to patch.
+    /// </summary>
+    public Guid Id { get; init; }
+
+    /// <summary>
+    /// The <see cref="Award.Ordinal"/> to patch.
+    /// </summary>
+    public ScalarPatch<int>? Ordinal { get; init; }
+
+    /// <summary>
+    /// The <see cref="Award.AwardBody"/> to patch.
+    /// </summary>
+    public ScalarPatch<string>? AwardBody { get; init; }
+
+    /// <summary>
+    /// The <see cref="Award.Name"/> to patch.
+    /// </summary>
+    public ScalarPatch<string>? Name { get; init; }
+
+    /// <summary>
+    /// The <see cref="Award.Category"/> to patch.
+    /// </summary>
+    public ScalarPatch<string?>? Category { get; init; }
+
+    /// <summary>
+    /// The <see cref="Award.Status"/> to patch.
+    /// </summary>
+    public ScalarPatch<string?>? Status { get; init; }
+
+    /// <summary>
+    /// The <see cref="Award.Year"/> to patch.
+    /// </summary>
+    public ScalarPatch<int?>? Year { get; init; }
+
+    /// <summary>
+    /// The <see cref="Award.Language"/> to patch.
+    /// </summary>
+    public ScalarPatch<string?>? Language { get; init; }
+
+    /// <summary>
+    /// The <see cref="Award.Country"/> to patch.
+    /// </summary>
+    public ScalarPatch<string?>? Country { get; init; }
+}

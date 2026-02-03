@@ -10,8 +10,8 @@ using Magpie.Data;
 using Magpie.Models;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
+using Magpie.Models.Enums;
 using Magpie.Models.Paging;
-using Magpie.Models.Sorting;
 
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
@@ -128,7 +128,13 @@ public sealed class ReleaseRepository(
 
             var items = await releases.ToListAsync(cancellationToken).ConfigureAwait(false);
 
-            return new(items, paging?.PageNumber, paging?.PageSize, totalCount);
+            return new()
+            {
+                Items = items,
+                PageNumber = paging?.PageNumber,
+                PageSize = paging?.PageSize,
+                TotalItems = totalCount
+            };
         }
         catch (Exception ex)
         {

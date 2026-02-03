@@ -8,22 +8,18 @@ using Magpie.Abstractions.Repositories;
 using Magpie.Data;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
+using Magpie.Models.Enums;
 using Magpie.Models.Paging;
-using Magpie.Models.Sorting;
 
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 
 namespace Magpie.Core.Repositories;
 
-/// <summary>
-/// Repository for recording and querying audit history records.
-/// </summary>
-public sealed class AuditRecordRepository(
+internal sealed class AuditRecordRepository(
     MagpieDbContext context,
     ILogger<AuditRecordRepository> logger) : IAuditRecordRepository
 {
-    /// <inheritdoc />
     public async Task<IEnumerable<AuditRecord>> ListAllAsync(CancellationToken cancellationToken)
     {
         try
@@ -41,7 +37,6 @@ public sealed class AuditRecordRepository(
         }
     }
 
-    /// <inheritdoc />
     public async Task<AuditRecord?> GetByIdAsync(Guid id, CancellationToken cancellationToken)
     {
         try
@@ -58,7 +53,6 @@ public sealed class AuditRecordRepository(
         }
     }
 
-    /// <inheritdoc />
     public async Task<PagedList<AuditRecord>> QueryAsync(
         AuditRecordQuery query,
         PagingParameter? page,
@@ -88,9 +82,9 @@ public sealed class AuditRecordRepository(
             {
                 auditRecords = auditRecords.Where(r => r.Operation == query.Operation);
             }
-            if (query.Description is not null)
+            if (query.Detail is not null)
             {
-                auditRecords = auditRecords.Where(r => r.Detail != null && r.Detail.Contains(query.Description));
+                auditRecords = auditRecords.Where(r => r.Detail != null && r.Detail.Contains(query.Detail));
             }
             if (query.Timestamp?.Min is not null)
             {
@@ -125,7 +119,13 @@ public sealed class AuditRecordRepository(
 
             var items = await auditRecords.ToListAsync(cancellationToken).ConfigureAwait(false);
 
-            return new(items, page?.PageNumber, page?.PageSize, totalCount);
+            return new()
+            {
+                Items = items,
+                PageNumber = page?.PageNumber,
+                PageSize = page?.PageSize,
+                TotalItems = totalCount
+            };
         }
         catch (Exception ex)
         {
@@ -134,7 +134,6 @@ public sealed class AuditRecordRepository(
         }
     }
 
-    /// <inheritdoc />
     public async Task<AuditRecord> CreateAsync(AuditRecord auditRecord, CancellationToken cancellationToken)
     {
         try

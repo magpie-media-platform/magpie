@@ -9,54 +9,130 @@ namespace Magpie.Models.Arguments;
 /// <summary>
 /// Patch for <see cref="MetadataContribution"/>.
 /// </summary>
-/// <param name="Id">The <see cref="MetadataContribution.Id"/> of the item to patch.</param>
-/// <param name="Ordinal">The <see cref="MetadataContribution.Ordinal"/> patch</param>
-/// <param name="Locked">The <see cref="MetadataContribution.Locked"/> patch</param>
-/// <param name="Title">The <see cref="MetadataContribution.Title"/> patch</param>
-/// <param name="OriginalTitle">The <see cref="MetadataContribution.OriginalTitle"/> patch</param>
-/// <param name="SortTitle">The <see cref="MetadataContribution.SortTitle"/> patch</param>
-/// <param name="Language">The <see cref="MetadataContribution.Language"/> patch</param>
-/// <param name="Overview">The <see cref="MetadataContribution.Overview"/> patch</param>
-/// <param name="PublishDate">The <see cref="MetadataContribution.PublishDate"/> patch</param>
-/// <param name="Duration">The <see cref="MetadataContribution.Duration"/> patch</param>
-/// <param name="ProductionStatus">The <see cref="MetadataContribution.ProductionStatus"/> patch</param>
-/// <param name="Established">The <see cref="MetadataContribution.Established"/> patch</param>
-/// <param name="Dissolved">The <see cref="MetadataContribution.Dissolved"/> patch</param>
-/// <param name="BirthDate">The <see cref="MetadataContribution.BirthDate"/> patch</param>
-/// <param name="DeathDate">The <see cref="MetadataContribution.DeathDate"/> patch</param>
-/// <param name="AlternateTexts">The <see cref="MetadataContribution.AlternateTexts"/> patch</param>
-/// <param name="Awards">The <see cref="MetadataContribution.Awards"/> patch</param>
-/// <param name="ContentRatings">The <see cref="MetadataContribution.ContentRatings"/> patch</param>
-/// <param name="CustomMetadata">The <see cref="MetadataContribution.CustomMetadata"/> patch</param>
-/// <param name="ExternalIds">The <see cref="MetadataContribution.ExternalIds"/> patch</param>
-/// <param name="Genres">The <see cref="MetadataContribution.Genres"/> patch</param>
-/// <param name="Images">The <see cref="MetadataContribution.Images"/> patch</param>
-/// <param name="Previews">The <see cref="MetadataContribution.Previews"/> patch</param>
-/// <param name="References">The <see cref="MetadataContribution.References"/> patch</param>
-/// <param name="Relationships">The <see cref="MetadataContribution.Relationships"/> patch</param>
-public sealed record ContributionPatch(
-    Guid Id,
-    ScalarPatch<int>? Ordinal = null,
-    ScalarPatch<bool>? Locked = null,
-    ScalarPatch<string?>? Title = null,
-    ScalarPatch<string?>? OriginalTitle = null,
-    ScalarPatch<string?>? SortTitle = null,
-    ScalarPatch<string?>? Language = null,
-    ScalarPatch<string?>? Overview = null,
-    ScalarPatch<DateTime?>? PublishDate = null,
-    ScalarPatch<TimeSpan?>? Duration = null,
-    ScalarPatch<string?>? ProductionStatus = null,
-    ScalarPatch<DateTime?>? Established = null,
-    ScalarPatch<DateTime?>? Dissolved = null,
-    ScalarPatch<DateTime?>? BirthDate = null,
-    ScalarPatch<DateTime?>? DeathDate = null,
-    CollectionPatch<AlternateText, Guid, AlternateTextPatch>? AlternateTexts = null,
-    CollectionPatch<Award, Guid, AwardPatch>? Awards = null,
-    CollectionPatch<ContentRating, Guid, ContentRatingPatch>? ContentRatings = null,
-    ScalarPatch<IReadOnlyDictionary<string, string?>>? CustomMetadata = null,
-    CollectionPatch<ExternalId, Guid, ExternalIdPatch>? ExternalIds = null,
-    SetPatch<string, string>? Genres = null,
-    CollectionPatch<Image, Guid, ImagePatch>? Images = null,
-    CollectionPatch<Preview, Guid, PreviewPatch>? Previews = null,
-    CollectionPatch<Reference, Guid, ReferencePatch>? References = null,
-    CollectionPatch<Relationship, Guid, RelationshipPatch>? Relationships = null);
+public sealed record ContributionPatch
+{
+    /// <summary>
+    /// The <see cref="MetadataContribution.Id"/> of the item to patch.
+    /// </summary>
+    public Guid Id { get; init; }
+
+    /// <summary>
+    /// The <see cref="MetadataContribution.Ordinal"/> to patch.
+    /// </summary>
+    public ScalarPatch<int>? Ordinal { get; init; }
+
+    /// <summary>
+    /// The <see cref="MetadataContribution.Locked"/> to patch.
+    /// </summary>
+    public ScalarPatch<bool>? Locked { get; init; }
+
+    /// <summary>
+    /// The <see cref="MetadataContribution.Title"/> to patch.
+    /// </summary>
+    public ScalarPatch<string?>? Title { get; init; }
+
+    /// <summary>
+    /// The <see cref="MetadataContribution.OriginalTitle"/> to patch.
+    /// </summary>
+    public ScalarPatch<string?>? OriginalTitle { get; init; }
+
+    /// <summary>
+    /// The <see cref="MetadataContribution.SortTitle"/> to patch.
+    /// </summary>
+    public ScalarPatch<string?>? SortTitle { get; init; }
+
+    /// <summary>
+    /// The <see cref="MetadataContribution.Language"/> to patch.
+    /// </summary>
+    public ScalarPatch<string?>? Language { get; init; }
+
+    /// <summary>
+    /// The <see cref="MetadataContribution.Overview"/> to patch.
+    /// </summary>
+    public ScalarPatch<string?>? Overview { get; init; }
+
+    /// <summary>
+    /// The <see cref="MetadataContribution.PublishDate"/> to patch.
+    /// </summary>
+    public ScalarPatch<DateTime?>? PublishDate { get; init; }
+
+    /// <summary>
+    /// The <see cref="MetadataContribution.Duration"/> to patch.
+    /// </summary>
+    public ScalarPatch<TimeSpan?>? Duration { get; init; }
+
+    /// <summary>
+    /// The <see cref="MetadataContribution.ProductionStatus"/> to patch.
+    /// </summary>
+    public ScalarPatch<string?>? ProductionStatus { get; init; }
+
+    /// <summary>
+    /// The <see cref="MetadataContribution.Established"/> to patch.
+    /// </summary>
+    public ScalarPatch<DateTime?>? Established { get; init; }
+
+    /// <summary>
+    /// The <see cref="MetadataContribution.Dissolved"/> to patch.
+    /// </summary>
+    public ScalarPatch<DateTime?>? Dissolved { get; init; }
+
+    /// <summary>
+    /// The <see cref="MetadataContribution.BirthDate"/> to patch.
+    /// </summary>
+    public ScalarPatch<DateTime?>? BirthDate { get; init; }
+
+    /// <summary>
+    /// The <see cref="MetadataContribution.DeathDate"/> to patch.
+    /// </summary>
+    public ScalarPatch<DateTime?>? DeathDate { get; init; }
+
+    /// <summary>
+    /// The <see cref="MetadataContribution.AlternateTexts"/> to patch.
+    /// </summary>
+    public CollectionPatch<AlternateText, Guid, AlternateTextPatch>? AlternateTexts { get; init; }
+
+    /// <summary>
+    /// The <see cref="MetadataContribution.Awards"/> to patch.
+    /// </summary>
+    public CollectionPatch<Award, Guid, AwardPatch>? Awards { get; init; }
+
+    /// <summary>
+    /// The <see cref="MetadataContribution.ContentRatings"/> to patch.
+    /// </summary>
+    public CollectionPatch<ContentRating, Guid, ContentRatingPatch>? ContentRatings { get; init; }
+
+    /// <summary>
+    /// The <see cref="MetadataContribution.CustomMetadata"/> to patch.
+    /// </summary>
+    public ScalarPatch<IReadOnlyDictionary<string, string?>>? CustomMetadata { get; init; }
+
+    /// <summary>
+    /// The <see cref="MetadataContribution.ExternalIds"/> to patch.
+    /// </summary>
+    public CollectionPatch<ExternalId, Guid, ExternalIdPatch>? ExternalIds { get; init; }
+
+    /// <summary>
+    /// The <see cref="MetadataContribution.Genres"/> to patch.
+    /// </summary>
+    public SetPatch<string, string>? Genres { get; init; }
+
+    /// <summary>
+    /// The <see cref="MetadataContribution.Images"/> to patch.
+    /// </summary>
+    public CollectionPatch<Image, Guid, ImagePatch>? Images { get; init; }
+
+    /// <summary>
+    /// The <see cref="MetadataContribution.Previews"/> to patch.
+    /// </summary>
+    public CollectionPatch<Preview, Guid, PreviewPatch>? Previews { get; init; }
+
+    /// <summary>
+    /// The <see cref="MetadataContribution.References"/> to patch.
+    /// </summary>
+    public CollectionPatch<Reference, Guid, ReferencePatch>? References { get; init; }
+
+    /// <summary>
+    /// The <see cref="MetadataContribution.Relationships"/> to patch.
+    /// </summary>
+    public CollectionPatch<Relationship, Guid, RelationshipPatch>? Relationships { get; init; }
+}

@@ -91,9 +91,9 @@ public class RootFoldersEndpointGroupTests
 
         // Act
         var response = await _client.GetAsync("/api/root-folders").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<RootFolder[]>().ConfigureAwait(false);
 
         // Assert
+        var content = await response.Content.ReadFromJsonAsync<RootFolder[]>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
@@ -115,9 +115,9 @@ public class RootFoldersEndpointGroupTests
 
         // Act
         var response = await _client.GetAsync("/api/root-folders").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<RootFolder[]>().ConfigureAwait(false);
 
         // Assert
+        var content = await response.Content.ReadFromJsonAsync<RootFolder[]>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
@@ -148,9 +148,9 @@ public class RootFoldersEndpointGroupTests
 
         // Act
         var response = await _client.GetAsync($"/api/root-folders/{rootFolderId}").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<RootFolder>().ConfigureAwait(false);
 
         // Assert
+        var content = await response.Content.ReadFromJsonAsync<RootFolder>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
@@ -189,9 +189,9 @@ public class RootFoldersEndpointGroupTests
 
         // Act
         var response = await _client.PostAsJsonAsync("/api/root-folders", request).ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<RootFolder>().ConfigureAwait(false);
 
         // Assert
+        var content = await response.Content.ReadFromJsonAsync<RootFolder>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.Created));

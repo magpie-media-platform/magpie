@@ -9,7 +9,6 @@ using Magpie.Data;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
-using Magpie.Models.Patch;
 using Magpie.Test.Shared;
 
 using Microsoft.EntityFrameworkCore;
@@ -334,7 +333,7 @@ public class UserRepositoryTests
         };
         var created = await _subject.CreateAsync(user, _adminUserId);
 
-        var patch = new UserPatch(created.Id, Enabled: new ScalarPatch<bool>(false));
+        var patch = new UserPatch { Id = created.Id, Enabled = new() { Value = false } };
 
         // Act
         var result = await _subject.PatchAsync(patch, _adminUserId);
@@ -362,7 +361,7 @@ public class UserRepositoryTests
         };
         var created = await _subject.CreateAsync(user, _adminUserId);
 
-        var patch = new UserPatch(created.Id, Role: new ScalarPatch<Role>(Role.Admin));
+        var patch = new UserPatch { Id = created.Id, Role = new() { Value = Role.Admin } };
 
         // Act
         var result = await _subject.PatchAsync(patch, _adminUserId);
@@ -378,7 +377,7 @@ public class UserRepositoryTests
     public async Task PatchAsync_ReturnsFalse_WhenUserNotExists()
     {
         // Arrange
-        var patch = new UserPatch(Guid.NewGuid(), Enabled: new ScalarPatch<bool>(false));
+        var patch = new UserPatch { Id = Guid.NewGuid(), Enabled = new() { Value = false } };
 
         // Act
         var result = await _subject.PatchAsync(patch, _adminUserId);
@@ -433,7 +432,7 @@ public class UserRepositoryTests
         }, _adminUserId);
 
         // Act
-        var result = await _subject.QueryAsync(new UserQuery(Enabled: false), null, null);
+        var result = await _subject.QueryAsync(new() { Enabled = false }, null, null);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -464,7 +463,7 @@ public class UserRepositoryTests
         }, _adminUserId);
 
         // Act
-        var result = await _subject.QueryAsync(new UserQuery(Role: Role.Manager), null, null);
+        var result = await _subject.QueryAsync(new() { Role = Role.Manager }, null, null);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -495,7 +494,7 @@ public class UserRepositoryTests
         }, _adminUserId);
 
         // Act
-        var result = await _subject.QueryAsync(new UserQuery(ProviderType: "oauth"), null, null);
+        var result = await _subject.QueryAsync(new() { ProviderType = "oauth" }, null, null);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -595,7 +594,7 @@ public class UserRepositoryTests
         };
         var created = await _subject.CreateAsync(user, _adminUserId);
 
-        var patch = new UserPatch(created.Id, Enabled: new ScalarPatch<bool>(false));
+        var patch = new UserPatch { Id = created.Id, Enabled = new() { Value = false } };
 
         // Act
         await _subject.PatchAsync(patch, _adminUserId);

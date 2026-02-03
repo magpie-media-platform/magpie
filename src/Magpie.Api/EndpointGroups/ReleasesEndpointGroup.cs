@@ -7,8 +7,8 @@ using Magpie.Abstractions.Repositories;
 using Magpie.Abstractions.Security;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
+using Magpie.Models.Enums;
 using Magpie.Models.Paging;
-using Magpie.Models.Sorting;
 
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -89,11 +89,11 @@ internal sealed class ReleasesEndpointGroup(IReleaseRepository releaseRepository
         CancellationToken cancellationToken)
     {
         var paging = pageNumber.HasValue && pageSize.HasValue
-            ? new PagingParameter(pageNumber.Value, pageSize.Value)
+            ? new PagingParameter { PageNumber = pageNumber.Value, PageSize = pageSize.Value }
             : null;
 
         var sort = !string.IsNullOrEmpty(sortBy)
-            ? new SortParameter(sortBy, sortDirection ?? SortDirection.Ascending)
+            ? new SortParameter { PropertyName = sortBy, Direction = sortDirection ?? SortDirection.Ascending }
             : null;
 
         var result = await releaseRepository.QueryAsync(query, paging, sort, cancellationToken)

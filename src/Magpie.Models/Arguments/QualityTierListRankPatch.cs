@@ -8,10 +8,20 @@ namespace Magpie.Models.Arguments;
 /// <summary>
 /// Patch for <see cref="QualityTierListRank"/>.
 /// </summary>
-/// <param name="QualityTierId">The <see cref="QualityTierListRank.QualityTierId"/> patch</param>
-/// <param name="Ordinal">The <see cref="QualityTierListRank.Ordinal"/> patch</param>
-/// <param name="IsCutoff">The <see cref="QualityTierListRank.IsCutoff"/> patch</param>
-public sealed record QualityTierListRankPatch(
-    ScalarPatch<Guid>? QualityTierId = null,
-    ScalarPatch<int>? Ordinal = null,
-    ScalarPatch<bool>? IsCutoff = null);
+public sealed record QualityTierListRankPatch
+{
+    /// <summary>
+    /// The <see cref="QualityTierListRank.QualityTierId"/> to patch.
+    /// </summary>
+    public ScalarPatch<Guid>? QualityTierId { get; init; }
+
+    /// <summary>
+    /// The <see cref="QualityTierListRank.Ordinal"/> to patch.
+    /// </summary>
+    public ScalarPatch<int>? Ordinal { get; init; }
+
+    /// <summary>
+    /// The <see cref="QualityTierListRank.IsCutoff"/> to patch.
+    /// </summary>
+    public ScalarPatch<bool>? IsCutoff { get; init; }
+}

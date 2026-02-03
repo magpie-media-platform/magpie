@@ -8,12 +8,25 @@ namespace Magpie.Models.Arguments;
 /// <summary>
 /// Patch for <see cref="ContentRating"/>.
 /// </summary>
-/// <param name="Id">The <see cref="ContentRating.Id"/> of the item to patch.</param>
-/// <param name="Ordinal">The <see cref="ContentRating.Ordinal"/> patch</param>
-/// <param name="RatingsBody">The <see cref="ContentRating.RatingsBody"/> patch</param>
-/// <param name="Value">The <see cref="ContentRating.Value"/> patch</param>
-public sealed record ContentRatingPatch(
-    Guid Id,
-    ScalarPatch<int>? Ordinal = null,
-    ScalarPatch<string>? RatingsBody = null,
-    ScalarPatch<string>? Value = null);
+public sealed record ContentRatingPatch
+{
+    /// <summary>
+    /// The <see cref="ContentRating.Id"/> of the item to patch.
+    /// </summary>
+    public Guid Id { get; init; }
+
+    /// <summary>
+    /// The <see cref="ContentRating.Ordinal"/> to patch.
+    /// </summary>
+    public ScalarPatch<int>? Ordinal { get; init; }
+
+    /// <summary>
+    /// The <see cref="ContentRating.RatingsBody"/> to patch.
+    /// </summary>
+    public ScalarPatch<string>? RatingsBody { get; init; }
+
+    /// <summary>
+    /// The <see cref="ContentRating.Value"/> to patch.
+    /// </summary>
+    public ScalarPatch<string>? Value { get; init; }
+}

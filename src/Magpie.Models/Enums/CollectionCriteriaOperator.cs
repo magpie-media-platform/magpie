@@ -6,7 +6,7 @@ namespace Magpie.Models.Enums;
 public enum CollectionCriteriaOperator
 {
     /// <summary>
-    /// Matches when at least item in the collection matches the criteria.
+    /// Matches when at least one item in the collection matches the criteria.
     /// </summary>
     Some = 0,
 

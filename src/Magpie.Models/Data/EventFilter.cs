@@ -15,5 +15,5 @@ public sealed record EventFilter
     /// <summary>
     /// The criteria for matching the event context.
     /// </summary>
-    public PropertyDictionaryCriteria? EventContext { get; init; }
+    public DictionaryCriteria<PropertyCriterion<string>>? EventContext { get; init; }
 }

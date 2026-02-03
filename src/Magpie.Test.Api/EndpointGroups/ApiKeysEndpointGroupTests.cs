@@ -94,9 +94,9 @@ public class ApiKeysEndpointGroupTests
 
         // Act
         var response = await _client.GetAsync("/api/api-keys").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<ApiKeyResponse[]>().ConfigureAwait(false);
 
         // Assert
+        var content = await response.Content.ReadFromJsonAsync<ApiKeyResponse[]>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
@@ -130,9 +130,9 @@ public class ApiKeysEndpointGroupTests
 
         // Act
         var response = await _client.GetAsync("/api/api-keys").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<ApiKeyResponse[]>().ConfigureAwait(false);
 
         // Assert
+        var content = await response.Content.ReadFromJsonAsync<ApiKeyResponse[]>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
@@ -167,9 +167,9 @@ public class ApiKeysEndpointGroupTests
 
         // Act
         var response = await _client.GetAsync($"/api/api-keys?userId={_userId}").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<ApiKeyResponse[]>().ConfigureAwait(false);
 
         // Assert
+        var content = await response.Content.ReadFromJsonAsync<ApiKeyResponse[]>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
@@ -203,9 +203,9 @@ public class ApiKeysEndpointGroupTests
 
         // Act
         var response = await _client.GetAsync($"/api/api-keys/{apiKeyId}").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<ApiKeyResponse>().ConfigureAwait(false);
 
         // Assert
+        var content = await response.Content.ReadFromJsonAsync<ApiKeyResponse>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
@@ -314,9 +314,9 @@ public class ApiKeysEndpointGroupTests
 
         // Act
         var response = await _client.PostAsync($"/api/api-keys/{apiKeyId}/rotate", null).ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<ApiKeyCreatedResponse>().ConfigureAwait(false);
 
         // Assert
+        var content = await response.Content.ReadFromJsonAsync<ApiKeyCreatedResponse>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
@@ -384,9 +384,9 @@ public class ApiKeysEndpointGroupTests
 
         // Act
         var response = await _client.PostAsync($"/api/api-keys/{apiKeyId}/enable", null).ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<ApiKeyResponse>().ConfigureAwait(false);
 
         // Assert
+        var content = await response.Content.ReadFromJsonAsync<ApiKeyResponse>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));

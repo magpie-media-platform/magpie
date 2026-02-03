@@ -6,8 +6,25 @@ namespace Magpie.Models.Paging;
 /// A page of <typeparamref name="T"/> items.
 /// </summary>
 /// <typeparam name="T">The type of items.</typeparam>
-/// <param name="Items">The items for the current page.</param>
-/// <param name="PageNumber">The current page number.</param>
-/// <param name="PageSize">The number of items per page.</param>
-/// <param name="TotalItems">The total number of items.</param>
-public sealed record PagedList<T>(IEnumerable<T> Items, int? PageNumber, int? PageSize, int TotalItems);
+public sealed record PagedList<T>
+{
+    /// <summary>
+    /// The items for the current page.
+    /// </summary>
+    public IEnumerable<T> Items { get; init; } = [];
+
+    /// <summary>
+    /// The current page number.
+    /// </summary>
+    public int? PageNumber { get; init; }
+
+    /// <summary>
+    /// The number of items per page.
+    /// </summary>
+    public int? PageSize { get; init; }
+
+    /// <summary>
+    /// The total number of items.
+    /// </summary>
+    public int TotalItems { get; init; }
+}

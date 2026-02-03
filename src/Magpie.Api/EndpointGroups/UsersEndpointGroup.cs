@@ -9,8 +9,6 @@ using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Models.Paging;
-using Magpie.Models.Patch;
-using Magpie.Models.Sorting;
 
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -76,12 +74,12 @@ internal sealed class UsersEndpointGroup(IUserRepository userRepository) : IApiE
         SortDirection? sortDirection,
         CancellationToken cancellationToken)
     {
-        var query = new UserQuery(enabled, role, providerType);
+        var query = new UserQuery { Enabled = enabled, Role = role, ProviderType = providerType };
         var paging = page.HasValue || pageSize.HasValue
-            ? new PagingParameter(page ?? 1, pageSize ?? 25)
+            ? new PagingParameter { PageNumber = page ?? 1, PageSize = pageSize ?? 25 }
             : null;
         var sort = !string.IsNullOrEmpty(sortBy)
-            ? new SortParameter(sortBy, sortDirection ?? SortDirection.Ascending)
+            ? new SortParameter { PropertyName = sortBy, Direction = sortDirection ?? SortDirection.Ascending }
             : null;
 
         var result = await userRepository.QueryAsync(query, paging, sort, cancellationToken)
@@ -123,7 +121,7 @@ internal sealed class UsersEndpointGroup(IUserRepository userRepository) : IApiE
             return Results.NotFound();
         }
 
-        var patch = new UserPatch(id, Enabled: new ScalarPatch<bool>(true));
+        var patch = new UserPatch { Id = id, Enabled = new() { Value = true } };
         await userRepository.PatchAsync(patch, currentUserId, cancellationToken)
             .ConfigureAwait(false);
 
@@ -140,7 +138,7 @@ internal sealed class UsersEndpointGroup(IUserRepository userRepository) : IApiE
             return Results.NotFound();
         }
 
-        var patch = new UserPatch(id, Enabled: new ScalarPatch<bool>(false));
+        var patch = new UserPatch { Id = id, Enabled = new() { Value = false } };
         await userRepository.PatchAsync(patch, currentUserId, cancellationToken)
             .ConfigureAwait(false);
 

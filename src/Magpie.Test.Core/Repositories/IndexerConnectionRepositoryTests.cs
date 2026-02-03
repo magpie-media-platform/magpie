@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 
@@ -10,7 +9,6 @@ using Magpie.Data;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
-using Magpie.Models.Patch;
 using Magpie.Test.Shared;
 
 using Microsoft.EntityFrameworkCore;
@@ -283,7 +281,7 @@ public class IndexerConnectionRepositoryTests
             Name = "NewConnection",
             Enabled = true,
             Status = IndexerStatus.Unknown,
-            Settings = new Dictionary<string, string> { ["apiKey"] = "secret" }
+            Settings = new() { ["apiKey"] = "secret" }
         };
 
         // Act
@@ -497,9 +495,11 @@ public class IndexerConnectionRepositoryTests
         _context.IndexerConnections.Add(connection);
         await _context.SaveChangesAsync();
 
-        var patch = new IndexerConnectionPatch(
-            connection.Id,
-            Name: new ScalarPatch<string>("PatchedName"));
+        var patch = new IndexerConnectionPatch
+        {
+            Id = connection.Id,
+            Name = new() { Value = "PatchedName" }
+        };
 
         // Act
         var result = await _subject.PatchAsync(patch, _userId);
@@ -531,9 +531,11 @@ public class IndexerConnectionRepositoryTests
         _context.IndexerConnections.Add(connection);
         await _context.SaveChangesAsync();
 
-        var patch = new IndexerConnectionPatch(
-            connection.Id,
-            Enabled: new ScalarPatch<bool>(false));
+        var patch = new IndexerConnectionPatch
+        {
+            Id = connection.Id,
+            Enabled = new() { Value = false }
+        };
 
         // Act
         var result = await _subject.PatchAsync(patch, _userId);
@@ -558,18 +560,20 @@ public class IndexerConnectionRepositoryTests
             Name = "TestConnection",
             Enabled = true,
             Status = IndexerStatus.Healthy,
-            Settings = new Dictionary<string, string> { ["existing"] = "value" },
+            Settings = new() { ["existing"] = "value" },
             CreatedAt = DateTime.UtcNow
         };
         _context.IndexerConnections.Add(connection);
         await _context.SaveChangesAsync();
 
-        var patch = new IndexerConnectionPatch(
-            connection.Id,
-            Settings: new DictionaryPatch<string, string?, string?>(
-                Add: new Dictionary<string, string?> { ["newKey"] = "newValue" },
-                Remove: null,
-                Update: null));
+        var patch = new IndexerConnectionPatch
+        {
+            Id = connection.Id,
+            Settings = new()
+            {
+                Add = new() { ["newKey"] = "newValue" }
+            }
+        };
 
         // Act
         var result = await _subject.PatchAsync(patch, _userId);
@@ -595,7 +599,7 @@ public class IndexerConnectionRepositoryTests
             Name = "TestConnection",
             Enabled = true,
             Status = IndexerStatus.Healthy,
-            Settings = new Dictionary<string, string>
+            Settings = new()
             {
                 ["keepKey"] = "keepValue",
                 ["removeKey"] = "removeValue"
@@ -605,12 +609,14 @@ public class IndexerConnectionRepositoryTests
         _context.IndexerConnections.Add(connection);
         await _context.SaveChangesAsync();
 
-        var patch = new IndexerConnectionPatch(
-            connection.Id,
-            Settings: new DictionaryPatch<string, string?, string?>(
-                Add: null,
-                Remove: ["removeKey"],
-                Update: null));
+        var patch = new IndexerConnectionPatch
+        {
+            Id = connection.Id,
+            Settings = new()
+            {
+                Remove = ["removeKey"]
+            }
+        };
 
         // Act
         var result = await _subject.PatchAsync(patch, _userId);
@@ -636,18 +642,20 @@ public class IndexerConnectionRepositoryTests
             Name = "TestConnection",
             Enabled = true,
             Status = IndexerStatus.Healthy,
-            Settings = new Dictionary<string, string> { ["updateKey"] = "oldValue" },
+            Settings = new() { ["updateKey"] = "oldValue" },
             CreatedAt = DateTime.UtcNow
         };
         _context.IndexerConnections.Add(connection);
         await _context.SaveChangesAsync();
 
-        var patch = new IndexerConnectionPatch(
-            connection.Id,
-            Settings: new DictionaryPatch<string, string?, string?>(
-                Add: null,
-                Remove: null,
-                Update: new Dictionary<string, string?> { ["updateKey"] = "newValue" }));
+        var patch = new IndexerConnectionPatch
+        {
+            Id = connection.Id,
+            Settings = new()
+            {
+                Update = new() { ["updateKey"] = "newValue" }
+            }
+        };
 
         // Act
         var result = await _subject.PatchAsync(patch, _userId);
@@ -677,9 +685,11 @@ public class IndexerConnectionRepositoryTests
         _context.IndexerConnections.Add(connection);
         await _context.SaveChangesAsync();
 
-        var patch = new IndexerConnectionPatch(
-            connection.Id,
-            Tags: new SetPatch<string, string>(Add: ["NewTag"]));
+        var patch = new IndexerConnectionPatch
+        {
+            Id = connection.Id,
+            Tags = new() { Add = ["NewTag"] }
+        };
 
         // Act
         var result = await _subject.PatchAsync(patch, _userId);
@@ -719,9 +729,11 @@ public class IndexerConnectionRepositoryTests
         tag.IndexerConnections.Add(connection);
         await _context.SaveChangesAsync();
 
-        var patch = new IndexerConnectionPatch(
-            connection.Id,
-            Tags: new SetPatch<string, string>(Remove: ["ExistingTag"]));
+        var patch = new IndexerConnectionPatch
+        {
+            Id = connection.Id,
+            Tags = new() { Remove = ["ExistingTag"] }
+        };
 
         // Act
         var result = await _subject.PatchAsync(patch, _userId);
@@ -742,9 +754,11 @@ public class IndexerConnectionRepositoryTests
     public async Task PatchAsync_ReturnsFalse_WhenNotExists()
     {
         // Arrange
-        var patch = new IndexerConnectionPatch(
-            Guid.NewGuid(),
-            Name: new ScalarPatch<string>("PatchedName"));
+        var patch = new IndexerConnectionPatch
+        {
+            Id = Guid.NewGuid(),
+            Name = new() { Value = "PatchedName" }
+        };
 
         // Act
         var result = await _subject.PatchAsync(patch, _userId);
@@ -768,9 +782,11 @@ public class IndexerConnectionRepositoryTests
         _context.IndexerConnections.Add(connection);
         await _context.SaveChangesAsync();
 
-        var patch = new IndexerConnectionPatch(
-            connection.Id,
-            Name: new ScalarPatch<string>("Patched"));
+        var patch = new IndexerConnectionPatch
+        {
+            Id = connection.Id,
+            Name = new() { Value = "Patched" }
+        };
 
         // Act
         await _subject.PatchAsync(patch, _userId);
@@ -802,9 +818,11 @@ public class IndexerConnectionRepositoryTests
         _context.IndexerConnections.Add(connection);
         await _context.SaveChangesAsync();
 
-        var patch = new IndexerConnectionPatch(
-            connection.Id,
-            Tags: new SetPatch<string, string>(Add: ["AuditTag"]));
+        var patch = new IndexerConnectionPatch
+        {
+            Id = connection.Id,
+            Tags = new() { Add = ["AuditTag"] }
+        };
 
         // Act
         await _subject.PatchAsync(patch, _userId);
@@ -840,9 +858,11 @@ public class IndexerConnectionRepositoryTests
         tag.IndexerConnections.Add(connection);
         await _context.SaveChangesAsync();
 
-        var patch = new IndexerConnectionPatch(
-            connection.Id,
-            Tags: new SetPatch<string, string>(Remove: ["RemoveAuditTag"]));
+        var patch = new IndexerConnectionPatch
+        {
+            Id = connection.Id,
+            Tags = new() { Remove = ["RemoveAuditTag"] }
+        };
 
         // Act
         await _subject.PatchAsync(patch, _userId);

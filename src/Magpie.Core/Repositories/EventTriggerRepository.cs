@@ -258,12 +258,11 @@ public sealed class EventTriggerRepository(
                     return false;
                 }
 
-                // Apply patches to build updated values
                 var name = patch.Name?.Value ?? existing.Name;
                 var eventFilter = patch.EventFilter?.Value ?? existing.EventFilter;
                 var executionMode = patch.ExecutionMode?.Value ?? existing.ExecutionMode;
                 var enabled = patch.Enabled?.Value ?? existing.Enabled;
-                var parameters = existing.Parameters ?? new Dictionary<string, string>();
+                var parameters = existing.Parameters ?? [];
 
                 if (patch.Parameters is not null)
                 {

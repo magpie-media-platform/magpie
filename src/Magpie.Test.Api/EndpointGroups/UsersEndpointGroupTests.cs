@@ -14,7 +14,6 @@ using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Models.Paging;
-using Magpie.Models.Patch;
 using Magpie.Test.Shared;
 
 using Microsoft.AspNetCore.Authentication;
@@ -96,13 +95,19 @@ public class UsersEndpointGroupTests
         _userRepository
             .Setup(m => m
                 .QueryAsync(It.IsAny<UserQuery>(), It.IsAny<PagingParameter?>(), null, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new PagedList<User>([], null, null, 0));
+            .ReturnsAsync(new PagedList<User>
+            {
+                Items = [],
+                PageNumber = null,
+                PageSize = null,
+                TotalItems = 0
+            });
 
         // Act
         var response = await _client.GetAsync("/api/users").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<PagedList<User>>().ConfigureAwait(false);
 
         // Assert
+        var content = await response.Content.ReadFromJsonAsync<PagedList<User>>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
@@ -126,13 +131,19 @@ public class UsersEndpointGroupTests
         _userRepository
             .Setup(m => m
                 .QueryAsync(It.IsAny<UserQuery>(), It.IsAny<PagingParameter?>(), null, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new PagedList<User>([user], 1, 25, 1));
+            .ReturnsAsync(new PagedList<User>
+            {
+                Items = [user],
+                PageNumber = 1,
+                PageSize = 25,
+                TotalItems = 1
+            });
 
         // Act
         var response = await _client.GetAsync("/api/users").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<PagedList<User>>().ConfigureAwait(false);
 
         // Assert
+        var content = await response.Content.ReadFromJsonAsync<PagedList<User>>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
@@ -164,9 +175,9 @@ public class UsersEndpointGroupTests
 
         // Act
         var response = await _client.GetAsync($"/api/users/{userId}").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<User>().ConfigureAwait(false);
 
         // Assert
+        var content = await response.Content.ReadFromJsonAsync<User>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
@@ -197,7 +208,7 @@ public class UsersEndpointGroupTests
     {
         // Arrange
         var userId = Guid.NewGuid();
-        var patch = new UserPatch(userId, Enabled: new ScalarPatch<bool>(false));
+        var patch = new UserPatch { Id = userId, Enabled = new() { Value = false } };
 
         _userRepository
             .Setup(m => m.PatchAsync(It.Is<UserPatch>(p => p.Id == userId), null, It.IsAny<CancellationToken>()))
@@ -215,7 +226,7 @@ public class UsersEndpointGroupTests
     {
         // Arrange
         var userId = Guid.NewGuid();
-        var patch = new UserPatch(userId, Enabled: new ScalarPatch<bool>(false));
+        var patch = new UserPatch { Id = userId, Enabled = new() { Value = false } };
 
         _userRepository
             .Setup(m => m.PatchAsync(It.IsAny<UserPatch>(), null, It.IsAny<CancellationToken>()))

@@ -10,9 +10,9 @@ public sealed record ContentFilterCriteria
     /// <summary>
     /// The criteria for related <see cref="ContentHierarchyItem"/>s.
     /// </summary>
-    public AllCriteria<ContentHierarchyItemCriteria> ContentHierarchyItem { get; init; } = new();
+    public CriteriaSet<ContentHierarchyItemCriteria> ContentHierarchyItem { get; init; } = new();
     /// <summary>
     /// The criteria for <see cref="ContentItem.MediaFiles"/>.
     /// </summary>
-    public AllCriteria<MediaFileCriteria> MediaFiles { get; init; } = new();
+    public CriteriaSet<MediaFileCriteria> MediaFiles { get; init; } = new();
 }

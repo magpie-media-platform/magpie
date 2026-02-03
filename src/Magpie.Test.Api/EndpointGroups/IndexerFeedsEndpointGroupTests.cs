@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Json;
@@ -92,9 +91,9 @@ public class IndexerFeedsEndpointGroupTests
 
         // Act
         var response = await _client.GetAsync("/api/indexer-feeds").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<IndexerFeed[]>().ConfigureAwait(false);
 
         // Assert
+        var content = await response.Content.ReadFromJsonAsync<IndexerFeed[]>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
@@ -121,9 +120,9 @@ public class IndexerFeedsEndpointGroupTests
 
         // Act
         var response = await _client.GetAsync("/api/indexer-feeds").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<IndexerFeed[]>().ConfigureAwait(false);
 
         // Assert
+        var content = await response.Content.ReadFromJsonAsync<IndexerFeed[]>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
@@ -159,9 +158,9 @@ public class IndexerFeedsEndpointGroupTests
 
         // Act
         var response = await _client.GetAsync($"/api/indexer-feeds/{feedId}").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<IndexerFeed>().ConfigureAwait(false);
 
         // Assert
+        var content = await response.Content.ReadFromJsonAsync<IndexerFeed>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
@@ -197,7 +196,7 @@ public class IndexerFeedsEndpointGroupTests
             ProviderType = "newznab",
             Description = "A new RSS feed",
             Enabled = true,
-            Settings = new Dictionary<string, string> { ["apiKey"] = "abc123", ["baseUrl"] = "https://example.com" }
+            Settings = new() { ["apiKey"] = "abc123", ["baseUrl"] = "https://example.com" }
         };
 
         _indexerFeedRepository
@@ -206,9 +205,9 @@ public class IndexerFeedsEndpointGroupTests
 
         // Act
         var response = await _client.PostAsJsonAsync("/api/indexer-feeds", request).ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<IndexerFeed>().ConfigureAwait(false);
 
         // Assert
+        var content = await response.Content.ReadFromJsonAsync<IndexerFeed>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.Created));

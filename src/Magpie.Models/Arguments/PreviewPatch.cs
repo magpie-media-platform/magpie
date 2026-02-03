@@ -8,22 +8,50 @@ namespace Magpie.Models.Arguments;
 /// <summary>
 /// Patch for <see cref="Preview"/>.
 /// </summary>
-/// <param name="Id">The <see cref="Preview.Id"/> of the item to patch.</param>
-/// <param name="Ordinal">The <see cref="Preview.Ordinal"/> patch</param>
-/// <param name="Kind">The <see cref="Preview.Kind"/> patch</param>
-/// <param name="MimeType">The <see cref="Preview.MimeType"/> patch</param>
-/// <param name="Url">The <see cref="Preview.Url"/> patch</param>
-/// <param name="Source">The <see cref="Preview.Source"/> patch</param>
-/// <param name="Title">The <see cref="Preview.Title"/> patch</param>
-/// <param name="ReleaseDate">The <see cref="Preview.ReleaseDate"/> patch</param>
-/// <param name="Language">The <see cref="Preview.Language"/> patch</param>
-public sealed record PreviewPatch(
-    Guid Id,
-    ScalarPatch<int>? Ordinal = null,
-    ScalarPatch<string>? Kind = null,
-    ScalarPatch<string?>? MimeType = null,
-    ScalarPatch<string>? Url = null,
-    ScalarPatch<string?>? Source = null,
-    ScalarPatch<string?>? Title = null,
-    ScalarPatch<DateTime?>? ReleaseDate = null,
-    ScalarPatch<string?>? Language = null);
+public sealed record PreviewPatch
+{
+    /// <summary>
+    /// The <see cref="Preview.Id"/> of the item to patch.
+    /// </summary>
+    public Guid Id { get; init; }
+
+    /// <summary>
+    /// The <see cref="Preview.Ordinal"/> to patch.
+    /// </summary>
+    public ScalarPatch<int>? Ordinal { get; init; }
+
+    /// <summary>
+    /// The <see cref="Preview.Kind"/> to patch.
+    /// </summary>
+    public ScalarPatch<string>? Kind { get; init; }
+
+    /// <summary>
+    /// The <see cref="Preview.MimeType"/> to patch.
+    /// </summary>
+    public ScalarPatch<string?>? MimeType { get; init; }
+
+    /// <summary>
+    /// The <see cref="Preview.Url"/> to patch.
+    /// </summary>
+    public ScalarPatch<string>? Url { get; init; }
+
+    /// <summary>
+    /// The <see cref="Preview.Source"/> to patch.
+    /// </summary>
+    public ScalarPatch<string?>? Source { get; init; }
+
+    /// <summary>
+    /// The <see cref="Preview.Title"/> to patch.
+    /// </summary>
+    public ScalarPatch<string?>? Title { get; init; }
+
+    /// <summary>
+    /// The <see cref="Preview.ReleaseDate"/> to patch.
+    /// </summary>
+    public ScalarPatch<DateTime?>? ReleaseDate { get; init; }
+
+    /// <summary>
+    /// The <see cref="Preview.Language"/> to patch.
+    /// </summary>
+    public ScalarPatch<string?>? Language { get; init; }
+}

@@ -92,9 +92,9 @@ public class IndexersEndpointGroupTests
 
         // Act
         var response = await _client.GetAsync("/api/indexers").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<Indexer[]>().ConfigureAwait(false);
 
         // Assert
+        var content = await response.Content.ReadFromJsonAsync<Indexer[]>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
@@ -115,9 +115,9 @@ public class IndexersEndpointGroupTests
 
         // Act
         var response = await _client.GetAsync("/api/indexers").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<Indexer[]>().ConfigureAwait(false);
 
         // Assert
+        var content = await response.Content.ReadFromJsonAsync<Indexer[]>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
@@ -140,9 +140,9 @@ public class IndexersEndpointGroupTests
 
         // Act
         var response = await _client.GetAsync($"/api/indexers/{indexerId}").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<Indexer>().ConfigureAwait(false);
 
         // Assert
+        var content = await response.Content.ReadFromJsonAsync<Indexer>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
@@ -186,9 +186,9 @@ public class IndexersEndpointGroupTests
 
         // Act
         var response = await _client.PostAsJsonAsync("/api/indexers", request).ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<Indexer>().ConfigureAwait(false);
 
         // Assert
+        var content = await response.Content.ReadFromJsonAsync<Indexer>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.Created));

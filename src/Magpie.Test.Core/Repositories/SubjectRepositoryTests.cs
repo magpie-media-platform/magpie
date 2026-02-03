@@ -221,7 +221,6 @@ public class SubjectRepositoryTests
     [Test]
     public async Task GetByTagAsync_ReturnsEmptyList()
     {
-        // Subject does not have tag support in the current model
         // Act
         var result = await _subject.GetByTagAsync("testtag");
 
@@ -426,7 +425,7 @@ public class SubjectRepositoryTests
         _context.Subjects.Add(subject);
         await _context.SaveChangesAsync();
 
-        var patch = new TagsPatch(subject.Id, null);
+        var patch = new TagsPatch { Id = subject.Id };
 
         // Act
         var result = await _subject.PatchAsync(patch, _userId);
@@ -446,7 +445,7 @@ public class SubjectRepositoryTests
     public async Task PatchAsync_ReturnsFalse_WhenNotExists()
     {
         // Arrange
-        var patch = new TagsPatch(Guid.NewGuid(), null);
+        var patch = new TagsPatch { Id = Guid.NewGuid() };
 
         // Act
         var result = await _subject.PatchAsync(patch, _userId);
@@ -468,7 +467,7 @@ public class SubjectRepositoryTests
         _context.Subjects.Add(subject);
         await _context.SaveChangesAsync();
 
-        var patch = new TagsPatch(subject.Id, null);
+        var patch = new TagsPatch { Id = subject.Id };
 
         // Act
         await _subject.PatchAsync(patch, _userId);

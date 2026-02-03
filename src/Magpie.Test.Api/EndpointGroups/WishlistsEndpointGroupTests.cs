@@ -11,7 +11,6 @@ using Magpie.Abstractions.Repositories;
 using Magpie.Api.EndpointGroups;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
-using Magpie.Models.Patch;
 using Magpie.Test.Shared;
 
 using Microsoft.AspNetCore.Authentication;
@@ -93,9 +92,9 @@ public class WishlistsEndpointGroupTests
 
         // Act
         var response = await _client.GetAsync("/api/wishlists").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<Wishlist[]>().ConfigureAwait(false);
 
         // Assert
+        var content = await response.Content.ReadFromJsonAsync<Wishlist[]>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
@@ -116,9 +115,9 @@ public class WishlistsEndpointGroupTests
 
         // Act
         var response = await _client.GetAsync("/api/wishlists").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<Wishlist[]>().ConfigureAwait(false);
 
         // Assert
+        var content = await response.Content.ReadFromJsonAsync<Wishlist[]>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
@@ -140,9 +139,9 @@ public class WishlistsEndpointGroupTests
 
         // Act
         var response = await _client.GetAsync($"/api/wishlists/{wishlistId}").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<Wishlist>().ConfigureAwait(false);
 
         // Assert
+        var content = await response.Content.ReadFromJsonAsync<Wishlist>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
@@ -180,9 +179,9 @@ public class WishlistsEndpointGroupTests
 
         // Act
         var response = await _client.GetAsync($"/api/wishlists/by-user/{userId}").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<Wishlist[]>().ConfigureAwait(false);
 
         // Assert
+        var content = await response.Content.ReadFromJsonAsync<Wishlist[]>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
@@ -203,9 +202,9 @@ public class WishlistsEndpointGroupTests
 
         // Act
         var response = await _client.GetAsync("/api/wishlists/monitored").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<Wishlist[]>().ConfigureAwait(false);
 
         // Assert
+        var content = await response.Content.ReadFromJsonAsync<Wishlist[]>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
@@ -227,9 +226,9 @@ public class WishlistsEndpointGroupTests
 
         // Act
         var response = await _client.PostAsJsonAsync("/api/wishlists", request).ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<Wishlist>().ConfigureAwait(false);
 
         // Assert
+        var content = await response.Content.ReadFromJsonAsync<Wishlist>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.Created));
@@ -243,7 +242,7 @@ public class WishlistsEndpointGroupTests
     {
         // Arrange
         var wishlistId = Guid.NewGuid();
-        var request = new WishlistPatch(wishlistId, Name: new ScalarPatch<string>("Patched"));
+        var request = new WishlistPatch { Id = wishlistId, Name = new() { Value = "Patched" } };
 
         _wishlistRepository
             .Setup(m => m.PatchAsync(
@@ -264,7 +263,7 @@ public class WishlistsEndpointGroupTests
     {
         // Arrange
         var wishlistId = Guid.NewGuid();
-        var request = new WishlistPatch(wishlistId, OwnerLock: new ScalarPatch<bool>(true));
+        var request = new WishlistPatch { Id = wishlistId, OwnerLock = new() { Value = true } };
 
         _wishlistRepository
             .Setup(m => m.PatchAsync(
@@ -285,7 +284,7 @@ public class WishlistsEndpointGroupTests
     {
         // Arrange
         var wishlistId = Guid.NewGuid();
-        var request = new WishlistPatch(wishlistId, Tags: new SetPatch<string, string>(["new-tag"], null));
+        var request = new WishlistPatch { Id = wishlistId, Tags = new() { Add = ["new-tag"] } };
 
         _wishlistRepository
             .Setup(m => m.PatchAsync(
@@ -306,7 +305,7 @@ public class WishlistsEndpointGroupTests
     {
         // Arrange
         var wishlistId = Guid.NewGuid();
-        var request = new WishlistPatch(wishlistId, Name: new ScalarPatch<string>("Patched"));
+        var request = new WishlistPatch { Id = wishlistId, Name = new() { Value = "Patched" } };
 
         _wishlistRepository
             .Setup(m => m.PatchAsync(It.IsAny<WishlistPatch>(), null, It.IsAny<CancellationToken>()))

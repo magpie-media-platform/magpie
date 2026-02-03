@@ -18,10 +18,7 @@ using Microsoft.Extensions.Logging;
 
 namespace Magpie.Core.Repositories;
 
-/// <summary>
-/// Repository for managing quality tiers.
-/// </summary>
-public sealed class QualityTierRepository(
+internal sealed class QualityTierRepository(
     MagpieDbContext context,
     IAuditRecordRepository auditRecordRepository,
     ITransactionManager transactionManager,
@@ -44,7 +41,6 @@ public sealed class QualityTierRepository(
         }
     }
 
-    /// <inheritdoc />
     public async Task<QualityTier?> GetByIdAsync(Guid id, CancellationToken cancellationToken)
     {
         try
@@ -61,7 +57,6 @@ public sealed class QualityTierRepository(
         }
     }
 
-    /// <inheritdoc />
     public async Task<QualityTier> CreateAsync(
         QualityTier model,
         Guid? createdByUserId,
@@ -99,7 +94,6 @@ public sealed class QualityTierRepository(
         }
     }
 
-    /// <inheritdoc />
     public async Task<bool> UpdateAsync(
         QualityTier model,
         Guid? modifiedByUserId,
@@ -145,7 +139,6 @@ public sealed class QualityTierRepository(
         }
     }
 
-    /// <inheritdoc />
     public async Task<bool> DeleteAsync(
         Guid id,
         Guid? deletedByUserId,
@@ -197,7 +190,6 @@ public sealed class QualityTierRepository(
         }
     }
 
-    /// <inheritdoc />
     public async Task<bool> PatchAsync(
         QualityTierPatch patch,
         Guid? modifiedByUserId,
@@ -259,13 +251,13 @@ public sealed class QualityTierRepository(
 
     private static QualityTierCriteria ApplyCriteriaPatch(QualityTierCriteria current, QualityTierCriteriaPatch patch)
     {
-        var criteria = current.All.ToList();
+        var criteria = current.And.ToList();
 
-        if (patch.Criteria?.Criteria is not null)
+        if (patch.And is not null)
         {
-            if (patch.Criteria.Criteria.Remove is not null)
+            if (patch.And.Remove is not null)
             {
-                foreach (var index in patch.Criteria.Criteria.Remove.OrderByDescending(i => i))
+                foreach (var index in patch.And.Remove.OrderByDescending(i => i))
                 {
                     if (index >= 0 && index < criteria.Count)
                     {
@@ -274,9 +266,9 @@ public sealed class QualityTierRepository(
                 }
             }
 
-            if (patch.Criteria.Criteria.Update is not null)
+            if (patch.And.Update is not null)
             {
-                foreach (var (index, itemPatch) in patch.Criteria.Criteria.Update)
+                foreach (var (index, itemPatch) in patch.And.Update)
                 {
                     if (index >= 0 && index < criteria.Count)
                     {
@@ -285,9 +277,9 @@ public sealed class QualityTierRepository(
                 }
             }
 
-            if (patch.Criteria.Criteria.Insert is not null)
+            if (patch.And.Insert is not null)
             {
-                foreach (var (index, item) in patch.Criteria.Criteria.Insert.OrderBy(kvp => kvp.Key))
+                foreach (var (index, item) in patch.And.Insert.OrderBy(kvp => kvp.Key))
                 {
                     var insertIndex = Math.Min(index, criteria.Count);
                     criteria.Insert(insertIndex, item);
@@ -295,46 +287,43 @@ public sealed class QualityTierRepository(
             }
         }
 
-        return new() { All = criteria };
+        return new() { And = criteria };
     }
 
     private static DictionaryCriteria<PropertyCriterion<string>> ApplyPropertyDictionaryCriteriaPatch(
         DictionaryCriteria<PropertyCriterion<string>> current,
-        PropertyDictionaryCriteriaPatch patch)
+        DictionaryPatch<string, PropertyCriterion<string>, PropertyCriterionPatch> patch)
     {
-        var criteria = current.Criteria?.ToDictionary(kvp => kvp.Key, kvp => kvp.Value) ?? [];
+        var criteria = current.Items?.ToDictionary(kvp => kvp.Key, kvp => kvp.Value) ?? [];
 
-        if (patch.Criteria is not null)
+        if (patch.Remove is not null)
         {
-            if (patch.Criteria.Remove is not null)
+            foreach (var key in patch.Remove)
             {
-                foreach (var key in patch.Criteria.Remove)
-                {
-                    criteria.Remove(key);
-                }
+                criteria.Remove(key);
             }
+        }
 
-            if (patch.Criteria.Update is not null)
+        if (patch.Update is not null)
+        {
+            foreach (var (key, valuePatch) in patch.Update)
             {
-                foreach (var (key, valuePatch) in patch.Criteria.Update)
+                if (criteria.TryGetValue(key, out var existing))
                 {
-                    if (criteria.TryGetValue(key, out var existing))
-                    {
-                        criteria[key] = ApplyPropertyCriterionPatch(existing, valuePatch);
-                    }
-                }
-            }
-
-            if (patch.Criteria.Add is not null)
-            {
-                foreach (var (key, value) in patch.Criteria.Add)
-                {
-                    criteria[key] = value;
+                    criteria[key] = ApplyPropertyCriterionPatch(existing, valuePatch);
                 }
             }
         }
 
-        return new() { Criteria = criteria };
+        if (patch.Add is not null)
+        {
+            foreach (var (key, value) in patch.Add)
+            {
+                criteria[key] = value;
+            }
+        }
+
+        return new() { Items = criteria };
     }
 
     private static PropertyCriterion<string> ApplyPropertyCriterionPatch(

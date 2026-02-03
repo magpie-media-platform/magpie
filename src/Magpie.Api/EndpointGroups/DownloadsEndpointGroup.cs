@@ -9,7 +9,6 @@ using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Models.Paging;
-using Magpie.Models.Sorting;
 
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -61,17 +60,19 @@ internal sealed class DownloadsEndpointGroup(IDownloadRepository downloadReposit
         SortDirection? sortDirection,
         CancellationToken cancellationToken)
     {
-        var query = new DownloadQuery(
-            ReleaseId: releaseId,
-            DownloadClientId: downloadClientId,
-            Status: status);
+        var query = new DownloadQuery
+        {
+            ReleaseId = releaseId,
+            DownloadClientId = downloadClientId,
+            Status = status
+        };
 
-        var paging = pageNumber.HasValue && pageSize.HasValue
-            ? new PagingParameter(pageNumber.Value, pageSize.Value)
+        var paging = pageNumber is not null && pageSize is not null
+            ? new PagingParameter { PageNumber = pageNumber.Value, PageSize = pageSize.Value }
             : null;
 
         var sort = !string.IsNullOrEmpty(sortBy)
-            ? new SortParameter(sortBy, sortDirection ?? SortDirection.Ascending)
+            ? new SortParameter { PropertyName = sortBy, Direction = sortDirection ?? SortDirection.Ascending }
             : null;
 
         var result = await downloadRepository.QueryAsync(query, paging, sort, cancellationToken)

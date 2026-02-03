@@ -12,5 +12,5 @@ public sealed record MediaInfoTrackCriteria
     /// <inheritdoc cref="MediaInfoTrack.Name" />
     public PropertyCriterion<string> Name { get; init; } = new();
     /// <inheritdoc cref="MediaInfoTrack.Properties" />
-    public PropertyDictionaryCriteria Properties { get; init; } = new();
+    public DictionaryCriteria<PropertyCriterion<string>>? Properties { get; init; } = new();
 }

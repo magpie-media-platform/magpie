@@ -7,20 +7,45 @@ namespace Magpie.Models.Arguments;
 /// <summary>
 /// Query criteria for <see cref="AuditRecord"/>s. 
 /// </summary>
-/// <param name="EntityId"><inheritdoc cref="AuditRecord.EntityId" path="/summary"/></param>
-/// <param name="ParentEntityId"><inheritdoc cref="AuditRecord.ParentEntityId" path="/summary"/></param>
-/// <param name="EntityType"><inheritdoc cref="AuditRecord.EntityType" path="/summary"/></param>
-/// <param name="Category"><inheritdoc cref="AuditRecord.Category" path="/summary"/></param>
-/// <param name="Operation"><inheritdoc cref="AuditRecord.Operation" path="/summary"/></param>
-/// <param name="Description"><inheritdoc cref="AuditRecord.Detail" path="/summary"/></param>
-/// <param name="Timestamp"><inheritdoc cref="AuditRecord.Timestamp" path="/summary"/></param>
-/// <param name="UserId"><inheritdoc cref="AuditRecord.UserId" path="/summary"/></param>
-public sealed record AuditRecordQuery(
-    string? EntityId = null,
-    string? ParentEntityId = null,
-    string? EntityType = null,
-    string? Category = null,
-    string? Operation = null,
-    string? Description = null,
-    Range<DateTime>? Timestamp = null,
-    Guid? UserId = null);
+public sealed record AuditRecordQuery
+{
+    /// <summary>
+    /// <inheritdoc cref="AuditRecord.EntityId" path="/summary"/>
+    /// </summary>
+    public string? EntityId { get; init; }
+
+    /// <summary>
+    /// <inheritdoc cref="AuditRecord.ParentEntityId" path="/summary"/>
+    /// </summary>
+    public string? ParentEntityId { get; init; }
+
+    /// <summary>
+    /// <inheritdoc cref="AuditRecord.EntityType" path="/summary"/>
+    /// </summary>
+    public string? EntityType { get; init; }
+
+    /// <summary>
+    /// <inheritdoc cref="AuditRecord.Category" path="/summary"/>
+    /// </summary>
+    public string? Category { get; init; }
+
+    /// <summary>
+    /// <inheritdoc cref="AuditRecord.Operation" path="/summary"/>
+    /// </summary>
+    public string? Operation { get; init; }
+
+    /// <summary>
+    /// <inheritdoc cref="AuditRecord.Detail" path="/summary"/>
+    /// </summary>
+    public string? Detail { get; init; }
+
+    /// <summary>
+    /// <inheritdoc cref="AuditRecord.Timestamp" path="/summary"/>
+    /// </summary>
+    public Range<DateTime>? Timestamp { get; init; }
+
+    /// <summary>
+    /// <inheritdoc cref="AuditRecord.UserId" path="/summary"/>
+    /// </summary>
+    public Guid? UserId { get; init; }
+}

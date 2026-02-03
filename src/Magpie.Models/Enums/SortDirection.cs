@@ -1,4 +1,4 @@
-namespace Magpie.Models.Sorting;
+namespace Magpie.Models.Enums;
 
 /// <summary>
 /// The direction to sort in.

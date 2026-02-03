@@ -23,5 +23,5 @@ public sealed record PropertyCriterion<T>
     /// <summary>
     /// The values to compare against.
     /// </summary>
-    public List<T>? Values { get; init; } = [];
+    public IEnumerable<T>? Values { get; init; } = [];
 }

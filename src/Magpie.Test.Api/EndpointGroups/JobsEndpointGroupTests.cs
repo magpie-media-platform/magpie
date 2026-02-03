@@ -15,7 +15,6 @@ using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Models.Paging;
-using Magpie.Models.Sorting;
 using Magpie.Test.Shared;
 
 using Microsoft.AspNetCore.Authentication;
@@ -106,13 +105,19 @@ public class JobsEndpointGroupTests
                 It.IsAny<PagingParameter?>(),
                 It.IsAny<SortParameter?>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new PagedList<JobExecution>([], 1, 10, 0));
+            .ReturnsAsync(new PagedList<JobExecution>
+            {
+                Items = [],
+                PageNumber = 1,
+                PageSize = 10,
+                TotalItems = 0
+            });
 
         // Act
         var response = await _client.GetAsync("/api/jobs").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<PagedList<JobExecution>>().ConfigureAwait(false);
 
         // Assert
+        var content = await response.Content.ReadFromJsonAsync<PagedList<JobExecution>>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
@@ -133,13 +138,19 @@ public class JobsEndpointGroupTests
                 It.IsAny<PagingParameter?>(),
                 It.IsAny<SortParameter?>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new PagedList<JobExecution>([execution], 1, 10, 1));
+            .ReturnsAsync(new PagedList<JobExecution>
+            {
+                Items = [execution],
+                PageNumber = 1,
+                PageSize = 10,
+                TotalItems = 1
+            });
 
         // Act
         var response = await _client.GetAsync("/api/jobs").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<PagedList<JobExecution>>().ConfigureAwait(false);
 
         // Assert
+        var content = await response.Content.ReadFromJsonAsync<PagedList<JobExecution>>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
@@ -171,9 +182,9 @@ public class JobsEndpointGroupTests
 
         // Act
         var response = await _client.GetAsync($"/api/jobs/{id}").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<JobExecution>().ConfigureAwait(false);
 
         // Assert
+        var content = await response.Content.ReadFromJsonAsync<JobExecution>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
@@ -208,7 +219,7 @@ public class JobsEndpointGroupTests
         var request = new RunJobRequest(
             JobType: "TestJob",
             ExtensionId: null,
-            Parameters: new Dictionary<string, string> { ["key1"] = "value1" },
+            Parameters: new() { ["key1"] = "value1" },
             Mode: JobExecutionMode.Queue);
 
         _jobManager
@@ -223,9 +234,9 @@ public class JobsEndpointGroupTests
 
         // Act
         var response = await _client.PostAsJsonAsync("/api/jobs", request).ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<Guid>().ConfigureAwait(false);
 
         // Assert
+        var content = await response.Content.ReadFromJsonAsync<Guid>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.Accepted));
@@ -284,7 +295,13 @@ public class JobsEndpointGroupTests
                 It.IsAny<PagingParameter?>(),
                 It.IsAny<SortParameter?>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new PagedList<JobExecution>([], 1, 10, 0));
+            .ReturnsAsync(new PagedList<JobExecution>
+            {
+                Items = [],
+                PageNumber = 1,
+                PageSize = 10,
+                TotalItems = 0
+            });
 
         // Act
         var response = await _client.GetAsync(

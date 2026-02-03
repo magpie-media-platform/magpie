@@ -10,13 +10,13 @@ public sealed record AlternateTextCriteria
     /// <summary>
     /// The criteria for <see cref="AlternateText.Kind"/>.
     /// </summary>
-    public AllCriteria<PropertyCriterion<string>> Kind { get; init; } = new();
+    public CriteriaSet<PropertyCriterion<string>> Kind { get; init; } = new();
     /// <summary>
     /// The criteria for <see cref="AlternateText.Language"/>.
     /// </summary>
-    public AllCriteria<PropertyCriterion<string>> Language { get; init; } = new();
+    public CriteriaSet<PropertyCriterion<string>> Language { get; init; } = new();
     /// <summary>
     /// The criteria for <see cref="AlternateText.Text"/>.
     /// </summary>
-    public AllCriteria<PropertyCriterion<string>> Text { get; init; } = new();
+    public CriteriaSet<PropertyCriterion<string>> Text { get; init; } = new();
 }

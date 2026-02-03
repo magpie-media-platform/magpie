@@ -9,10 +9,20 @@ namespace Magpie.Models.Arguments;
 /// <summary>
 /// Patch for a user account.
 /// </summary>
-/// <param name="Id">The <see cref="User.Id"/> of the user to patch.</param>
-/// <param name="Enabled">The <see cref="User.Enabled"/> patch.</param>" 
-/// <param name="Role">The <see cref="User.Role"/> patch.</param>
-public record UserPatch(
-    Guid Id,
-    ScalarPatch<bool>? Enabled = null,
-    ScalarPatch<Role>? Role = null);
+public record UserPatch
+{
+    /// <summary>
+    /// The <see cref="User.Id"/> of the item to patch.
+    /// </summary>
+    public Guid Id { get; init; }
+
+    /// <summary>
+    /// The <see cref="User.Enabled"/> to patch.
+    /// </summary>
+    public ScalarPatch<bool>? Enabled { get; init; }
+
+    /// <summary>
+    /// The <see cref="User.Role"/> to patch.
+    /// </summary>
+    public ScalarPatch<Role>? Role { get; init; }
+}

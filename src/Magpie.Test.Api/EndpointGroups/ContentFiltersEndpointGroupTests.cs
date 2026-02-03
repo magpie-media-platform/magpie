@@ -11,8 +11,6 @@ using Magpie.Abstractions.Repositories;
 using Magpie.Api.EndpointGroups;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
-using Magpie.Models.Filtering;
-using Magpie.Models.Patch;
 using Magpie.Test.Shared;
 
 using Microsoft.AspNetCore.Authentication;
@@ -38,11 +36,7 @@ public class ContentFiltersEndpointGroupTests
     private HttpClient _client = null!;
     private Mock<IContentFilterRepository> _contentFilterRepository = null!;
 
-    private static readonly ContentFilterCriteria DefaultCriteria = new()
-    {
-        ContentHierarchyItem = new AllCriteria<ContentHierarchyItemCriteria>(),
-        MediaFiles = new AllCriteria<MediaFileCriteria>()
-    };
+    private static readonly ContentFilterCriteria DefaultCriteria = new();
 
     [SetUp]
     public void SetUp()
@@ -100,9 +94,9 @@ public class ContentFiltersEndpointGroupTests
 
         // Act
         var response = await _client.GetAsync("/api/content-filters").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<ContentFilter[]>().ConfigureAwait(false);
 
         // Assert
+        var content = await response.Content.ReadFromJsonAsync<ContentFilter[]>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
@@ -132,9 +126,9 @@ public class ContentFiltersEndpointGroupTests
 
         // Act
         var response = await _client.GetAsync("/api/content-filters").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<ContentFilter[]>().ConfigureAwait(false);
 
         // Assert
+        var content = await response.Content.ReadFromJsonAsync<ContentFilter[]>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
@@ -165,9 +159,9 @@ public class ContentFiltersEndpointGroupTests
 
         // Act
         var response = await _client.GetAsync($"/api/content-filters/{contentFilterId}").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<ContentFilter>().ConfigureAwait(false);
 
         // Assert
+        var content = await response.Content.ReadFromJsonAsync<ContentFilter>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
@@ -213,9 +207,9 @@ public class ContentFiltersEndpointGroupTests
 
         // Act
         var response = await _client.GetAsync("/api/content-filters/by-name/Music%20Albums").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<ContentFilter>().ConfigureAwait(false);
 
         // Assert
+        var content = await response.Content.ReadFromJsonAsync<ContentFilter>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
@@ -270,9 +264,9 @@ public class ContentFiltersEndpointGroupTests
 
         // Act
         var response = await _client.GetAsync("/api/content-filters/by-tag/automation").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<ContentFilter[]>().ConfigureAwait(false);
 
         // Assert
+        var content = await response.Content.ReadFromJsonAsync<ContentFilter[]>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
@@ -301,9 +295,9 @@ public class ContentFiltersEndpointGroupTests
 
         // Act
         var response = await _client.PostAsJsonAsync("/api/content-filters", request).ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<ContentFilter>().ConfigureAwait(false);
 
         // Assert
+        var content = await response.Content.ReadFromJsonAsync<ContentFilter>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.Created));
@@ -316,7 +310,7 @@ public class ContentFiltersEndpointGroupTests
     {
         // Arrange
         var contentFilterId = Guid.NewGuid();
-        var request = new ContentFilterPatch(contentFilterId, Name: new ScalarPatch<string>("Patched"));
+        var request = new ContentFilterPatch { Id = contentFilterId, Name = new() { Value = "Patched" } };
 
         _contentFilterRepository
             .Setup(m => m.PatchAsync(
@@ -338,7 +332,7 @@ public class ContentFiltersEndpointGroupTests
     {
         // Arrange
         var contentFilterId = Guid.NewGuid();
-        var request = new ContentFilterPatch(contentFilterId, Tags: new SetPatch<string, string>(["new-tag"], null));
+        var request = new ContentFilterPatch { Id = contentFilterId, Tags = new() { Add = ["new-tag"] } };
 
         _contentFilterRepository
             .Setup(m => m.PatchAsync(
@@ -363,7 +357,7 @@ public class ContentFiltersEndpointGroupTests
     {
         // Arrange
         var contentFilterId = Guid.NewGuid();
-        var request = new ContentFilterPatch(contentFilterId, Name: new ScalarPatch<string>("Patched"));
+        var request = new ContentFilterPatch { Id = contentFilterId, Name = new() { Value = "Patched" } };
 
         _contentFilterRepository
             .Setup(m => m.PatchAsync(It.IsAny<ContentFilterPatch>(), null, It.IsAny<CancellationToken>()))

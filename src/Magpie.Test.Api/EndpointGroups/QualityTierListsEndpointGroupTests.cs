@@ -11,7 +11,6 @@ using Magpie.Abstractions.Repositories;
 using Magpie.Api.EndpointGroups;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
-using Magpie.Models.Patch;
 using Magpie.Test.Shared;
 
 using Microsoft.AspNetCore.Authentication;
@@ -93,9 +92,9 @@ public class QualityTierListsEndpointGroupTests
 
         // Act
         var response = await _client.GetAsync("/api/quality-tier-lists").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<QualityTierList[]>().ConfigureAwait(false);
 
         // Assert
+        var content = await response.Content.ReadFromJsonAsync<QualityTierList[]>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
@@ -115,9 +114,9 @@ public class QualityTierListsEndpointGroupTests
 
         // Act
         var response = await _client.GetAsync("/api/quality-tier-lists").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<QualityTierList[]>().ConfigureAwait(false);
 
         // Assert
+        var content = await response.Content.ReadFromJsonAsync<QualityTierList[]>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
@@ -139,9 +138,9 @@ public class QualityTierListsEndpointGroupTests
 
         // Act
         var response = await _client.GetAsync($"/api/quality-tier-lists/{qualityTierList.Id}").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<QualityTierList>().ConfigureAwait(false);
 
         // Assert
+        var content = await response.Content.ReadFromJsonAsync<QualityTierList>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
@@ -178,9 +177,9 @@ public class QualityTierListsEndpointGroupTests
 
         // Act
         var response = await _client.GetAsync("/api/quality-tier-lists/by-tag/hd").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<QualityTierList[]>().ConfigureAwait(false);
 
         // Assert
+        var content = await response.Content.ReadFromJsonAsync<QualityTierList[]>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
@@ -202,9 +201,9 @@ public class QualityTierListsEndpointGroupTests
 
         // Act
         var response = await _client.PostAsJsonAsync("/api/quality-tier-lists", request).ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<QualityTierList>().ConfigureAwait(false);
 
         // Assert
+        var content = await response.Content.ReadFromJsonAsync<QualityTierList>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.Created));
@@ -217,7 +216,7 @@ public class QualityTierListsEndpointGroupTests
     {
         // Arrange
         var id = Guid.NewGuid();
-        var request = new QualityTierListPatch(id, Name: new ScalarPatch<string>("Patched"));
+        var request = new QualityTierListPatch { Id = id, Name = new() { Value = "Patched" } };
 
         _repository
             .Setup(m => m.PatchAsync(
@@ -238,7 +237,7 @@ public class QualityTierListsEndpointGroupTests
     {
         // Arrange
         var id = Guid.NewGuid();
-        var request = new QualityTierListPatch(id, Name: new ScalarPatch<string>("Patched"));
+        var request = new QualityTierListPatch { Id = id, Name = new() { Value = "Patched" } };
 
         _repository
             .Setup(m => m.PatchAsync(It.IsAny<QualityTierListPatch>(), null, It.IsAny<CancellationToken>()))

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 
+using Magpie.Models.Data;
 using Magpie.Models.Enums;
 
 namespace Magpie.Models.Arguments;
@@ -11,42 +12,42 @@ namespace Magpie.Models.Arguments;
 public record ScheduleTriggerCreate
 {
     /// <summary>
-    /// The extension that defines the job type.
+    /// <inheritdoc cref="ScheduleTrigger.ExtensionId" path="/summary"/>
     /// </summary>
     public Guid? ExtensionId { get; set; }
 
     /// <summary>
-    /// The job type to execute.
+    /// <inheritdoc cref="ScheduleTrigger.JobType" path="/summary"/>
     /// </summary>
     public required string JobType { get; set; }
 
     /// <summary>
-    /// The job scope.
+    /// <inheritdoc cref="ScheduleTrigger.Scope" path="/summary"/>
     /// </summary>
     public required JobScope Scope { get; set; }
 
     /// <summary>
-    /// The display name.
+    /// <inheritdoc cref="ScheduleTrigger.Name" path="/summary"/>
     /// </summary>
     public required string Name { get; set; }
 
     /// <summary>
-    /// The cron schedule expression.
+    /// <inheritdoc cref="ScheduleTrigger.Schedule" path="/summary"/>
     /// </summary>
     public required string Schedule { get; set; }
 
     /// <summary>
-    /// The execution mode for this trigger.
+    /// <inheritdoc cref="ScheduleTrigger.ExecutionMode" path="/summary"/>
     /// </summary>
     public JobExecutionMode ExecutionMode { get; set; }
 
     /// <summary>
-    /// Whether the trigger is enabled.
+    /// <inheritdoc cref="ScheduleTrigger.Enabled" path="/summary"/>
     /// </summary>
     public bool Enabled { get; set; } = true;
 
     /// <summary>
-    /// Parameters to pass to the job.
+    /// <inheritdoc cref="ScheduleTrigger.Parameters" path="/summary"/>
     /// </summary>
     public Dictionary<string, string> Parameters { get; set; } = [];
 }

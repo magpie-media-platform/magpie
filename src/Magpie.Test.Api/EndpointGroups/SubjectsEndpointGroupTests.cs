@@ -11,7 +11,6 @@ using Magpie.Abstractions.Repositories;
 using Magpie.Api.EndpointGroups;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
-using Magpie.Models.Patch;
 using Magpie.Test.Shared;
 
 using Microsoft.AspNetCore.Authentication;
@@ -93,9 +92,9 @@ public class SubjectsEndpointGroupTests
 
         // Act
         var response = await _client.GetAsync("/api/subjects").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<Subject[]>().ConfigureAwait(false);
 
         // Assert
+        var content = await response.Content.ReadFromJsonAsync<Subject[]>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
@@ -116,9 +115,9 @@ public class SubjectsEndpointGroupTests
 
         // Act
         var response = await _client.GetAsync("/api/subjects").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<Subject[]>().ConfigureAwait(false);
 
         // Assert
+        var content = await response.Content.ReadFromJsonAsync<Subject[]>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
@@ -140,9 +139,9 @@ public class SubjectsEndpointGroupTests
 
         // Act
         var response = await _client.GetAsync($"/api/subjects/{subjectId}").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<Subject>().ConfigureAwait(false);
 
         // Assert
+        var content = await response.Content.ReadFromJsonAsync<Subject>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
@@ -180,9 +179,9 @@ public class SubjectsEndpointGroupTests
 
         // Act
         var response = await _client.GetAsync("/api/subjects/by-kind/person").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<Subject[]>().ConfigureAwait(false);
 
         // Assert
+        var content = await response.Content.ReadFromJsonAsync<Subject[]>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
@@ -201,9 +200,9 @@ public class SubjectsEndpointGroupTests
 
         // Act
         var response = await _client.GetAsync("/api/subjects/by-kind/studio").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<Subject[]>().ConfigureAwait(false);
 
         // Assert
+        var content = await response.Content.ReadFromJsonAsync<Subject[]>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
@@ -223,9 +222,9 @@ public class SubjectsEndpointGroupTests
 
         // Act
         var response = await _client.GetAsync("/api/subjects/by-tag/actor").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<Subject[]>().ConfigureAwait(false);
 
         // Assert
+        var content = await response.Content.ReadFromJsonAsync<Subject[]>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
@@ -244,9 +243,9 @@ public class SubjectsEndpointGroupTests
 
         // Act
         var response = await _client.GetAsync("/api/subjects/by-tag/director").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<Subject[]>().ConfigureAwait(false);
 
         // Assert
+        var content = await response.Content.ReadFromJsonAsync<Subject[]>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
@@ -266,9 +265,9 @@ public class SubjectsEndpointGroupTests
 
         // Act
         var response = await _client.PostAsJsonAsync("/api/subjects", request).ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<Subject>().ConfigureAwait(false);
 
         // Assert
+        var content = await response.Content.ReadFromJsonAsync<Subject>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.Created));
@@ -281,7 +280,7 @@ public class SubjectsEndpointGroupTests
     {
         // Arrange
         var subjectId = Guid.NewGuid();
-        var request = new TagsPatch(subjectId, new SetPatch<string, string>(["new-tag"], null));
+        var request = new TagsPatch { Id = subjectId, Tags = new() { Add = ["new-tag"] } };
 
         _subjectRepository
             .Setup(m => m.PatchAsync(
@@ -302,7 +301,7 @@ public class SubjectsEndpointGroupTests
     {
         // Arrange
         var subjectId = Guid.NewGuid();
-        var request = new TagsPatch(subjectId, new SetPatch<string, string>(["tag"], null));
+        var request = new TagsPatch { Id = subjectId, Tags = new() { Add = ["tag"] } };
 
         _subjectRepository
             .Setup(m => m.PatchAsync(It.IsAny<TagsPatch>(), null, It.IsAny<CancellationToken>()))

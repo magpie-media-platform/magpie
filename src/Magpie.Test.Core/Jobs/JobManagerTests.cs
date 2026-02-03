@@ -211,8 +211,13 @@ public class JobManagerTests
     {
         // Arrange
         var query = new JobExecutionQuery();
-        var paging = new PagingParameter(1, 10);
-        var executions = new PagedList<JobExecution>([], 1, 10, 0);
+        var paging = new PagingParameter { PageNumber = 1, PageSize = 10 };
+        var executions = new PagedList<JobExecution>
+        {
+            PageNumber = 1,
+            PageSize = 10,
+            TotalItems = 0,
+        };
 
         _executionRepository
             .Setup(m => m.QueryAsync(query, paging, null, It.IsAny<CancellationToken>()))

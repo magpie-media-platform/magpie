@@ -26,7 +26,17 @@ internal sealed class SettingsGroupWrapper(ISettingsRepository repository, Setti
             gs.Key != s.Key)));
 
         return await repository.PatchAsync(
-            new(group.ExtensionId, Name, new(add, remove, update)),
+            new()
+            {
+                ExtensionId = group.ExtensionId,
+                Name = Name,
+                Settings = new()
+                {
+                    Add = add,
+                    Remove = remove,
+                    Update = update
+                }
+            },
             currentUserId,
             cancellationToken).ConfigureAwait(false);
     }

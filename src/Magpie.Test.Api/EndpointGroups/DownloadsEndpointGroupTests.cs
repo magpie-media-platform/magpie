@@ -13,7 +13,6 @@ using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Models.Paging;
-using Magpie.Models.Sorting;
 using Magpie.Test.Shared;
 
 using Microsoft.AspNetCore.Authentication;
@@ -95,13 +94,19 @@ public class DownloadsEndpointGroupTests
                 It.IsAny<PagingParameter?>(),
                 It.IsAny<SortParameter?>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new PagedList<Download>([], 1, 20, 0));
+            .ReturnsAsync(new PagedList<Download>
+            {
+                Items = [],
+                PageNumber = 1,
+                PageSize = 20,
+                TotalItems = 0
+            });
 
         // Act
         var response = await _client.GetAsync("/api/downloads").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<PagedList<Download>>().ConfigureAwait(false);
 
         // Assert
+        var content = await response.Content.ReadFromJsonAsync<PagedList<Download>>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
@@ -138,13 +143,19 @@ public class DownloadsEndpointGroupTests
                 It.IsAny<PagingParameter?>(),
                 It.IsAny<SortParameter?>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new PagedList<Download>([download], 1, 20, 1));
+            .ReturnsAsync(new PagedList<Download>
+            {
+                Items = [download],
+                PageNumber = 1,
+                PageSize = 20,
+                TotalItems = 1
+            });
 
         // Act
         var response = await _client.GetAsync("/api/downloads").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<PagedList<Download>>().ConfigureAwait(false);
 
         // Assert
+        var content = await response.Content.ReadFromJsonAsync<PagedList<Download>>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
@@ -185,9 +196,9 @@ public class DownloadsEndpointGroupTests
 
         // Act
         var response = await _client.GetAsync($"/api/downloads/{downloadId}").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<Download>().ConfigureAwait(false);
 
         // Assert
+        var content = await response.Content.ReadFromJsonAsync<Download>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
@@ -240,7 +251,13 @@ public class DownloadsEndpointGroupTests
                 It.IsAny<PagingParameter?>(),
                 It.IsAny<SortParameter?>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new PagedList<Download>([download], 1, 20, 1));
+            .ReturnsAsync(new PagedList<Download>
+            {
+                Items = [download],
+                PageNumber = 1,
+                PageSize = 20,
+                TotalItems = 1
+            });
 
         // Act
         var response = await _client.GetAsync($"/api/downloads?downloadClientId={downloadClientId}")
@@ -285,13 +302,19 @@ public class DownloadsEndpointGroupTests
                 It.IsAny<PagingParameter?>(),
                 It.IsAny<SortParameter?>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new PagedList<Download>([download], 1, 20, 1));
+            .ReturnsAsync(new PagedList<Download>
+            {
+                Items = [download],
+                PageNumber = 1,
+                PageSize = 20,
+                TotalItems = 1
+            });
 
         // Act
         var response = await _client.GetAsync("/api/downloads?status=Downloading").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<PagedList<Download>>().ConfigureAwait(false);
 
         // Assert
+        var content = await response.Content.ReadFromJsonAsync<PagedList<Download>>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
@@ -329,9 +352,9 @@ public class DownloadsEndpointGroupTests
 
         // Act
         var response = await _client.PostAsJsonAsync("/api/downloads", request).ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<Download>().ConfigureAwait(false);
 
         // Assert
+        var content = await response.Content.ReadFromJsonAsync<Download>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.Created));
@@ -369,9 +392,9 @@ public class DownloadsEndpointGroupTests
 
         // Act
         var response = await _client.PostAsJsonAsync("/api/downloads", request).ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<Download>().ConfigureAwait(false);
 
         // Assert
+        var content = await response.Content.ReadFromJsonAsync<Download>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.Created));

@@ -91,9 +91,9 @@ public class ExtensionsEndpointGroupTests
 
         // Act
         var response = await _client.GetAsync("/api/extensions").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<Extension[]>().ConfigureAwait(false);
 
         // Assert
+        var content = await response.Content.ReadFromJsonAsync<Extension[]>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
@@ -121,9 +121,9 @@ public class ExtensionsEndpointGroupTests
 
         // Act
         var response = await _client.GetAsync("/api/extensions").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<Extension[]>().ConfigureAwait(false);
 
         // Assert
+        var content = await response.Content.ReadFromJsonAsync<Extension[]>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
@@ -156,9 +156,9 @@ public class ExtensionsEndpointGroupTests
 
         // Act
         var response = await _client.GetAsync($"/api/extensions/{extensionId}").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<Extension>().ConfigureAwait(false);
 
         // Assert
+        var content = await response.Content.ReadFromJsonAsync<Extension>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));

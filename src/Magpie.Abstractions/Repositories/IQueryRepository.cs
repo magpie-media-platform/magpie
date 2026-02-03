@@ -2,7 +2,6 @@ using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Models.Paging;
-using Magpie.Models.Sorting;
 
 namespace Magpie.Abstractions.Repositories;
 

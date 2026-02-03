@@ -4,7 +4,6 @@ using System.Threading.Tasks;
 
 using Magpie.Models.Data;
 using Magpie.Models.Paging;
-using Magpie.Models.Sorting;
 
 namespace Magpie.Abstractions.Repositories;
 

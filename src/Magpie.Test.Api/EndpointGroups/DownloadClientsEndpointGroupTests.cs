@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Json;
@@ -13,7 +12,6 @@ using Magpie.Api.EndpointGroups;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
-using Magpie.Models.Patch;
 using Magpie.Test.Shared;
 
 using Microsoft.AspNetCore.Authentication;
@@ -95,9 +93,9 @@ public class DownloadClientsEndpointGroupTests
 
         // Act
         var response = await _client.GetAsync("/api/download-clients").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<DownloadClient[]>().ConfigureAwait(false);
 
         // Assert
+        var content = await response.Content.ReadFromJsonAsync<DownloadClient[]>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
@@ -117,7 +115,7 @@ public class DownloadClientsEndpointGroupTests
             ProviderType = "qbittorrent",
             Enabled = true,
             Status = DownloadClientStatus.Healthy,
-            Settings = new Dictionary<string, string>
+            Settings = new()
             {
                 ["Host"] = "localhost",
                 ["Port"] = "8080"
@@ -134,9 +132,9 @@ public class DownloadClientsEndpointGroupTests
 
         // Act
         var response = await _client.GetAsync("/api/download-clients").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<DownloadClient[]>().ConfigureAwait(false);
 
         // Assert
+        var content = await response.Content.ReadFromJsonAsync<DownloadClient[]>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
@@ -171,9 +169,9 @@ public class DownloadClientsEndpointGroupTests
 
         // Act
         var response = await _client.GetAsync($"/api/download-clients/{downloadClientId}").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<DownloadClient>().ConfigureAwait(false);
 
         // Assert
+        var content = await response.Content.ReadFromJsonAsync<DownloadClient>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
@@ -210,7 +208,7 @@ public class DownloadClientsEndpointGroupTests
             ProviderType = "qbittorrent",
             Enabled = true,
             Status = DownloadClientStatus.Unknown,
-            Settings = new Dictionary<string, string>
+            Settings = new()
             {
                 ["Host"] = "localhost"
             },
@@ -226,9 +224,9 @@ public class DownloadClientsEndpointGroupTests
 
         // Act
         var response = await _client.PostAsJsonAsync("/api/download-clients", request).ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<DownloadClient>().ConfigureAwait(false);
 
         // Assert
+        var content = await response.Content.ReadFromJsonAsync<DownloadClient>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.Created));
@@ -242,7 +240,7 @@ public class DownloadClientsEndpointGroupTests
     {
         // Arrange
         var downloadClientId = Guid.NewGuid();
-        var request = new DownloadClientPatch(downloadClientId, Name: new ScalarPatch<string>("Patched Client"));
+        var request = new DownloadClientPatch { Id = downloadClientId, Name = new() { Value = "Patched Client" } };
 
         _downloadClientRepository
             .Setup(m => m.PatchAsync(
@@ -264,7 +262,7 @@ public class DownloadClientsEndpointGroupTests
     {
         // Arrange
         var downloadClientId = Guid.NewGuid();
-        var request = new DownloadClientPatch(downloadClientId, Name: new ScalarPatch<string>("Patched"));
+        var request = new DownloadClientPatch { Id = downloadClientId, Name = new() { Value = "Patched" } };
 
         _downloadClientRepository
             .Setup(m => m.PatchAsync(It.IsAny<DownloadClientPatch>(), null, It.IsAny<CancellationToken>()))

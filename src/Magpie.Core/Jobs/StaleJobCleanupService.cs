@@ -32,7 +32,10 @@ internal sealed class StaleJobCleanupService(
                 logger.LogDebug("Cleaning up stale job executions.");
 
                 var staleJobs = await jobExecutionRepository.QueryAsync(
-                    query: new(LastHeartbeat: new(Min: null, Max: DateTime.UtcNow - CutoffAge)),
+                    query: new()
+                    {
+                        LastHeartbeat = new(Min: null, Max: DateTime.UtcNow - CutoffAge)
+                    },
                     paging: null,
                     sort: null,
                     cancellationToken: stoppingToken).ConfigureAwait(false);

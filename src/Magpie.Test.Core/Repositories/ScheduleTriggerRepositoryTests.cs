@@ -9,7 +9,6 @@ using Magpie.Data;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
-using Magpie.Models.Patch;
 using Magpie.Test.Shared;
 
 using Microsoft.EntityFrameworkCore;
@@ -453,7 +452,7 @@ public class ScheduleTriggerRepositoryTests
         _context.ScheduleTriggers.Add(trigger);
         await _context.SaveChangesAsync();
 
-        var patch = new ScheduleTriggerPatch(trigger.Id, Name: new ScalarPatch<string>("PatchedName"));
+        var patch = new ScheduleTriggerPatch { Id = trigger.Id, Name = new() { Value = "PatchedName" } };
 
         // Act
         var result = await _subject.PatchAsync(patch, _userId);
@@ -485,7 +484,7 @@ public class ScheduleTriggerRepositoryTests
         _context.ScheduleTriggers.Add(trigger);
         await _context.SaveChangesAsync();
 
-        var patch = new ScheduleTriggerPatch(trigger.Id, Enabled: new ScalarPatch<bool>(false));
+        var patch = new ScheduleTriggerPatch { Id = trigger.Id, Enabled = new() { Value = false } };
 
         // Act
         var result = await _subject.PatchAsync(patch, _userId);
@@ -501,7 +500,7 @@ public class ScheduleTriggerRepositoryTests
     public async Task PatchAsync_ReturnsFalse_WhenNotExists()
     {
         // Arrange
-        var patch = new ScheduleTriggerPatch(Guid.NewGuid(), Name: new ScalarPatch<string>("Test"));
+        var patch = new ScheduleTriggerPatch { Id = Guid.NewGuid(), Name = new() { Value = "Test" } };
 
         // Act
         var result = await _subject.PatchAsync(patch, _userId);

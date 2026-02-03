@@ -12,7 +12,6 @@ using Magpie.Abstractions.Repositories;
 using Magpie.Api.EndpointGroups;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
-using Magpie.Models.Patch;
 using Magpie.Test.Shared;
 
 using Microsoft.AspNetCore.Authentication;
@@ -94,9 +93,9 @@ public class MediaServersEndpointGroupTests
 
         // Act
         var response = await _client.GetAsync("/api/media-servers").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<MediaServer[]>().ConfigureAwait(false);
 
         // Assert
+        var content = await response.Content.ReadFromJsonAsync<MediaServer[]>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
@@ -117,9 +116,9 @@ public class MediaServersEndpointGroupTests
 
         // Act
         var response = await _client.GetAsync("/api/media-servers").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<MediaServer[]>().ConfigureAwait(false);
 
         // Assert
+        var content = await response.Content.ReadFromJsonAsync<MediaServer[]>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
@@ -149,9 +148,9 @@ public class MediaServersEndpointGroupTests
 
         // Act
         var response = await _client.GetAsync($"/api/media-servers/{serverId}").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<MediaServer>().ConfigureAwait(false);
 
         // Assert
+        var content = await response.Content.ReadFromJsonAsync<MediaServer>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
@@ -195,9 +194,9 @@ public class MediaServersEndpointGroupTests
 
         // Act
         var response = await _client.PostAsJsonAsync("/api/media-servers", request).ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<MediaServer>().ConfigureAwait(false);
 
         // Assert
+        var content = await response.Content.ReadFromJsonAsync<MediaServer>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.Created));
@@ -214,7 +213,7 @@ public class MediaServersEndpointGroupTests
     {
         // Arrange
         var serverId = Guid.NewGuid();
-        var request = new MediaServerPatch(serverId, Name: new ScalarPatch<string>("Patched"));
+        var request = new MediaServerPatch { Id = serverId, Name = new() { Value = "Patched" } };
 
         _repository
             .Setup(m => m.PatchAsync(
@@ -235,7 +234,7 @@ public class MediaServersEndpointGroupTests
     {
         // Arrange
         var serverId = Guid.NewGuid();
-        var request = new MediaServerPatch(serverId, Enabled: new ScalarPatch<bool>(false));
+        var request = new MediaServerPatch { Id = serverId, Enabled = new() { Value = false } };
 
         _repository
             .Setup(m => m.PatchAsync(
@@ -256,7 +255,7 @@ public class MediaServersEndpointGroupTests
     {
         // Arrange
         var serverId = Guid.NewGuid();
-        var request = new MediaServerPatch(serverId, Name: new ScalarPatch<string>("Patched"));
+        var request = new MediaServerPatch { Id = serverId, Name = new() { Value = "Patched" } };
 
         _repository
             .Setup(m => m.PatchAsync(It.IsAny<MediaServerPatch>(), null, It.IsAny<CancellationToken>()))

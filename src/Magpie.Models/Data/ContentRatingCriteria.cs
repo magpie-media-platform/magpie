@@ -10,9 +10,9 @@ public sealed record ContentRatingCriteria
     /// <summary>
     /// The criteria for <see cref="ContentRating.RatingsBody"/>.
     /// </summary>
-    public AllCriteria<PropertyCriterion<string>> RatingsBody { get; init; } = new();
+    public CriteriaSet<PropertyCriterion<string>> RatingsBody { get; init; } = new();
     /// <summary>
     /// The criteria for <see cref="ContentRating.Value"/>.
     /// </summary>
-    public AllCriteria<PropertyCriterion<string>> Value { get; init; } = new();
+    public CriteriaSet<PropertyCriterion<string>> Value { get; init; } = new();
 }

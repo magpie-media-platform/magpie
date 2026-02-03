@@ -1,5 +1,3 @@
-using System;
-
 using Magpie.Models.Data;
 using Magpie.Models.Patch;
 
@@ -8,14 +6,20 @@ namespace Magpie.Models.Arguments;
 /// <summary>
 /// Patch for <see cref="DownloadClient"/>.
 /// </summary>
-/// <param name="Id">The <see cref="DownloadClient.Id"/> of the item to patch.</param>
-/// <param name="Name">The <see cref="DownloadClient.Name"/> patch</param>
-/// <param name="Enabled">The <see cref="DownloadClient.Enabled"/> patch</param>
-/// <param name="Settings">The <see cref="DownloadClient.Settings"/> patch</param>
-/// <param name="Tags">The <see cref="Tag"/>s patch</param>
-public sealed record DownloadClientPatch(
-    Guid Id,
-    ScalarPatch<string>? Name = null,
-    ScalarPatch<bool>? Enabled = null,
-    DictionaryPatch<string, string?, string?>? Settings = null,
-    SetPatch<string, string>? Tags = null) : TagsPatch(Id, Tags);
+public sealed record DownloadClientPatch : TagsPatch
+{
+    /// <summary>
+    /// The <see cref="DownloadClient.Name"/> to patch.
+    /// </summary>
+    public ScalarPatch<string>? Name { get; init; }
+
+    /// <summary>
+    /// The <see cref="DownloadClient.Enabled"/> to patch.
+    /// </summary>
+    public ScalarPatch<bool>? Enabled { get; init; }
+
+    /// <summary>
+    /// The <see cref="DownloadClient.Settings"/> to patch.
+    /// </summary>
+    public DictionaryPatch<string, string, string>? Settings { get; init; }
+}

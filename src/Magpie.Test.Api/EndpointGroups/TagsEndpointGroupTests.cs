@@ -91,9 +91,9 @@ public class TagsEndpointGroupTests
 
         // Act
         var response = await _client.GetAsync("/api/tags").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<Tag[]>().ConfigureAwait(false);
 
         // Assert
+        var content = await response.Content.ReadFromJsonAsync<Tag[]>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
@@ -119,9 +119,9 @@ public class TagsEndpointGroupTests
 
         // Act
         var response = await _client.GetAsync("/api/tags").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<Tag[]>().ConfigureAwait(false);
 
         // Assert
+        var content = await response.Content.ReadFromJsonAsync<Tag[]>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
@@ -150,9 +150,9 @@ public class TagsEndpointGroupTests
 
         // Act
         var response = await _client.GetAsync("/api/tags/by-prefix/genre:").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<Tag[]>().ConfigureAwait(false);
 
         // Assert
+        var content = await response.Content.ReadFromJsonAsync<Tag[]>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
@@ -172,9 +172,9 @@ public class TagsEndpointGroupTests
 
         // Act
         var response = await _client.GetAsync("/api/tags/by-prefix/rating:").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<Tag[]>().ConfigureAwait(false);
 
         // Assert
+        var content = await response.Content.ReadFromJsonAsync<Tag[]>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
@@ -193,9 +193,9 @@ public class TagsEndpointGroupTests
 
         // Act
         var response = await _client.GetAsync("/api/tags/by-prefix/genre:").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<Tag[]>().ConfigureAwait(false);
 
         // Assert
+        var content = await response.Content.ReadFromJsonAsync<Tag[]>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));

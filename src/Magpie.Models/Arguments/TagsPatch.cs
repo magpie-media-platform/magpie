@@ -8,6 +8,15 @@ namespace Magpie.Models.Arguments;
 /// <summary>
 /// Patch for <see cref="Tag"/>s. 
 /// </summary>
-/// <param name="Id">The id of the entity to patch.</param>
-/// <param name="Tags">The <see cref="Tag"/>s to patch.</param>
-public record TagsPatch(Guid Id, SetPatch<string, string>? Tags);
+public record TagsPatch
+{
+    /// <summary>
+    /// The id of the entity to patch.
+    /// </summary>
+    public Guid Id { get; init; }
+
+    /// <summary>
+    /// The <see cref="Tag"/>s to patch.
+    /// </summary>
+    public SetPatch<string, string>? Tags { get; init; }
+}

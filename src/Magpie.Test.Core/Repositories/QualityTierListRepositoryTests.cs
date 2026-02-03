@@ -9,7 +9,6 @@ using Magpie.Data;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
-using Magpie.Models.Patch;
 using Magpie.Test.Shared;
 
 using Microsoft.EntityFrameworkCore;
@@ -481,9 +480,11 @@ public class QualityTierListRepositoryTests
         _context.QualityTierLists.Add(qualityTierList);
         await _context.SaveChangesAsync();
 
-        var patch = new QualityTierListPatch(
-            qualityTierList.Id,
-            Name: new ScalarPatch<string>("PatchedName"));
+        var patch = new QualityTierListPatch
+        {
+            Id = qualityTierList.Id,
+            Name = new() { Value = "PatchedName" }
+        };
 
         // Act
         var result = await _subject.PatchAsync(patch, _userId);
@@ -512,9 +513,11 @@ public class QualityTierListRepositoryTests
         _context.QualityTierLists.Add(qualityTierList);
         await _context.SaveChangesAsync();
 
-        var patch = new QualityTierListPatch(
-            qualityTierList.Id,
-            UpgradeAllowed: new ScalarPatch<bool>(false));
+        var patch = new QualityTierListPatch
+        {
+            Id = qualityTierList.Id,
+            UpgradeAllowed = new() { Value = false }
+        };
 
         // Act
         var result = await _subject.PatchAsync(patch, _userId);
@@ -530,9 +533,11 @@ public class QualityTierListRepositoryTests
     public async Task PatchAsync_ReturnsFalse_WhenNotExists()
     {
         // Arrange
-        var patch = new QualityTierListPatch(
-            Guid.NewGuid(),
-            Name: new ScalarPatch<string>("NonExistent"));
+        var patch = new QualityTierListPatch
+        {
+            Id = Guid.NewGuid(),
+            Name = new() { Value = "NonExistent" }
+        };
 
         // Act
         var result = await _subject.PatchAsync(patch, _userId);
@@ -554,10 +559,14 @@ public class QualityTierListRepositoryTests
         _context.QualityTierLists.Add(qualityTierList);
         await _context.SaveChangesAsync();
 
-        var patch = new QualityTierListPatch(
-            qualityTierList.Id,
-            QualityTierRanks: new CollectionPatch<QualityTierListRankCreate, Guid, QualityTierListRankPatch>(
-                Add: [new QualityTierListRankCreate(_qualityTierId, 1, true)]));
+        var patch = new QualityTierListPatch
+        {
+            Id = qualityTierList.Id,
+            QualityTierRanks = new()
+            {
+                Add = [new() { QualityTierId = _qualityTierId, Ordinal = 1, IsCutoff = true }]
+            }
+        };
 
         // Act
         var result = await _subject.PatchAsync(patch, _userId);
@@ -599,10 +608,14 @@ public class QualityTierListRepositoryTests
         _context.QualityTierListRanks.Add(rank);
         await _context.SaveChangesAsync();
 
-        var patch = new QualityTierListPatch(
-            qualityTierList.Id,
-            QualityTierRanks: new CollectionPatch<QualityTierListRankCreate, Guid, QualityTierListRankPatch>(
-                Remove: [_qualityTierId]));
+        var patch = new QualityTierListPatch
+        {
+            Id = qualityTierList.Id,
+            QualityTierRanks = new()
+            {
+                Remove = [_qualityTierId]
+            }
+        };
 
         // Act
         var result = await _subject.PatchAsync(patch, _userId);
@@ -638,13 +651,19 @@ public class QualityTierListRepositoryTests
         _context.QualityTierListRanks.Add(rank);
         await _context.SaveChangesAsync();
 
-        var patch = new QualityTierListPatch(
-            qualityTierList.Id,
-            QualityTierRanks: new CollectionPatch<QualityTierListRankCreate, Guid, QualityTierListRankPatch>(
-                Update: [new QualityTierListRankPatch(
-                    QualityTierId: new ScalarPatch<Guid>(_qualityTierId),
-                    Ordinal: new ScalarPatch<int>(5),
-                    IsCutoff: new ScalarPatch<bool>(true))]));
+        var patch = new QualityTierListPatch
+        {
+            Id = qualityTierList.Id,
+            QualityTierRanks = new()
+            {
+                Update = [new()
+                {
+                    QualityTierId = new() { Value = _qualityTierId },
+                    Ordinal = new() { Value = 5 },
+                    IsCutoff = new() { Value = true }
+                }]
+            }
+        };
 
         // Act
         var result = await _subject.PatchAsync(patch, _userId);
@@ -675,9 +694,11 @@ public class QualityTierListRepositoryTests
         _context.QualityTierLists.Add(qualityTierList);
         await _context.SaveChangesAsync();
 
-        var patch = new QualityTierListPatch(
-            qualityTierList.Id,
-            Tags: new SetPatch<string, string>(Add: ["premium"]));
+        var patch = new QualityTierListPatch
+        {
+            Id = qualityTierList.Id,
+            Tags = new() { Add = ["premium"] }
+        };
 
         // Act
         var result = await _subject.PatchAsync(patch, _userId);
@@ -706,9 +727,11 @@ public class QualityTierListRepositoryTests
         _context.Tags.Add(tag);
         await _context.SaveChangesAsync();
 
-        var patch = new QualityTierListPatch(
-            qualityTierList.Id,
-            Tags: new SetPatch<string, string>(Remove: ["toRemove"]));
+        var patch = new QualityTierListPatch
+        {
+            Id = qualityTierList.Id,
+            Tags = new() { Remove = ["toRemove"] }
+        };
 
         // Act
         var result = await _subject.PatchAsync(patch, _userId);
@@ -733,9 +756,11 @@ public class QualityTierListRepositoryTests
         _context.QualityTierLists.Add(qualityTierList);
         await _context.SaveChangesAsync();
 
-        var patch = new QualityTierListPatch(
-            qualityTierList.Id,
-            Name: new ScalarPatch<string>("Patched"));
+        var patch = new QualityTierListPatch
+        {
+            Id = qualityTierList.Id,
+            Name = new() { Value = "Patched" }
+        };
 
         // Act
         await _subject.PatchAsync(patch, _userId);
@@ -764,9 +789,11 @@ public class QualityTierListRepositoryTests
         _context.QualityTierLists.Add(qualityTierList);
         await _context.SaveChangesAsync();
 
-        var patch = new QualityTierListPatch(
-            qualityTierList.Id,
-            Tags: new SetPatch<string, string>(Add: ["tag1", "tag2"]));
+        var patch = new QualityTierListPatch
+        {
+            Id = qualityTierList.Id,
+            Tags = new() { Add = ["tag1", "tag2"] }
+        };
 
         // Act
         await _subject.PatchAsync(patch, _userId);
@@ -794,10 +821,14 @@ public class QualityTierListRepositoryTests
         _context.QualityTierLists.Add(qualityTierList);
         await _context.SaveChangesAsync();
 
-        var patch = new QualityTierListPatch(
-            qualityTierList.Id,
-            QualityTierRanks: new CollectionPatch<QualityTierListRankCreate, Guid, QualityTierListRankPatch>(
-                Add: [new QualityTierListRankCreate(_qualityTierId, 1, true)]));
+        var patch = new QualityTierListPatch
+        {
+            Id = qualityTierList.Id,
+            QualityTierRanks = new()
+            {
+                Add = [new() { QualityTierId = _qualityTierId, Ordinal = 1, IsCutoff = true }]
+            }
+        };
 
         // Act
         await _subject.PatchAsync(patch, _userId);
@@ -825,9 +856,11 @@ public class QualityTierListRepositoryTests
         _context.QualityTierLists.Add(qualityTierList);
         await _context.SaveChangesAsync();
 
-        var patch = new QualityTierListPatch(
-            qualityTierList.Id,
-            Name: new ScalarPatch<string>("Modified"));
+        var patch = new QualityTierListPatch
+        {
+            Id = qualityTierList.Id,
+            Name = new() { Value = "Modified" }
+        };
 
         // Act
         await _subject.PatchAsync(patch, _userId);

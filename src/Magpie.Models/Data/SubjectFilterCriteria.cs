@@ -12,13 +12,13 @@ public sealed record SubjectFilterCriteria
     /// <summary>
     /// Filter criteria for <see cref="Subject.Kind"/>.
     /// </summary>
-    public AllCriteria<PropertyCriterion<string>> Kind { get; init; } = new();
+    public CriteriaSet<PropertyCriterion<string>> Kind { get; init; } = new();
     /// <summary>
     /// Filter criteria for <see cref="Subject.DateLastRefreshed"/>.
     /// </summary>
-    public AllCriteria<PropertyCriterion<DateTime>> DateLastRefreshed { get; init; } = new();
+    public CriteriaSet<PropertyCriterion<DateTime>> DateLastRefreshed { get; init; } = new();
     /// <summary>
     /// Filter criteria for the subject metadata.
     /// </summary>
-    public AllCriteria<MetadataCriteria> Metadata { get; init; } = new();
+    public CriteriaSet<MetadataCriteria> Metadata { get; init; } = new();
 }

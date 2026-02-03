@@ -1,3 +1,5 @@
+using System.Collections.Generic;
+
 using Magpie.Models.Enums;
 
 namespace Magpie.Models.Filtering;
@@ -11,8 +13,9 @@ public record CollectionCriteria<TCriteria>
     /// The operator to apply to the collection
     /// </summary>
     public CollectionCriteriaOperator Operator { get; init; } = CollectionCriteriaOperator.Some;
+
     /// <summary>
     /// The criteria to apply to items in the collection
     /// </summary>
-    public AllCriteria<TCriteria> Items { get; init; } = new();
+    public List<TCriteria> Items { get; init; } = [];
 }

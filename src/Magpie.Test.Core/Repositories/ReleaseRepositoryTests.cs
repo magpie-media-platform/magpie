@@ -6,12 +6,8 @@ using Magpie.Abstractions.Repositories;
 using Magpie.Core;
 using Magpie.Core.Repositories;
 using Magpie.Data;
-using Magpie.Models;
-using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
-using Magpie.Models.Paging;
-using Magpie.Models.Sorting;
 using Magpie.Test.Shared;
 
 using Microsoft.EntityFrameworkCore;
@@ -206,11 +202,7 @@ public class ReleaseRepositoryTests
         await _context.SaveChangesAsync();
 
         // Act
-        var result = await _subject.QueryAsync(
-            new ReleaseQuery(IndexerId: _indexerId),
-            null,
-            null,
-            default);
+        var result = await _subject.QueryAsync(new() { IndexerId = _indexerId }, null, null);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -252,11 +244,7 @@ public class ReleaseRepositoryTests
         await _context.SaveChangesAsync();
 
         // Act
-        var result = await _subject.QueryAsync(
-            new ReleaseQuery(Title: "TestMovie"),
-            null,
-            null,
-            default);
+        var result = await _subject.QueryAsync(new() { Title = "TestMovie" }, null, null);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -293,11 +281,7 @@ public class ReleaseRepositoryTests
         await _context.SaveChangesAsync();
 
         // Act
-        var result = await _subject.QueryAsync(
-            new ReleaseQuery(Category: "movies"),
-            null,
-            null,
-            default);
+        var result = await _subject.QueryAsync(new() { Category = "movies" }, null, null);
 
         // Assert
         var items = result.Items.ToList();
@@ -334,11 +318,7 @@ public class ReleaseRepositoryTests
         await _context.SaveChangesAsync();
 
         // Act
-        var result = await _subject.QueryAsync(
-            new ReleaseQuery(ExternalId: "ext-123"),
-            null,
-            null,
-            default);
+        var result = await _subject.QueryAsync(new() { ExternalId = "ext-123" }, null, null);
 
         // Assert
         var items = result.Items.ToList();
@@ -382,11 +362,10 @@ public class ReleaseRepositoryTests
         await _context.SaveChangesAsync();
 
         // Act
-        var result = await _subject.QueryAsync(
-            new ReleaseQuery(PublishDate: new Range<DateTime>(now.AddDays(-6), now.AddDays(-1))),
-            null,
-            null,
-            default);
+        var result = await _subject.QueryAsync(new()
+        {
+            PublishDate = new(now.AddDays(-6), now.AddDays(-1))
+        }, null, null);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -461,11 +440,7 @@ public class ReleaseRepositoryTests
         await _context.SaveChangesAsync();
 
         // Act
-        var result = await _subject.QueryAsync(
-            new ReleaseQuery(ContentItemId: contentItem1.Id),
-            null,
-            null,
-            default);
+        var result = await _subject.QueryAsync(new() { ContentItemId = contentItem1.Id }, null, null);
 
         // Assert
         var items = result.Items.ToList();
@@ -507,11 +482,7 @@ public class ReleaseRepositoryTests
         await _context.SaveChangesAsync();
 
         // Act
-        var result = await _subject.QueryAsync(
-            new ReleaseQuery(Tags: ["high-quality"]),
-            null,
-            null,
-            default);
+        var result = await _subject.QueryAsync(new() { Tags = ["high-quality"] }, null, null);
 
         // Assert
         var items = result.Items.ToList();
@@ -538,11 +509,7 @@ public class ReleaseRepositoryTests
         await _context.SaveChangesAsync();
 
         // Act
-        var result = await _subject.QueryAsync(
-            new ReleaseQuery(Title: "NonExistent"),
-            null,
-            null,
-            default);
+        var result = await _subject.QueryAsync(new() { Title = "NonExistent" }, null, null);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -570,11 +537,7 @@ public class ReleaseRepositoryTests
         await _context.SaveChangesAsync();
 
         // Act
-        var result = await _subject.QueryAsync(
-            new ReleaseQuery(),
-            new PagingParameter(2, 3),
-            null,
-            default);
+        var result = await _subject.QueryAsync(new(), new() { PageNumber = 2, PageSize = 3 }, null);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -618,19 +581,19 @@ public class ReleaseRepositoryTests
         await _context.SaveChangesAsync();
 
         // Act
-        var result = await _subject.QueryAsync(
-            new ReleaseQuery(),
-            null,
-            new SortParameter(nameof(Release.Title), SortDirection.Ascending),
-            default);
+        var result = await _subject.QueryAsync(new(), null, new()
+        {
+            PropertyName = nameof(Release.Title),
+            Direction = SortDirection.Ascending
+        });
 
         // Assert
         var items = result.Items.ToList();
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(items[0], Has.Property(nameof(Release.Title)).EqualTo("Alpha"));
-            Assert.That(items[1], Has.Property(nameof(Release.Title)).EqualTo("Beta"));
-            Assert.That(items[2], Has.Property(nameof(Release.Title)).EqualTo("Zebra"));
+            Assert.That(items, Has.ItemAt(0).Property(nameof(Release.Title)).EqualTo("Alpha"));
+            Assert.That(items, Has.ItemAt(1).Property(nameof(Release.Title)).EqualTo("Beta"));
+            Assert.That(items, Has.ItemAt(2).Property(nameof(Release.Title)).EqualTo("Zebra"));
         }
     }
 
@@ -658,18 +621,18 @@ public class ReleaseRepositoryTests
         await _context.SaveChangesAsync();
 
         // Act
-        var result = await _subject.QueryAsync(
-            new ReleaseQuery(),
-            null,
-            new SortParameter(nameof(Release.Title), SortDirection.Descending),
-            default);
+        var result = await _subject.QueryAsync(new(), null, new()
+        {
+            PropertyName = nameof(Release.Title),
+            Direction = SortDirection.Descending
+        });
 
         // Assert
         var items = result.Items.ToList();
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(items[0], Has.Property(nameof(Release.Title)).EqualTo("Zebra"));
-            Assert.That(items[1], Has.Property(nameof(Release.Title)).EqualTo("Alpha"));
+            Assert.That(items, Has.ItemAt(0).Property(nameof(Release.Title)).EqualTo("Zebra"));
+            Assert.That(items, Has.ItemAt(1).Property(nameof(Release.Title)).EqualTo("Alpha"));
         }
     }
 
@@ -698,18 +661,14 @@ public class ReleaseRepositoryTests
         await _context.SaveChangesAsync();
 
         // Act
-        var result = await _subject.QueryAsync(
-            new ReleaseQuery(),
-            null,
-            null,
-            default);
+        var result = await _subject.QueryAsync(new(), null, null);
 
         // Assert
         var items = result.Items.ToList();
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(items[0], Has.Property(nameof(Release.Title)).EqualTo("NewRelease"));
-            Assert.That(items[1], Has.Property(nameof(Release.Title)).EqualTo("OldRelease"));
+            Assert.That(items, Has.ItemAt(0).Property(nameof(Release.Title)).EqualTo("NewRelease"));
+            Assert.That(items, Has.ItemAt(1).Property(nameof(Release.Title)).EqualTo("OldRelease"));
         }
     }
 

@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 
@@ -10,10 +9,7 @@ using Magpie.Data;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
-using Magpie.Models.Filtering;
 using Magpie.Models.Paging;
-using Magpie.Models.Patch;
-using Magpie.Models.Sorting;
 using Magpie.Test.Shared;
 
 using Microsoft.EntityFrameworkCore;
@@ -301,11 +297,10 @@ public class ContentHierarchyItemRepositoryTests
         var result = await _subject.UpdateAsync(item, _userId);
 
         // Assert
-        Assert.That(result, Is.True);
-
         var updated = await _subject.GetByIdAsync(item.Id);
         using (Assert.EnterMultipleScope())
         {
+            Assert.That(result, Is.True);
             Assert.That(updated, Has.Property(nameof(updated.Name)).EqualTo("Updated Movie"));
             Assert.That(updated, Has.Property(nameof(updated.Monitoring)).EqualTo(MonitoringIntent.Excluded));
             Assert.That(updated, Has.Property(nameof(updated.Path)).EqualTo("/movies/updated-movie"));
@@ -390,10 +385,13 @@ public class ContentHierarchyItemRepositoryTests
         var result = await _subject.DeleteAsync(item.Id, _userId);
 
         // Assert
-        Assert.That(result, Is.True);
-
         var deleted = await _subject.GetByIdAsync(item.Id);
-        Assert.That(deleted, Is.Null);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Is.True);
+            Assert.That(deleted, Is.Null);
+        }
+
     }
 
     [Test]
@@ -471,9 +469,9 @@ public class ContentHierarchyItemRepositoryTests
 
         var criteria = new ContentHierarchyItemCriteria
         {
-            ContentType = new AllCriteria<PropertyCriterion<string>>
+            ContentType = new()
             {
-                All = [new PropertyCriterion<string> { Value = "movies" }]
+                And = [new() { Value = "movies" }]
             }
         };
 
@@ -522,9 +520,9 @@ public class ContentHierarchyItemRepositoryTests
 
         var criteria = new ContentHierarchyItemCriteria
         {
-            Level = new AllCriteria<PropertyCriterion<string>>
+            Level = new()
             {
-                All = [new PropertyCriterion<string> { Value = "series" }]
+                And = [new() { Value = "series" }]
             }
         };
 
@@ -573,9 +571,9 @@ public class ContentHierarchyItemRepositoryTests
 
         var criteria = new ContentHierarchyItemCriteria
         {
-            Monitoring = new AllCriteria<PropertyCriterion<MonitoringIntent>>
+            Monitoring = new()
             {
-                All = [new PropertyCriterion<MonitoringIntent> { Value = MonitoringIntent.Active }]
+                And = [new() { Value = MonitoringIntent.Active }]
             }
         };
 
@@ -615,7 +613,7 @@ public class ContentHierarchyItemRepositoryTests
         }
         await _context.SaveChangesAsync();
 
-        var paging = new PagingParameter(1, 2);
+        var paging = new PagingParameter { PageNumber = 1, PageSize = 2 };
 
         // Act
         var result = await _subject.QueryAsync(new ContentHierarchyItemCriteria(), paging, null);
@@ -673,7 +671,7 @@ public class ContentHierarchyItemRepositoryTests
         _context.ContentHierarchyItems.AddRange(item1, item2, item3);
         await _context.SaveChangesAsync();
 
-        var sort = new SortParameter("Name", SortDirection.Ascending);
+        var sort = new SortParameter { PropertyName = "Name", Direction = SortDirection.Ascending };
 
         // Act
         var result = await _subject.QueryAsync(new ContentHierarchyItemCriteria(), null, sort);
@@ -683,9 +681,9 @@ public class ContentHierarchyItemRepositoryTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(items, Has.Count.EqualTo(3));
-            Assert.That(items[0], Has.Property(nameof(ContentHierarchyItem.Name)).EqualTo("A Movie"));
-            Assert.That(items[1], Has.Property(nameof(ContentHierarchyItem.Name)).EqualTo("B Movie"));
-            Assert.That(items[2], Has.Property(nameof(ContentHierarchyItem.Name)).EqualTo("C Movie"));
+            Assert.That(items, Has.ItemAt(0).Property(nameof(ContentHierarchyItem.Name)).EqualTo("A Movie"));
+            Assert.That(items, Has.ItemAt(1).Property(nameof(ContentHierarchyItem.Name)).EqualTo("B Movie"));
+            Assert.That(items, Has.ItemAt(2).Property(nameof(ContentHierarchyItem.Name)).EqualTo("C Movie"));
         }
     }
 
@@ -722,9 +720,9 @@ public class ContentHierarchyItemRepositoryTests
 
         var criteria = new ContentHierarchyItemCriteria
         {
-            Name = new AllCriteria<PropertyCriterion<string>>
+            Name = new()
             {
-                All = [new PropertyCriterion<string>
+                And = [new()
                 {
                     Value = "Action",
                     Operator = CriteriaValueOperator.ContainsString
@@ -756,17 +754,18 @@ public class ContentHierarchyItemRepositoryTests
             Slug = "patch-movie",
             Name = "Patch Movie",
             Monitoring = MonitoringIntent.Active,
-            CreatedAt = DateTime.UtcNow
+            CreatedAt = DateTime.UtcNow,
+            MetadataContainer = await _context.MetadataContainers.FindAsync(_metadataContainerId)
         };
-
-        item.MetadataContainer = await _context.MetadataContainers.FindAsync(_metadataContainerId);
 
         _context.ContentHierarchyItems.Add(item);
         await _context.SaveChangesAsync();
 
-        var patch = new ContentHierarchyItemPatch(
-            item.Id,
-            Monitoring: new ScalarPatch<MonitoringIntent>(MonitoringIntent.Excluded));
+        var patch = new ContentHierarchyItemPatch
+        {
+            Id = item.Id,
+            Monitoring = new() { Value = MonitoringIntent.Excluded }
+        };
 
         // Act
         var result = await _subject.PatchAsync(patch, _userId);
@@ -791,17 +790,18 @@ public class ContentHierarchyItemRepositoryTests
             Name = "Path Movie",
             Monitoring = MonitoringIntent.Active,
             Path = "/old/path",
-            CreatedAt = DateTime.UtcNow
+            CreatedAt = DateTime.UtcNow,
+            MetadataContainer = await _context.MetadataContainers.FindAsync(_metadataContainerId)
         };
-
-        item.MetadataContainer = await _context.MetadataContainers.FindAsync(_metadataContainerId);
 
         _context.ContentHierarchyItems.Add(item);
         await _context.SaveChangesAsync();
 
-        var patch = new ContentHierarchyItemPatch(
-            item.Id,
-            Path: new ScalarPatch<string>("/new/path"));
+        var patch = new ContentHierarchyItemPatch
+        {
+            Id = item.Id,
+            Path = new() { Value = "/new/path" }
+        };
 
         // Act
         var result = await _subject.PatchAsync(patch, _userId);
@@ -826,18 +826,21 @@ public class ContentHierarchyItemRepositoryTests
             Name = "Language Movie",
             Monitoring = MonitoringIntent.Active,
             LanguagePreferences = ["en"],
-            CreatedAt = DateTime.UtcNow
+            CreatedAt = DateTime.UtcNow,
+            MetadataContainer = await _context.MetadataContainers.FindAsync(_metadataContainerId)
         };
-
-        item.MetadataContainer = await _context.MetadataContainers.FindAsync(_metadataContainerId);
 
         _context.ContentHierarchyItems.Add(item);
         await _context.SaveChangesAsync();
 
-        var patch = new ContentHierarchyItemPatch(
-            item.Id,
-            LanguagePreferences: new ListPatch<string, string>(
-                Insert: new Dictionary<int, string> { { 1, "es" } }));
+        var patch = new ContentHierarchyItemPatch
+        {
+            Id = item.Id,
+            LanguagePreferences = new()
+            {
+                Insert = new() { [1] = "es" }
+            }
+        };
 
         // Act
         var result = await _subject.PatchAsync(patch, _userId);
@@ -858,9 +861,11 @@ public class ContentHierarchyItemRepositoryTests
     public async Task PatchAsync_ReturnsFalse_WhenNotExists()
     {
         // Arrange
-        var patch = new ContentHierarchyItemPatch(
-            Guid.NewGuid(),
-            Monitoring: new ScalarPatch<MonitoringIntent>(MonitoringIntent.Excluded));
+        var patch = new ContentHierarchyItemPatch
+        {
+            Id = Guid.NewGuid(),
+            Monitoring = new() { Value = MonitoringIntent.Excluded }
+        };
 
         // Act
         var result = await _subject.PatchAsync(patch, _userId);
@@ -881,17 +886,18 @@ public class ContentHierarchyItemRepositoryTests
             Slug = "audit-patch-movie",
             Name = "Audit Patch Movie",
             Monitoring = MonitoringIntent.Active,
-            CreatedAt = DateTime.UtcNow
+            CreatedAt = DateTime.UtcNow,
+            MetadataContainer = await _context.MetadataContainers.FindAsync(_metadataContainerId)
         };
-
-        item.MetadataContainer = await _context.MetadataContainers.FindAsync(_metadataContainerId);
 
         _context.ContentHierarchyItems.Add(item);
         await _context.SaveChangesAsync();
 
-        var patch = new ContentHierarchyItemPatch(
-            item.Id,
-            Monitoring: new ScalarPatch<MonitoringIntent>(MonitoringIntent.Excluded));
+        var patch = new ContentHierarchyItemPatch
+        {
+            Id = item.Id,
+            Monitoring = new() { Value = MonitoringIntent.Excluded }
+        };
 
         // Act
         await _subject.PatchAsync(patch, _userId);
@@ -920,17 +926,18 @@ public class ContentHierarchyItemRepositoryTests
             Slug = "tag-movie",
             Name = "Tag Movie",
             Monitoring = MonitoringIntent.Active,
-            CreatedAt = DateTime.UtcNow
+            CreatedAt = DateTime.UtcNow,
+            MetadataContainer = await _context.MetadataContainers.FindAsync(_metadataContainerId)
         };
-
-        item.MetadataContainer = await _context.MetadataContainers.FindAsync(_metadataContainerId);
 
         _context.ContentHierarchyItems.Add(item);
         await _context.SaveChangesAsync();
 
-        var patch = new ContentHierarchyItemPatch(
-            item.Id,
-            Tags: new SetPatch<string, string>(Add: ["action", "adventure"]));
+        var patch = new ContentHierarchyItemPatch
+        {
+            Id = item.Id,
+            Tags = new() { Add = ["action", "adventure"] }
+        };
 
         // Act
         var result = await _subject.PatchAsync(patch, _userId);
@@ -973,9 +980,11 @@ public class ContentHierarchyItemRepositoryTests
         _context.ContentHierarchyItems.Add(item);
         await _context.SaveChangesAsync();
 
-        var patch = new ContentHierarchyItemPatch(
-            item.Id,
-            Tags: new SetPatch<string, string>(Remove: ["to-remove"]));
+        var patch = new ContentHierarchyItemPatch
+        {
+            Id = item.Id,
+            Tags = new() { Remove = ["to-remove"] }
+        };
 
         // Act
         var result = await _subject.PatchAsync(patch, _userId);
@@ -1016,11 +1025,15 @@ public class ContentHierarchyItemRepositoryTests
         _context.ContentHierarchyItems.Add(item);
         await _context.SaveChangesAsync();
 
-        var patch = new ContentHierarchyItemPatch(
-            item.Id,
-            Tags: new SetPatch<string, string>(
-                Add: ["new-tag"],
-                Remove: ["existing-tag"]));
+        var patch = new ContentHierarchyItemPatch
+        {
+            Id = item.Id,
+            Tags = new()
+            {
+                Add = ["new-tag"],
+                Remove = ["existing-tag"]
+            }
+        };
 
         // Act
         await _subject.PatchAsync(patch, _userId);
@@ -1069,9 +1082,9 @@ public class ContentHierarchyItemRepositoryTests
 
         var criteria = new ContentHierarchyItemCriteria
         {
-            Slug = new AllCriteria<PropertyCriterion<string>>
+            Slug = new()
             {
-                All = [new PropertyCriterion<string> { Value = "specific-slug" }]
+                And = [new() { Value = "specific-slug" }]
             }
         };
 
@@ -1122,9 +1135,9 @@ public class ContentHierarchyItemRepositoryTests
 
         var criteria = new ContentHierarchyItemCriteria
         {
-            Path = new AllCriteria<PropertyCriterion<string>>
+            Path = new()
             {
-                All = [new PropertyCriterion<string>
+                And = [new()
                 {
                     Value = "action",
                     Operator = CriteriaValueOperator.ContainsString

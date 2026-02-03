@@ -9,8 +9,6 @@ using Magpie.Data;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
-using Magpie.Models.Filtering;
-using Magpie.Models.Patch;
 using Magpie.Test.Shared;
 
 using Microsoft.EntityFrameworkCore;
@@ -85,7 +83,7 @@ public class SubjectFilterRepositoryTests
     {
         return new SubjectFilterCriteria
         {
-            Kind = new AllCriteria<PropertyCriterion<string>>()
+            Kind = new()
         };
     }
 
@@ -324,7 +322,6 @@ public class SubjectFilterRepositoryTests
             .AsNoTracking()
             .FirstOrDefaultAsync(f => f.Id == filter.Id);
         var audit = await _context.AuditRecords.ToListAsync();
-
         using (Assert.EnterMultipleScope())
         {
             Assert.That(result, Is.True);
@@ -375,7 +372,6 @@ public class SubjectFilterRepositoryTests
         // Assert
         var exists = await _context.SubjectFilters.AnyAsync(f => f.Id == filter.Id);
         var audit = await _context.AuditRecords.ToListAsync();
-
         using (Assert.EnterMultipleScope())
         {
             Assert.That(result, Is.True);
@@ -410,9 +406,11 @@ public class SubjectFilterRepositoryTests
         _context.SubjectFilters.Add(filter);
         _context.SaveChanges();
 
-        var patch = new SubjectFilterPatch(
-            filter.Id,
-            Name: new ScalarPatch<string>("PatchedName"));
+        var patch = new SubjectFilterPatch
+        {
+            Id = filter.Id,
+            Name = new() { Value = "PatchedName" }
+        };
 
         // Act
         var result = await _subject.PatchAsync(patch, _userId);
@@ -422,7 +420,6 @@ public class SubjectFilterRepositoryTests
             .AsNoTracking()
             .FirstOrDefaultAsync(f => f.Id == filter.Id);
         var audit = await _context.AuditRecords.ToListAsync();
-
         using (Assert.EnterMultipleScope())
         {
             Assert.That(result, Is.True);
@@ -453,12 +450,14 @@ public class SubjectFilterRepositoryTests
         {
             Kind = new()
             {
-                All = [new() { Values = ["Movie"] }]
+                And = [new() { Values = ["Movie"] }]
             }
         };
-        var patch = new SubjectFilterPatch(
-            filter.Id,
-            Criteria: new ScalarPatch<SubjectFilterCriteria>(newCriteria));
+        var patch = new SubjectFilterPatch
+        {
+            Id = filter.Id,
+            Criteria = new() { Value = newCriteria }
+        };
 
         // Act
         var result = await _subject.PatchAsync(patch, _userId);
@@ -467,12 +466,11 @@ public class SubjectFilterRepositoryTests
         var updatedFilter = await _context.SubjectFilters
             .AsNoTracking()
             .FirstOrDefaultAsync(f => f.Id == filter.Id);
-
         using (Assert.EnterMultipleScope())
         {
             Assert.That(result, Is.True);
             Assert.That(updatedFilter, Is.Not.Null);
-            Assert.That(updatedFilter!.Criteria.Kind!.All, Has.Count.EqualTo(1));
+            Assert.That(updatedFilter!.Criteria.Kind!.And.ToList(), Has.Count.EqualTo(1));
         }
     }
 
@@ -493,9 +491,11 @@ public class SubjectFilterRepositoryTests
         _context.SubjectFilters.Add(filter);
         _context.SaveChanges();
 
-        var patch = new SubjectFilterPatch(
-            filter.Id,
-            Tags: new SetPatch<string, string>(Add: ["newTag1", "newTag2"], Remove: null));
+        var patch = new SubjectFilterPatch
+        {
+            Id = filter.Id,
+            Tags = new() { Add = ["newTag1", "newTag2"] }
+        };
 
         // Act
         var result = await _subject.PatchAsync(patch, _userId);
@@ -505,7 +505,6 @@ public class SubjectFilterRepositoryTests
             .Where(t => t.SubjectFilters.Any(f => f.Id == filter.Id))
             .Select(t => t.Name)
             .ToListAsync();
-
         using (Assert.EnterMultipleScope())
         {
             Assert.That(result, Is.True);
@@ -535,9 +534,11 @@ public class SubjectFilterRepositoryTests
         _context.SubjectFilters.Add(filter);
         _context.SaveChanges();
 
-        var patch = new SubjectFilterPatch(
-            filter.Id,
-            Tags: new SetPatch<string, string>(Add: null, Remove: ["removeMe"]));
+        var patch = new SubjectFilterPatch
+        {
+            Id = filter.Id,
+            Tags = new() { Remove = ["removeMe"] }
+        };
 
         // Act
         var result = await _subject.PatchAsync(patch, _userId);
@@ -547,7 +548,6 @@ public class SubjectFilterRepositoryTests
             .Where(t => t.SubjectFilters.Any(f => f.Id == filter.Id))
             .Select(t => t.Name)
             .ToListAsync();
-
         using (Assert.EnterMultipleScope())
         {
             Assert.That(result, Is.True);
@@ -576,9 +576,11 @@ public class SubjectFilterRepositoryTests
         _context.SubjectFilters.Add(filter);
         _context.SaveChanges();
 
-        var patch = new SubjectFilterPatch(
-            filter.Id,
-            Tags: new SetPatch<string, string>(Add: ["toAdd"], Remove: ["toRemove"]));
+        var patch = new SubjectFilterPatch
+        {
+            Id = filter.Id,
+            Tags = new() { Add = ["toAdd"], Remove = ["toRemove"] }
+        };
 
         // Act
         var result = await _subject.PatchAsync(patch, _userId);
@@ -588,7 +590,6 @@ public class SubjectFilterRepositoryTests
             .Where(t => t.SubjectFilters.Any(f => f.Id == filter.Id))
             .Select(t => t.Name)
             .ToListAsync();
-
         using (Assert.EnterMultipleScope())
         {
             Assert.That(result, Is.True);
@@ -603,9 +604,11 @@ public class SubjectFilterRepositoryTests
     public async Task PatchAsync_ReturnsFalse_WhenNotFound()
     {
         // Arrange
-        var patch = new SubjectFilterPatch(
-            Guid.NewGuid(),
-            Name: new ScalarPatch<string>("NewName"));
+        var patch = new SubjectFilterPatch
+        {
+            Id = Guid.NewGuid(),
+            Name = new() { Value = "NewName" }
+        };
 
         // Act
         var result = await _subject.PatchAsync(patch, _userId);

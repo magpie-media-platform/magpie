@@ -10,24 +10,20 @@ using Magpie.Data;
 using Magpie.Models;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
+using Magpie.Models.Enums;
 using Magpie.Models.Paging;
-using Magpie.Models.Sorting;
 
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 
 namespace Magpie.Core.Repositories;
 
-/// <summary>
-/// Repository for managing content hierarchy items.
-/// </summary>
-public sealed class ContentHierarchyItemRepository(
+internal sealed class ContentHierarchyItemRepository(
     MagpieDbContext context,
     IAuditRecordRepository auditRecordRepository,
     ITransactionManager transactionManager,
     ILogger<ContentHierarchyItemRepository> logger) : IContentHierarchyItemRepository
 {
-    /// <inheritdoc />
     public async Task<IEnumerable<ContentHierarchyItem>> ListAllAsync(CancellationToken cancellationToken = default)
     {
         try
@@ -46,7 +42,6 @@ public sealed class ContentHierarchyItemRepository(
         }
     }
 
-    /// <inheritdoc />
     public async Task<ContentHierarchyItem?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default)
     {
         try
@@ -65,7 +60,6 @@ public sealed class ContentHierarchyItemRepository(
         }
     }
 
-    /// <inheritdoc />
     public async Task<ContentHierarchyItem?> GetBySlugAsync(
         string contentType,
         string level,
@@ -93,7 +87,6 @@ public sealed class ContentHierarchyItemRepository(
         }
     }
 
-    /// <inheritdoc />
     public async Task<PagedList<ContentHierarchyItem>> QueryAsync(
         ContentHierarchyItemCriteria query,
         PagingParameter? paging,
@@ -130,7 +123,13 @@ public sealed class ContentHierarchyItemRepository(
 
             var result = await items.ToListAsync(cancellationToken).ConfigureAwait(false);
 
-            return new(result, paging?.PageNumber, paging?.PageSize, totalCount);
+            return new()
+            {
+                Items = result,
+                PageNumber = paging?.PageNumber,
+                PageSize = paging?.PageSize,
+                TotalItems = totalCount
+            };
         }
         catch (Exception ex)
         {
@@ -139,7 +138,6 @@ public sealed class ContentHierarchyItemRepository(
         }
     }
 
-    /// <inheritdoc />
     public async Task<ContentHierarchyItem> CreateAsync(
         ContentHierarchyItem model,
         Guid? createdByUserId,
@@ -177,7 +175,6 @@ public sealed class ContentHierarchyItemRepository(
         }
     }
 
-    /// <inheritdoc />
     public async Task<bool> UpdateAsync(
         ContentHierarchyItem model,
         Guid? modifiedByUserId,
@@ -234,7 +231,6 @@ public sealed class ContentHierarchyItemRepository(
         }
     }
 
-    /// <inheritdoc />
     public async Task<bool> DeleteAsync(
         Guid id,
         Guid? deletedByUserId,
@@ -286,7 +282,6 @@ public sealed class ContentHierarchyItemRepository(
         }
     }
 
-    /// <inheritdoc />
     public async Task<bool> PatchAsync(
         ContentHierarchyItemPatch patch,
         Guid? modifiedByUserId,
@@ -462,14 +457,14 @@ public sealed class ContentHierarchyItemRepository(
         IQueryable<ContentHierarchyItem> query,
         ContentHierarchyItemCriteria criteria)
     {
-        query = query.ApplyAllEquatableCriteria(criteria.ParentId, nameof(ContentHierarchyItem.ParentId));
-        query = query.ApplyAllEquatableCriteria(criteria.RootFolderId, nameof(ContentHierarchyItem.RootFolderId));
-        query = query.ApplyAllStringCriteria(criteria.ContentType, nameof(ContentHierarchyItem.ContentType));
-        query = query.ApplyAllStringCriteria(criteria.Level, nameof(ContentHierarchyItem.Level));
-        query = query.ApplyAllStringCriteria(criteria.Slug, nameof(ContentHierarchyItem.Slug));
-        query = query.ApplyAllStringCriteria(criteria.Name, nameof(ContentHierarchyItem.Name));
-        query = query.ApplyAllStructCriteria(criteria.Monitoring, nameof(ContentHierarchyItem.Monitoring));
-        query = query.ApplyAllStringCriteria(criteria.Path, nameof(ContentHierarchyItem.Path));
+        query = query.ApplyCriteriaSet(criteria.ParentId, nameof(ContentHierarchyItem.ParentId));
+        query = query.ApplyCriteriaSet(criteria.RootFolderId, nameof(ContentHierarchyItem.RootFolderId));
+        query = query.ApplyCriteriaSet(criteria.ContentType, nameof(ContentHierarchyItem.ContentType));
+        query = query.ApplyCriteriaSet(criteria.Level, nameof(ContentHierarchyItem.Level));
+        query = query.ApplyCriteriaSet(criteria.Slug, nameof(ContentHierarchyItem.Slug));
+        query = query.ApplyCriteriaSet(criteria.Name, nameof(ContentHierarchyItem.Name));
+        query = query.ApplyEnumCriteriaSet(criteria.Monitoring, nameof(ContentHierarchyItem.Monitoring));
+        query = query.ApplyCriteriaSet(criteria.Path, nameof(ContentHierarchyItem.Path));
 
         return query;
     }

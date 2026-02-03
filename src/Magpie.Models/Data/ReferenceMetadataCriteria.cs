@@ -12,13 +12,13 @@ public sealed record ReferenceMetadataCriteria
     /// <summary>
     /// The criteria for <see cref="Reference.Ordinal"/>.
     /// </summary>
-    public AllCriteria<PropertyCriterion<int>> Ordinal { get; init; } = new();
+    public CriteriaSet<PropertyCriterion<int>> Ordinal { get; init; } = new();
     /// <inheritdoc cref="Reference.Kind" />
-    public AllCriteria<PropertyCriterion<string>> Kind { get; init; } = new();
+    public CriteriaSet<PropertyCriterion<string>> Kind { get; init; } = new();
     /// <inheritdoc cref="Reference.Url" />
-    public AllCriteria<PropertyCriterion<Uri>> Url { get; init; } = new();
+    public CriteriaSet<PropertyCriterion<Uri>> Url { get; init; } = new();
     /// <inheritdoc cref="Reference.DisplayName" />
-    public AllCriteria<PropertyCriterion<string>> DisplayName { get; init; } = new();
+    public CriteriaSet<PropertyCriterion<string>> DisplayName { get; init; } = new();
     /// <inheritdoc cref="Reference.Language" />
-    public AllCriteria<PropertyCriterion<string>> Language { get; init; } = new();
+    public CriteriaSet<PropertyCriterion<string>> Language { get; init; } = new();
 }

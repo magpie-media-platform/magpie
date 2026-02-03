@@ -8,22 +8,50 @@ namespace Magpie.Models.Arguments;
 /// <summary>
 /// Patch for <see cref="Image"/>.
 /// </summary>
-/// <param name="Id">The <see cref="Image.Id"/> of the item to patch.</param>
-/// <param name="Ordinal">The <see cref="Image.Ordinal"/> patch</param>
-/// <param name="Kind">The <see cref="Image.Kind"/> patch</param>
-/// <param name="MimeType">The <see cref="Image.MimeType"/> patch</param>
-/// <param name="Url">The <see cref="Image.Url"/> patch</param>
-/// <param name="Source">The <see cref="Image.Source"/> patch</param>
-/// <param name="Language">The <see cref="Image.Language"/> patch</param>
-/// <param name="Width">The <see cref="Image.Width"/> patch</param>
-/// <param name="Height">The <see cref="Image.Height"/> patch</param>
-public sealed record ImagePatch(
-    Guid Id,
-    ScalarPatch<int>? Ordinal = null,
-    ScalarPatch<string>? Kind = null,
-    ScalarPatch<string?>? MimeType = null,
-    ScalarPatch<Uri>? Url = null,
-    ScalarPatch<string?>? Source = null,
-    ScalarPatch<string?>? Language = null,
-    ScalarPatch<int?>? Width = null,
-    ScalarPatch<int?>? Height = null);
+public sealed record ImagePatch
+{
+    /// <summary>
+    /// The <see cref="Image.Id"/> of the item to patch.
+    /// </summary>
+    public Guid Id { get; init; }
+
+    /// <summary>
+    /// The <see cref="Image.Ordinal"/> to patch.
+    /// </summary>
+    public ScalarPatch<int>? Ordinal { get; init; }
+
+    /// <summary>
+    /// The <see cref="Image.Kind"/> to patch.
+    /// </summary>
+    public ScalarPatch<string>? Kind { get; init; }
+
+    /// <summary>
+    /// The <see cref="Image.MimeType"/> to patch.
+    /// </summary>
+    public ScalarPatch<string?>? MimeType { get; init; }
+
+    /// <summary>
+    /// The <see cref="Image.Url"/> to patch.
+    /// </summary>
+    public ScalarPatch<Uri>? Url { get; init; }
+
+    /// <summary>
+    /// The <see cref="Image.Source"/> to patch.
+    /// </summary>
+    public ScalarPatch<string?>? Source { get; init; }
+
+    /// <summary>
+    /// The <see cref="Image.Language"/> to patch.
+    /// </summary>
+    public ScalarPatch<string?>? Language { get; init; }
+
+    /// <summary>
+    /// The <see cref="Image.Width"/> to patch.
+    /// </summary>
+    public ScalarPatch<int?>? Width { get; init; }
+
+    /// <summary>
+    /// The <see cref="Image.Height"/> to patch.
+    /// </summary>
+    public ScalarPatch<int?>? Height { get; init; }
+}

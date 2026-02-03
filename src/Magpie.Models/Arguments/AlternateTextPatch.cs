@@ -8,15 +8,31 @@ namespace Magpie.Models.Arguments;
 /// <summary>
 /// Patch for <see cref="AlternateText"/>.
 /// </summary>
-/// <param name="Id">The <see cref="AlternateText.Id"/> of the item to patch.</param>
-/// <param name="Ordinal">The <see cref="AlternateText.Ordinal"/> patch</param>
-/// <param name="Kind">The <see cref="AlternateText.Kind"/> patch</param>
-/// <param name="Language">The <see cref="AlternateText.Language"/> patch</param>
-/// <param name="Text">The <see cref="AlternateText.Text"/> patch</param>
-public sealed record AlternateTextPatch(
-    Guid Id,
-    ScalarPatch<int>? Ordinal = null,
-    ScalarPatch<string>? Kind = null,
-    ScalarPatch<string?>? Language = null,
-    ScalarPatch<string>? Text = null);
+public sealed record AlternateTextPatch
+{
+    /// <summary>
+    /// The <see cref="AlternateText.Id"/> of the item to patch.
+    /// </summary>
+    public Guid Id { get; init; }
+
+    /// <summary>
+    /// The <see cref="AlternateText.Ordinal"/> patch.
+    /// </summary>
+    public ScalarPatch<int>? Ordinal { get; init; }
+
+    /// <summary>
+    /// The <see cref="AlternateText.Kind"/> patch.
+    /// </summary>
+    public ScalarPatch<string>? Kind { get; init; }
+
+    /// <summary>
+    /// The <see cref="AlternateText.Language"/> patch.
+    /// </summary>
+    public ScalarPatch<string?>? Language { get; init; }
+
+    /// <summary>
+    /// The <see cref="AlternateText.Text"/> patch.
+    /// </summary>
+    public ScalarPatch<string>? Text { get; init; }
+}
 

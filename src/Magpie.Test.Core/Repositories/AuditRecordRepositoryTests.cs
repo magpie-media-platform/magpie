@@ -5,11 +5,8 @@ using System.Threading.Tasks;
 using Magpie.Abstractions.Repositories;
 using Magpie.Core.Repositories;
 using Magpie.Data;
-using Magpie.Models;
-using Magpie.Models.Arguments;
 using Magpie.Models.Data;
-using Magpie.Models.Paging;
-using Magpie.Models.Sorting;
+using Magpie.Models.Enums;
 using Magpie.Test.Shared;
 
 using Microsoft.EntityFrameworkCore;
@@ -41,7 +38,7 @@ public class AuditRecordRepositoryTests
             Username = "TestUser",
             ProviderType = "local",
             Enabled = true,
-            Role = Models.Enums.Role.Admin,
+            Role = Role.Admin,
             CreatedAt = DateTime.UtcNow
         };
 
@@ -123,9 +120,9 @@ public class AuditRecordRepositoryTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(result, Has.Exactly(3).Items);
-            Assert.That(result[0], Has.Property(nameof(AuditRecord.Id)).EqualTo(newRecord.Id));
-            Assert.That(result[1], Has.Property(nameof(AuditRecord.Id)).EqualTo(middleRecord.Id));
-            Assert.That(result[2], Has.Property(nameof(AuditRecord.Id)).EqualTo(oldRecord.Id));
+            Assert.That(result, Has.ItemAt(0).Property(nameof(AuditRecord.Id)).EqualTo(newRecord.Id));
+            Assert.That(result, Has.ItemAt(1).Property(nameof(AuditRecord.Id)).EqualTo(middleRecord.Id));
+            Assert.That(result, Has.ItemAt(2).Property(nameof(AuditRecord.Id)).EqualTo(oldRecord.Id));
         }
     }
 
@@ -180,7 +177,7 @@ public class AuditRecordRepositoryTests
         await _context.SaveChangesAsync();
 
         // Act
-        var result = await _subject.QueryAsync(new AuditRecordQuery(), null, null);
+        var result = await _subject.QueryAsync(new(), null, null);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -220,7 +217,7 @@ public class AuditRecordRepositoryTests
         await _context.SaveChangesAsync();
 
         // Act
-        var result = await _subject.QueryAsync(new AuditRecordQuery(EntityId: entityId), null, null);
+        var result = await _subject.QueryAsync(new() { EntityId = entityId }, null, null);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -254,7 +251,7 @@ public class AuditRecordRepositoryTests
         await _context.SaveChangesAsync();
 
         // Act
-        var result = await _subject.QueryAsync(new AuditRecordQuery(ParentEntityId: parentId), null, null);
+        var result = await _subject.QueryAsync(new() { ParentEntityId = parentId }, null, null);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -294,7 +291,7 @@ public class AuditRecordRepositoryTests
         await _context.SaveChangesAsync();
 
         // Act
-        var result = await _subject.QueryAsync(new AuditRecordQuery(EntityType: "Subject"), null, null);
+        var result = await _subject.QueryAsync(new() { EntityType = "Subject" }, null, null);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -316,7 +313,7 @@ public class AuditRecordRepositoryTests
         await _context.SaveChangesAsync();
 
         // Act
-        var result = await _subject.QueryAsync(new AuditRecordQuery(Category: "Security"), null, null);
+        var result = await _subject.QueryAsync(new() { Category = "Security" }, null, null);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -338,7 +335,7 @@ public class AuditRecordRepositoryTests
         await _context.SaveChangesAsync();
 
         // Act
-        var result = await _subject.QueryAsync(new AuditRecordQuery(Operation: "Create"), null, null);
+        var result = await _subject.QueryAsync(new() { Operation = "Create" }, null, null);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -378,7 +375,7 @@ public class AuditRecordRepositoryTests
         await _context.SaveChangesAsync();
 
         // Act
-        var result = await _subject.QueryAsync(new AuditRecordQuery(Description: "movie"), null, null);
+        var result = await _subject.QueryAsync(new() { Detail = "movie" }, null, null);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -410,11 +407,7 @@ public class AuditRecordRepositoryTests
         await _context.SaveChangesAsync();
 
         // Act
-        var result = await _subject.QueryAsync(
-            new AuditRecordQuery(Timestamp: new Range<DateTime>(cutoff, null)),
-            null,
-            null,
-            default);
+        var result = await _subject.QueryAsync(new() { Timestamp = new(cutoff, null) }, null, null);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -446,11 +439,7 @@ public class AuditRecordRepositoryTests
         await _context.SaveChangesAsync();
 
         // Act
-        var result = await _subject.QueryAsync(
-            new AuditRecordQuery(Timestamp: new Range<DateTime>(null, cutoff)),
-            null,
-            null,
-            default);
+        var result = await _subject.QueryAsync(new() { Timestamp = new(null, cutoff), }, null, null);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -490,10 +479,9 @@ public class AuditRecordRepositoryTests
 
         // Act
         var result = await _subject.QueryAsync(
-            new AuditRecordQuery(Timestamp: new Range<DateTime>(minTime, maxTime)),
+            new() { Timestamp = new(minTime, maxTime) },
             null,
-            null,
-            default);
+            null);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -534,7 +522,7 @@ public class AuditRecordRepositoryTests
         await _context.SaveChangesAsync();
 
         // Act
-        var result = await _subject.QueryAsync(new AuditRecordQuery(UserId: _userId), null, null);
+        var result = await _subject.QueryAsync(new() { UserId = _userId }, null, null);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -585,11 +573,7 @@ public class AuditRecordRepositoryTests
         await _context.SaveChangesAsync();
 
         // Act
-        var result = await _subject.QueryAsync(
-            new AuditRecordQuery(Category: "Content", EntityType: "Subject"),
-            null,
-            null,
-            default);
+        var result = await _subject.QueryAsync(new() { Category = "Content", EntityType = "Subject" }, null, null);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -618,11 +602,7 @@ public class AuditRecordRepositoryTests
         await _context.SaveChangesAsync();
 
         // Act
-        var result = await _subject.QueryAsync(
-            new AuditRecordQuery(),
-            new PagingParameter(2, 3),
-            null,
-            default);
+        var result = await _subject.QueryAsync(new(), new() { PageNumber = 2, PageSize = 3 }, null);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -645,19 +625,19 @@ public class AuditRecordRepositoryTests
         await _context.SaveChangesAsync();
 
         // Act
-        var result = await _subject.QueryAsync(
-            new AuditRecordQuery(),
-            null,
-            new SortParameter(nameof(AuditRecord.Category), SortDirection.Ascending),
-            default);
+        var result = await _subject.QueryAsync(new(), null, new()
+        {
+            PropertyName = nameof(AuditRecord.Category),
+            Direction = SortDirection.Ascending
+        });
 
         // Assert
         var items = result.Items.ToList();
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(items[0], Has.Property(nameof(AuditRecord.Category)).EqualTo("A"));
-            Assert.That(items[1], Has.Property(nameof(AuditRecord.Category)).EqualTo("B"));
-            Assert.That(items[2], Has.Property(nameof(AuditRecord.Category)).EqualTo("C"));
+            Assert.That(items, Has.ItemAt(0).Property(nameof(AuditRecord.Category)).EqualTo("A"));
+            Assert.That(items, Has.ItemAt(1).Property(nameof(AuditRecord.Category)).EqualTo("B"));
+            Assert.That(items, Has.ItemAt(2).Property(nameof(AuditRecord.Category)).EqualTo("C"));
         }
     }
 
@@ -672,19 +652,19 @@ public class AuditRecordRepositoryTests
         await _context.SaveChangesAsync();
 
         // Act
-        var result = await _subject.QueryAsync(
-            new AuditRecordQuery(),
-            null,
-            new SortParameter(nameof(AuditRecord.Category), SortDirection.Descending),
-            default);
+        var result = await _subject.QueryAsync(new(), null, new()
+        {
+            PropertyName = nameof(AuditRecord.Category),
+            Direction = SortDirection.Descending
+        });
 
         // Assert
         var items = result.Items.ToList();
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(items[0], Has.Property(nameof(AuditRecord.Category)).EqualTo("C"));
-            Assert.That(items[1], Has.Property(nameof(AuditRecord.Category)).EqualTo("B"));
-            Assert.That(items[2], Has.Property(nameof(AuditRecord.Category)).EqualTo("A"));
+            Assert.That(items, Has.ItemAt(0).Property(nameof(AuditRecord.Category)).EqualTo("C"));
+            Assert.That(items, Has.ItemAt(1).Property(nameof(AuditRecord.Category)).EqualTo("B"));
+            Assert.That(items, Has.ItemAt(2).Property(nameof(AuditRecord.Category)).EqualTo("A"));
         }
     }
 
@@ -708,14 +688,14 @@ public class AuditRecordRepositoryTests
         await _context.SaveChangesAsync();
 
         // Act
-        var result = await _subject.QueryAsync(new AuditRecordQuery(), null, null);
+        var result = await _subject.QueryAsync(new(), null, null);
 
         // Assert
         var items = result.Items.ToList();
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(items[0], Has.Property(nameof(AuditRecord.Id)).EqualTo(newRecord.Id));
-            Assert.That(items[1], Has.Property(nameof(AuditRecord.Id)).EqualTo(oldRecord.Id));
+            Assert.That(items, Has.ItemAt(0).Property(nameof(AuditRecord.Id)).EqualTo(newRecord.Id));
+            Assert.That(items, Has.ItemAt(1).Property(nameof(AuditRecord.Id)).EqualTo(oldRecord.Id));
         }
     }
 
@@ -723,11 +703,7 @@ public class AuditRecordRepositoryTests
     public async Task QueryAsync_ReturnsEmptyResult_WhenNoMatches()
     {
         // Act
-        var result = await _subject.QueryAsync(
-            new AuditRecordQuery(Category: "NonExistent"),
-            null,
-            null,
-            default);
+        var result = await _subject.QueryAsync(new() { Category = "NonExistent" }, null, null);
 
         // Assert
         using (Assert.EnterMultipleScope())

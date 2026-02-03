@@ -12,7 +12,6 @@ using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Models.Paging;
-using Magpie.Models.Sorting;
 
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
@@ -108,7 +107,13 @@ internal sealed class JobExecutionRepository(
 
             var items = await jobExecutions.ToListAsync(cancellationToken).ConfigureAwait(false);
 
-            return new(items, page?.PageNumber, page?.PageSize, totalCount);
+            return new()
+            {
+                Items = items,
+                PageNumber = page?.PageNumber,
+                PageSize = page?.PageSize,
+                TotalItems = totalCount
+            };
         }
         catch (Exception ex)
         {

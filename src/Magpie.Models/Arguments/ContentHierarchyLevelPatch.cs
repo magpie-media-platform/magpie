@@ -9,16 +9,25 @@ namespace Magpie.Models.Arguments;
 /// <summary>
 /// Patch for <see cref="ContentHierarchyItem"/>.
 /// </summary>
-/// <param name="Id">The <see cref="ContentHierarchyItem.Id"/> of the item to patch.</param>
-/// <param name="RootFolderId">The <see cref="ContentHierarchyItem.RootFolderId"/> patch</param>
-/// <param name="Monitoring">The <see cref="ContentHierarchyItem.Monitoring"/> patch</param>
-/// <param name="Path">The <see cref="ContentHierarchyItem.Path"/> patch</param>
-/// <param name="LanguagePreferences">The <see cref="ContentHierarchyItem.LanguagePreferences"/> patch</param>
-/// <param name="Tags">The <see cref="Tag"/>s patch</param>
-public sealed record ContentHierarchyItemPatch(
-    Guid Id,
-    ScalarPatch<Guid?>? RootFolderId = null,
-    ScalarPatch<MonitoringIntent>? Monitoring = null,
-    ScalarPatch<string>? Path = null,
-    ListPatch<string, string>? LanguagePreferences = null,
-    SetPatch<string, string>? Tags = null) : TagsPatch(Id, Tags);
+public sealed record ContentHierarchyItemPatch : TagsPatch
+{
+    /// <summary>
+    /// The <see cref="ContentHierarchyItem.RootFolderId"/> patch
+    /// </summary>
+    public ScalarPatch<Guid?>? RootFolderId { get; init; }
+
+    /// <summary>
+    /// The <see cref="ContentHierarchyItem.Monitoring"/> patch
+    /// </summary>
+    public ScalarPatch<MonitoringIntent>? Monitoring { get; init; }
+
+    /// <summary>
+    /// The <see cref="ContentHierarchyItem.Path"/> patch
+    /// </summary>
+    public ScalarPatch<string>? Path { get; init; }
+
+    /// <summary>
+    /// The <see cref="ContentHierarchyItem.LanguagePreferences"/> patch
+    /// </summary>
+    public ListPatch<string, string>? LanguagePreferences { get; init; }
+}

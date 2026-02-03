@@ -10,9 +10,9 @@ public sealed record ExternalIdCriteria
     /// <summary>
     /// The criteria for <see cref="ExternalId.Value"/>.
     /// </summary>
-    public AllCriteria<PropertyCriterion<string>> Value { get; init; } = new();
+    public CriteriaSet<PropertyCriterion<string>> Value { get; init; } = new();
     /// <summary>
     /// The criteria for <see cref="ExternalId.Source"/>.
     /// </summary>
-    public AllCriteria<PropertyCriterion<string>> Source { get; init; } = new();
+    public CriteriaSet<PropertyCriterion<string>> Source { get; init; } = new();
 }

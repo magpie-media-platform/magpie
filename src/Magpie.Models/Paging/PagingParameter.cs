@@ -3,6 +3,15 @@ namespace Magpie.Models.Paging;
 /// <summary>
 /// Pagination parameters for a query.
 /// </summary>
-/// <param name="PageNumber">The page number.</param>
-/// <param name="PageSize">The number of items per page.</param>
-public sealed record PagingParameter(int PageNumber, int PageSize);
+public sealed record PagingParameter
+{
+    /// <summary>
+    /// The page number.
+    /// </summary>
+    public required int PageNumber { get; init; }
+
+    /// <summary>
+    /// The number of items per page.
+    /// </summary>
+    public required int PageSize { get; init; }
+}

@@ -8,5 +8,5 @@ namespace Magpie.Models.Data;
 public sealed record MediaInfoCriteria
 {
     /// <inheritdoc cref="MediaInfo.Tracks" />
-    public AllCriteria<MediaInfoTrackCriteria> Tracks { get; init; } = new();
+    public CriteriaSet<MediaInfoTrackCriteria> Tracks { get; init; } = new();
 }

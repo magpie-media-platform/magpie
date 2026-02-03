@@ -12,7 +12,6 @@ using Magpie.Api.EndpointGroups;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Paging;
-using Magpie.Models.Sorting;
 using Magpie.Test.Shared;
 
 using Microsoft.AspNetCore.Authentication;
@@ -94,9 +93,9 @@ public class ReleasesEndpointGroupTests
 
         // Act
         var response = await _client.GetAsync("/api/releases").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<Release[]>().ConfigureAwait(false);
 
         // Assert
+        var content = await response.Content.ReadFromJsonAsync<Release[]>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
@@ -122,9 +121,9 @@ public class ReleasesEndpointGroupTests
 
         // Act
         var response = await _client.GetAsync("/api/releases").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<Release[]>().ConfigureAwait(false);
 
         // Assert
+        var content = await response.Content.ReadFromJsonAsync<Release[]>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
@@ -154,9 +153,9 @@ public class ReleasesEndpointGroupTests
 
         // Act
         var response = await _client.GetAsync($"/api/releases/{releaseId}").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<Release>().ConfigureAwait(false);
 
         // Assert
+        var content = await response.Content.ReadFromJsonAsync<Release>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
@@ -198,7 +197,6 @@ public class ReleasesEndpointGroupTests
             Protocol = "usenet",
             PublishDate = DateTime.UtcNow,
         };
-        var pagedResult = new PagedList<Release>([release1, release2], 1, 10, 2);
 
         _repository
             .Setup(m => m.QueryAsync(
@@ -206,7 +204,13 @@ public class ReleasesEndpointGroupTests
                 It.IsAny<PagingParameter?>(),
                 It.IsAny<SortParameter?>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(pagedResult);
+            .ReturnsAsync(new PagedList<Release>
+            {
+                Items = [release1, release2],
+                PageNumber = 1,
+                PageSize = 10,
+                TotalItems = 2
+            });
 
         // Act
         var response = await _client.PostAsJsonAsync("/api/releases/query", new ReleaseQuery())
@@ -242,9 +246,9 @@ public class ReleasesEndpointGroupTests
 
         // Act
         var response = await _client.PostAsJsonAsync("/api/releases", request).ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<Release>().ConfigureAwait(false);
 
         // Assert
+        var content = await response.Content.ReadFromJsonAsync<Release>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.Created));
@@ -355,7 +359,13 @@ public class ReleasesEndpointGroupTests
                 It.IsAny<PagingParameter?>(),
                 It.IsAny<SortParameter?>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new PagedList<Release>([], 1, 10, 0));
+            .ReturnsAsync(new PagedList<Release>
+            {
+                Items = [],
+                PageNumber = 1,
+                PageSize = 10,
+                TotalItems = 0
+            });
 
         // Act
         var response = await _client.PostAsJsonAsync("/api/releases/query", query).ConfigureAwait(false);

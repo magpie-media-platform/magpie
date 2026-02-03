@@ -10,7 +10,6 @@ using Magpie.Data;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
-using Magpie.Models.Patch;
 using Magpie.Test.Shared;
 
 using Microsoft.EntityFrameworkCore;
@@ -559,7 +558,7 @@ public class EventTriggerRepositoryTests
                 EventName = new() { Value = "content.added" }
             },
             Enabled = true,
-            Parameters = new Dictionary<string, string> { ["old"] = "value" },
+            Parameters = new() { ["old"] = "value" },
             CreatedAt = DateTime.UtcNow
         };
         _context.EventTriggers.Add(entity);
@@ -619,9 +618,11 @@ public class EventTriggerRepositoryTests
         _context.EventTriggers.Add(entity);
         _context.SaveChanges();
 
-        var patch = new EventTriggerPatch(
-            entity.Id,
-            Name: new ScalarPatch<string>("PatchedName"));
+        var patch = new EventTriggerPatch
+        {
+            Id = entity.Id,
+            Name = new() { Value = "PatchedName" }
+        };
 
         // Act
         var result = await _subject.PatchAsync(patch, _userId);
@@ -665,9 +666,11 @@ public class EventTriggerRepositoryTests
         _context.EventTriggers.Add(entity);
         _context.SaveChanges();
 
-        var patch = new EventTriggerPatch(
-            entity.Id,
-            Enabled: new ScalarPatch<bool>(false));
+        var patch = new EventTriggerPatch
+        {
+            Id = entity.Id,
+            Enabled = new() { Value = false }
+        };
 
         // Act
         var result = await _subject.PatchAsync(patch, _userId);
@@ -699,18 +702,22 @@ public class EventTriggerRepositoryTests
                 EventName = new() { Value = "content.added" }
             },
             Enabled = true,
-            Parameters = new Dictionary<string, string> { ["old"] = "value", ["keep"] = "this" },
+            Parameters = new() { ["old"] = "value", ["keep"] = "this" },
             CreatedAt = DateTime.UtcNow
         };
         _context.EventTriggers.Add(entity);
         _context.SaveChanges();
 
-        var patch = new EventTriggerPatch(
-            entity.Id,
-            Parameters: new DictionaryPatch<string, string, string>(
-                Add: new Dictionary<string, string> { ["new"] = "newValue" },
-                Remove: ["old"],
-                Update: new Dictionary<string, string> { ["keep"] = "updated" }));
+        var patch = new EventTriggerPatch
+        {
+            Id = entity.Id,
+            Parameters = new()
+            {
+                Add = new() { ["new"] = "newValue" },
+                Remove = ["old"],
+                Update = new() { ["keep"] = "updated" }
+            }
+        };
 
         // Act
         var result = await _subject.PatchAsync(patch, _userId);
@@ -736,9 +743,11 @@ public class EventTriggerRepositoryTests
     public async Task PatchAsync_ReturnsFalse_WhenNotFound()
     {
         // Arrange
-        var patch = new EventTriggerPatch(
-            Guid.NewGuid(),
-            Name: new ScalarPatch<string>("NewName"));
+        var patch = new EventTriggerPatch
+        {
+            Id = Guid.NewGuid(),
+            Name = new() { Value = "NewName" }
+        };
 
         // Act
         var result = await _subject.PatchAsync(patch, _userId);

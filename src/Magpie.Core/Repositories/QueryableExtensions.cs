@@ -11,108 +11,119 @@ namespace Magpie.Core.Repositories;
 
 internal static class QueryableExtensions
 {
-    public static IQueryable<TEntity> ApplyAllStructCriteria<TEntity, TProperty>(
+    public static IQueryable<TEntity> ApplyCriteriaSet<TEntity, TProperty>(
         this IQueryable<TEntity> query,
-        AllCriteria<PropertyCriterion<TProperty>>? criteria,
-        string property)
-            where TEntity : class
-            where TProperty : struct
-    {
-        if (criteria is not { All.Count: > 0 })
-        {
-            return query;
-        }
-
-        foreach (var c in criteria.All)
-        {
-            query = query.Where(BuildStructPredicate<TEntity, TProperty>(c, property));
-        }
-
-        return query;
-    }
-
-    public static IQueryable<TEntity> ApplyAllEquatableCriteria<TEntity, TProperty>(
-        this IQueryable<TEntity> query,
-        AllCriteria<PropertyCriterion<TProperty>>? criteria,
+        CriteriaSet<PropertyCriterion<TProperty>>? criteria,
         string property)
             where TEntity : class
             where TProperty : IEquatable<TProperty>
     {
-        if (criteria is not { All.Count: > 0 })
+        if (criteria?.And is null || !criteria.And.Any())
         {
             return query;
         }
 
-        foreach (var c in criteria.All)
+        foreach (var c in criteria.And)
         {
-            query = query.Where(BuildEquatablePredicate<TEntity, TProperty>(c, property));
+            query = query.Where(BuildPredicate<TEntity, TProperty>(c, property));
         }
 
         return query;
     }
 
-    public static IQueryable<TEntity> ApplyAllComparableCriteria<TEntity, TProperty>(
+    public static IQueryable<TEntity> ApplyCriteriaSet<TEntity>(
         this IQueryable<TEntity> query,
-        AllCriteria<PropertyCriterion<TProperty>>? criteria,
-        string property)
-            where TEntity : class
-            where TProperty : IComparable<TProperty>
-    {
-        if (criteria is not { All.Count: > 0 })
-        {
-            return query;
-        }
-
-        foreach (var c in criteria.All)
-        {
-            query = query.Where(BuildComparablePredicate<TEntity, TProperty>(c, property));
-        }
-
-        return query;
-    }
-
-    public static IQueryable<TEntity> ApplyAllStringCriteria<TEntity>(
-        this IQueryable<TEntity> query,
-        AllCriteria<PropertyCriterion<string>>? criteria,
+        CriteriaSet<PropertyCriterion<string>>? criteria,
         string property) where TEntity : class
     {
-        if (criteria is not { All.Count: > 0 })
+        if (criteria?.And is null || !criteria.And.Any())
         {
             return query;
         }
 
-        foreach (var c in criteria.All)
+        foreach (var c in criteria.And)
         {
-            query = query.Where(BuildStringPredicate<TEntity>(c, property));
+            query = query.Where(BuildPredicate<TEntity>(c, property));
         }
 
         return query;
     }
 
-    public static Expression<Func<TEntity, bool>> BuildStructPredicate<TEntity, TProperty>(
-        PropertyCriterion<TProperty> criterion,
-        string property)
-            where TEntity : class
-            where TProperty : struct
+    public static IQueryable<TEntity> ApplyCriteriaSet<TEntity>(
+        this IQueryable<TEntity> query,
+        CriteriaSet<PropertyCriterion<int>>? criteria,
+        string property) where TEntity : class
     {
-        return criterion.Operator switch
+        if (criteria?.And is null || !criteria.And.Any())
         {
-            CriteriaValueOperator.Equals => e =>
-                EF.Property<TProperty>(e, property).Equals(criterion.Value),
-            CriteriaValueOperator.NotEquals => e =>
-                !EF.Property<TProperty>(e, property).Equals(criterion.Value),
-            CriteriaValueOperator.In => e =>
-                criterion.Values != null &&
-                criterion.Values.Contains(EF.Property<TProperty>(e, property)),
-            CriteriaValueOperator.NotIn => e =>
-                criterion.Values == null ||
-                !criterion.Values.Contains(EF.Property<TProperty>(e, property)),
-            _ => throw new NotSupportedException(
-                $"Operator {criterion.Operator} is not supported for {typeof(TProperty).Name}")
-        };
+            return query;
+        }
+
+        foreach (var c in criteria.And)
+        {
+            query = query.Where(BuildPredicate<TEntity>(c, property));
+        }
+
+        return query;
     }
 
-    public static Expression<Func<TEntity, bool>> BuildEquatablePredicate<TEntity, TProperty>(
+    public static IQueryable<TEntity> ApplyCriteriaSet<TEntity>(
+        this IQueryable<TEntity> query,
+        CriteriaSet<PropertyCriterion<DateTime>>? criteria,
+        string property) where TEntity : class
+    {
+        if (criteria?.And is null || !criteria.And.Any())
+        {
+            return query;
+        }
+
+        foreach (var c in criteria.And)
+        {
+            query = query.Where(BuildPredicate<TEntity>(c, property));
+        }
+
+        return query;
+    }
+
+    public static IQueryable<TEntity> ApplyCriteriaSet<TEntity>(
+        this IQueryable<TEntity> query,
+        CriteriaSet<PropertyCriterion<TimeSpan>>? criteria,
+        string property) where TEntity : class
+    {
+        if (criteria?.And is null || !criteria.And.Any())
+        {
+            return query;
+        }
+
+        foreach (var c in criteria.And)
+        {
+            query = query.Where(BuildPredicate<TEntity>(c, property));
+        }
+
+        return query;
+    }
+
+    public static IQueryable<TEntity> ApplyEnumCriteriaSet<TEntity, TProperty>(
+        this IQueryable<TEntity> query,
+        CriteriaSet<PropertyCriterion<TProperty>>? criteria,
+        string property)
+            where TEntity : class
+            where TProperty : struct, Enum
+    {
+        if (criteria?.And is null || !criteria.And.Any())
+        {
+            return query;
+        }
+
+        foreach (var c in criteria.And)
+        {
+            query = query.Where(BuildEnumPredicate<TEntity, TProperty>(c, property));
+        }
+
+        return query;
+    }
+
+    public static Expression<Func<TEntity, bool>> BuildPredicate<TEntity, TProperty>(
         PropertyCriterion<TProperty> criterion,
         string property)
             where TEntity : class
@@ -136,61 +147,16 @@ internal static class QueryableExtensions
                 EF.Property<TProperty>(e, property) == null ||
                 criterion.Values == null ||
                 !criterion.Values.Contains(EF.Property<TProperty>(e, property)),
-            _ => throw new NotSupportedException(
-                $"Operator {criterion.Operator} is not supported for {typeof(TProperty).Name}")
-        };
-    }
-    public static Expression<Func<TEntity, bool>> BuildComparablePredicate<TEntity, TProperty>(
-        PropertyCriterion<TProperty> criterion,
-        string property)
-            where TEntity : class
-            where TProperty : IComparable<TProperty>
-    {
-        return criterion.Operator switch
-        {
-            CriteriaValueOperator.Equals => e =>
-                EF.Property<TProperty>(e, property).Equals(criterion.Value),
-            CriteriaValueOperator.NotEquals => e =>
-                !EF.Property<TProperty>(e, property).Equals(criterion.Value),
-            CriteriaValueOperator.LessThan => e =>
-                EF.Property<TProperty>(e, property).CompareTo(criterion.Value) < 0,
-            CriteriaValueOperator.LessThanOrEqual => e =>
-                EF.Property<TProperty>(e, property).CompareTo(criterion.Value) <= 0,
-            CriteriaValueOperator.GreaterThan => e =>
-                EF.Property<TProperty>(e, property).CompareTo(criterion.Value) > 0,
-            CriteriaValueOperator.GreaterThanOrEqual => e =>
-                EF.Property<TProperty>(e, property).CompareTo(criterion.Value) >= 0,
-            CriteriaValueOperator.IsNull => e =>
-                EF.Property<TProperty>(e, property) == null,
-            CriteriaValueOperator.IsNotNull => e =>
-                EF.Property<TProperty>(e, property) != null,
-            CriteriaValueOperator.In => e =>
-                EF.Property<TProperty>(e, property) != null &&
-                criterion.Values != null &&
-                criterion.Values.Contains(EF.Property<TProperty>(e, property)),
-            CriteriaValueOperator.NotIn => e =>
-                EF.Property<TProperty>(e, property) == null ||
-                criterion.Values == null ||
-                !criterion.Values.Contains(EF.Property<TProperty>(e, property)),
-            _ => throw new NotSupportedException(
-                $"Operator {criterion.Operator} is not supported for {typeof(TProperty).Name}")
+            var op => throw new NotSupportedException($"Operator {op} is not supported for {typeof(TProperty).Name}")
         };
     }
 
-    public static Expression<Func<TEntity, bool>> BuildStringPredicate<TEntity>(
+    public static Expression<Func<TEntity, bool>> BuildPredicate<TEntity>(
         PropertyCriterion<string> criterion,
         string property) where TEntity : class
     {
         return criterion.Operator switch
         {
-            CriteriaValueOperator.Equals => e =>
-                EF.Property<string>(e, property) == criterion.Value,
-            CriteriaValueOperator.NotEquals => e =>
-                EF.Property<string>(e, property) != criterion.Value,
-            CriteriaValueOperator.IsNull => e =>
-                EF.Property<string>(e, property) == null,
-            CriteriaValueOperator.IsNotNull => e =>
-                EF.Property<string>(e, property) != null,
             CriteriaValueOperator.ContainsString => e =>
                 criterion.Value != null &&
                 EF.Property<string>(e, property) != null &&
@@ -215,15 +181,72 @@ internal static class QueryableExtensions
                 criterion.Value == null ||
                 EF.Property<string>(e, property) == null ||
                 !EF.Property<string>(e, property).EndsWith(criterion.Value),
+            _ => BuildPredicate<TEntity, string>(criterion, property)
+        };
+    }
+
+    public static Expression<Func<TEntity, bool>> BuildPredicate<TEntity>(
+        PropertyCriterion<int> criterion,
+        string property) where TEntity : class
+    {
+        return criterion.Operator switch
+        {
+            CriteriaValueOperator.LessThan => e => EF.Property<int?>(e, property) < criterion.Value,
+            CriteriaValueOperator.LessThanOrEqual => e => EF.Property<int?>(e, property) <= criterion.Value,
+            CriteriaValueOperator.GreaterThan => e => EF.Property<int?>(e, property) > criterion.Value,
+            CriteriaValueOperator.GreaterThanOrEqual => e => EF.Property<int?>(e, property) >= criterion.Value,
+            _ => BuildPredicate<TEntity, int>(criterion, property)
+        };
+    }
+
+    public static Expression<Func<TEntity, bool>> BuildPredicate<TEntity>(
+        PropertyCriterion<DateTime> criterion,
+        string property)
+            where TEntity : class
+    {
+        return criterion.Operator switch
+        {
+            CriteriaValueOperator.LessThan => e => EF.Property<DateTime?>(e, property) < criterion.Value,
+            CriteriaValueOperator.LessThanOrEqual => e => EF.Property<DateTime?>(e, property) <= criterion.Value,
+            CriteriaValueOperator.GreaterThan => e => EF.Property<DateTime?>(e, property) > criterion.Value,
+            CriteriaValueOperator.GreaterThanOrEqual => e => EF.Property<DateTime?>(e, property) >= criterion.Value,
+            _ => BuildPredicate<TEntity, DateTime>(criterion, property)
+        };
+    }
+
+    public static Expression<Func<TEntity, bool>> BuildPredicate<TEntity>(
+        PropertyCriterion<TimeSpan> criterion,
+        string property) where TEntity : class
+    {
+        return criterion.Operator switch
+        {
+            CriteriaValueOperator.LessThan => e => EF.Property<TimeSpan>(e, property) < criterion.Value,
+            CriteriaValueOperator.LessThanOrEqual => e => EF.Property<TimeSpan>(e, property) <= criterion.Value,
+            CriteriaValueOperator.GreaterThan => e => EF.Property<TimeSpan>(e, property) > criterion.Value,
+            CriteriaValueOperator.GreaterThanOrEqual => e => EF.Property<TimeSpan>(e, property) >= criterion.Value,
+            _ => BuildPredicate<TEntity, TimeSpan>(criterion, property)
+        };
+    }
+
+    public static Expression<Func<TEntity, bool>> BuildEnumPredicate<TEntity, TProperty>(
+        PropertyCriterion<TProperty> criterion,
+        string property)
+            where TEntity : class
+            where TProperty : struct, Enum
+    {
+        return criterion.Operator switch
+        {
+            CriteriaValueOperator.Equals => e =>
+                EF.Property<TProperty>(e, property).Equals(criterion.Value),
+            CriteriaValueOperator.NotEquals => e =>
+                !EF.Property<TProperty>(e, property).Equals(criterion.Value),
             CriteriaValueOperator.In => e =>
                 criterion.Values != null &&
-                EF.Property<string>(e, property) != null &&
-                criterion.Values.Contains(EF.Property<string>(e, property)),
+                criterion.Values.Contains(EF.Property<TProperty>(e, property)),
             CriteriaValueOperator.NotIn => e =>
                 criterion.Values == null ||
-                EF.Property<string>(e, property) == null ||
-                !criterion.Values.Contains(EF.Property<string>(e, property)),
-            _ => throw new NotSupportedException($"Operator {criterion.Operator} is not supported for strings")
+                !criterion.Values.Contains(EF.Property<TProperty>(e, property)),
+            var op => throw new NotSupportedException($"Operator {op} is not supported for {typeof(TProperty).Name}")
         };
     }
 }

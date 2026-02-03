@@ -6,10 +6,8 @@ using Magpie.Abstractions.Repositories;
 using Magpie.Core;
 using Magpie.Core.Repositories;
 using Magpie.Data;
-using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
-using Magpie.Models.Paging;
 using Magpie.Test.Shared;
 
 using Microsoft.EntityFrameworkCore;
@@ -204,10 +202,7 @@ public class DownloadRepositoryTests
         await _context.SaveChangesAsync();
 
         // Act
-        var result = await _subject.QueryAsync(
-            new DownloadQuery(DownloadClientId: _downloadClientId),
-            null,
-            null);
+        var result = await _subject.QueryAsync(new() { DownloadClientId = _downloadClientId }, null, null);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -249,10 +244,7 @@ public class DownloadRepositoryTests
         await _context.SaveChangesAsync();
 
         // Act
-        var result = await _subject.QueryAsync(
-            new DownloadQuery(Status: DownloadStatus.Downloading),
-            null,
-            null);
+        var result = await _subject.QueryAsync(new() { Status = DownloadStatus.Downloading }, null, null);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -279,10 +271,7 @@ public class DownloadRepositoryTests
         await _context.SaveChangesAsync();
 
         // Act
-        var result = await _subject.QueryAsync(
-            new DownloadQuery(Status: DownloadStatus.Failed),
-            null,
-            null);
+        var result = await _subject.QueryAsync(new() { Status = DownloadStatus.Failed }, null, null);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -298,7 +287,7 @@ public class DownloadRepositoryTests
         // Arrange
         for (var i = 0; i < 10; i++)
         {
-            _context.Downloads.Add(new Download
+            _context.Downloads.Add(new()
             {
                 DownloadClientId = _downloadClientId,
                 ExternalId = $"ext-{i}",
@@ -310,10 +299,7 @@ public class DownloadRepositoryTests
         await _context.SaveChangesAsync();
 
         // Act
-        var result = await _subject.QueryAsync(
-            new DownloadQuery(),
-            new PagingParameter(2, 3),
-            null);
+        var result = await _subject.QueryAsync(new(), new() { PageNumber = 2, PageSize = 3 }, null);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -376,7 +362,6 @@ public class DownloadRepositoryTests
         var persisted = await _context.Downloads
             .AsNoTracking()
             .FirstOrDefaultAsync(d => d.Id == result.Id);
-
         using (Assert.EnterMultipleScope())
         {
             Assert.That(persisted, Has.Property(nameof(persisted.OutputPath)).EqualTo("/output/path"));
@@ -436,7 +421,6 @@ public class DownloadRepositoryTests
 
         // Assert
         var updated = await _subject.GetByIdAsync(download.Id);
-
         using (Assert.EnterMultipleScope())
         {
             Assert.That(result, Is.True);

@@ -4,5 +4,10 @@ namespace Magpie.Models.Patch;
 /// A patch operation for a property.
 /// </summary>
 /// <typeparam name="T">The type of value being patched.</typeparam>
-/// <param name="Value">The value to set.</param>
-public sealed record ScalarPatch<T>(T Value);
+public sealed record ScalarPatch<T>
+{
+    /// <summary>
+    /// The value to set.
+    /// </summary>
+    public required T Value { get; init; }
+}

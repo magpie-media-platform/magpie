@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Json;
@@ -12,7 +11,6 @@ using Magpie.Abstractions.Repositories;
 using Magpie.Api.EndpointGroups;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
-using Magpie.Models.Patch;
 using Magpie.Test.Shared;
 
 using Microsoft.AspNetCore.Authentication;
@@ -94,9 +92,9 @@ public class SettingsEndpointGroupTests
 
         // Act
         var response = await _client.GetAsync("/api/settings/groups").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<SettingsGroup[]>().ConfigureAwait(false);
 
         // Assert
+        var content = await response.Content.ReadFromJsonAsync<SettingsGroup[]>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
@@ -118,9 +116,9 @@ public class SettingsEndpointGroupTests
 
         // Act
         var response = await _client.GetAsync("/api/settings/groups").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<SettingsGroup[]>().ConfigureAwait(false);
 
         // Assert
+        var content = await response.Content.ReadFromJsonAsync<SettingsGroup[]>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
@@ -188,9 +186,9 @@ public class SettingsEndpointGroupTests
 
         // Act
         var response = await _client.GetAsync("/api/settings/groups/system/system-settings").ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<SettingsGroup>().ConfigureAwait(false);
 
         // Assert
+        var content = await response.Content.ReadFromJsonAsync<SettingsGroup>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
@@ -219,13 +217,15 @@ public class SettingsEndpointGroupTests
     {
         // Arrange
         var extensionId = Guid.NewGuid();
-        var patch = new SettingsGroupPatch(
-            extensionId,
-            "config",
-            new DictionaryPatch<string, string, string>(
-                Add: new Dictionary<string, string> { ["key1"] = "value1" },
-                Remove: null,
-                Update: null));
+        var patch = new SettingsGroupPatch
+        {
+            ExtensionId = extensionId,
+            Name = "config",
+            Settings = new()
+            {
+                Add = new() { ["key1"] = "value1" }
+            }
+        };
 
         _settingsRepository
             .Setup(m => m.PatchAsync(
@@ -247,13 +247,15 @@ public class SettingsEndpointGroupTests
     {
         // Arrange
         var extensionId = Guid.NewGuid();
-        var patch = new SettingsGroupPatch(
-            extensionId,
-            "config",
-            new DictionaryPatch<string, string, string>(
-                Add: new Dictionary<string, string> { ["key1"] = "value1" },
-                Remove: null,
-                Update: null));
+        var patch = new SettingsGroupPatch
+        {
+            ExtensionId = extensionId,
+            Name = "config",
+            Settings = new()
+            {
+                Add = new() { ["key1"] = "value1" }
+            }
+        };
 
         _settingsRepository
             .Setup(m => m.PatchAsync(It.IsAny<SettingsGroupPatch>(), null, It.IsAny<CancellationToken>()))
@@ -271,13 +273,15 @@ public class SettingsEndpointGroupTests
     public async Task PatchSystemSettingsGroup_PatchesSettings()
     {
         // Arrange
-        var patch = new SettingsGroupPatch(
-            null,
-            "system-config",
-            new DictionaryPatch<string, string, string>(
-                Add: new Dictionary<string, string> { ["key1"] = "value1" },
-                Remove: null,
-                Update: null));
+        var patch = new SettingsGroupPatch
+        {
+            ExtensionId = null,
+            Name = "system-config",
+            Settings = new()
+            {
+                Add = new() { ["key1"] = "value1" }
+            }
+        };
 
         _settingsRepository
             .Setup(m => m.PatchAsync(
@@ -298,13 +302,15 @@ public class SettingsEndpointGroupTests
     public async Task PatchSystemSettingsGroup_ReturnsNotFound_WhenSettingsGroupDoesNotExist()
     {
         // Arrange
-        var patch = new SettingsGroupPatch(
-            null,
-            "system-config",
-            new DictionaryPatch<string, string, string>(
-                Add: new Dictionary<string, string> { ["key1"] = "value1" },
-                Remove: null,
-                Update: null));
+        var patch = new SettingsGroupPatch
+        {
+            ExtensionId = null,
+            Name = "system-config",
+            Settings = new()
+            {
+                Add = new() { ["key1"] = "value1" },
+            }
+        };
 
         _settingsRepository
             .Setup(m => m.PatchAsync(It.IsAny<SettingsGroupPatch>(), null, It.IsAny<CancellationToken>()))

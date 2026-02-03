@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 
@@ -10,7 +9,6 @@ using Magpie.Data;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
-using Magpie.Models.Patch;
 using Magpie.Test.Shared;
 
 using Microsoft.EntityFrameworkCore;
@@ -158,7 +156,7 @@ public class MediaServerRepositoryTests
             Name = "NewServer",
             ProviderType = "emby",
             Enabled = true,
-            Settings = new Dictionary<string, string> { ["host"] = "localhost" }
+            Settings = new() { ["host"] = "localhost" }
         };
 
         // Act
@@ -360,9 +358,11 @@ public class MediaServerRepositoryTests
         _context.MediaServers.Add(mediaServer);
         await _context.SaveChangesAsync();
 
-        var patch = new MediaServerPatch(
-            mediaServer.Id,
-            Name: new ScalarPatch<string>("PatchedName"));
+        var patch = new MediaServerPatch
+        {
+            Id = mediaServer.Id,
+            Name = new() { Value = "PatchedName" }
+        };
 
         // Act
         var result = await _subject.PatchAsync(patch, _userId);
@@ -393,9 +393,11 @@ public class MediaServerRepositoryTests
         _context.MediaServers.Add(mediaServer);
         await _context.SaveChangesAsync();
 
-        var patch = new MediaServerPatch(
-            mediaServer.Id,
-            Enabled: new ScalarPatch<bool>(false));
+        var patch = new MediaServerPatch
+        {
+            Id = mediaServer.Id,
+            Enabled = new() { Value = false }
+        };
 
         // Act
         var result = await _subject.PatchAsync(patch, _userId);
@@ -416,18 +418,20 @@ public class MediaServerRepositoryTests
             Name = "Server",
             ProviderType = "plex",
             Enabled = true,
-            Settings = new Dictionary<string, string> { ["existing"] = "value" },
+            Settings = new() { ["existing"] = "value" },
             CreatedAt = DateTime.UtcNow
         };
         _context.MediaServers.Add(mediaServer);
         await _context.SaveChangesAsync();
 
-        var patch = new MediaServerPatch(
-            mediaServer.Id,
-            Settings: new DictionaryPatch<string, string?, string?>(
-                Add: new Dictionary<string, string?> { ["newkey"] = "newvalue" },
-                Remove: null,
-                Update: null));
+        var patch = new MediaServerPatch
+        {
+            Id = mediaServer.Id,
+            Settings = new()
+            {
+                Add = new() { ["newkey"] = "newvalue" }
+            }
+        };
 
         // Act
         var result = await _subject.PatchAsync(patch, _userId);
@@ -453,18 +457,20 @@ public class MediaServerRepositoryTests
             Name = "Server",
             ProviderType = "plex",
             Enabled = true,
-            Settings = new Dictionary<string, string> { ["host"] = "oldhost" },
+            Settings = new() { ["host"] = "oldhost" },
             CreatedAt = DateTime.UtcNow
         };
         _context.MediaServers.Add(mediaServer);
         await _context.SaveChangesAsync();
 
-        var patch = new MediaServerPatch(
-            mediaServer.Id,
-            Settings: new DictionaryPatch<string, string?, string?>(
-                Add: null,
-                Remove: null,
-                Update: new Dictionary<string, string?> { ["host"] = "newhost" }));
+        var patch = new MediaServerPatch
+        {
+            Id = mediaServer.Id,
+            Settings = new()
+            {
+                Update = new() { ["host"] = "newhost" }
+            }
+        };
 
         // Act
         var result = await _subject.PatchAsync(patch, _userId);
@@ -486,18 +492,20 @@ public class MediaServerRepositoryTests
             Name = "Server",
             ProviderType = "plex",
             Enabled = true,
-            Settings = new Dictionary<string, string> { ["keep"] = "value", ["remove"] = "value" },
+            Settings = new() { ["keep"] = "value", ["remove"] = "value" },
             CreatedAt = DateTime.UtcNow
         };
         _context.MediaServers.Add(mediaServer);
         await _context.SaveChangesAsync();
 
-        var patch = new MediaServerPatch(
-            mediaServer.Id,
-            Settings: new DictionaryPatch<string, string?, string?>(
-                Add: null,
-                Remove: ["remove"],
-                Update: null));
+        var patch = new MediaServerPatch
+        {
+            Id = mediaServer.Id,
+            Settings = new()
+            {
+                Remove = ["remove"]
+            }
+        };
 
         // Act
         var result = await _subject.PatchAsync(patch, _userId);
@@ -528,9 +536,11 @@ public class MediaServerRepositoryTests
         _context.MediaServers.Add(mediaServer);
         await _context.SaveChangesAsync();
 
-        var patch = new MediaServerPatch(
-            mediaServer.Id,
-            Tags: new SetPatch<string, string>(Add: ["newtag"]));
+        var patch = new MediaServerPatch
+        {
+            Id = mediaServer.Id,
+            Tags = new() { Add = ["newtag"] }
+        };
 
         // Act
         var result = await _subject.PatchAsync(patch, _userId);
@@ -564,9 +574,11 @@ public class MediaServerRepositoryTests
         _context.Tags.Add(tag);
         await _context.SaveChangesAsync();
 
-        var patch = new MediaServerPatch(
-            mediaServer.Id,
-            Tags: new SetPatch<string, string>(Remove: ["existingtag"]));
+        var patch = new MediaServerPatch
+        {
+            Id = mediaServer.Id,
+            Tags = new() { Remove = ["existingtag"] }
+        };
 
         // Act
         var result = await _subject.PatchAsync(patch, _userId);
@@ -587,9 +599,11 @@ public class MediaServerRepositoryTests
     public async Task PatchAsync_ReturnsFalse_WhenNotExists()
     {
         // Arrange
-        var patch = new MediaServerPatch(
-            Guid.NewGuid(),
-            Name: new ScalarPatch<string>("PatchedName"));
+        var patch = new MediaServerPatch
+        {
+            Id = Guid.NewGuid(),
+            Name = new() { Value = "PatchedName" }
+        };
 
         // Act
         var result = await _subject.PatchAsync(patch, _userId);
@@ -612,9 +626,11 @@ public class MediaServerRepositoryTests
         _context.MediaServers.Add(mediaServer);
         await _context.SaveChangesAsync();
 
-        var patch = new MediaServerPatch(
-            mediaServer.Id,
-            Name: new ScalarPatch<string>("Patched"));
+        var patch = new MediaServerPatch
+        {
+            Id = mediaServer.Id,
+            Name = new() { Value = "Patched" }
+        };
 
         // Act
         await _subject.PatchAsync(patch, _userId);
@@ -647,11 +663,11 @@ public class MediaServerRepositoryTests
         _context.Tags.Add(existingTag);
         await _context.SaveChangesAsync();
 
-        var patch = new MediaServerPatch(
-            mediaServer.Id,
-            Tags: new SetPatch<string, string>(
-                Add: ["addTag"],
-                Remove: ["removeTag"]));
+        var patch = new MediaServerPatch
+        {
+            Id = mediaServer.Id,
+            Tags = new() { Add = ["addTag"], Remove = ["removeTag"] }
+        };
 
         // Act
         await _subject.PatchAsync(patch, _userId);

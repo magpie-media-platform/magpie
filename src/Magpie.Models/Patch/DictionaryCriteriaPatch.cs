@@ -7,6 +7,10 @@ namespace Magpie.Models.Patch;
 /// </summary>
 /// <typeparam name="TCriteria">The criteria type for values in the dictionary.</typeparam>
 /// <typeparam name="TCriteriaPatch">The criteria patch type for values in the dictionary.</typeparam>
-/// <param name="Criteria">The criteria patch.</param>
-public record DictionaryCriteriaPatch<TCriteria, TCriteriaPatch>(
-    DictionaryPatch<string, TCriteria, TCriteriaPatch>? Criteria = null);
+public record DictionaryCriteriaPatch<TCriteria, TCriteriaPatch>
+{
+    /// <summary>
+    /// The items criteria patch.
+    /// </summary>
+    public DictionaryPatch<string, TCriteria, TCriteriaPatch>? Items { get; init; }
+}
