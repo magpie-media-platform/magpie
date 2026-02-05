@@ -53,7 +53,9 @@ public class IndexersEndpointGroupTests
             .SetFallbackPolicy(null)
             .SetDefaultPolicy(new AuthorizationPolicyBuilder()
                 .RequireAssertion(_ => true)
-                .Build());
+                .Build())
+            .AddPolicy(nameof(Role.Viewer), policy => policy.RequireAssertion(_ => true))
+            .AddPolicy(nameof(Role.Manager), policy => policy.RequireAssertion(_ => true));
 
         builder.Services.AddSingleton(_indexerRepository.Object);
         builder.Services.AddSingleton<IApiEndpointGroup, IndexersEndpointGroup>();
@@ -199,7 +201,7 @@ public class IndexersEndpointGroupTests
     }
 
     [Test]
-    public async Task UpdateIndexer_UpdatesIndexer()
+    public async Task PatchIndexer_PatchesIndexer()
     {
         // Arrange
         var indexerId = Guid.NewGuid();
@@ -221,7 +223,7 @@ public class IndexersEndpointGroupTests
             .ReturnsAsync(true);
 
         // Act
-        var response = await _client.PutAsJsonAsync($"/api/indexers/{indexerId}", request).ConfigureAwait(false);
+        var response = await _client.PatchAsJsonAsync($"/api/indexers/{indexerId}", request).ConfigureAwait(false);
 
         // Assert
         Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NoContent));
@@ -236,7 +238,7 @@ public class IndexersEndpointGroupTests
     }
 
     [Test]
-    public async Task UpdateIndexer_ReturnsNotFound_WhenIndexerDoesNotExist()
+    public async Task PatchIndexer_ReturnsNotFound_WhenIndexerDoesNotExist()
     {
         // Arrange
         var indexerId = Guid.NewGuid();
@@ -251,7 +253,7 @@ public class IndexersEndpointGroupTests
             .ReturnsAsync(default(Indexer?));
 
         // Act
-        var response = await _client.PutAsJsonAsync($"/api/indexers/{indexerId}", request).ConfigureAwait(false);
+        var response = await _client.PatchAsJsonAsync($"/api/indexers/{indexerId}", request).ConfigureAwait(false);
 
         // Assert
         Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NotFound));

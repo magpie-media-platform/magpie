@@ -11,6 +11,7 @@ using Magpie.Abstractions.Repositories;
 using Magpie.Api.EndpointGroups;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
+using Magpie.Models.Enums;
 using Magpie.Test.Shared;
 
 using Microsoft.AspNetCore.Authentication;
@@ -53,7 +54,9 @@ public class QualityTierListsEndpointGroupTests
             .SetFallbackPolicy(null)
             .SetDefaultPolicy(new AuthorizationPolicyBuilder()
                 .RequireAssertion(_ => true)
-                .Build());
+                .Build())
+            .AddPolicy(nameof(Role.Viewer), policy => policy.RequireAssertion(_ => true))
+            .AddPolicy(nameof(Role.Manager), policy => policy.RequireAssertion(_ => true));
 
         builder.Services.AddSingleton(_repository.Object);
         builder.Services.AddSingleton<IApiEndpointGroup, QualityTierListsEndpointGroup>();
@@ -167,7 +170,7 @@ public class QualityTierListsEndpointGroupTests
     }
 
     [Test]
-    public async Task GetQualityTierListsByTag_ReturnsQualityTierLists()
+    public async Task GetQualityTierLists_ReturnsFilteredResults_WhenTagProvided()
     {
         // Arrange
         var qualityTierList = new QualityTierList { Name = "HD Quality", UpgradeAllowed = true };
@@ -176,7 +179,7 @@ public class QualityTierListsEndpointGroupTests
             .ReturnsAsync([qualityTierList]);
 
         // Act
-        var response = await _client.GetAsync("/api/quality-tier-lists/by-tag/hd").ConfigureAwait(false);
+        var response = await _client.GetAsync("/api/quality-tier-lists?tag=hd").ConfigureAwait(false);
 
         // Assert
         var content = await response.Content.ReadFromJsonAsync<QualityTierList[]>().ConfigureAwait(false);

@@ -55,7 +55,10 @@ public class DownloadsEndpointGroupTests
             .SetFallbackPolicy(null)
             .SetDefaultPolicy(new AuthorizationPolicyBuilder()
                 .RequireAssertion(_ => true)
-                .Build());
+                .Build())
+            .AddPolicy(nameof(Role.Viewer), policy => policy.RequireAssertion(_ => true))
+            .AddPolicy(nameof(Role.Requester), policy => policy.RequireAssertion(_ => true))
+            .AddPolicy(nameof(Role.Manager), policy => policy.RequireAssertion(_ => true));
 
         builder.Services.AddSingleton(_downloadRepository.Object);
         builder.Services.AddSingleton<IApiEndpointGroup, DownloadsEndpointGroup>();

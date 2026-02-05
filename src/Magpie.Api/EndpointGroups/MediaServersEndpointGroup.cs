@@ -22,39 +22,46 @@ internal sealed class MediaServersEndpointGroup(IMediaServerRepository mediaServ
     public void MapEndpoints(IEndpointRouteBuilder builder)
     {
         builder.MapGet("", GetAllMediaServers)
-            .WithName("GetAllMediaServers")
-            .WithTags("MediaServers")
+            .WithName(nameof(GetAllMediaServers))
             .Produces<MediaServer[]>()
-            .RequireAuthorization();
+            .RequireViewer();
 
-        builder.MapGet("/{id:guid}", GetMediaServerById)
-            .WithName("GetMediaServerById")
-            .WithTags("MediaServers")
+        builder.MapGet("{id:guid}", GetMediaServerById)
+            .WithName(nameof(GetMediaServerById))
             .Produces<MediaServer>()
-            .Produces(StatusCodes.Status404NotFound)
-            .RequireAuthorization();
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .RequireViewer();
 
         builder.MapPost("", CreateMediaServer)
-            .WithName("CreateMediaServer")
-            .WithTags("MediaServers")
+            .WithName(nameof(CreateMediaServer))
             .Produces<MediaServer>(StatusCodes.Status201Created)
             .ProducesProblem(StatusCodes.Status400BadRequest)
-            .RequireAuthorization();
+            .RequireManager();
 
-        builder.MapPatch("/{id:guid}", PatchMediaServer)
-            .WithName("PatchMediaServer")
-            .WithTags("MediaServers")
+        builder.MapPatch("{id:guid}", PatchMediaServer)
+            .WithName(nameof(PatchMediaServer))
             .Produces(StatusCodes.Status204NoContent)
-            .Produces(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status404NotFound)
             .ProducesProblem(StatusCodes.Status400BadRequest)
-            .RequireAuthorization();
+            .RequireManager();
 
-        builder.MapDelete("/{id:guid}", DeleteMediaServer)
-            .WithName("DeleteMediaServer")
-            .WithTags("MediaServers")
+        builder.MapPost("{id:guid}/enable", EnableMediaServer)
+            .WithName(nameof(EnableMediaServer))
+            .Produces<MediaServer>()
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .RequireManager();
+
+        builder.MapPost("{id:guid}/disable", DisableMediaServer)
+            .WithName(nameof(DisableMediaServer))
+            .Produces<MediaServer>()
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .RequireManager();
+
+        builder.MapDelete("{id:guid}", DeleteMediaServer)
+            .WithName(nameof(DeleteMediaServer))
             .Produces(StatusCodes.Status204NoContent)
-            .Produces(StatusCodes.Status404NotFound)
-            .RequireAuthorization();
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .RequireManager();
     }
 
     private async Task<IResult> GetAllMediaServers(CancellationToken cancellationToken)
@@ -94,7 +101,7 @@ internal sealed class MediaServersEndpointGroup(IMediaServerRepository mediaServ
         var created = await mediaServerRepository.CreateAsync(mediaServer, currentUserId, cancellationToken)
             .ConfigureAwait(false);
 
-        return Results.Created($"/api/media-servers/{created.Id}", created);
+        return Results.Created($"api/{Name}/{created.Id}", created);
     }
 
     private async Task<IResult> PatchMediaServer(
@@ -112,6 +119,60 @@ internal sealed class MediaServersEndpointGroup(IMediaServerRepository mediaServ
         return updated
             ? Results.NoContent()
             : Results.NotFound();
+    }
+
+    private async Task<IResult> EnableMediaServer(
+        HttpContext httpContext,
+        Guid id,
+        CancellationToken cancellationToken)
+    {
+        var existing = await mediaServerRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
+
+        if (existing is null)
+        {
+            return Results.NotFound();
+        }
+
+        var currentUserId = httpContext.User.GetUserId();
+
+        var mediaServer = existing with
+        {
+            Enabled = true,
+            ModifiedAt = DateTime.UtcNow,
+            ModifiedByUserId = currentUserId
+        };
+
+        await mediaServerRepository.UpdateAsync(mediaServer, currentUserId, cancellationToken)
+            .ConfigureAwait(false);
+
+        return Results.Ok(mediaServer);
+    }
+
+    private async Task<IResult> DisableMediaServer(
+        HttpContext httpContext,
+        Guid id,
+        CancellationToken cancellationToken)
+    {
+        var existing = await mediaServerRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
+
+        if (existing is null)
+        {
+            return Results.NotFound();
+        }
+
+        var currentUserId = httpContext.User.GetUserId();
+
+        var mediaServer = existing with
+        {
+            Enabled = false,
+            ModifiedAt = DateTime.UtcNow,
+            ModifiedByUserId = currentUserId
+        };
+
+        await mediaServerRepository.UpdateAsync(mediaServer, currentUserId, cancellationToken)
+            .ConfigureAwait(false);
+
+        return Results.Ok(mediaServer);
     }
 
     private async Task<IResult> DeleteMediaServer(

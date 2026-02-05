@@ -11,6 +11,7 @@ using Magpie.Abstractions.Repositories;
 using Magpie.Api.EndpointGroups;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
+using Magpie.Models.Enums;
 using Magpie.Test.Shared;
 
 using Microsoft.AspNetCore.Authentication;
@@ -53,7 +54,10 @@ public class SubjectsEndpointGroupTests
             .SetFallbackPolicy(null)
             .SetDefaultPolicy(new AuthorizationPolicyBuilder()
                 .RequireAssertion(_ => true)
-                .Build());
+                .Build())
+            .AddPolicy(nameof(Role.Viewer), policy => policy.RequireAssertion(_ => true))
+            .AddPolicy(nameof(Role.Requester), policy => policy.RequireAssertion(_ => true))
+            .AddPolicy(nameof(Role.Manager), policy => policy.RequireAssertion(_ => true));
 
         builder.Services.AddSingleton(_subjectRepository.Object);
         builder.Services.AddSingleton<IApiEndpointGroup, SubjectsEndpointGroup>();
@@ -83,7 +87,7 @@ public class SubjectsEndpointGroupTests
     }
 
     [Test]
-    public async Task GetAllSubjects_ReturnsEmptyArray_WhenNoSubjects()
+    public async Task GetSubjects_ReturnsEmptyArray_WhenNoSubjects()
     {
         // Arrange
         _subjectRepository
@@ -104,7 +108,7 @@ public class SubjectsEndpointGroupTests
     }
 
     [Test]
-    public async Task GetAllSubjects_ReturnsSubjects()
+    public async Task GetSubjects_ReturnsSubjects()
     {
         // Arrange
         var subject = new Subject { Kind = "person", MetadataContainerId = Guid.NewGuid() };
@@ -167,7 +171,7 @@ public class SubjectsEndpointGroupTests
     }
 
     [Test]
-    public async Task GetSubjectsByKind_ReturnsFilteredSubjects()
+    public async Task GetSubjects_ReturnsFilteredSubjects_WhenKindProvided()
     {
         // Arrange
         var subject1 = new Subject { Kind = "person", MetadataContainerId = Guid.NewGuid() };
@@ -178,7 +182,7 @@ public class SubjectsEndpointGroupTests
             .ReturnsAsync([subject1, subject2]);
 
         // Act
-        var response = await _client.GetAsync("/api/subjects/by-kind/person").ConfigureAwait(false);
+        var response = await _client.GetAsync("/api/subjects?kind=person").ConfigureAwait(false);
 
         // Assert
         var content = await response.Content.ReadFromJsonAsync<Subject[]>().ConfigureAwait(false);
@@ -191,7 +195,7 @@ public class SubjectsEndpointGroupTests
     }
 
     [Test]
-    public async Task GetSubjectsByKind_ReturnsEmptyArray_WhenNoMatchingSubjects()
+    public async Task GetSubjects_ReturnsEmptyArray_WhenKindHasNoMatches()
     {
         // Arrange
         _subjectRepository
@@ -199,7 +203,7 @@ public class SubjectsEndpointGroupTests
             .ReturnsAsync([]);
 
         // Act
-        var response = await _client.GetAsync("/api/subjects/by-kind/studio").ConfigureAwait(false);
+        var response = await _client.GetAsync("/api/subjects?kind=studio").ConfigureAwait(false);
 
         // Assert
         var content = await response.Content.ReadFromJsonAsync<Subject[]>().ConfigureAwait(false);
@@ -211,7 +215,7 @@ public class SubjectsEndpointGroupTests
     }
 
     [Test]
-    public async Task GetSubjectsByTag_ReturnsFilteredSubjects()
+    public async Task GetSubjects_ReturnsFilteredSubjects_WhenTagProvided()
     {
         // Arrange
         var subject = new Subject { Kind = "person", MetadataContainerId = Guid.NewGuid() };
@@ -221,7 +225,7 @@ public class SubjectsEndpointGroupTests
             .ReturnsAsync([subject]);
 
         // Act
-        var response = await _client.GetAsync("/api/subjects/by-tag/actor").ConfigureAwait(false);
+        var response = await _client.GetAsync("/api/subjects?tag=actor").ConfigureAwait(false);
 
         // Assert
         var content = await response.Content.ReadFromJsonAsync<Subject[]>().ConfigureAwait(false);
@@ -234,7 +238,7 @@ public class SubjectsEndpointGroupTests
     }
 
     [Test]
-    public async Task GetSubjectsByTag_ReturnsEmptyArray_WhenNoMatchingSubjects()
+    public async Task GetSubjects_ReturnsEmptyArray_WhenTagHasNoMatches()
     {
         // Arrange
         _subjectRepository
@@ -242,7 +246,7 @@ public class SubjectsEndpointGroupTests
             .ReturnsAsync([]);
 
         // Act
-        var response = await _client.GetAsync("/api/subjects/by-tag/director").ConfigureAwait(false);
+        var response = await _client.GetAsync("/api/subjects?tag=director").ConfigureAwait(false);
 
         // Assert
         var content = await response.Content.ReadFromJsonAsync<Subject[]>().ConfigureAwait(false);

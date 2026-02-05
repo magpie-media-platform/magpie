@@ -12,6 +12,7 @@ using Magpie.Abstractions.Repositories;
 using Magpie.Api.EndpointGroups;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
+using Magpie.Models.Enums;
 using Magpie.Test.Shared;
 
 using Microsoft.AspNetCore.Authentication;
@@ -54,7 +55,9 @@ public class MediaServersEndpointGroupTests
             .SetFallbackPolicy(null)
             .SetDefaultPolicy(new AuthorizationPolicyBuilder()
                 .RequireAssertion(_ => true)
-                .Build());
+                .Build())
+            .AddPolicy(nameof(Role.Viewer), policy => policy.RequireAssertion(_ => true))
+            .AddPolicy(nameof(Role.Manager), policy => policy.RequireAssertion(_ => true));
 
         builder.Services.AddSingleton(_repository.Object);
         builder.Services.AddSingleton<IApiEndpointGroup, MediaServersEndpointGroup>();
@@ -297,6 +300,136 @@ public class MediaServersEndpointGroupTests
 
         // Act
         var response = await _client.DeleteAsync($"/api/media-servers/{serverId}").ConfigureAwait(false);
+
+        // Assert
+        Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NotFound));
+    }
+
+    [Test]
+    public async Task EnableMediaServer_EnablesAndReturnsMediaServer()
+    {
+        // Arrange
+        var serverId = Guid.NewGuid();
+        var existingServer = new MediaServer
+        {
+            Id = serverId,
+            Name = "Test Server",
+            ProviderType = "plex",
+            Enabled = false,
+            Status = MediaServerStatus.Unknown,
+            Settings = [],
+            CreatedAt = DateTime.UtcNow,
+            CreatedByUserId = null,
+            ModifiedAt = null,
+            ModifiedByUserId = null
+        };
+
+        _repository
+            .Setup(m => m.GetByIdAsync(serverId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(existingServer);
+
+        _repository
+            .Setup(m => m.UpdateAsync(It.IsAny<MediaServer>(), null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+
+        // Act
+        var response = await _client.PostAsync($"/api/media-servers/{serverId}/enable", null)
+            .ConfigureAwait(false);
+
+        // Assert
+        var content = await response.Content.ReadFromJsonAsync<MediaServer>().ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
+            Assert.That(content, Has.Property(nameof(content.Id)).EqualTo(serverId));
+            Assert.That(content, Has.Property(nameof(content.Enabled)).True);
+        }
+        _repository.Verify(
+            r => r.UpdateAsync(
+                It.Is<MediaServer>(s => s.Id == serverId && s.Enabled == true),
+                null,
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Test]
+    public async Task EnableMediaServer_ReturnsNotFound_WhenMediaServerDoesNotExist()
+    {
+        // Arrange
+        var serverId = Guid.NewGuid();
+
+        _repository
+            .Setup(m => m.GetByIdAsync(serverId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(default(MediaServer?));
+
+        // Act
+        var response = await _client.PostAsync($"/api/media-servers/{serverId}/enable", null)
+            .ConfigureAwait(false);
+
+        // Assert
+        Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NotFound));
+    }
+
+    [Test]
+    public async Task DisableMediaServer_DisablesAndReturnsMediaServer()
+    {
+        // Arrange
+        var serverId = Guid.NewGuid();
+        var existingServer = new MediaServer
+        {
+            Id = serverId,
+            Name = "Test Server",
+            ProviderType = "plex",
+            Enabled = true,
+            Status = MediaServerStatus.Healthy,
+            Settings = [],
+            CreatedAt = DateTime.UtcNow,
+            CreatedByUserId = null,
+            ModifiedAt = null,
+            ModifiedByUserId = null
+        };
+
+        _repository
+            .Setup(m => m.GetByIdAsync(serverId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(existingServer);
+
+        _repository
+            .Setup(m => m.UpdateAsync(It.IsAny<MediaServer>(), null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+
+        // Act
+        var response = await _client.PostAsync($"/api/media-servers/{serverId}/disable", null)
+            .ConfigureAwait(false);
+
+        // Assert
+        var content = await response.Content.ReadFromJsonAsync<MediaServer>().ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
+            Assert.That(content, Has.Property(nameof(content.Id)).EqualTo(serverId));
+            Assert.That(content, Has.Property(nameof(content.Enabled)).False);
+        }
+        _repository.Verify(
+            r => r.UpdateAsync(
+                It.Is<MediaServer>(s => s.Id == serverId && s.Enabled == false),
+                null,
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Test]
+    public async Task DisableMediaServer_ReturnsNotFound_WhenMediaServerDoesNotExist()
+    {
+        // Arrange
+        var serverId = Guid.NewGuid();
+
+        _repository
+            .Setup(m => m.GetByIdAsync(serverId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(default(MediaServer?));
+
+        // Act
+        var response = await _client.PostAsync($"/api/media-servers/{serverId}/disable", null)
+            .ConfigureAwait(false);
 
         // Assert
         Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NotFound));

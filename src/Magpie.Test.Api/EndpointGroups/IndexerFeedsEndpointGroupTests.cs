@@ -10,6 +10,7 @@ using Magpie.Abstractions.Api;
 using Magpie.Abstractions.Repositories;
 using Magpie.Api.EndpointGroups;
 using Magpie.Models.Data;
+using Magpie.Models.Enums;
 using Magpie.Test.Shared;
 
 using Microsoft.AspNetCore.Authentication;
@@ -52,7 +53,9 @@ public class IndexerFeedsEndpointGroupTests
             .SetFallbackPolicy(null)
             .SetDefaultPolicy(new AuthorizationPolicyBuilder()
                 .RequireAssertion(_ => true)
-                .Build());
+                .Build())
+            .AddPolicy(nameof(Role.Viewer), policy => policy.RequireAssertion(_ => true))
+            .AddPolicy(nameof(Role.Manager), policy => policy.RequireAssertion(_ => true));
 
         builder.Services.AddSingleton(_indexerFeedRepository.Object);
         builder.Services.AddSingleton<IApiEndpointGroup, IndexerFeedsEndpointGroup>();
@@ -221,7 +224,7 @@ public class IndexerFeedsEndpointGroupTests
     }
 
     [Test]
-    public async Task UpdateIndexerFeed_UpdatesIndexerFeed()
+    public async Task PatchIndexerFeed_UpdatesIndexerFeed()
     {
         // Arrange
         var feedId = Guid.NewGuid();
@@ -248,7 +251,7 @@ public class IndexerFeedsEndpointGroupTests
             .ReturnsAsync(true);
 
         // Act
-        var response = await _client.PutAsJsonAsync($"/api/indexer-feeds/{feedId}", request).ConfigureAwait(false);
+        var response = await _client.PatchAsJsonAsync($"/api/indexer-feeds/{feedId}", request).ConfigureAwait(false);
 
         // Assert
         Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NoContent));
@@ -264,7 +267,7 @@ public class IndexerFeedsEndpointGroupTests
     }
 
     [Test]
-    public async Task UpdateIndexerFeed_ReturnsNotFound_WhenIndexerFeedDoesNotExist()
+    public async Task PatchIndexerFeed_ReturnsNotFound_WhenIndexerFeedDoesNotExist()
     {
         // Arrange
         var feedId = Guid.NewGuid();
@@ -280,7 +283,121 @@ public class IndexerFeedsEndpointGroupTests
             .ReturnsAsync(default(IndexerFeed?));
 
         // Act
-        var response = await _client.PutAsJsonAsync($"/api/indexer-feeds/{feedId}", request).ConfigureAwait(false);
+        var response = await _client.PatchAsJsonAsync($"/api/indexer-feeds/{feedId}", request).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NotFound));
+    }
+
+    [Test]
+    public async Task EnableIndexerFeed_EnablesAndReturnsIndexerFeed()
+    {
+        // Arrange
+        var feedId = Guid.NewGuid();
+        var existingFeed = new IndexerFeed
+        {
+            Id = feedId,
+            Name = "Test Feed",
+            ProviderType = "newznab",
+            Enabled = false
+        };
+
+        _indexerFeedRepository
+            .Setup(m => m.GetByIdAsync(feedId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(existingFeed);
+
+        _indexerFeedRepository
+            .Setup(m => m.UpdateAsync(It.IsAny<IndexerFeed>(), null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+
+        // Act
+        var response = await _client.PostAsync($"/api/indexer-feeds/{feedId}/enable", null).ConfigureAwait(false);
+
+        // Assert
+        var content = await response.Content.ReadFromJsonAsync<IndexerFeed>().ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
+            Assert.That(content, Has.Property(nameof(content.Id)).EqualTo(feedId));
+            Assert.That(content, Has.Property(nameof(content.Enabled)).True);
+        }
+        _indexerFeedRepository.Verify(
+            r => r.UpdateAsync(
+                It.Is<IndexerFeed>(f => f.Id == feedId && f.Enabled == true),
+                null,
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Test]
+    public async Task EnableIndexerFeed_ReturnsNotFound_WhenIndexerFeedDoesNotExist()
+    {
+        // Arrange
+        var feedId = Guid.NewGuid();
+
+        _indexerFeedRepository
+            .Setup(m => m.GetByIdAsync(feedId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(default(IndexerFeed?));
+
+        // Act
+        var response = await _client.PostAsync($"/api/indexer-feeds/{feedId}/enable", null).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NotFound));
+    }
+
+    [Test]
+    public async Task DisableIndexerFeed_DisablesAndReturnsIndexerFeed()
+    {
+        // Arrange
+        var feedId = Guid.NewGuid();
+        var existingFeed = new IndexerFeed
+        {
+            Id = feedId,
+            Name = "Test Feed",
+            ProviderType = "newznab",
+            Enabled = true
+        };
+
+        _indexerFeedRepository
+            .Setup(m => m.GetByIdAsync(feedId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(existingFeed);
+
+        _indexerFeedRepository
+            .Setup(m => m.UpdateAsync(It.IsAny<IndexerFeed>(), null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+
+        // Act
+        var response = await _client.PostAsync($"/api/indexer-feeds/{feedId}/disable", null).ConfigureAwait(false);
+
+        // Assert
+        var content = await response.Content.ReadFromJsonAsync<IndexerFeed>().ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
+            Assert.That(content, Has.Property(nameof(content.Id)).EqualTo(feedId));
+            Assert.That(content, Has.Property(nameof(content.Enabled)).False);
+        }
+        _indexerFeedRepository.Verify(
+            r => r.UpdateAsync(
+                It.Is<IndexerFeed>(f => f.Id == feedId && f.Enabled == false),
+                null,
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Test]
+    public async Task DisableIndexerFeed_ReturnsNotFound_WhenIndexerFeedDoesNotExist()
+    {
+        // Arrange
+        var feedId = Guid.NewGuid();
+
+        _indexerFeedRepository
+            .Setup(m => m.GetByIdAsync(feedId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(default(IndexerFeed?));
+
+        // Act
+        var response = await _client.PostAsync($"/api/indexer-feeds/{feedId}/disable", null).ConfigureAwait(false);
 
         // Assert
         Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NotFound));

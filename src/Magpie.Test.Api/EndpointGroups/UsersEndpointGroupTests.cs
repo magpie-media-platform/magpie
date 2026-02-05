@@ -39,32 +39,45 @@ public class UsersEndpointGroupTests
     private HttpClient _client = null!;
     private Mock<IUserRepository> _userRepository = null!;
     private Mock<IUserManager> _userManager = null!;
+    private Guid _userId;
 
     [SetUp]
     public void SetUp()
     {
+        _userId = Guid.NewGuid();
         _userRepository = new Mock<IUserRepository>();
         _userManager = new Mock<IUserManager>();
 
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
         builder.Logging.ClearProviders().AddTestLogger();
+        var claims = new[] { new Claim(ClaimTypes.NameIdentifier, _userId.ToString()) };
+        var identity = new ClaimsIdentity(claims, "Test");
+        var principal = new ClaimsPrincipal(identity);
         var authServiceMock = new Mock<IAuthenticationService>();
         authServiceMock
             .Setup(m => m.AuthenticateAsync(It.IsAny<HttpContext>(), It.IsAny<string>()))
-            .ReturnsAsync(AuthenticateResult.Success(new(new ClaimsPrincipal(new ClaimsIdentity("Test")), "Test")));
+            .ReturnsAsync(AuthenticateResult.Success(new AuthenticationTicket(principal, "Test")));
         builder.Services.AddSingleton(authServiceMock.Object);
         builder.Services.AddAuthorizationBuilder()
             .SetFallbackPolicy(null)
             .SetDefaultPolicy(new AuthorizationPolicyBuilder()
                 .RequireAssertion(_ => true)
-                .Build());
+                .Build())
+            .AddPolicy(nameof(Role.Viewer), policy => policy.RequireAssertion(_ => true))
+            .AddPolicy(nameof(Role.Admin), policy => policy.RequireAssertion(_ => true));
 
         builder.Services.AddSingleton(_userRepository.Object);
         builder.Services.AddSingleton(_userManager.Object);
         builder.Services.AddSingleton<IApiEndpointGroup, UsersEndpointGroup>();
 
         var app = builder.Build();
+
+        app.Use(async (context, next) =>
+        {
+            context.User = principal;
+            await next(context).ConfigureAwait(false);
+        });
 
         var apiGroup = app.MapGroup("/api");
         var endpointGroups = app.Services.GetServices<IApiEndpointGroup>();
@@ -86,6 +99,85 @@ public class UsersEndpointGroupTests
     {
         _client?.Dispose();
         _host?.Dispose();
+    }
+
+    [Test]
+    public async Task GetCurrentUser_ReturnsUser()
+    {
+        // Arrange
+        var user = new User
+        {
+            Id = _userId,
+            Username = "TestUser",
+            Email = "test@example.com",
+            Role = Role.Viewer,
+            ProviderType = "local"
+        };
+
+        _userRepository
+            .Setup(m => m.GetByIdAsync(_userId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(user);
+
+        // Act
+        var response = await _client.GetAsync("/api/users/me").ConfigureAwait(false);
+
+        // Assert
+        var content = await response.Content.ReadFromJsonAsync<User>().ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
+            Assert.That(content, Has.Property(nameof(content.Id)).EqualTo(_userId));
+            Assert.That(content, Has.Property(nameof(content.Username)).EqualTo("TestUser"));
+        }
+    }
+
+    [Test]
+    public async Task GetCurrentUser_ReturnsNotFound_WhenUserDoesNotExist()
+    {
+        // Arrange
+        _userRepository
+            .Setup(m => m.GetByIdAsync(_userId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(default(User?));
+
+        // Act
+        var response = await _client.GetAsync("/api/users/me").ConfigureAwait(false);
+
+        // Assert
+        Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NotFound));
+    }
+
+    [Test]
+    public async Task PatchCurrentUser_PatchesUser()
+    {
+        // Arrange
+        var patch = new UserPatch { Id = _userId, Enabled = new() { Value = true } };
+
+        _userRepository
+            .Setup(m => m.PatchAsync(It.Is<UserPatch>(p => p.Id == _userId), _userId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+
+        // Act
+        var response = await _client.PatchAsJsonAsync("/api/users/me", patch).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NoContent));
+    }
+
+    [Test]
+    public async Task PatchCurrentUser_ReturnsNotFound_WhenUserDoesNotExist()
+    {
+        // Arrange
+        var patch = new UserPatch { Id = _userId, Enabled = new() { Value = true } };
+
+        _userRepository
+            .Setup(m => m.PatchAsync(It.IsAny<UserPatch>(), _userId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(false);
+
+        // Act
+        var response = await _client.PatchAsJsonAsync("/api/users/me", patch).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NotFound));
     }
 
     [Test]
@@ -156,6 +248,45 @@ public class UsersEndpointGroupTests
     }
 
     [Test]
+    public async Task CreateUser_CreatesUser()
+    {
+        // Arrange
+        var userId = Guid.NewGuid();
+        var request = new UserCreate
+        {
+            Username = "NewUser",
+            PasswordHash = "hashedpassword",
+            Role = Role.Viewer
+        };
+
+        var createdUser = new User
+        {
+            Id = userId,
+            Username = "NewUser",
+            Role = Role.Viewer,
+            ProviderType = "local"
+        };
+
+        _userManager
+            .Setup(m => m.CreateLocalUserAsync(
+                It.Is<UserCreate>(c => c.Username == "NewUser"),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(createdUser);
+
+        // Act
+        var response = await _client.PostAsJsonAsync("/api/users", request).ConfigureAwait(false);
+
+        // Assert
+        var content = await response.Content.ReadFromJsonAsync<User>().ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.Created));
+            Assert.That(content, Has.Property(nameof(content.Id)).EqualTo(userId));
+            Assert.That(content, Has.Property(nameof(content.Username)).EqualTo("NewUser"));
+        }
+    }
+
+    [Test]
     public async Task GetUserById_ReturnsUser()
     {
         // Arrange
@@ -211,7 +342,7 @@ public class UsersEndpointGroupTests
         var patch = new UserPatch { Id = userId, Enabled = new() { Value = false } };
 
         _userRepository
-            .Setup(m => m.PatchAsync(It.Is<UserPatch>(p => p.Id == userId), null, It.IsAny<CancellationToken>()))
+            .Setup(m => m.PatchAsync(It.Is<UserPatch>(p => p.Id == userId), _userId, It.IsAny<CancellationToken>()))
             .ReturnsAsync(true);
 
         // Act
@@ -229,11 +360,117 @@ public class UsersEndpointGroupTests
         var patch = new UserPatch { Id = userId, Enabled = new() { Value = false } };
 
         _userRepository
-            .Setup(m => m.PatchAsync(It.IsAny<UserPatch>(), null, It.IsAny<CancellationToken>()))
+            .Setup(m => m.PatchAsync(It.IsAny<UserPatch>(), _userId, It.IsAny<CancellationToken>()))
             .ReturnsAsync(false);
 
         // Act
         var response = await _client.PatchAsJsonAsync($"/api/users/{userId}", patch).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NotFound));
+    }
+
+    [Test]
+    public async Task EnableUser_EnablesUser()
+    {
+        // Arrange
+        var userId = Guid.NewGuid();
+        var user = new User
+        {
+            Id = userId,
+            Username = "TestUser",
+            Enabled = true,
+            Role = Role.Viewer,
+            ProviderType = "local"
+        };
+
+        _userRepository
+            .Setup(m => m.GetByIdAsync(userId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(user);
+        _userRepository
+            .Setup(m => m.PatchAsync(
+                It.Is<UserPatch>(p => p.Id == userId && p.Enabled!.Value),
+                _userId,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+
+        // Act
+        var response = await _client.PostAsync($"/api/users/{userId}/enable", null).ConfigureAwait(false);
+
+        // Assert
+        var content = await response.Content.ReadFromJsonAsync<User>().ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
+            Assert.That(content, Has.Property(nameof(content.Id)).EqualTo(userId));
+        }
+    }
+
+    [Test]
+    public async Task EnableUser_ReturnsNotFound_WhenUserDoesNotExist()
+    {
+        // Arrange
+        var userId = Guid.NewGuid();
+
+        _userRepository
+            .Setup(m => m.GetByIdAsync(userId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(default(User?));
+
+        // Act
+        var response = await _client.PostAsync($"/api/users/{userId}/enable", null).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NotFound));
+    }
+
+    [Test]
+    public async Task DisableUser_DisablesUser()
+    {
+        // Arrange
+        var userId = Guid.NewGuid();
+        var user = new User
+        {
+            Id = userId,
+            Username = "TestUser",
+            Enabled = false,
+            Role = Role.Viewer,
+            ProviderType = "local"
+        };
+
+        _userRepository
+            .Setup(m => m.GetByIdAsync(userId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(user);
+        _userRepository
+            .Setup(m => m.PatchAsync(
+                It.Is<UserPatch>(p => p.Id == userId && !p.Enabled!.Value),
+                _userId,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+
+        // Act
+        var response = await _client.PostAsync($"/api/users/{userId}/disable", null).ConfigureAwait(false);
+
+        // Assert
+        var content = await response.Content.ReadFromJsonAsync<User>().ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
+            Assert.That(content, Has.Property(nameof(content.Id)).EqualTo(userId));
+        }
+    }
+
+    [Test]
+    public async Task DisableUser_ReturnsNotFound_WhenUserDoesNotExist()
+    {
+        // Arrange
+        var userId = Guid.NewGuid();
+
+        _userRepository
+            .Setup(m => m.GetByIdAsync(userId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(default(User?));
+
+        // Act
+        var response = await _client.PostAsync($"/api/users/{userId}/disable", null).ConfigureAwait(false);
 
         // Assert
         Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NotFound));
@@ -246,7 +483,7 @@ public class UsersEndpointGroupTests
         var userId = Guid.NewGuid();
 
         _userRepository
-            .Setup(m => m.DeleteAsync(userId, null, It.IsAny<CancellationToken>()))
+            .Setup(m => m.DeleteAsync(userId, _userId, It.IsAny<CancellationToken>()))
             .ReturnsAsync(true);
 
         // Act
@@ -263,7 +500,7 @@ public class UsersEndpointGroupTests
         var userId = Guid.NewGuid();
 
         _userRepository
-            .Setup(m => m.DeleteAsync(userId, null, It.IsAny<CancellationToken>()))
+            .Setup(m => m.DeleteAsync(userId, _userId, It.IsAny<CancellationToken>()))
             .ReturnsAsync(false);
 
         // Act

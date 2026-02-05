@@ -21,53 +21,48 @@ internal sealed class QualityTierListsEndpointGroup(
 
     public void MapEndpoints(IEndpointRouteBuilder builder)
     {
-        builder.MapGet("", GetAllQualityTierLists)
-            .WithName("GetAllQualityTierLists")
-            .WithTags("QualityTierLists")
+        builder.MapGet("", GetQualityTierLists)
+            .WithName(nameof(GetQualityTierLists))
             .Produces<QualityTierList[]>()
-            .RequireAuthorization();
+            .RequireViewer();
 
-        builder.MapGet("/{id:guid}", GetQualityTierListById)
-            .WithName("GetQualityTierListById")
-            .WithTags("QualityTierLists")
+        builder.MapGet("{id:guid}", GetQualityTierListById)
+            .WithName(nameof(GetQualityTierListById))
             .Produces<QualityTierList>()
-            .Produces(StatusCodes.Status404NotFound)
-            .RequireAuthorization();
-
-        builder.MapGet("/by-tag/{tagName}", GetQualityTierListsByTag)
-            .WithName("GetQualityTierListsByTag")
-            .WithTags("QualityTierLists")
-            .Produces<QualityTierList[]>()
-            .RequireAuthorization();
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .RequireViewer();
 
         builder.MapPost("", CreateQualityTierList)
-            .WithName("CreateQualityTierList")
-            .WithTags("QualityTierLists")
+            .WithName(nameof(CreateQualityTierList))
             .Produces<QualityTierList>(StatusCodes.Status201Created)
             .ProducesProblem(StatusCodes.Status400BadRequest)
-            .RequireAuthorization();
+            .RequireManager();
 
-        builder.MapPatch("/{id:guid}", PatchQualityTierList)
-            .WithName("PatchQualityTierList")
-            .WithTags("QualityTierLists")
+        builder.MapPatch("{id:guid}", PatchQualityTierList)
+            .WithName(nameof(PatchQualityTierList))
             .Produces(StatusCodes.Status204NoContent)
-            .Produces(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status404NotFound)
             .ProducesProblem(StatusCodes.Status400BadRequest)
-            .RequireAuthorization();
+            .RequireManager();
 
-        builder.MapDelete("/{id:guid}", DeleteQualityTierList)
-            .WithName("DeleteQualityTierList")
-            .WithTags("QualityTierLists")
+        builder.MapDelete("{id:guid}", DeleteQualityTierList)
+            .WithName(nameof(DeleteQualityTierList))
             .Produces(StatusCodes.Status204NoContent)
-            .Produces(StatusCodes.Status404NotFound)
-            .RequireAuthorization();
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .RequireManager();
     }
 
-    private async Task<IResult> GetAllQualityTierLists(CancellationToken cancellationToken)
+    private async Task<IResult> GetQualityTierLists(string? tag, CancellationToken cancellationToken)
     {
+        if (tag is not null)
+        {
+            var qualityTierListsByTag = await qualityTierListRepository.ListByTagAsync(tag, cancellationToken)
+                .ConfigureAwait(false);
+            return Results.Ok(qualityTierListsByTag);
+        }
+
         var qualityTierLists = await qualityTierListRepository.ListAllAsync(cancellationToken)
             .ConfigureAwait(false);
-
         return Results.Ok(qualityTierLists);
     }
 
@@ -79,14 +74,6 @@ internal sealed class QualityTierListsEndpointGroup(
         return qualityTierList is null
             ? Results.NotFound()
             : Results.Ok(qualityTierList);
-    }
-
-    private async Task<IResult> GetQualityTierListsByTag(string tagName, CancellationToken cancellationToken)
-    {
-        var qualityTierLists = await qualityTierListRepository.ListByTagAsync(tagName, cancellationToken)
-            .ConfigureAwait(false);
-
-        return Results.Ok(qualityTierLists);
     }
 
     private async Task<IResult> CreateQualityTierList(
@@ -108,7 +95,7 @@ internal sealed class QualityTierListsEndpointGroup(
         var created = await qualityTierListRepository.CreateAsync(qualityTierList, currentUserId, cancellationToken)
             .ConfigureAwait(false);
 
-        return Results.Created($"/api/quality-tier-lists/{created.Id}", created);
+        return Results.Created($"api/{Name}/{created.Id}", created);
     }
 
     private async Task<IResult> PatchQualityTierList(

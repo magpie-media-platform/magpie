@@ -19,56 +19,224 @@ internal sealed class ApiKeysEndpointGroup(IApiKeyManager apiKeyManager) : IApiE
 
     public void MapEndpoints(IEndpointRouteBuilder builder)
     {
-        builder.MapGet("", GetApiKeys)
-            .WithName("GetApiKeys")
-            .WithTags("ApiKeys")
+        builder.MapGet("my", GetMyApiKeys)
+            .WithName(nameof(GetMyApiKeys))
             .Produces<ApiKeyResponse[]>()
-            .RequireAuthorization();
+            .RequireViewer();
 
-        builder.MapPost("", CreateApiKey)
-            .WithName("CreateApiKey")
-            .WithTags("ApiKeys")
+        builder.MapPost("my", CreateMyApiKey)
+            .WithName(nameof(CreateMyApiKey))
             .Produces<ApiKeyCreatedResponse>(StatusCodes.Status201Created)
-            .RequireAuthorization();
+            .RequireViewer();
 
-        builder.MapGet("/{id:guid}", GetApiKey)
-            .WithName("GetApiKey")
-            .WithTags("ApiKeys")
+        builder.MapGet("my/{id:guid}", GetMyApiKey)
+            .WithName(nameof(GetMyApiKey))
             .Produces<ApiKeyResponse>()
-            .Produces(StatusCodes.Status404NotFound)
-            .RequireAuthorization();
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .RequireViewer();
 
-        builder.MapPost("/{id:guid}/rotate", RotateApiKey)
-            .WithName("RotateApiKey")
-            .WithTags("ApiKeys")
+        builder.MapPost("my/{id:guid}/rotate", RotateMyApiKey)
+            .WithName(nameof(RotateMyApiKey))
             .Produces<ApiKeyCreatedResponse>()
-            .Produces(StatusCodes.Status404NotFound)
-            .RequireAuthorization();
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .RequireViewer();
 
-        builder.MapPost("/{id:guid}/enable", EnableApiKey)
-            .WithName("EnableApiKey")
-            .WithTags("ApiKeys")
+        builder.MapPost("my/{id:guid}/enable", EnableMyApiKey)
+            .WithName(nameof(EnableMyApiKey))
             .Produces<ApiKeyResponse>()
-            .Produces(StatusCodes.Status404NotFound)
-            .RequireAuthorization();
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .RequireViewer();
 
-        builder.MapPost("/{id:guid}/disable", DisableApiKey)
-            .WithName("DisableApiKey")
-            .WithTags("ApiKeys")
+        builder.MapPost("my/{id:guid}/disable", DisableMyApiKey)
+            .WithName(nameof(DisableMyApiKey))
             .Produces<ApiKeyResponse>()
-            .Produces(StatusCodes.Status404NotFound)
-            .RequireAuthorization();
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .RequireViewer();
 
-        builder.MapDelete("/{id:guid}", DeleteApiKey)
-            .WithName("DeleteApiKey")
-            .WithTags("ApiKeys")
+        builder.MapDelete("my/{id:guid}", DeleteMyApiKey)
+            .WithName(nameof(DeleteMyApiKey))
             .Produces(StatusCodes.Status204NoContent)
-            .Produces(StatusCodes.Status404NotFound)
-            .RequireAuthorization();
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .RequireViewer();
+
+        builder.MapGet("{userId:guid}", GetUserApiKeys)
+            .WithName(nameof(GetUserApiKeys))
+            .Produces<ApiKeyResponse[]>()
+            .RequireAdmin();
+
+        builder.MapGet("{userId:guid}/{id:guid}", GetUserApiKey)
+            .WithName(nameof(GetUserApiKey))
+            .Produces<ApiKeyResponse>()
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .RequireAdmin();
+
+        builder.MapDelete("{userId:guid}/{id:guid}", DeleteUserApiKey)
+            .WithName(nameof(DeleteUserApiKey))
+            .Produces(StatusCodes.Status204NoContent)
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .RequireAdmin();
     }
 
-    private async Task<IResult> GetApiKeys(
-        Guid? userId,
+    private async Task<IResult> GetMyApiKeys(
+        HttpContext httpContext,
+        bool? enabled,
+        bool? expired,
+        CancellationToken cancellationToken)
+    {
+        var userId = httpContext.User.GetUserId();
+        if (userId is null)
+        {
+            return Results.Problem(statusCode: StatusCodes.Status401Unauthorized);
+        }
+
+        var apiKeys = await apiKeyManager.ListApiKeysAsync(userId.Value, enabled, expired, cancellationToken)
+            .ConfigureAwait(false);
+
+        var responses = apiKeys.Select(k => k.ToResponse()).ToArray();
+        return Results.Ok(responses);
+    }
+
+    private async Task<IResult> CreateMyApiKey(
+        HttpContext httpContext,
+        CreateMyApiKeyRequest request,
+        CancellationToken cancellationToken)
+    {
+        var userId = httpContext.User.GetUserId();
+        if (userId is null)
+        {
+            return Results.Problem(statusCode: StatusCodes.Status401Unauthorized);
+        }
+
+        var result = await apiKeyManager.CreateApiKeyAsync(
+            userId.Value,
+            request.Name,
+            request.ExpiresAt,
+            userId,
+            cancellationToken).ConfigureAwait(false);
+
+        return Results.Created($"{Name}/my/{result.ApiKey.Id}", result.ToCreatedResponse());
+    }
+
+    private async Task<IResult> GetMyApiKey(
+        HttpContext httpContext,
+        Guid id,
+        CancellationToken cancellationToken)
+    {
+        var userId = httpContext.User.GetUserId();
+        if (userId is null)
+        {
+            return Results.Problem(statusCode: StatusCodes.Status401Unauthorized);
+        }
+
+        var apiKey = await apiKeyManager.GetApiKeyAsync(id, cancellationToken).ConfigureAwait(false);
+
+        if (apiKey is null || apiKey.UserId != userId)
+        {
+            return Results.NotFound();
+        }
+
+        return Results.Ok(apiKey.ToResponse());
+    }
+
+    private async Task<IResult> RotateMyApiKey(
+        HttpContext httpContext,
+        Guid id,
+        CancellationToken cancellationToken)
+    {
+        var userId = httpContext.User.GetUserId();
+        if (userId is null)
+        {
+            return Results.Problem(statusCode: StatusCodes.Status401Unauthorized);
+        }
+
+        var existing = await apiKeyManager.GetApiKeyAsync(id, cancellationToken).ConfigureAwait(false);
+        if (existing is null || existing.UserId != userId)
+        {
+            return Results.NotFound();
+        }
+
+        var result = await apiKeyManager.RotateApiKeyAsync(id, userId, cancellationToken)
+            .ConfigureAwait(false);
+
+        return Results.Ok(result.ToCreatedResponse());
+    }
+
+    private async Task<IResult> EnableMyApiKey(
+        HttpContext httpContext,
+        Guid id,
+        CancellationToken cancellationToken)
+    {
+        var userId = httpContext.User.GetUserId();
+        if (userId is null)
+        {
+            return Results.Problem(statusCode: StatusCodes.Status401Unauthorized);
+        }
+
+        var existing = await apiKeyManager.GetApiKeyAsync(id, cancellationToken).ConfigureAwait(false);
+        if (existing is null || existing.UserId != userId)
+        {
+            return Results.NotFound();
+        }
+
+        var apiKey = await apiKeyManager.EnableApiKeyAsync(id, userId, cancellationToken)
+            .ConfigureAwait(false);
+
+        return Results.Ok(apiKey.ToResponse());
+    }
+
+    private async Task<IResult> DisableMyApiKey(
+        HttpContext httpContext,
+        Guid id,
+        CancellationToken cancellationToken)
+    {
+        var userId = httpContext.User.GetUserId();
+        if (userId is null)
+        {
+            return Results.Problem(statusCode: StatusCodes.Status401Unauthorized);
+        }
+
+        var existing = await apiKeyManager.GetApiKeyAsync(id, cancellationToken).ConfigureAwait(false);
+        if (existing is null || existing.UserId != userId)
+        {
+            return Results.NotFound();
+        }
+
+        var apiKey = await apiKeyManager.DisableApiKeyAsync(id, userId, cancellationToken)
+            .ConfigureAwait(false);
+
+        return Results.Ok(apiKey.ToResponse());
+    }
+
+    private async Task<IResult> DeleteMyApiKey(
+        HttpContext httpContext,
+        Guid id,
+        CancellationToken cancellationToken)
+    {
+        var userId = httpContext.User.GetUserId();
+        if (userId is null)
+        {
+            return Results.Problem(statusCode: StatusCodes.Status401Unauthorized);
+        }
+
+        var existing = await apiKeyManager.GetApiKeyAsync(id, cancellationToken).ConfigureAwait(false);
+        if (existing is null || existing.UserId != userId)
+        {
+            return Results.NotFound();
+        }
+
+        var deleted = await apiKeyManager.DeleteApiKeyAsync(id, userId, cancellationToken)
+            .ConfigureAwait(false);
+
+        if (!deleted)
+        {
+            return Results.NotFound();
+        }
+
+        return Results.NoContent();
+    }
+
+    private async Task<IResult> GetUserApiKeys(
+        Guid userId,
         bool? enabled,
         bool? expired,
         CancellationToken cancellationToken)
@@ -80,27 +248,14 @@ internal sealed class ApiKeysEndpointGroup(IApiKeyManager apiKeyManager) : IApiE
         return Results.Ok(responses);
     }
 
-    private async Task<IResult> CreateApiKey(
-        HttpContext httpContext,
-        CreateApiKeyRequest request,
+    private async Task<IResult> GetUserApiKey(
+        Guid userId,
+        Guid id,
         CancellationToken cancellationToken)
-    {
-        var currentUserId = httpContext.User.GetUserId();
-        var result = await apiKeyManager.CreateApiKeyAsync(
-            request.UserId,
-            request.Name,
-            request.ExpiresAt,
-            currentUserId,
-            cancellationToken).ConfigureAwait(false);
-
-        return Results.Created($"/{Name}/{result.ApiKey.Id}", result.ToCreatedResponse());
-    }
-
-    private async Task<IResult> GetApiKey(Guid id, CancellationToken cancellationToken)
     {
         var apiKey = await apiKeyManager.GetApiKeyAsync(id, cancellationToken).ConfigureAwait(false);
 
-        if (apiKey is null)
+        if (apiKey is null || apiKey.UserId != userId)
         {
             return Results.NotFound();
         }
@@ -108,57 +263,20 @@ internal sealed class ApiKeysEndpointGroup(IApiKeyManager apiKeyManager) : IApiE
         return Results.Ok(apiKey.ToResponse());
     }
 
-    private async Task<IResult> RotateApiKey(HttpContext httpContext, Guid id, CancellationToken cancellationToken)
+    private async Task<IResult> DeleteUserApiKey(
+        HttpContext httpContext,
+        Guid userId,
+        Guid id,
+        CancellationToken cancellationToken)
     {
         var currentUserId = httpContext.User.GetUserId();
 
         var existing = await apiKeyManager.GetApiKeyAsync(id, cancellationToken).ConfigureAwait(false);
-        if (existing is null)
+        if (existing is null || existing.UserId != userId)
         {
             return Results.NotFound();
         }
 
-        var result = await apiKeyManager.RotateApiKeyAsync(id, currentUserId, cancellationToken)
-            .ConfigureAwait(false);
-
-        return Results.Ok(result.ToCreatedResponse());
-    }
-
-    private async Task<IResult> EnableApiKey(HttpContext httpContext, Guid id, CancellationToken cancellationToken)
-    {
-        var currentUserId = httpContext.User.GetUserId();
-
-        var existing = await apiKeyManager.GetApiKeyAsync(id, cancellationToken).ConfigureAwait(false);
-        if (existing is null)
-        {
-            return Results.NotFound();
-        }
-
-        var apiKey = await apiKeyManager.EnableApiKeyAsync(id, currentUserId, cancellationToken)
-            .ConfigureAwait(false);
-
-        return Results.Ok(apiKey.ToResponse());
-    }
-
-    private async Task<IResult> DisableApiKey(HttpContext httpContext, Guid id, CancellationToken cancellationToken)
-    {
-        var currentUserId = httpContext.User.GetUserId();
-
-        var existing = await apiKeyManager.GetApiKeyAsync(id, cancellationToken).ConfigureAwait(false);
-        if (existing is null)
-        {
-            return Results.NotFound();
-        }
-
-        var apiKey = await apiKeyManager.DisableApiKeyAsync(id, currentUserId, cancellationToken)
-            .ConfigureAwait(false);
-
-        return Results.Ok(apiKey.ToResponse());
-    }
-
-    private async Task<IResult> DeleteApiKey(HttpContext httpContext, Guid id, CancellationToken cancellationToken)
-    {
-        var currentUserId = httpContext.User.GetUserId();
         var deleted = await apiKeyManager.DeleteApiKeyAsync(id, currentUserId, cancellationToken)
             .ConfigureAwait(false);
 

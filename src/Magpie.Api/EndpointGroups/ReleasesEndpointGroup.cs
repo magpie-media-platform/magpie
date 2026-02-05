@@ -1,14 +1,14 @@
 using System;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions.Api;
 using Magpie.Abstractions.Repositories;
 using Magpie.Abstractions.Security;
+using Magpie.Models;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
-using Magpie.Models.Enums;
-using Magpie.Models.Paging;
 
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -22,84 +22,68 @@ internal sealed class ReleasesEndpointGroup(IReleaseRepository releaseRepository
 
     public void MapEndpoints(IEndpointRouteBuilder builder)
     {
-        builder.MapGet("", GetAllReleases)
-            .WithName("GetAllReleases")
-            .WithTags("Releases")
+        builder.MapGet("", GetReleases)
+            .WithName(nameof(GetReleases))
             .Produces<Release[]>()
-            .RequireAuthorization();
+            .RequireViewer();
 
-        builder.MapGet("/{id:guid}", GetReleaseById)
-            .WithName("GetReleaseById")
-            .WithTags("Releases")
+        builder.MapGet("{id:guid}", GetReleaseById)
+            .WithName(nameof(GetReleaseById))
             .Produces<Release>()
-            .Produces(StatusCodes.Status404NotFound)
-            .RequireAuthorization();
-
-        builder.MapPost("/query", QueryReleases)
-            .WithName("QueryReleases")
-            .WithTags("Releases")
-            .Produces<PagedList<Release>>()
-            .RequireAuthorization();
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .RequireViewer();
 
         builder.MapPost("", CreateRelease)
-            .WithName("CreateRelease")
-            .WithTags("Releases")
+            .WithName(nameof(CreateRelease))
             .Produces<Release>(StatusCodes.Status201Created)
             .ProducesProblem(StatusCodes.Status400BadRequest)
-            .RequireAuthorization();
+            .RequireManager();
 
-        builder.MapPut("/{id:guid}", UpdateRelease)
-            .WithName("UpdateRelease")
-            .WithTags("Releases")
+        builder.MapPatch("{id:guid}", PatchRelease)
+            .WithName(nameof(PatchRelease))
             .Produces(StatusCodes.Status204NoContent)
-            .Produces(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status404NotFound)
             .ProducesProblem(StatusCodes.Status400BadRequest)
-            .RequireAuthorization();
+            .RequireManager();
 
-        builder.MapDelete("/{id:guid}", DeleteRelease)
-            .WithName("DeleteRelease")
-            .WithTags("Releases")
+        builder.MapDelete("{id:guid}", DeleteRelease)
+            .WithName(nameof(DeleteRelease))
             .Produces(StatusCodes.Status204NoContent)
-            .Produces(StatusCodes.Status404NotFound)
-            .RequireAuthorization();
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .RequireManager();
     }
 
-    private async Task<IResult> GetAllReleases(CancellationToken cancellationToken)
+    private async Task<IResult> GetReleases(
+        Guid? indexerId,
+        DateTime? after,
+        CancellationToken cancellationToken)
     {
-        var releases = await releaseRepository.ListAllAsync(cancellationToken).ConfigureAwait(false);
+        if (indexerId is null && after is null)
+        {
+            var allReleases = await releaseRepository.ListAllAsync(cancellationToken).ConfigureAwait(false);
+            return Results.Ok(allReleases.ToArray());
+        }
 
-        return Results.Ok(releases);
+        var query = new ReleaseQuery
+        {
+            IndexerId = indexerId,
+            PublishDate = after is not null ? new Range<DateTime>(after, null) : null
+        };
+
+        var result = await releaseRepository.QueryAsync(query, null, null, cancellationToken).ConfigureAwait(false);
+        return Results.Ok(result.Items.ToArray());
     }
 
     private async Task<IResult> GetReleaseById(Guid id, CancellationToken cancellationToken)
     {
         var release = await releaseRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
 
-        return release is null
-            ? Results.NotFound()
-            : Results.Ok(release);
-    }
+        if (release is null)
+        {
+            return Results.NotFound();
+        }
 
-    private async Task<IResult> QueryReleases(
-        ReleaseQuery query,
-        int? pageNumber,
-        int? pageSize,
-        string? sortBy,
-        SortDirection? sortDirection,
-        CancellationToken cancellationToken)
-    {
-        var paging = pageNumber.HasValue && pageSize.HasValue
-            ? new PagingParameter { PageNumber = pageNumber.Value, PageSize = pageSize.Value }
-            : null;
-
-        var sort = !string.IsNullOrEmpty(sortBy)
-            ? new SortParameter { PropertyName = sortBy, Direction = sortDirection ?? SortDirection.Ascending }
-            : null;
-
-        var result = await releaseRepository.QueryAsync(query, paging, sort, cancellationToken)
-            .ConfigureAwait(false);
-
-        return Results.Ok(result);
+        return Results.Ok(release);
     }
 
     private async Task<IResult> CreateRelease(
@@ -121,30 +105,27 @@ internal sealed class ReleasesEndpointGroup(IReleaseRepository releaseRepository
         var created = await releaseRepository.CreateAsync(release, currentUserId, cancellationToken)
             .ConfigureAwait(false);
 
-        return Results.Created($"/api/releases/{created.Id}", created);
+        return Results.Created($"api/{Name}/{created.Id}", created);
     }
 
-    private async Task<IResult> UpdateRelease(
+    private async Task<IResult> PatchRelease(
         HttpContext httpContext,
         Guid id,
         Release request,
         CancellationToken cancellationToken)
     {
         var currentUserId = httpContext.User.GetUserId();
-
-        var release = request with
-        {
-            Id = id,
-            ModifiedAt = DateTime.UtcNow,
-            ModifiedByUserId = currentUserId
-        };
+        var release = request with { Id = id };
 
         var updated = await releaseRepository.UpdateAsync(release, currentUserId, cancellationToken)
             .ConfigureAwait(false);
 
-        return updated
-            ? Results.NoContent()
-            : Results.NotFound();
+        if (!updated)
+        {
+            return Results.NotFound();
+        }
+
+        return Results.NoContent();
     }
 
     private async Task<IResult> DeleteRelease(
@@ -157,8 +138,11 @@ internal sealed class ReleasesEndpointGroup(IReleaseRepository releaseRepository
         var deleted = await releaseRepository.DeleteAsync(id, currentUserId, cancellationToken)
             .ConfigureAwait(false);
 
-        return deleted
-            ? Results.NoContent()
-            : Results.NotFound();
+        if (!deleted)
+        {
+            return Results.NotFound();
+        }
+
+        return Results.NoContent();
     }
 }

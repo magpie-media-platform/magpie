@@ -18,43 +18,29 @@ internal sealed class TagsEndpointGroup(ITagRepository tagRepository) : IApiEndp
 
     public void MapEndpoints(IEndpointRouteBuilder builder)
     {
-        builder.MapGet("", GetAllTags)
-            .WithName("GetAllTags")
-            .WithTags("Tags")
+        builder.MapGet("", GetTags)
+            .WithName(nameof(GetTags))
             .Produces<Tag[]>()
-            .RequireAuthorization();
-
-        builder.MapGet("/by-prefix/{prefix}", GetTagsByPrefix)
-            .WithName("GetTagsByPrefix")
-            .WithTags("Tags")
-            .Produces<Tag[]>()
-            .RequireAuthorization();
-
-        builder.MapGet("/by-entity/{entityId:guid}", GetTagsByEntity)
-            .WithName("GetTagsByEntity")
-            .WithTags("Tags")
-            .Produces<Tag[]>()
-            .RequireAuthorization();
+            .RequireViewer();
     }
 
-    private async Task<IResult> GetAllTags(CancellationToken cancellationToken)
+    private async Task<IResult> GetTags(string? prefix, Guid? entityId, CancellationToken cancellationToken)
     {
+        if (prefix is not null)
+        {
+            var tagsByPrefix = await tagRepository.GetByPrefixAsync(prefix, cancellationToken)
+                .ConfigureAwait(false);
+            return Results.Ok(tagsByPrefix);
+        }
+
+        if (entityId is not null)
+        {
+            var tagsByEntity = await tagRepository.GetTagsByEntityAsync(entityId.Value, cancellationToken)
+                .ConfigureAwait(false);
+            return Results.Ok(tagsByEntity);
+        }
+
         var tags = await tagRepository.ListAllAsync(cancellationToken).ConfigureAwait(false);
-
-        return Results.Ok(tags);
-    }
-
-    private async Task<IResult> GetTagsByPrefix(string prefix, CancellationToken cancellationToken)
-    {
-        var tags = await tagRepository.GetByPrefixAsync(prefix, cancellationToken).ConfigureAwait(false);
-
-        return Results.Ok(tags);
-    }
-
-    private async Task<IResult> GetTagsByEntity(Guid entityId, CancellationToken cancellationToken)
-    {
-        var tags = await tagRepository.GetTagsByEntityAsync(entityId, cancellationToken).ConfigureAwait(false);
-
         return Results.Ok(tags);
     }
 }

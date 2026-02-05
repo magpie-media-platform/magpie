@@ -5,8 +5,10 @@ using Magpie.Abstractions.Repositories;
 using Magpie.Core;
 using Magpie.Core.Repositories;
 using Magpie.Data;
+using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
+using Magpie.Models.Patch;
 using Magpie.Test.Shared;
 
 using Microsoft.EntityFrameworkCore;
@@ -449,4 +451,224 @@ public class ExtensionRepositoryTests
             .And.Property(nameof(AuditRecord.UserId)).EqualTo(_userId));
     }
 
+    [Test]
+    public async Task PatchAsync_PatchesNuGetIdField()
+    {
+        // Arrange
+        var extension = new Extension
+        {
+            Name = "TestExtension",
+            Version = "1.0.0",
+            FilePath = "/path/to/test.dll",
+            AssemblyName = "TestExtension, Version=1.0.0.0",
+            Enabled = true,
+            LoadOrder = 100,
+            Managed = true,
+            AutoUpgrade = false,
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.Extensions.Add(extension);
+        await _context.SaveChangesAsync();
+
+        var patch = new ExtensionPatch
+        {
+            Id = extension.Id,
+            NuGetId = new ScalarPatch<string?> { Value = "TestExtension.Package" }
+        };
+
+        // Act
+        var result = await _subject.PatchAsync(patch, _userId);
+
+        // Assert
+        var updatedEntity = await _context.Extensions
+            .AsNoTracking()
+            .FirstOrDefaultAsync(e => e.Id == extension.Id);
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Is.True);
+            Assert.That(updatedEntity, Has.Property(nameof(updatedEntity.NuGetId)).EqualTo("TestExtension.Package"));
+            Assert.That(updatedEntity, Has.Property(nameof(updatedEntity.ModifiedByUserId)).EqualTo(_userId));
+            Assert.That(updatedEntity, Has.Property(nameof(updatedEntity.ModifiedAt)).Not.Null);
+        }
+    }
+
+    [Test]
+    public async Task PatchAsync_PatchesAutoUpgradeField()
+    {
+        // Arrange
+        var extension = new Extension
+        {
+            Name = "TestExtension",
+            Version = "1.0.0",
+            FilePath = "/path/to/test.dll",
+            AssemblyName = "TestExtension, Version=1.0.0.0",
+            Enabled = true,
+            LoadOrder = 100,
+            Managed = true,
+            AutoUpgrade = false,
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.Extensions.Add(extension);
+        await _context.SaveChangesAsync();
+
+        var patch = new ExtensionPatch
+        {
+            Id = extension.Id,
+            AutoUpgrade = new ScalarPatch<bool> { Value = true }
+        };
+
+        // Act
+        var result = await _subject.PatchAsync(patch, _userId);
+
+        // Assert
+        var updatedEntity = await _context.Extensions
+            .AsNoTracking()
+            .FirstOrDefaultAsync(e => e.Id == extension.Id);
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Is.True);
+            Assert.That(updatedEntity, Has.Property(nameof(updatedEntity.AutoUpgrade)).True);
+        }
+    }
+
+    [Test]
+    public async Task PatchAsync_PatchesPackageRepositoryField()
+    {
+        // Arrange
+        var extension = new Extension
+        {
+            Name = "TestExtension",
+            Version = "1.0.0",
+            FilePath = "/path/to/test.dll",
+            AssemblyName = "TestExtension, Version=1.0.0.0",
+            Enabled = true,
+            LoadOrder = 100,
+            Managed = true,
+            AutoUpgrade = false,
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.Extensions.Add(extension);
+        await _context.SaveChangesAsync();
+
+        var patch = new ExtensionPatch
+        {
+            Id = extension.Id,
+            PackageRepository = new ScalarPatch<string?> { Value = "https://custom.nuget.org" }
+        };
+
+        // Act
+        var result = await _subject.PatchAsync(patch, _userId);
+
+        // Assert
+        var updatedEntity = await _context.Extensions
+            .AsNoTracking()
+            .FirstOrDefaultAsync(e => e.Id == extension.Id);
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Is.True);
+            Assert.That(updatedEntity, Has.Property(nameof(updatedEntity.PackageRepository))
+                .EqualTo("https://custom.nuget.org"));
+        }
+    }
+
+    [Test]
+    public async Task PatchAsync_PatchesMultipleFields()
+    {
+        // Arrange
+        var extension = new Extension
+        {
+            Name = "TestExtension",
+            Version = "1.0.0",
+            FilePath = "/path/to/test.dll",
+            AssemblyName = "TestExtension, Version=1.0.0.0",
+            Enabled = true,
+            LoadOrder = 100,
+            Managed = true,
+            AutoUpgrade = false,
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.Extensions.Add(extension);
+        await _context.SaveChangesAsync();
+
+        var patch = new ExtensionPatch
+        {
+            Id = extension.Id,
+            NuGetId = new ScalarPatch<string?> { Value = "MultiPatch.Package" },
+            PackageRepository = new ScalarPatch<string?> { Value = "https://multi.nuget.org" },
+            AutoUpgrade = new ScalarPatch<bool> { Value = true }
+        };
+
+        // Act
+        var result = await _subject.PatchAsync(patch, _userId);
+
+        // Assert
+        var updatedEntity = await _context.Extensions
+            .AsNoTracking()
+            .FirstOrDefaultAsync(e => e.Id == extension.Id);
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Is.True);
+            Assert.That(updatedEntity, Has.Property(nameof(updatedEntity.NuGetId)).EqualTo("MultiPatch.Package"));
+            Assert.That(updatedEntity, Has.Property(nameof(updatedEntity.PackageRepository))
+                .EqualTo("https://multi.nuget.org"));
+            Assert.That(updatedEntity, Has.Property(nameof(updatedEntity.AutoUpgrade)).True);
+        }
+    }
+
+    [Test]
+    public async Task PatchAsync_ReturnsFalse_WhenNotFound()
+    {
+        // Arrange
+        var patch = new ExtensionPatch
+        {
+            Id = Guid.NewGuid(),
+            NuGetId = new ScalarPatch<string?> { Value = "NonExistent.Package" }
+        };
+
+        // Act
+        var result = await _subject.PatchAsync(patch, _userId);
+
+        // Assert
+        Assert.That(result, Is.False);
+    }
+
+    [Test]
+    public async Task PatchAsync_CreatesAuditRecord()
+    {
+        // Arrange
+        var extension = new Extension
+        {
+            Name = "AuditedPatchExtension",
+            Version = "1.0.0",
+            FilePath = "/path/to/audited.dll",
+            AssemblyName = "AuditedPatchExtension, Version=1.0.0.0",
+            Enabled = true,
+            LoadOrder = 100,
+            Managed = true,
+            AutoUpgrade = false,
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.Extensions.Add(extension);
+        await _context.SaveChangesAsync();
+
+        var patch = new ExtensionPatch
+        {
+            Id = extension.Id,
+            AutoUpgrade = new ScalarPatch<bool> { Value = true }
+        };
+
+        // Act
+        await _subject.PatchAsync(patch, _userId);
+
+        // Assert
+        var auditRecords = await _context.AuditRecords.ToListAsync();
+        Assert.That(auditRecords, Has.One
+            .With.Property(nameof(AuditRecord.Operation)).EqualTo("Patch")
+            .And.Property(nameof(AuditRecord.EntityType)).EqualTo("Extension")
+            .And.Property(nameof(AuditRecord.UserId)).EqualTo(_userId));
+    }
 }

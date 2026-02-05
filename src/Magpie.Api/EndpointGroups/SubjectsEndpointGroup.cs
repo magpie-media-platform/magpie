@@ -21,56 +21,51 @@ internal sealed class SubjectsEndpointGroup(ISubjectRepository subjectRepository
 
     public void MapEndpoints(IEndpointRouteBuilder builder)
     {
-        builder.MapGet("", GetAllSubjects)
-            .WithName("GetAllSubjects")
-            .WithTags("Subjects")
+        builder.MapGet("", GetSubjects)
+            .WithName(nameof(GetSubjects))
             .Produces<Subject[]>()
-            .RequireAuthorization();
+            .RequireViewer();
 
-        builder.MapGet("/{id:guid}", GetSubjectById)
-            .WithName("GetSubjectById")
-            .WithTags("Subjects")
+        builder.MapGet("{id:guid}", GetSubjectById)
+            .WithName(nameof(GetSubjectById))
             .Produces<Subject>()
-            .Produces(StatusCodes.Status404NotFound)
-            .RequireAuthorization();
-
-        builder.MapGet("/by-kind/{kind}", GetSubjectsByKind)
-            .WithName("GetSubjectsByKind")
-            .WithTags("Subjects")
-            .Produces<Subject[]>()
-            .RequireAuthorization();
-
-        builder.MapGet("/by-tag/{tag}", GetSubjectsByTag)
-            .WithName("GetSubjectsByTag")
-            .WithTags("Subjects")
-            .Produces<Subject[]>()
-            .RequireAuthorization();
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .RequireViewer();
 
         builder.MapPost("", CreateSubject)
-            .WithName("CreateSubject")
-            .WithTags("Subjects")
+            .WithName(nameof(CreateSubject))
             .Produces<Subject>(StatusCodes.Status201Created)
             .ProducesProblem(StatusCodes.Status400BadRequest)
-            .RequireAuthorization();
+            .RequireRequester();
 
-        builder.MapPatch("/{id:guid}", PatchSubject)
-            .WithName("PatchSubject")
-            .WithTags("Subjects")
+        builder.MapPatch("{id:guid}", PatchSubject)
+            .WithName(nameof(PatchSubject))
             .Produces(StatusCodes.Status204NoContent)
-            .Produces(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status404NotFound)
             .ProducesProblem(StatusCodes.Status400BadRequest)
-            .RequireAuthorization();
+            .RequireRequester();
 
-        builder.MapDelete("/{id:guid}", DeleteSubject)
-            .WithName("DeleteSubject")
-            .WithTags("Subjects")
+        builder.MapDelete("{id:guid}", DeleteSubject)
+            .WithName(nameof(DeleteSubject))
             .Produces(StatusCodes.Status204NoContent)
-            .Produces(StatusCodes.Status404NotFound)
-            .RequireAuthorization();
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .RequireManager();
     }
 
-    private async Task<IResult> GetAllSubjects(CancellationToken cancellationToken)
+    private async Task<IResult> GetSubjects(string? kind, string? tag, CancellationToken cancellationToken)
     {
+        if (kind is not null)
+        {
+            var subjectsByKind = await subjectRepository.GetByKindAsync(kind, cancellationToken).ConfigureAwait(false);
+            return Results.Ok(subjectsByKind.ToArray());
+        }
+
+        if (tag is not null)
+        {
+            var subjectsByTag = await subjectRepository.GetByTagAsync(tag, cancellationToken).ConfigureAwait(false);
+            return Results.Ok(subjectsByTag.ToArray());
+        }
+
         var subjects = await subjectRepository.ListAllAsync(cancellationToken).ConfigureAwait(false);
         return Results.Ok(subjects.ToArray());
     }
@@ -85,18 +80,6 @@ internal sealed class SubjectsEndpointGroup(ISubjectRepository subjectRepository
         }
 
         return Results.Ok(subject);
-    }
-
-    private async Task<IResult> GetSubjectsByKind(string kind, CancellationToken cancellationToken)
-    {
-        var subjects = await subjectRepository.GetByKindAsync(kind, cancellationToken).ConfigureAwait(false);
-        return Results.Ok(subjects.ToArray());
-    }
-
-    private async Task<IResult> GetSubjectsByTag(string tag, CancellationToken cancellationToken)
-    {
-        var subjects = await subjectRepository.GetByTagAsync(tag, cancellationToken).ConfigureAwait(false);
-        return Results.Ok(subjects.ToArray());
     }
 
     private async Task<IResult> CreateSubject(
@@ -118,7 +101,7 @@ internal sealed class SubjectsEndpointGroup(ISubjectRepository subjectRepository
         var created = await subjectRepository.CreateAsync(subject, currentUserId, cancellationToken)
             .ConfigureAwait(false);
 
-        return Results.Created($"/api/subjects/{created.Id}", created);
+        return Results.Created($"api/{Name}/{created.Id}", created);
     }
 
     private async Task<IResult> PatchSubject(

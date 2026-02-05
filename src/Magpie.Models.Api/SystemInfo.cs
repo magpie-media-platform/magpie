@@ -3,16 +3,36 @@ namespace Magpie.Models.Api;
 /// <summary>
 /// System information response.
 /// </summary>
-/// <param name="Version">The application version.</param>
-/// <param name="Runtime">The runtime framework.</param>
-/// <param name="OperatingSystem">The operating system.</param>
-/// <param name="Architecture">The process architecture.</param>
-/// <param name="SystemRoot">The Magpie installation root directory.</param>
-/// <param name="NodeId">The unique node identifier.</param>
-public sealed record SystemInfo(
-    string Version,
-    string Runtime,
-    string OperatingSystem,
-    string Architecture,
-    string SystemRoot,
-    string NodeId);
+public sealed record SystemInfo
+{
+    /// <summary>
+    /// The application version.
+    /// </summary>
+    public required string Version { get; init; }
+
+    /// <summary>
+    /// The runtime framework.
+    /// </summary>
+    public required string Runtime { get; init; }
+
+    /// <summary>
+    /// The operating system.
+    /// </summary>
+    public required string OperatingSystem { get; init; }
+
+    /// <summary>
+    /// The process architecture.
+    /// </summary>
+    public required string Architecture { get; init; }
+
+    /// <summary>
+    /// The Magpie installation root directory.
+    /// </summary>
+    public required string SystemRoot { get; init; }
+
+    /// <summary>
+    /// The unique node identifier.
+    /// </summary>
+    public required string NodeId { get; init; }
+}
+

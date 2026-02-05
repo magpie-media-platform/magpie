@@ -8,6 +8,7 @@ using Magpie.Abstractions;
 using Magpie.Abstractions.Repositories;
 using Magpie.Data;
 using Magpie.Models;
+using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 
 using Microsoft.EntityFrameworkCore;
@@ -15,16 +16,12 @@ using Microsoft.Extensions.Logging;
 
 namespace Magpie.Core.Repositories;
 
-/// <summary>
-/// Repository for managing extensions.
-/// </summary>
-public sealed class ExtensionRepository(
+internal sealed class ExtensionRepository(
     MagpieDbContext context,
     IAuditRecordRepository auditRecordRepository,
     ITransactionManager transactionManager,
     ILogger<ExtensionRepository> logger) : IExtensionRepository
 {
-    /// <inheritdoc />
     public async Task<IEnumerable<Extension>> ListAllAsync(CancellationToken cancellationToken)
     {
         try
@@ -41,7 +38,6 @@ public sealed class ExtensionRepository(
         }
     }
 
-    /// <inheritdoc />
     public async Task<Extension?> GetByIdAsync(Guid id, CancellationToken cancellationToken)
     {
         try
@@ -58,7 +54,6 @@ public sealed class ExtensionRepository(
         }
     }
 
-    /// <inheritdoc />
     public async Task<Extension> CreateAsync(
         Extension model,
         Guid? createdByUserId,
@@ -96,7 +91,6 @@ public sealed class ExtensionRepository(
         }
     }
 
-    /// <inheritdoc />
     public async Task<bool> UpdateAsync(Extension model, Guid? modifiedByUserId, CancellationToken cancellationToken)
     {
         try
@@ -152,7 +146,6 @@ public sealed class ExtensionRepository(
         }
     }
 
-    /// <inheritdoc />
     public async Task<bool> DeleteAsync(Guid id, Guid? deletedByUserId, CancellationToken cancellationToken)
     {
         try
@@ -198,6 +191,66 @@ public sealed class ExtensionRepository(
         catch (Exception ex)
         {
             logger.LogError(ex, "Error deleting extension {ExtensionId}", id);
+            throw;
+        }
+    }
+
+    public async Task<bool> PatchAsync(
+        ExtensionPatch patch,
+        Guid? modifiedByUserId,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await transactionManager.ExecuteWithTransactionAsync(async _ =>
+            {
+                var model = await context.Extensions
+                    .FirstOrDefaultAsync(e => e.Id == patch.Id, cancellationToken)
+                    .ConfigureAwait(false);
+
+                if (model is null)
+                {
+                    return false;
+                }
+
+                var now = DateTime.UtcNow;
+                if (patch.NuGetId is not null)
+                {
+                    model.NuGetId = patch.NuGetId.Value;
+                }
+                if (patch.PackageRepository is not null)
+                {
+                    model.PackageRepository = patch.PackageRepository.Value;
+                }
+                if (patch.AutoUpgrade is not null)
+                {
+                    model.AutoUpgrade = patch.AutoUpgrade.Value;
+                }
+
+                model.ModifiedAt = now;
+                model.ModifiedByUserId = modifiedByUserId;
+
+                var updated = await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+                if (updated > 0)
+                {
+                    await auditRecordRepository.CreateAsync(new()
+                    {
+                        Category = AuditCategories.System,
+                        Operation = "Patch",
+                        EntityId = patch.Id.ToString(),
+                        EntityType = nameof(Extension),
+                        Detail = $"Patched extension {model.Name}",
+                        Timestamp = now,
+                        UserId = modifiedByUserId
+                    }, cancellationToken).ConfigureAwait(false);
+                }
+
+                return updated > 0;
+            }, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Error patching extension {ExtensionId}", patch.Id);
             throw;
         }
     }

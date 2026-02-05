@@ -16,52 +16,100 @@ using Microsoft.AspNetCore.Routing;
 
 namespace Magpie.Api.EndpointGroups;
 
-internal sealed class UsersEndpointGroup(IUserRepository userRepository) : IApiEndpointGroup
+internal sealed class UsersEndpointGroup(
+    IUserRepository userRepository,
+    IUserManager userManager) : IApiEndpointGroup
 {
     public string Name => "users";
 
     public void MapEndpoints(IEndpointRouteBuilder builder)
     {
+        builder.MapGet("me", GetCurrentUser)
+            .WithName(nameof(GetCurrentUser))
+            .Produces<User>()
+            .ProducesProblem(StatusCodes.Status401Unauthorized)
+            .RequireViewer();
+
+        builder.MapPatch("me", PatchCurrentUser)
+            .WithName(nameof(PatchCurrentUser))
+            .Produces(StatusCodes.Status204NoContent)
+            .ProducesProblem(StatusCodes.Status401Unauthorized)
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .RequireViewer();
+
         builder.MapGet("", GetUsers)
-            .WithName("GetUsers")
-            .WithTags("Users")
+            .WithName(nameof(GetUsers))
             .Produces<PagedList<User>>()
-            .RequireAuthorization();
+            .RequireAdmin();
 
-        builder.MapGet("/{id:guid}", GetUser)
-            .WithName("GetUser")
-            .WithTags("Users")
+        builder.MapPost("", CreateUser)
+            .WithName(nameof(CreateUser))
+            .Produces<User>(StatusCodes.Status201Created)
+            .RequireAdmin();
+
+        builder.MapGet("{id:guid}", GetUser)
+            .WithName(nameof(GetUser))
             .Produces<User>()
-            .Produces(StatusCodes.Status404NotFound)
-            .RequireAuthorization();
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .RequireAdmin();
 
-        builder.MapPatch("/{id:guid}", PatchUser)
-            .WithName("PatchUser")
-            .WithTags("Users")
+        builder.MapPatch("{id:guid}", PatchUser)
+            .WithName(nameof(PatchUser))
             .Produces(StatusCodes.Status204NoContent)
-            .Produces(StatusCodes.Status404NotFound)
-            .RequireAuthorization();
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .RequireAdmin();
 
-        builder.MapPost("/{id:guid}/enable", EnableUser)
-            .WithName("EnableUser")
-            .WithTags("Users")
+        builder.MapPost("{id:guid}/enable", EnableUser)
+            .WithName(nameof(EnableUser))
             .Produces<User>()
-            .Produces(StatusCodes.Status404NotFound)
-            .RequireAuthorization();
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .RequireAdmin();
 
-        builder.MapPost("/{id:guid}/disable", DisableUser)
-            .WithName("DisableUser")
-            .WithTags("Users")
+        builder.MapPost("{id:guid}/disable", DisableUser)
+            .WithName(nameof(DisableUser))
             .Produces<User>()
-            .Produces(StatusCodes.Status404NotFound)
-            .RequireAuthorization();
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .RequireAdmin();
 
-        builder.MapDelete("/{id:guid}", DeleteUser)
-            .WithName("DeleteUser")
-            .WithTags("Users")
+        builder.MapDelete("{id:guid}", DeleteUser)
+            .WithName(nameof(DeleteUser))
             .Produces(StatusCodes.Status204NoContent)
-            .Produces(StatusCodes.Status404NotFound)
-            .RequireAuthorization();
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .RequireAdmin();
+    }
+
+    private async Task<IResult> GetCurrentUser(HttpContext httpContext, CancellationToken cancellationToken)
+    {
+        var userId = httpContext.User.GetUserId();
+        if (userId is null)
+        {
+            return Results.Problem(statusCode: StatusCodes.Status401Unauthorized);
+        }
+
+        var user = await userRepository.GetByIdAsync(userId.Value, cancellationToken).ConfigureAwait(false);
+
+        return user is null
+            ? Results.NotFound()
+            : Results.Ok(user);
+    }
+
+    private async Task<IResult> PatchCurrentUser(
+        HttpContext httpContext,
+        UserPatch request,
+        CancellationToken cancellationToken)
+    {
+        var userId = httpContext.User.GetUserId();
+        if (userId is null)
+        {
+            return Results.Problem(statusCode: StatusCodes.Status401Unauthorized);
+        }
+
+        var patch = request with { Id = userId.Value };
+        var updated = await userRepository.PatchAsync(patch, userId.Value, cancellationToken).ConfigureAwait(false);
+
+        return updated
+            ? Results.NoContent()
+            : Results.NotFound();
     }
 
     private async Task<IResult> GetUsers(
@@ -86,6 +134,16 @@ internal sealed class UsersEndpointGroup(IUserRepository userRepository) : IApiE
             .ConfigureAwait(false);
 
         return Results.Ok(result);
+    }
+
+    private async Task<IResult> CreateUser(
+        HttpContext httpContext,
+        UserCreate request,
+        CancellationToken cancellationToken)
+    {
+        var user = await userManager.CreateLocalUserAsync(request, cancellationToken).ConfigureAwait(false);
+
+        return Results.Created($"api/{Name}/{user.Id}", user);
     }
 
     private async Task<IResult> GetUser(Guid id, CancellationToken cancellationToken)

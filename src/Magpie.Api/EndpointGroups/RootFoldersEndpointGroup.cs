@@ -21,39 +21,34 @@ internal sealed class RootFoldersEndpointGroup(
     public void MapEndpoints(IEndpointRouteBuilder builder)
     {
         builder.MapGet("", GetAllRootFolders)
-            .WithName("GetAllRootFolders")
-            .WithTags("RootFolders")
+            .WithName(nameof(GetAllRootFolders))
             .Produces<RootFolder[]>()
-            .RequireAuthorization();
+            .RequireViewer();
 
-        builder.MapGet("/{id:guid}", GetRootFolderById)
-            .WithName("GetRootFolderById")
-            .WithTags("RootFolders")
+        builder.MapGet("{id:guid}", GetRootFolderById)
+            .WithName(nameof(GetRootFolderById))
             .Produces<RootFolder>()
-            .Produces(StatusCodes.Status404NotFound)
-            .RequireAuthorization();
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .RequireViewer();
 
         builder.MapPost("", CreateRootFolder)
-            .WithName("CreateRootFolder")
-            .WithTags("RootFolders")
+            .WithName(nameof(CreateRootFolder))
             .Produces<RootFolder>(StatusCodes.Status201Created)
             .ProducesProblem(StatusCodes.Status400BadRequest)
-            .RequireAuthorization();
+            .RequireManager();
 
-        builder.MapPut("/{id:guid}", UpdateRootFolder)
-            .WithName("UpdateRootFolder")
-            .WithTags("RootFolders")
+        builder.MapPatch("{id:guid}", PatchRootFolder)
+            .WithName(nameof(PatchRootFolder))
             .Produces(StatusCodes.Status204NoContent)
-            .Produces(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status404NotFound)
             .ProducesProblem(StatusCodes.Status400BadRequest)
-            .RequireAuthorization();
+            .RequireManager();
 
-        builder.MapDelete("/{id:guid}", DeleteRootFolder)
-            .WithName("DeleteRootFolder")
-            .WithTags("RootFolders")
+        builder.MapDelete("{id:guid}", DeleteRootFolder)
+            .WithName(nameof(DeleteRootFolder))
             .Produces(StatusCodes.Status204NoContent)
-            .Produces(StatusCodes.Status404NotFound)
-            .RequireAuthorization();
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .RequireManager();
     }
 
     private async Task<IResult> GetAllRootFolders(CancellationToken cancellationToken)
@@ -91,30 +86,37 @@ internal sealed class RootFoldersEndpointGroup(
         var created = await rootFolderRepository.CreateAsync(rootFolder, currentUserId, cancellationToken)
             .ConfigureAwait(false);
 
-        return Results.Created($"/api/root-folders/{created.Id}", created);
+        return Results.Created($"api/{Name}/{created.Id}", created);
     }
 
-    private async Task<IResult> UpdateRootFolder(
+    private async Task<IResult> PatchRootFolder(
         HttpContext httpContext,
         Guid id,
         RootFolder request,
         CancellationToken cancellationToken)
     {
+        var existing = await rootFolderRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
+
+        if (existing is null)
+        {
+            return Results.NotFound();
+        }
+
         var currentUserId = httpContext.User.GetUserId();
 
         var rootFolder = request with
         {
             Id = id,
+            CreatedAt = existing.CreatedAt,
+            CreatedByUserId = existing.CreatedByUserId,
             ModifiedAt = DateTime.UtcNow,
             ModifiedByUserId = currentUserId
         };
 
-        var updated = await rootFolderRepository.UpdateAsync(rootFolder, currentUserId, cancellationToken)
+        await rootFolderRepository.UpdateAsync(rootFolder, currentUserId, cancellationToken)
             .ConfigureAwait(false);
 
-        return updated
-            ? Results.NoContent()
-            : Results.NotFound();
+        return Results.NoContent();
     }
 
     private async Task<IResult> DeleteRootFolder(

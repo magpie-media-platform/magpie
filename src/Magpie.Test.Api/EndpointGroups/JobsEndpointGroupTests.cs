@@ -216,11 +216,13 @@ public class JobsEndpointGroupTests
     {
         // Arrange
         var executionId = Guid.NewGuid();
-        var request = new RunJobRequest(
-            JobType: "TestJob",
-            ExtensionId: null,
-            Parameters: new() { ["key1"] = "value1" },
-            Mode: JobExecutionMode.Queue);
+        var request = new RunJobRequest()
+        {
+            JobType = "TestJob",
+            ExtensionId = null,
+            Parameters = new() { ["key1"] = "value1" },
+            Mode = JobExecutionMode.Queue
+        };
 
         _jobManager
             .Setup(m => m.ExecuteAsync(

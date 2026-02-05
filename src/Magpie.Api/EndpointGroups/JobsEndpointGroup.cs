@@ -24,30 +24,26 @@ internal sealed class JobsEndpointGroup(IJobManager jobManager) : IApiEndpointGr
     public void MapEndpoints(IEndpointRouteBuilder builder)
     {
         builder.MapGet("", QueryJobExecutions)
-            .WithName("QueryJobExecutions")
-            .WithTags("Jobs")
+            .WithName(nameof(QueryJobExecutions))
             .Produces<PagedList<JobExecution>>()
             .RequireViewer();
 
-        builder.MapGet("/{id:guid}", GetJobExecutionById)
-            .WithName("GetJobExecutionById")
-            .WithTags("Jobs")
+        builder.MapGet("{id:guid}", GetJobExecutionById)
+            .WithName(nameof(GetJobExecutionById))
             .Produces<JobExecution>()
-            .Produces(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status404NotFound)
             .RequireViewer();
 
         builder.MapPost("", RunJob)
-            .WithName("RunJob")
-            .WithTags("Jobs")
+            .WithName(nameof(RunJob))
             .Produces<Guid>(StatusCodes.Status202Accepted)
             .ProducesProblem(StatusCodes.Status400BadRequest)
             .RequireManager();
 
-        builder.MapPost("/{id:guid}/cancel", RequestCancellation)
-            .WithName("RequestJobCancellation")
-            .WithTags("Jobs")
+        builder.MapPost("{id:guid}/cancel", RequestJobCancellation)
+            .WithName(nameof(RequestJobCancellation))
             .Produces(StatusCodes.Status204NoContent)
-            .Produces(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status404NotFound)
             .RequireManager();
     }
 
@@ -110,10 +106,10 @@ internal sealed class JobsEndpointGroup(IJobManager jobManager) : IApiEndpointGr
             userId,
             cancellationToken).ConfigureAwait(false);
 
-        return Results.Accepted($"/api/jobs/{executionId}", executionId);
+        return Results.Accepted($"api/{Name}/jobs/{executionId}", executionId);
     }
 
-    private async Task<IResult> RequestCancellation(Guid id, CancellationToken cancellationToken)
+    private async Task<IResult> RequestJobCancellation(Guid id, CancellationToken cancellationToken)
     {
         var cancelled = await jobManager.RequestCancellationAsync(id, cancellationToken).ConfigureAwait(false);
 

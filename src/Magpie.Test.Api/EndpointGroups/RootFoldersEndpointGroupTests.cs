@@ -10,6 +10,7 @@ using Magpie.Abstractions.Api;
 using Magpie.Abstractions.Repositories;
 using Magpie.Api.EndpointGroups;
 using Magpie.Models.Data;
+using Magpie.Models.Enums;
 using Magpie.Test.Shared;
 
 using Microsoft.AspNetCore.Authentication;
@@ -52,7 +53,9 @@ public class RootFoldersEndpointGroupTests
             .SetFallbackPolicy(null)
             .SetDefaultPolicy(new AuthorizationPolicyBuilder()
                 .RequireAssertion(_ => true)
-                .Build());
+                .Build())
+            .AddPolicy(nameof(Role.Viewer), policy => policy.RequireAssertion(_ => true))
+            .AddPolicy(nameof(Role.Manager), policy => policy.RequireAssertion(_ => true));
 
         builder.Services.AddSingleton(_rootFolderRepository.Object);
         builder.Services.AddSingleton<IApiEndpointGroup, RootFoldersEndpointGroup>();
@@ -202,32 +205,51 @@ public class RootFoldersEndpointGroupTests
     }
 
     [Test]
-    public async Task UpdateRootFolder_UpdatesRootFolder()
+    public async Task PatchRootFolder_PatchesRootFolder()
     {
         // Arrange
         var rootFolderId = Guid.NewGuid();
         var contentTypeId = Guid.NewGuid();
+        var existingRootFolder = new RootFolder
+        {
+            Id = rootFolderId,
+            Name = "Original Movies",
+            Path = "/media/movies",
+            ContentTypeId = contentTypeId,
+        };
         var request = new RootFolder
         {
             Name = "Updated Movies",
             Path = "/media/updated-movies",
             ContentTypeId = contentTypeId,
         };
+
+        _rootFolderRepository
+            .Setup(m => m.GetByIdAsync(rootFolderId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(existingRootFolder);
 
         _rootFolderRepository
             .Setup(m => m.UpdateAsync(It.IsAny<RootFolder>(), null, It.IsAny<CancellationToken>()))
             .ReturnsAsync(true);
 
         // Act
-        var response = await _client.PutAsJsonAsync($"/api/root-folders/{rootFolderId}", request)
+        var response = await _client.PatchAsJsonAsync($"/api/root-folders/{rootFolderId}", request)
             .ConfigureAwait(false);
 
         // Assert
         Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NoContent));
+        _rootFolderRepository.Verify(
+            r => r.UpdateAsync(
+                It.Is<RootFolder>(rf =>
+                    rf.Id == rootFolderId &&
+                    rf.Name == "Updated Movies"),
+                null,
+                It.IsAny<CancellationToken>()),
+            Times.Once);
     }
 
     [Test]
-    public async Task UpdateRootFolder_ReturnsNotFound_WhenRootFolderDoesNotExist()
+    public async Task PatchRootFolder_ReturnsNotFound_WhenRootFolderDoesNotExist()
     {
         // Arrange
         var rootFolderId = Guid.NewGuid();
@@ -240,11 +262,11 @@ public class RootFoldersEndpointGroupTests
         };
 
         _rootFolderRepository
-            .Setup(m => m.UpdateAsync(It.IsAny<RootFolder>(), null, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(false);
+            .Setup(m => m.GetByIdAsync(rootFolderId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(default(RootFolder?));
 
         // Act
-        var response = await _client.PutAsJsonAsync($"/api/root-folders/{rootFolderId}", request)
+        var response = await _client.PatchAsJsonAsync($"/api/root-folders/{rootFolderId}", request)
             .ConfigureAwait(false);
 
         // Assert

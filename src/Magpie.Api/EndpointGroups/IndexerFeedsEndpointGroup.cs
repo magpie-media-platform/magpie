@@ -20,39 +20,46 @@ internal sealed class IndexerFeedsEndpointGroup(IIndexerFeedRepository indexerFe
     public void MapEndpoints(IEndpointRouteBuilder builder)
     {
         builder.MapGet("", GetAllIndexerFeeds)
-            .WithName("GetAllIndexerFeeds")
-            .WithTags("IndexerFeeds")
+            .WithName(nameof(GetAllIndexerFeeds))
             .Produces<IndexerFeed[]>()
-            .RequireAuthorization();
+            .RequireViewer();
 
-        builder.MapGet("/{id:guid}", GetIndexerFeedById)
-            .WithName("GetIndexerFeedById")
-            .WithTags("IndexerFeeds")
+        builder.MapGet("{id:guid}", GetIndexerFeedById)
+            .WithName(nameof(GetIndexerFeedById))
             .Produces<IndexerFeed>()
-            .Produces(StatusCodes.Status404NotFound)
-            .RequireAuthorization();
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .RequireViewer();
 
         builder.MapPost("", CreateIndexerFeed)
-            .WithName("CreateIndexerFeed")
-            .WithTags("IndexerFeeds")
+            .WithName(nameof(CreateIndexerFeed))
             .Produces<IndexerFeed>(StatusCodes.Status201Created)
             .ProducesProblem(StatusCodes.Status400BadRequest)
-            .RequireAuthorization();
+            .RequireManager();
 
-        builder.MapPut("/{id:guid}", UpdateIndexerFeed)
-            .WithName("UpdateIndexerFeed")
-            .WithTags("IndexerFeeds")
+        builder.MapPatch("{id:guid}", PatchIndexerFeed)
+            .WithName(nameof(PatchIndexerFeed))
             .Produces(StatusCodes.Status204NoContent)
-            .Produces(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status404NotFound)
             .ProducesProblem(StatusCodes.Status400BadRequest)
-            .RequireAuthorization();
+            .RequireManager();
 
-        builder.MapDelete("/{id:guid}", DeleteIndexerFeed)
-            .WithName("DeleteIndexerFeed")
-            .WithTags("IndexerFeeds")
+        builder.MapPost("{id:guid}/enable", EnableIndexerFeed)
+            .WithName(nameof(EnableIndexerFeed))
+            .Produces<IndexerFeed>()
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .RequireManager();
+
+        builder.MapPost("{id:guid}/disable", DisableIndexerFeed)
+            .WithName(nameof(DisableIndexerFeed))
+            .Produces<IndexerFeed>()
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .RequireManager();
+
+        builder.MapDelete("{id:guid}", DeleteIndexerFeed)
+            .WithName(nameof(DeleteIndexerFeed))
             .Produces(StatusCodes.Status204NoContent)
-            .Produces(StatusCodes.Status404NotFound)
-            .RequireAuthorization();
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .RequireManager();
     }
 
     private async Task<IResult> GetAllIndexerFeeds(CancellationToken cancellationToken)
@@ -87,10 +94,10 @@ internal sealed class IndexerFeedsEndpointGroup(IIndexerFeedRepository indexerFe
         var created = await indexerFeedRepository.CreateAsync(feed, currentUserId, cancellationToken)
             .ConfigureAwait(false);
 
-        return Results.Created($"/api/indexer-feeds/{created.Id}", created);
+        return Results.Created($"api/{Name}/{created.Id}", created);
     }
 
-    private async Task<IResult> UpdateIndexerFeed(
+    private async Task<IResult> PatchIndexerFeed(
         HttpContext httpContext,
         Guid id,
         IndexerFeed request,
@@ -119,6 +126,60 @@ internal sealed class IndexerFeedsEndpointGroup(IIndexerFeedRepository indexerFe
             .ConfigureAwait(false);
 
         return Results.NoContent();
+    }
+
+    private async Task<IResult> EnableIndexerFeed(
+        HttpContext httpContext,
+        Guid id,
+        CancellationToken cancellationToken)
+    {
+        var existing = await indexerFeedRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
+
+        if (existing is null)
+        {
+            return Results.NotFound();
+        }
+
+        var currentUserId = httpContext.User.GetUserId();
+
+        var feed = existing with
+        {
+            Enabled = true,
+            ModifiedAt = DateTime.UtcNow,
+            ModifiedByUserId = currentUserId
+        };
+
+        await indexerFeedRepository.UpdateAsync(feed, currentUserId, cancellationToken)
+            .ConfigureAwait(false);
+
+        return Results.Ok(feed);
+    }
+
+    private async Task<IResult> DisableIndexerFeed(
+        HttpContext httpContext,
+        Guid id,
+        CancellationToken cancellationToken)
+    {
+        var existing = await indexerFeedRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
+
+        if (existing is null)
+        {
+            return Results.NotFound();
+        }
+
+        var currentUserId = httpContext.User.GetUserId();
+
+        var feed = existing with
+        {
+            Enabled = false,
+            ModifiedAt = DateTime.UtcNow,
+            ModifiedByUserId = currentUserId
+        };
+
+        await indexerFeedRepository.UpdateAsync(feed, currentUserId, cancellationToken)
+            .ConfigureAwait(false);
+
+        return Results.Ok(feed);
     }
 
     private async Task<IResult> DeleteIndexerFeed(

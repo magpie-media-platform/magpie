@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Net;
 using System.Net.Http;
@@ -10,6 +11,7 @@ using Magpie.Abstractions.Api;
 using Magpie.Abstractions.Repositories;
 using Magpie.Api.EndpointGroups;
 using Magpie.Models.Data;
+using Magpie.Models.Enums;
 using Magpie.Test.Shared;
 
 using Microsoft.AspNetCore.Authentication;
@@ -52,7 +54,8 @@ public class TagsEndpointGroupTests
             .SetFallbackPolicy(null)
             .SetDefaultPolicy(new AuthorizationPolicyBuilder()
                 .RequireAssertion(_ => true)
-                .Build());
+                .Build())
+            .AddPolicy(nameof(Role.Viewer), policy => policy.RequireAssertion(_ => true));
 
         builder.Services.AddSingleton(_tagRepository.Object);
         builder.Services.AddSingleton<IApiEndpointGroup, TagsEndpointGroup>();
@@ -134,7 +137,7 @@ public class TagsEndpointGroupTests
     }
 
     [Test]
-    public async Task GetTagsByPrefix_ReturnsMatchingTags()
+    public async Task GetTags_ReturnsMatchingTags_WhenPrefixProvided()
     {
         // Arrange
         var matchingTags = new List<Tag>
@@ -149,7 +152,7 @@ public class TagsEndpointGroupTests
             .ReturnsAsync(matchingTags);
 
         // Act
-        var response = await _client.GetAsync("/api/tags/by-prefix/genre:").ConfigureAwait(false);
+        var response = await _client.GetAsync("/api/tags?prefix=genre:").ConfigureAwait(false);
 
         // Assert
         var content = await response.Content.ReadFromJsonAsync<Tag[]>().ConfigureAwait(false);
@@ -163,7 +166,7 @@ public class TagsEndpointGroupTests
     }
 
     [Test]
-    public async Task GetTagsByPrefix_ReturnsEmptyArray_WhenNoMatchingTags()
+    public async Task GetTags_ReturnsEmptyArray_WhenPrefixHasNoMatches()
     {
         // Arrange
         _tagRepository
@@ -171,7 +174,7 @@ public class TagsEndpointGroupTests
             .ReturnsAsync([]);
 
         // Act
-        var response = await _client.GetAsync("/api/tags/by-prefix/rating:").ConfigureAwait(false);
+        var response = await _client.GetAsync("/api/tags?prefix=rating:").ConfigureAwait(false);
 
         // Assert
         var content = await response.Content.ReadFromJsonAsync<Tag[]>().ConfigureAwait(false);
@@ -184,15 +187,45 @@ public class TagsEndpointGroupTests
     }
 
     [Test]
-    public async Task GetTagsByPrefix_ReturnsEmptyArray_WhenNoTags()
+    public async Task GetTags_ReturnsMatchingTags_WhenEntityIdProvided()
     {
         // Arrange
+        var entityId = Guid.NewGuid();
+        var matchingTags = new List<Tag>
+        {
+            new Tag { Name = "genre:action" },
+            new Tag { Name = "quality:hd" }
+        };
+
         _tagRepository
-            .Setup(m => m.GetByPrefixAsync("genre:", It.IsAny<CancellationToken>()))
+            .Setup(m => m.GetTagsByEntityAsync(entityId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(matchingTags);
+
+        // Act
+        var response = await _client.GetAsync($"/api/tags?entityId={entityId}").ConfigureAwait(false);
+
+        // Assert
+        var content = await response.Content.ReadFromJsonAsync<Tag[]>().ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
+            Assert.That(content, Is.Not.Null);
+            Assert.That(content, Has.Length.EqualTo(2));
+        }
+    }
+
+    [Test]
+    public async Task GetTags_ReturnsEmptyArray_WhenEntityIdHasNoTags()
+    {
+        // Arrange
+        var entityId = Guid.NewGuid();
+
+        _tagRepository
+            .Setup(m => m.GetTagsByEntityAsync(entityId, It.IsAny<CancellationToken>()))
             .ReturnsAsync([]);
 
         // Act
-        var response = await _client.GetAsync("/api/tags/by-prefix/genre:").ConfigureAwait(false);
+        var response = await _client.GetAsync($"/api/tags?entityId={entityId}").ConfigureAwait(false);
 
         // Assert
         var content = await response.Content.ReadFromJsonAsync<Tag[]>().ConfigureAwait(false);

@@ -11,6 +11,7 @@ using Magpie.Abstractions.Repositories;
 using Magpie.Api.EndpointGroups;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
+using Magpie.Models.Enums;
 using Magpie.Test.Shared;
 
 using Microsoft.AspNetCore.Authentication;
@@ -53,7 +54,9 @@ public class SettingsEndpointGroupTests
             .SetFallbackPolicy(null)
             .SetDefaultPolicy(new AuthorizationPolicyBuilder()
                 .RequireAssertion(_ => true)
-                .Build());
+                .Build())
+            .AddPolicy(nameof(Role.Manager), policy => policy.RequireAssertion(_ => true))
+            .AddPolicy(nameof(Role.Admin), policy => policy.RequireAssertion(_ => true));
 
         builder.Services.AddSingleton(_settingsRepository.Object);
         builder.Services.AddSingleton<IApiEndpointGroup, SettingsEndpointGroup>();

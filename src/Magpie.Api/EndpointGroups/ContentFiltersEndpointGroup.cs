@@ -20,114 +20,228 @@ internal sealed class ContentFiltersEndpointGroup(IContentFilterRepository conte
 
     public void MapEndpoints(IEndpointRouteBuilder builder)
     {
-        builder.MapGet("/my", GetMyContentFilters)
-            .WithName("GetMyContentFilters")
-            .WithTags("ContentFilters")
+        builder.MapGet("my", GetMyContentFilters)
+            .WithName(nameof(GetMyContentFilters))
             .Produces<ContentFilter[]>()
-            .RequireAuthorization();
+            .RequireViewer();
 
-        builder.MapGet("", GetAllContentFilters)
-            .WithName("GetAllContentFilters")
-            .WithTags("ContentFilters")
-            .Produces<ContentFilter[]>()
-            .RequireAuthorization();
-
-        builder.MapGet("/{id:guid}", GetContentFilterById)
-            .WithName("GetContentFilterById")
-            .WithTags("ContentFilters")
-            .Produces<ContentFilter>()
-            .Produces(StatusCodes.Status404NotFound)
-            .RequireAuthorization();
-
-        builder.MapGet("/by-name/{name}", GetContentFilterByName)
-            .WithName("GetContentFilterByName")
-            .WithTags("ContentFilters")
-            .Produces<ContentFilter>()
-            .Produces(StatusCodes.Status404NotFound)
-            .RequireAuthorization();
-
-        builder.MapGet("/by-tag/{tag}", GetContentFiltersByTag)
-            .WithName("GetContentFiltersByTag")
-            .WithTags("ContentFilters")
-            .Produces<ContentFilter[]>()
-            .RequireAuthorization();
-
-        builder.MapPost("", CreateContentFilter)
-            .WithName("CreateContentFilter")
-            .WithTags("ContentFilters")
+        builder.MapPost("my", CreateMyContentFilter)
+            .WithName(nameof(CreateMyContentFilter))
             .Produces<ContentFilter>(StatusCodes.Status201Created)
             .ProducesProblem(StatusCodes.Status400BadRequest)
-            .RequireAuthorization();
+            .RequireRequester();
 
-        builder.MapPut("/{id:guid}", UpdateContentFilter)
-            .WithName("UpdateContentFilter")
-            .WithTags("ContentFilters")
+        builder.MapGet("my/{id:guid}", GetMyContentFilter)
+            .WithName(nameof(GetMyContentFilter))
+            .Produces<ContentFilter>()
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .RequireViewer();
+
+        builder.MapPatch("my/{id:guid}", PatchMyContentFilter)
+            .WithName(nameof(PatchMyContentFilter))
             .Produces(StatusCodes.Status204NoContent)
-            .Produces(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status404NotFound)
             .ProducesProblem(StatusCodes.Status400BadRequest)
-            .RequireAuthorization();
+            .RequireRequester();
 
-        builder.MapPatch("/{id:guid}", PatchContentFilter)
-            .WithName("PatchContentFilter")
-            .WithTags("ContentFilters")
+        builder.MapDelete("my/{id:guid}", DeleteMyContentFilter)
+            .WithName(nameof(DeleteMyContentFilter))
             .Produces(StatusCodes.Status204NoContent)
-            .Produces(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .RequireRequester();
+
+        builder.MapGet("", GetSharedContentFilters)
+            .WithName(nameof(GetSharedContentFilters))
+            .Produces<ContentFilter[]>()
+            .RequireViewer();
+
+        builder.MapGet("{id:guid}", GetSharedContentFilter)
+            .WithName(nameof(GetSharedContentFilter))
+            .Produces<ContentFilter>()
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .RequireViewer();
+
+        builder.MapPost("", CreateSharedContentFilter)
+            .WithName(nameof(CreateSharedContentFilter))
+            .Produces<ContentFilter>(StatusCodes.Status201Created)
             .ProducesProblem(StatusCodes.Status400BadRequest)
-            .RequireAuthorization();
+            .RequireManager();
 
-        builder.MapDelete("/{id:guid}", DeleteContentFilter)
-            .WithName("DeleteContentFilter")
-            .WithTags("ContentFilters")
+        builder.MapPatch("{id:guid}", PatchSharedContentFilter)
+            .WithName(nameof(PatchSharedContentFilter))
             .Produces(StatusCodes.Status204NoContent)
-            .Produces(StatusCodes.Status404NotFound)
-            .RequireAuthorization();
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status400BadRequest)
+            .RequireManager();
+
+        builder.MapDelete("{id:guid}", DeleteSharedContentFilter)
+            .WithName(nameof(DeleteSharedContentFilter))
+            .Produces(StatusCodes.Status204NoContent)
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .RequireManager();
     }
 
-    private async Task<IResult> GetMyContentFilters(HttpContext httpContext, CancellationToken cancellationToken)
+    private async Task<IResult> GetMyContentFilters(
+        HttpContext httpContext,
+        CancellationToken cancellationToken)
     {
         var userId = httpContext.User.GetUserId();
         if (userId is null)
         {
-            return Results.Problem("User not authenticated", statusCode: StatusCodes.Status401Unauthorized);
+            return Results.Problem(statusCode: StatusCodes.Status401Unauthorized);
         }
+
         var filters = await contentFilterRepository.ListByUserIdAsync(userId.Value, cancellationToken)
             .ConfigureAwait(false);
+
         return Results.Ok(filters);
     }
 
-    private async Task<IResult> GetAllContentFilters(CancellationToken cancellationToken)
+    private async Task<IResult> CreateMyContentFilter(
+        HttpContext httpContext,
+        ContentFilter request,
+        CancellationToken cancellationToken)
     {
-        var filters = await contentFilterRepository.ListAllAsync(cancellationToken).ConfigureAwait(false);
-        return Results.Ok(filters);
+        var userId = httpContext.User.GetUserId();
+        if (userId is null)
+        {
+            return Results.Problem(statusCode: StatusCodes.Status401Unauthorized);
+        }
+
+        var filter = request with
+        {
+            Id = Guid.NewGuid(),
+            OwnerUserId = userId.Value,
+            CreatedAt = DateTime.UtcNow,
+            CreatedByUserId = userId,
+            ModifiedAt = null,
+            ModifiedByUserId = null
+        };
+
+        var created = await contentFilterRepository.CreateAsync(filter, userId, cancellationToken)
+            .ConfigureAwait(false);
+
+        return Results.Created($"api/{Name}/my/{created.Id}", created);
     }
 
-    private async Task<IResult> GetContentFilterById(Guid id, CancellationToken cancellationToken)
+    private async Task<IResult> GetMyContentFilter(
+        HttpContext httpContext,
+        Guid id,
+        CancellationToken cancellationToken)
+    {
+        var userId = httpContext.User.GetUserId();
+        if (userId is null)
+        {
+            return Results.Problem(statusCode: StatusCodes.Status401Unauthorized);
+        }
+
+        var filter = await contentFilterRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
+
+        if (filter is null || filter.OwnerUserId != userId)
+        {
+            return Results.NotFound();
+        }
+
+        return Results.Ok(filter);
+    }
+
+    private async Task<IResult> PatchMyContentFilter(
+        HttpContext httpContext,
+        Guid id,
+        ContentFilterPatch request,
+        CancellationToken cancellationToken)
+    {
+        var userId = httpContext.User.GetUserId();
+        if (userId is null)
+        {
+            return Results.Problem(statusCode: StatusCodes.Status401Unauthorized);
+        }
+
+        var existing = await contentFilterRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
+        if (existing is null || existing.OwnerUserId != userId)
+        {
+            return Results.NotFound();
+        }
+
+        var patch = request with { Id = id };
+
+        var patched = await contentFilterRepository.PatchAsync(patch, userId, cancellationToken)
+            .ConfigureAwait(false);
+
+        return patched ? Results.NoContent() : Results.NotFound();
+    }
+
+    private async Task<IResult> DeleteMyContentFilter(
+        HttpContext httpContext,
+        Guid id,
+        CancellationToken cancellationToken)
+    {
+        var userId = httpContext.User.GetUserId();
+        if (userId is null)
+        {
+            return Results.Problem(statusCode: StatusCodes.Status401Unauthorized);
+        }
+
+        var existing = await contentFilterRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
+        if (existing is null || existing.OwnerUserId != userId)
+        {
+            return Results.NotFound();
+        }
+
+        var deleted = await contentFilterRepository.DeleteAsync(id, userId, cancellationToken)
+            .ConfigureAwait(false);
+
+        return deleted ? Results.NoContent() : Results.NotFound();
+    }
+
+    private async Task<IResult> GetSharedContentFilters(
+        string? name,
+        string? tag,
+        CancellationToken cancellationToken)
+    {
+        if (!string.IsNullOrEmpty(name))
+        {
+            var filter = await contentFilterRepository.GetByNameAsync(name, cancellationToken)
+                .ConfigureAwait(false);
+            return filter is null || filter.OwnerUserId is not null
+                ? Results.Ok(Array.Empty<ContentFilter>())
+                : Results.Ok(new[] { filter });
+        }
+
+        if (!string.IsNullOrEmpty(tag))
+        {
+            var filters = await contentFilterRepository.ListByTagAsync(tag, cancellationToken)
+                .ConfigureAwait(false);
+            return Results.Ok(filters);
+        }
+
+        var allFilters = await contentFilterRepository.ListAllAsync(cancellationToken).ConfigureAwait(false);
+        return Results.Ok(allFilters);
+    }
+
+    private async Task<IResult> GetSharedContentFilter(Guid id, CancellationToken cancellationToken)
     {
         var filter = await contentFilterRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
-        return filter is null ? Results.NotFound() : Results.Ok(filter);
+
+        if (filter is null || filter.OwnerUserId is not null)
+        {
+            return Results.NotFound();
+        }
+
+        return Results.Ok(filter);
     }
 
-    private async Task<IResult> GetContentFilterByName(string name, CancellationToken cancellationToken)
-    {
-        var filter = await contentFilterRepository.GetByNameAsync(name, cancellationToken).ConfigureAwait(false);
-        return filter is null ? Results.NotFound() : Results.Ok(filter);
-    }
-
-    private async Task<IResult> GetContentFiltersByTag(string tag, CancellationToken cancellationToken)
-    {
-        var filters = await contentFilterRepository.ListByTagAsync(tag, cancellationToken).ConfigureAwait(false);
-        return Results.Ok(filters);
-    }
-
-    private async Task<IResult> CreateContentFilter(
+    private async Task<IResult> CreateSharedContentFilter(
         HttpContext httpContext,
         ContentFilter request,
         CancellationToken cancellationToken)
     {
         var currentUserId = httpContext.User.GetUserId();
+
         var filter = request with
         {
             Id = Guid.NewGuid(),
+            OwnerUserId = null,
             CreatedAt = DateTime.UtcNow,
             CreatedByUserId = currentUserId,
             ModifiedAt = null,
@@ -137,45 +251,23 @@ internal sealed class ContentFiltersEndpointGroup(IContentFilterRepository conte
         var created = await contentFilterRepository.CreateAsync(filter, currentUserId, cancellationToken)
             .ConfigureAwait(false);
 
-        return Results.Created($"/api/content-filters/{created.Id}", created);
+        return Results.Created($"api/{Name}/{created.Id}", created);
     }
 
-    private async Task<IResult> UpdateContentFilter(
-        HttpContext httpContext,
-        Guid id,
-        ContentFilter request,
-        CancellationToken cancellationToken)
-    {
-        var currentUserId = httpContext.User.GetUserId();
-        var existing = await contentFilterRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
-
-        if (existing is null)
-        {
-            return Results.NotFound();
-        }
-
-        var filter = request with
-        {
-            Id = id,
-            CreatedAt = existing.CreatedAt,
-            CreatedByUserId = existing.CreatedByUserId,
-            ModifiedAt = DateTime.UtcNow,
-            ModifiedByUserId = currentUserId
-        };
-
-        await contentFilterRepository.UpdateAsync(filter, currentUserId, cancellationToken)
-            .ConfigureAwait(false);
-
-        return Results.NoContent();
-    }
-
-    private async Task<IResult> PatchContentFilter(
+    private async Task<IResult> PatchSharedContentFilter(
         HttpContext httpContext,
         Guid id,
         ContentFilterPatch request,
         CancellationToken cancellationToken)
     {
         var currentUserId = httpContext.User.GetUserId();
+        var existing = await contentFilterRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
+
+        if (existing is null || existing.OwnerUserId is not null)
+        {
+            return Results.NotFound();
+        }
+
         var patch = request with { Id = id };
 
         var patched = await contentFilterRepository.PatchAsync(patch, currentUserId, cancellationToken)
@@ -184,12 +276,19 @@ internal sealed class ContentFiltersEndpointGroup(IContentFilterRepository conte
         return patched ? Results.NoContent() : Results.NotFound();
     }
 
-    private async Task<IResult> DeleteContentFilter(
+    private async Task<IResult> DeleteSharedContentFilter(
         HttpContext httpContext,
         Guid id,
         CancellationToken cancellationToken)
     {
         var currentUserId = httpContext.User.GetUserId();
+        var existing = await contentFilterRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
+
+        if (existing is null || existing.OwnerUserId is not null)
+        {
+            return Results.NotFound();
+        }
+
         var deleted = await contentFilterRepository.DeleteAsync(id, currentUserId, cancellationToken)
             .ConfigureAwait(false);
 

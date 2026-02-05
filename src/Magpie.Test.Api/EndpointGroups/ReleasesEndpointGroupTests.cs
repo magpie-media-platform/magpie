@@ -11,6 +11,7 @@ using Magpie.Abstractions.Repositories;
 using Magpie.Api.EndpointGroups;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
+using Magpie.Models.Enums;
 using Magpie.Models.Paging;
 using Magpie.Test.Shared;
 
@@ -54,7 +55,10 @@ public class ReleasesEndpointGroupTests
             .SetFallbackPolicy(null)
             .SetDefaultPolicy(new AuthorizationPolicyBuilder()
                 .RequireAssertion(_ => true)
-                .Build());
+                .Build())
+            .AddPolicy(nameof(Role.Viewer), policy => policy.RequireAssertion(_ => true))
+            .AddPolicy(nameof(Role.Requester), policy => policy.RequireAssertion(_ => true))
+            .AddPolicy(nameof(Role.Manager), policy => policy.RequireAssertion(_ => true));
 
         builder.Services.AddSingleton(_repository.Object);
         builder.Services.AddSingleton<IApiEndpointGroup, ReleasesEndpointGroup>();
@@ -84,7 +88,7 @@ public class ReleasesEndpointGroupTests
     }
 
     [Test]
-    public async Task GetAllReleases_ReturnsEmptyArray_WhenNoReleases()
+    public async Task GetReleases_ReturnsEmptyArray_WhenNoReleases()
     {
         // Arrange
         _repository
@@ -105,7 +109,7 @@ public class ReleasesEndpointGroupTests
     }
 
     [Test]
-    public async Task GetAllReleases_ReturnsReleases()
+    public async Task GetReleases_ReturnsReleases()
     {
         // Arrange
         var release = new Release
@@ -131,6 +135,122 @@ public class ReleasesEndpointGroupTests
             Assert.That(content, Has.One
                 .With.Property(nameof(Release.Title)).EqualTo("Test.Movie.2024.1080p.BluRay"));
             Assert.That(content, Has.One.With.Property(nameof(Release.Protocol)).EqualTo("torrent"));
+        }
+    }
+
+    [Test]
+    public async Task GetReleases_ReturnsFilteredReleases_WhenIndexerIdProvided()
+    {
+        // Arrange
+        var indexerId = Guid.NewGuid();
+        var release = new Release
+        {
+            Title = "Test.Movie.2024.1080p.BluRay",
+            Protocol = "torrent",
+            PublishDate = DateTime.UtcNow,
+            IndexerId = indexerId
+        };
+
+        _repository
+            .Setup(m => m.QueryAsync(
+                It.Is<ReleaseQuery>(q => q.IndexerId == indexerId),
+                null,
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<Release>
+            {
+                Items = [release],
+                TotalItems = 1
+            });
+
+        // Act
+        var response = await _client.GetAsync($"/api/releases?indexerId={indexerId}").ConfigureAwait(false);
+
+        // Assert
+        var content = await response.Content.ReadFromJsonAsync<Release[]>().ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
+            Assert.That(content, Has.Length.EqualTo(1));
+            Assert.That(content, Has.One.With.Property(nameof(Release.IndexerId)).EqualTo(indexerId));
+        }
+    }
+
+    [Test]
+    public async Task GetReleases_ReturnsFilteredReleases_WhenAfterProvided()
+    {
+        // Arrange
+        var afterDate = new DateTime(2024, 1, 15, 0, 0, 0, DateTimeKind.Utc);
+        var release = new Release
+        {
+            Title = "Test.Movie.2024.1080p.BluRay",
+            Protocol = "torrent",
+            PublishDate = new DateTime(2024, 2, 1, 0, 0, 0, DateTimeKind.Utc)
+        };
+
+        _repository
+            .Setup(m => m.QueryAsync(
+                It.Is<ReleaseQuery>(q => q.PublishDate != null && q.PublishDate.Min == afterDate),
+                null,
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<Release>
+            {
+                Items = [release],
+                TotalItems = 1
+            });
+
+        // Act
+        var response = await _client.GetAsync($"/api/releases?after={afterDate:O}").ConfigureAwait(false);
+
+        // Assert
+        var content = await response.Content.ReadFromJsonAsync<Release[]>().ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
+            Assert.That(content, Has.Length.EqualTo(1));
+        }
+    }
+
+    [Test]
+    public async Task GetReleases_ReturnsFilteredReleases_WhenBothFiltersProvided()
+    {
+        // Arrange
+        var indexerId = Guid.NewGuid();
+        var afterDate = new DateTime(2024, 1, 15, 0, 0, 0, DateTimeKind.Utc);
+        var release = new Release
+        {
+            Title = "Test.Movie.2024.1080p.BluRay",
+            Protocol = "torrent",
+            PublishDate = new DateTime(2024, 2, 1, 0, 0, 0, DateTimeKind.Utc),
+            IndexerId = indexerId
+        };
+
+        _repository
+            .Setup(m => m.QueryAsync(
+                It.Is<ReleaseQuery>(q =>
+                    q.IndexerId == indexerId &&
+                    q.PublishDate != null &&
+                    q.PublishDate.Min == afterDate),
+                null,
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<Release>
+            {
+                Items = [release],
+                TotalItems = 1
+            });
+
+        // Act
+        var response = await _client.GetAsync($"/api/releases?indexerId={indexerId}&after={afterDate:O}")
+            .ConfigureAwait(false);
+
+        // Assert
+        var content = await response.Content.ReadFromJsonAsync<Release[]>().ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
+            Assert.That(content, Has.Length.EqualTo(1));
         }
     }
 
@@ -182,52 +302,6 @@ public class ReleasesEndpointGroupTests
     }
 
     [Test]
-    public async Task QueryReleases_ReturnsPagedResults()
-    {
-        // Arrange
-        var release1 = new Release
-        {
-            Title = "Movie.One.2024.1080p",
-            Protocol = "torrent",
-            PublishDate = DateTime.UtcNow,
-        };
-        var release2 = new Release
-        {
-            Title = "Movie.Two.2024.720p",
-            Protocol = "usenet",
-            PublishDate = DateTime.UtcNow,
-        };
-
-        _repository
-            .Setup(m => m.QueryAsync(
-                It.IsAny<ReleaseQuery>(),
-                It.IsAny<PagingParameter?>(),
-                It.IsAny<SortParameter?>(),
-                It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new PagedList<Release>
-            {
-                Items = [release1, release2],
-                PageNumber = 1,
-                PageSize = 10,
-                TotalItems = 2
-            });
-
-        // Act
-        var response = await _client.PostAsJsonAsync("/api/releases/query", new ReleaseQuery())
-            .ConfigureAwait(false);
-        var content = await response.Content.ReadFromJsonAsync<PagedList<Release>>().ConfigureAwait(false);
-
-        // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
-            Assert.That(content, Is.Not.Null);
-            Assert.That(content, Has.Property(nameof(content.TotalItems)).EqualTo(2));
-            Assert.That(content, Has.Property(nameof(content.Items)).With.Count.EqualTo(2));
-        }
-    }
-
-    [Test]
     public async Task CreateRelease_CreatesAndReturnsRelease()
     {
         // Arrange
@@ -258,7 +332,7 @@ public class ReleasesEndpointGroupTests
     }
 
     [Test]
-    public async Task UpdateRelease_UpdatesRelease()
+    public async Task PatchRelease_UpdatesRelease()
     {
         // Arrange
         var releaseId = Guid.NewGuid();
@@ -274,7 +348,7 @@ public class ReleasesEndpointGroupTests
             .ReturnsAsync(true);
 
         // Act
-        var response = await _client.PutAsJsonAsync($"/api/releases/{releaseId}", request).ConfigureAwait(false);
+        var response = await _client.PatchAsJsonAsync($"/api/releases/{releaseId}", request).ConfigureAwait(false);
 
         // Assert
         Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NoContent));
@@ -290,7 +364,7 @@ public class ReleasesEndpointGroupTests
     }
 
     [Test]
-    public async Task UpdateRelease_ReturnsNotFound_WhenReleaseDoesNotExist()
+    public async Task PatchRelease_ReturnsNotFound_WhenReleaseDoesNotExist()
     {
         // Arrange
         var releaseId = Guid.NewGuid();
@@ -306,7 +380,7 @@ public class ReleasesEndpointGroupTests
             .ReturnsAsync(false);
 
         // Act
-        var response = await _client.PutAsJsonAsync($"/api/releases/{releaseId}", request).ConfigureAwait(false);
+        var response = await _client.PatchAsJsonAsync($"/api/releases/{releaseId}", request).ConfigureAwait(false);
 
         // Assert
         Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NotFound));
@@ -344,40 +418,5 @@ public class ReleasesEndpointGroupTests
 
         // Assert
         Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NotFound));
-    }
-
-    [Test]
-    public async Task QueryReleases_WithFilterParameters()
-    {
-        // Arrange
-        var indexerId = Guid.NewGuid();
-        var query = new ReleaseQuery { IndexerId = indexerId };
-
-        _repository
-            .Setup(m => m.QueryAsync(
-                It.Is<ReleaseQuery>(q => q.IndexerId == indexerId),
-                It.IsAny<PagingParameter?>(),
-                It.IsAny<SortParameter?>(),
-                It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new PagedList<Release>
-            {
-                Items = [],
-                PageNumber = 1,
-                PageSize = 10,
-                TotalItems = 0
-            });
-
-        // Act
-        var response = await _client.PostAsJsonAsync("/api/releases/query", query).ConfigureAwait(false);
-
-        // Assert
-        Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
-        _repository.Verify(
-            r => r.QueryAsync(
-                It.Is<ReleaseQuery>(q => q.IndexerId == indexerId),
-                It.IsAny<PagingParameter?>(),
-                It.IsAny<SortParameter?>(),
-                It.IsAny<CancellationToken>()),
-            Times.Once);
     }
 }

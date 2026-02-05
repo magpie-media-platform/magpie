@@ -24,56 +24,57 @@ internal sealed class EventTriggersEndpointGroup(
 
     public void MapEndpoints(IEndpointRouteBuilder builder)
     {
-        builder.MapGet("", GetAllEventTriggers)
-            .WithName("GetAllEventTriggers")
-            .WithTags("EventTriggers")
+        builder.MapGet("", GetEventTriggers)
+            .WithName(nameof(GetEventTriggers))
             .Produces<EventTrigger[]>()
             .RequireViewer();
 
-        builder.MapGet("/{id:guid}", GetEventTriggerById)
-            .WithName("GetEventTriggerById")
-            .WithTags("EventTriggers")
+        builder.MapGet("{id:guid}", GetEventTriggerById)
+            .WithName(nameof(GetEventTriggerById))
             .Produces<EventTrigger>()
-            .Produces(StatusCodes.Status404NotFound)
-            .RequireViewer();
-
-        builder.MapGet("/by-extension/{extensionId:guid}", GetEventTriggersByExtension)
-            .WithName("GetEventTriggersByExtension")
-            .WithTags("EventTriggers")
-            .Produces<EventTrigger[]>()
-            .RequireViewer();
-
-        builder.MapGet("/enabled", GetEnabledEventTriggers)
-            .WithName("GetEnabledEventTriggers")
-            .WithTags("EventTriggers")
-            .Produces<EventTrigger[]>()
+            .ProducesProblem(StatusCodes.Status404NotFound)
             .RequireViewer();
 
         builder.MapPost("", CreateEventTrigger)
-            .WithName("CreateEventTrigger")
-            .WithTags("EventTriggers")
+            .WithName(nameof(CreateEventTrigger))
             .Produces<EventTrigger>(StatusCodes.Status201Created)
             .ProducesProblem(StatusCodes.Status400BadRequest)
             .RequireManager();
 
-        builder.MapPatch("/{id:guid}", PatchEventTrigger)
-            .WithName("PatchEventTrigger")
-            .WithTags("EventTriggers")
+        builder.MapPatch("{id:guid}", PatchEventTrigger)
+            .WithName(nameof(PatchEventTrigger))
             .Produces(StatusCodes.Status204NoContent)
-            .Produces(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status404NotFound)
             .ProducesProblem(StatusCodes.Status400BadRequest)
             .RequireManager();
 
-        builder.MapDelete("/{id:guid}", DeleteEventTrigger)
-            .WithName("DeleteEventTrigger")
-            .WithTags("EventTriggers")
+        builder.MapDelete("{id:guid}", DeleteEventTrigger)
+            .WithName(nameof(DeleteEventTrigger))
             .Produces(StatusCodes.Status204NoContent)
-            .Produces(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status404NotFound)
             .RequireManager();
     }
 
-    private async Task<IResult> GetAllEventTriggers(CancellationToken cancellationToken)
+    private async Task<IResult> GetEventTriggers(
+        Guid? extensionId,
+        bool? enabled,
+        CancellationToken cancellationToken)
     {
+        if (extensionId is not null)
+        {
+            var triggersByExtension = await eventTriggerRepository
+                .ListByExtensionIdAsync(extensionId.Value, cancellationToken)
+                .ConfigureAwait(false);
+            return Results.Ok(triggersByExtension.ToArray());
+        }
+
+        if (enabled is true)
+        {
+            var enabledTriggers = await eventTriggerRepository.ListEnabledAsync(cancellationToken)
+                .ConfigureAwait(false);
+            return Results.Ok(enabledTriggers.ToArray());
+        }
+
         var triggers = await eventTriggerRepository.ListAllAsync(cancellationToken).ConfigureAwait(false);
         return Results.Ok(triggers.ToArray());
     }
@@ -87,20 +88,6 @@ internal sealed class EventTriggersEndpointGroup(
             : Results.Ok(trigger);
     }
 
-    private async Task<IResult> GetEventTriggersByExtension(Guid extensionId, CancellationToken cancellationToken)
-    {
-        var triggers = await eventTriggerRepository.ListByExtensionIdAsync(extensionId, cancellationToken)
-            .ConfigureAwait(false);
-
-        return Results.Ok(triggers.ToArray());
-    }
-
-    private async Task<IResult> GetEnabledEventTriggers(CancellationToken cancellationToken)
-    {
-        var triggers = await eventTriggerRepository.ListEnabledAsync(cancellationToken).ConfigureAwait(false);
-        return Results.Ok(triggers.ToArray());
-    }
-
     private async Task<IResult> CreateEventTrigger(
         HttpContext httpContext,
         EventTriggerCreate request,
@@ -110,7 +97,7 @@ internal sealed class EventTriggersEndpointGroup(
         var trigger = await jobManager.CreateEventTriggerAsync(request, currentUserId, cancellationToken)
             .ConfigureAwait(false);
 
-        return Results.Created($"/api/event-triggers/{trigger.Id}", trigger);
+        return Results.Created($"api/{Name}/{trigger.Id}", trigger);
     }
 
     private async Task<IResult> PatchEventTrigger(

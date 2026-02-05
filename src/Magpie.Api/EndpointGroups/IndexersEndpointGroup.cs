@@ -20,39 +20,34 @@ internal sealed class IndexersEndpointGroup(IIndexerRepository indexerRepository
     public void MapEndpoints(IEndpointRouteBuilder builder)
     {
         builder.MapGet("", GetAllIndexers)
-            .WithName("GetAllIndexers")
-            .WithTags("Indexers")
+            .WithName(nameof(GetAllIndexers))
             .Produces<Indexer[]>()
-            .RequireAuthorization();
+            .RequireViewer();
 
-        builder.MapGet("/{id:guid}", GetIndexerById)
-            .WithName("GetIndexerById")
-            .WithTags("Indexers")
+        builder.MapGet("{id:guid}", GetIndexerById)
+            .WithName(nameof(GetIndexerById))
             .Produces<Indexer>()
-            .Produces(StatusCodes.Status404NotFound)
-            .RequireAuthorization();
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .RequireViewer();
 
         builder.MapPost("", CreateIndexer)
-            .WithName("CreateIndexer")
-            .WithTags("Indexers")
+            .WithName(nameof(CreateIndexer))
             .Produces<Indexer>(StatusCodes.Status201Created)
             .ProducesProblem(StatusCodes.Status400BadRequest)
-            .RequireAuthorization();
+            .RequireManager();
 
-        builder.MapPut("/{id:guid}", UpdateIndexer)
-            .WithName("UpdateIndexer")
-            .WithTags("Indexers")
+        builder.MapPatch("{id:guid}", PatchIndexer)
+            .WithName(nameof(PatchIndexer))
             .Produces(StatusCodes.Status204NoContent)
-            .Produces(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status404NotFound)
             .ProducesProblem(StatusCodes.Status400BadRequest)
-            .RequireAuthorization();
+            .RequireManager();
 
-        builder.MapDelete("/{id:guid}", DeleteIndexer)
-            .WithName("DeleteIndexer")
-            .WithTags("Indexers")
+        builder.MapDelete("{id:guid}", DeleteIndexer)
+            .WithName(nameof(DeleteIndexer))
             .Produces(StatusCodes.Status204NoContent)
-            .Produces(StatusCodes.Status404NotFound)
-            .RequireAuthorization();
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .RequireManager();
     }
 
     private async Task<IResult> GetAllIndexers(CancellationToken cancellationToken)
@@ -86,10 +81,10 @@ internal sealed class IndexersEndpointGroup(IIndexerRepository indexerRepository
         var created = await indexerRepository.CreateAsync(indexer, currentUserId, cancellationToken)
             .ConfigureAwait(false);
 
-        return Results.Created($"/api/indexers/{created.Id}", created);
+        return Results.Created($"api/{Name}/{created.Id}", created);
     }
 
-    private async Task<IResult> UpdateIndexer(
+    private async Task<IResult> PatchIndexer(
         HttpContext httpContext,
         Guid id,
         Indexer request,

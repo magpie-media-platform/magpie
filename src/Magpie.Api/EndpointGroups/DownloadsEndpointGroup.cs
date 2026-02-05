@@ -23,31 +23,27 @@ internal sealed class DownloadsEndpointGroup(IDownloadRepository downloadReposit
     public void MapEndpoints(IEndpointRouteBuilder builder)
     {
         builder.MapGet("", QueryDownloads)
-            .WithName("QueryDownloads")
-            .WithTags("Downloads")
+            .WithName(nameof(QueryDownloads))
             .Produces<PagedList<Download>>()
-            .RequireAuthorization();
+            .RequireViewer();
 
-        builder.MapGet("/{id:guid}", GetDownloadById)
-            .WithName("GetDownloadById")
-            .WithTags("Downloads")
+        builder.MapGet("{id:guid}", GetDownloadById)
+            .WithName(nameof(GetDownloadById))
             .Produces<Download>()
-            .Produces(StatusCodes.Status404NotFound)
-            .RequireAuthorization();
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .RequireViewer();
 
         builder.MapPost("", CreateDownload)
-            .WithName("CreateDownload")
-            .WithTags("Downloads")
+            .WithName(nameof(CreateDownload))
             .Produces<Download>(StatusCodes.Status201Created)
             .ProducesProblem(StatusCodes.Status400BadRequest)
-            .RequireAuthorization();
+            .RequireRequester();
 
-        builder.MapDelete("/{id:guid}", DeleteDownload)
-            .WithName("DeleteDownload")
-            .WithTags("Downloads")
+        builder.MapDelete("{id:guid}", DeleteDownload)
+            .WithName(nameof(DeleteDownload))
             .Produces(StatusCodes.Status204NoContent)
-            .Produces(StatusCodes.Status404NotFound)
-            .RequireAuthorization();
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .RequireManager();
     }
 
     private async Task<IResult> QueryDownloads(
@@ -110,7 +106,7 @@ internal sealed class DownloadsEndpointGroup(IDownloadRepository downloadReposit
         var created = await downloadRepository.CreateAsync(download, currentUserId, cancellationToken)
             .ConfigureAwait(false);
 
-        return Results.Created($"/api/downloads/{created.Id}", created);
+        return Results.Created($"api/{Name}/{created.Id}", created);
     }
 
     private async Task<IResult> DeleteDownload(

@@ -25,38 +25,33 @@ internal sealed class ScheduleTriggersEndpointGroup(
     public void MapEndpoints(IEndpointRouteBuilder builder)
     {
         builder.MapGet("", GetAllScheduleTriggers)
-            .WithName("GetAllScheduleTriggers")
-            .WithTags("ScheduleTriggers")
+            .WithName(nameof(GetAllScheduleTriggers))
             .Produces<ScheduleTrigger[]>()
             .RequireViewer();
 
-        builder.MapGet("/{id:guid}", GetScheduleTriggerById)
-            .WithName("GetScheduleTriggerById")
-            .WithTags("ScheduleTriggers")
+        builder.MapGet("{id:guid}", GetScheduleTriggerById)
+            .WithName(nameof(GetScheduleTriggerById))
             .Produces<ScheduleTrigger>()
-            .Produces(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status404NotFound)
             .RequireViewer();
 
         builder.MapPost("", CreateScheduleTrigger)
-            .WithName("CreateScheduleTrigger")
-            .WithTags("ScheduleTriggers")
+            .WithName(nameof(CreateScheduleTrigger))
             .Produces<ScheduleTrigger>(StatusCodes.Status201Created)
             .ProducesProblem(StatusCodes.Status400BadRequest)
             .RequireManager();
 
-        builder.MapPatch("/{id:guid}", PatchScheduleTrigger)
-            .WithName("PatchScheduleTrigger")
-            .WithTags("ScheduleTriggers")
+        builder.MapPatch("{id:guid}", PatchScheduleTrigger)
+            .WithName(nameof(PatchScheduleTrigger))
             .Produces(StatusCodes.Status204NoContent)
-            .Produces(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status404NotFound)
             .ProducesProblem(StatusCodes.Status400BadRequest)
             .RequireManager();
 
-        builder.MapDelete("/{id:guid}", DeleteScheduleTrigger)
-            .WithName("DeleteScheduleTrigger")
-            .WithTags("ScheduleTriggers")
+        builder.MapDelete("{id:guid}", DeleteScheduleTrigger)
+            .WithName(nameof(DeleteScheduleTrigger))
             .Produces(StatusCodes.Status204NoContent)
-            .Produces(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status404NotFound)
             .RequireManager();
     }
 
@@ -85,7 +80,7 @@ internal sealed class ScheduleTriggersEndpointGroup(
         var trigger = await jobManager.CreateScheduleTriggerAsync(request, currentUserId, cancellationToken)
             .ConfigureAwait(false);
 
-        return Results.Created($"/api/schedule-triggers/{trigger.Id}", trigger);
+        return Results.Created($"api/{Name}/{trigger.Id}", trigger);
     }
 
     private async Task<IResult> PatchScheduleTrigger(

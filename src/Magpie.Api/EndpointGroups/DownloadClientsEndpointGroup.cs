@@ -23,39 +23,46 @@ internal sealed class DownloadClientsEndpointGroup(
     public void MapEndpoints(IEndpointRouteBuilder builder)
     {
         builder.MapGet("", GetAllDownloadClients)
-            .WithName("GetAllDownloadClients")
-            .WithTags("DownloadClients")
+            .WithName(nameof(GetAllDownloadClients))
             .Produces<DownloadClient[]>()
-            .RequireAuthorization();
+            .RequireViewer();
 
-        builder.MapGet("/{id:guid}", GetDownloadClientById)
-            .WithName("GetDownloadClientById")
-            .WithTags("DownloadClients")
+        builder.MapGet("{id:guid}", GetDownloadClientById)
+            .WithName(nameof(GetDownloadClientById))
             .Produces<DownloadClient>()
-            .Produces(StatusCodes.Status404NotFound)
-            .RequireAuthorization();
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .RequireViewer();
 
         builder.MapPost("", CreateDownloadClient)
-            .WithName("CreateDownloadClient")
-            .WithTags("DownloadClients")
+            .WithName(nameof(CreateDownloadClient))
             .Produces<DownloadClient>(StatusCodes.Status201Created)
             .ProducesProblem(StatusCodes.Status400BadRequest)
-            .RequireAuthorization();
+            .RequireManager();
 
-        builder.MapPatch("/{id:guid}", PatchDownloadClient)
-            .WithName("PatchDownloadClient")
-            .WithTags("DownloadClients")
+        builder.MapPatch("{id:guid}", PatchDownloadClient)
+            .WithName(nameof(PatchDownloadClient))
             .Produces(StatusCodes.Status204NoContent)
-            .Produces(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status404NotFound)
             .ProducesProblem(StatusCodes.Status400BadRequest)
-            .RequireAuthorization();
+            .RequireManager();
 
-        builder.MapDelete("/{id:guid}", DeleteDownloadClient)
-            .WithName("DeleteDownloadClient")
-            .WithTags("DownloadClients")
+        builder.MapPost("{id:guid}/enable", EnableDownloadClient)
+            .WithName(nameof(EnableDownloadClient))
+            .Produces<DownloadClient>()
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .RequireManager();
+
+        builder.MapPost("{id:guid}/disable", DisableDownloadClient)
+            .WithName(nameof(DisableDownloadClient))
+            .Produces<DownloadClient>()
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .RequireManager();
+
+        builder.MapDelete("{id:guid}", DeleteDownloadClient)
+            .WithName(nameof(DeleteDownloadClient))
             .Produces(StatusCodes.Status204NoContent)
-            .Produces(StatusCodes.Status404NotFound)
-            .RequireAuthorization();
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .RequireManager();
     }
 
     private async Task<IResult> GetAllDownloadClients(CancellationToken cancellationToken)
@@ -96,7 +103,7 @@ internal sealed class DownloadClientsEndpointGroup(
         var created = await downloadClientRepository.CreateAsync(downloadClient, currentUserId, cancellationToken)
             .ConfigureAwait(false);
 
-        return Results.Created($"/api/download-clients/{created.Id}", created);
+        return Results.Created($"api/{Name}/{created.Id}", created);
     }
 
     private async Task<IResult> PatchDownloadClient(
@@ -114,6 +121,60 @@ internal sealed class DownloadClientsEndpointGroup(
         return updated
             ? Results.NoContent()
             : Results.NotFound();
+    }
+
+    private async Task<IResult> EnableDownloadClient(
+        HttpContext httpContext,
+        Guid id,
+        CancellationToken cancellationToken)
+    {
+        var existing = await downloadClientRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
+
+        if (existing is null)
+        {
+            return Results.NotFound();
+        }
+
+        var currentUserId = httpContext.User.GetUserId();
+
+        var downloadClient = existing with
+        {
+            Enabled = true,
+            ModifiedAt = DateTime.UtcNow,
+            ModifiedByUserId = currentUserId
+        };
+
+        await downloadClientRepository.UpdateAsync(downloadClient, currentUserId, cancellationToken)
+            .ConfigureAwait(false);
+
+        return Results.Ok(downloadClient);
+    }
+
+    private async Task<IResult> DisableDownloadClient(
+        HttpContext httpContext,
+        Guid id,
+        CancellationToken cancellationToken)
+    {
+        var existing = await downloadClientRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
+
+        if (existing is null)
+        {
+            return Results.NotFound();
+        }
+
+        var currentUserId = httpContext.User.GetUserId();
+
+        var downloadClient = existing with
+        {
+            Enabled = false,
+            ModifiedAt = DateTime.UtcNow,
+            ModifiedByUserId = currentUserId
+        };
+
+        await downloadClientRepository.UpdateAsync(downloadClient, currentUserId, cancellationToken)
+            .ConfigureAwait(false);
+
+        return Results.Ok(downloadClient);
     }
 
     private async Task<IResult> DeleteDownloadClient(

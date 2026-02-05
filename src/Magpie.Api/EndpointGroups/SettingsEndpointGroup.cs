@@ -20,39 +20,34 @@ internal sealed class SettingsEndpointGroup(ISettingsRepository settingsReposito
 
     public void MapEndpoints(IEndpointRouteBuilder builder)
     {
-        builder.MapGet("/groups", GetAllSettingsGroups)
-            .WithName("GetAllSettingsGroups")
-            .WithTags("Settings")
+        builder.MapGet("groups", GetAllSettingsGroups)
+            .WithName(nameof(GetAllSettingsGroups))
             .Produces<SettingsGroup[]>()
-            .RequireAuthorization();
+            .RequireManager();
 
-        builder.MapGet("/groups/{extensionId:guid}/{name}", GetSettingsGroupByKey)
-            .WithName("GetSettingsGroupByKey")
-            .WithTags("Settings")
+        builder.MapGet("groups/{extensionId:guid}/{name}", GetSettingsGroupByKey)
+            .WithName(nameof(GetSettingsGroupByKey))
             .Produces<SettingsGroup>()
-            .Produces(StatusCodes.Status404NotFound)
-            .RequireAuthorization();
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .RequireManager();
 
-        builder.MapGet("/groups/system/{name}", GetSystemSettingsGroupByName)
-            .WithName("GetSystemSettingsGroupByName")
-            .WithTags("Settings")
+        builder.MapGet("groups/system/{name}", GetSystemSettingsGroupByName)
+            .WithName(nameof(GetSystemSettingsGroupByName))
             .Produces<SettingsGroup>()
-            .Produces(StatusCodes.Status404NotFound)
-            .RequireAuthorization();
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .RequireManager();
 
-        builder.MapPatch("/groups/{extensionId:guid}/{name}", PatchSettingsGroup)
-            .WithName("PatchSettingsGroup")
-            .WithTags("Settings")
+        builder.MapPatch("groups/{extensionId:guid}/{name}", PatchSettingsGroup)
+            .WithName(nameof(PatchSettingsGroup))
             .Produces(StatusCodes.Status204NoContent)
-            .Produces(StatusCodes.Status404NotFound)
-            .RequireAuthorization();
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .RequireAdmin();
 
-        builder.MapPatch("/groups/system/{name}", PatchSystemSettingsGroup)
-            .WithName("PatchSystemSettingsGroup")
-            .WithTags("Settings")
+        builder.MapPatch("groups/system/{name}", PatchSystemSettingsGroup)
+            .WithName(nameof(PatchSystemSettingsGroup))
             .Produces(StatusCodes.Status204NoContent)
-            .Produces(StatusCodes.Status404NotFound)
-            .RequireAuthorization();
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .RequireAdmin();
     }
 
     private async Task<IResult> GetAllSettingsGroups(CancellationToken cancellationToken)
