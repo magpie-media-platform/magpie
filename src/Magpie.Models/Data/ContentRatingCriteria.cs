@@ -8,11 +8,11 @@ namespace Magpie.Models.Data;
 public sealed record ContentRatingCriteria
 {
     /// <summary>
-    /// The criteria for <see cref="ContentRating.RatingsBody"/>.
+    /// The criteria for <see cref="ContentRating.Body"/>.
     /// </summary>
-    public CriteriaSet<PropertyCriterion<string>> RatingsBody { get; init; } = new();
+    public CriteriaSet<PropertyCriterion<string>> Body { get; init; } = new();
     /// <summary>
-    /// The criteria for <see cref="ContentRating.Value"/>.
+    /// The criteria for <see cref="ContentRating.Rating"/>.
     /// </summary>
-    public CriteriaSet<PropertyCriterion<string>> Value { get; init; } = new();
+    public CriteriaSet<PropertyCriterion<string>> Rating { get; init; } = new();
 }

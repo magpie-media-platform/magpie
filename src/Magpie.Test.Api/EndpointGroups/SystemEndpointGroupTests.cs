@@ -111,10 +111,18 @@ public class SystemEndpointGroupTests
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
             Assert.That(content, Is.Not.Null);
-            Assert.That(content, Has.Property(nameof(SystemInfo.Version)).Not.Null & Has.Property(nameof(SystemInfo.Version)).Not.Empty);
-            Assert.That(content, Has.Property(nameof(SystemInfo.Runtime)).Not.Null & Has.Property(nameof(SystemInfo.Runtime)).Not.Empty);
-            Assert.That(content, Has.Property(nameof(SystemInfo.OperatingSystem)).Not.Null & Has.Property(nameof(SystemInfo.OperatingSystem)).Not.Empty);
-            Assert.That(content, Has.Property(nameof(SystemInfo.Architecture)).Not.Null & Has.Property(nameof(SystemInfo.Architecture)).Not.Empty);
+            Assert.That(content,
+                Has.Property(nameof(SystemInfo.Version)).Not.Null
+                    .And.Property(nameof(SystemInfo.Version)).Not.Empty);
+            Assert.That(content,
+                Has.Property(nameof(SystemInfo.Runtime)).Not.Null
+                    .And.Property(nameof(SystemInfo.Runtime)).Not.Empty);
+            Assert.That(content,
+                Has.Property(nameof(SystemInfo.OperatingSystem)).Not.Null
+                    .And.Property(nameof(SystemInfo.OperatingSystem)).Not.Empty);
+            Assert.That(content,
+                Has.Property(nameof(SystemInfo.Architecture)).Not.Null
+                    .And.Property(nameof(SystemInfo.Architecture)).Not.Empty);
             Assert.That(content, Has.Property(nameof(SystemInfo.SystemRoot)).EqualTo("/opt/magpie"));
             Assert.That(content, Has.Property(nameof(SystemInfo.NodeId)).EqualTo("test-node-001"));
         }

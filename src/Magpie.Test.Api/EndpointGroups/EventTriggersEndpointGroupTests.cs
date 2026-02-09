@@ -354,7 +354,9 @@ public class EventTriggersEndpointGroupTests
             .ReturnsAsync(true);
 
         // Act
-        var response = await _client.PatchAsJsonAsync($"/api/event-triggers/{triggerId}", request).ConfigureAwait(false);
+        var response = await _client
+            .PatchAsJsonAsync($"/api/event-triggers/{triggerId}", request)
+            .ConfigureAwait(false);
 
         // Assert
         Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NoContent));
@@ -372,7 +374,9 @@ public class EventTriggersEndpointGroupTests
             .ReturnsAsync(false);
 
         // Act
-        var response = await _client.PatchAsJsonAsync($"/api/event-triggers/{triggerId}", request).ConfigureAwait(false);
+        var response = await _client
+            .PatchAsJsonAsync($"/api/event-triggers/{triggerId}", request)
+            .ConfigureAwait(false);
 
         // Assert
         Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NotFound));

@@ -23,9 +23,9 @@ public record Image
     public int Ordinal { get; set; }
 
     /// <summary>
-    /// The kind of image (e.g., "poster", "backdrop", "logo").
+    /// The type of image (e.g., "poster", "backdrop", "logo").
     /// </summary>
-    public required string Kind { get; set; }
+    public required string Type { get; set; }
 
     /// <summary>
     /// The MIME type of the image.

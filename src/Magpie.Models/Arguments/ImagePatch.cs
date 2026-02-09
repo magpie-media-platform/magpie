@@ -21,9 +21,9 @@ public sealed record ImagePatch
     public ScalarPatch<int>? Ordinal { get; init; }
 
     /// <summary>
-    /// The <see cref="Image.Kind"/> to patch.
+    /// The <see cref="Image.Type"/> to patch.
     /// </summary>
-    public ScalarPatch<string>? Kind { get; init; }
+    public ScalarPatch<string>? Type { get; init; }
 
     /// <summary>
     /// The <see cref="Image.MimeType"/> to patch.

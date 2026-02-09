@@ -8,9 +8,9 @@ namespace Magpie.Models.Data;
 public sealed record ImageCriteria
 {
     /// <summary>
-    /// The criteria for <see cref="Image.Kind"/>.
+    /// The criteria for <see cref="Image.Type"/>.
     /// </summary>
-    public CriteriaSet<PropertyCriterion<string>> Kind { get; init; } = new();
+    public CriteriaSet<PropertyCriterion<string>> Type { get; init; } = new();
     /// <summary>
     /// The criteria for <see cref="Image.MimeType"/>.
     /// </summary>

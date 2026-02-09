@@ -20,7 +20,7 @@ public record MediaFile
     /// <summary>
     /// The kind of media file (Video, Audio, Subtitle, etc.).
     /// </summary>
-    public required string Kind { get; set; }
+    public required string FileKind { get; set; }
 
     /// <summary>
     /// The MIME type of the file.
@@ -28,14 +28,14 @@ public record MediaFile
     public string? MimeType { get; set; }
 
     /// <summary>
-    /// The file absolute path.
+    /// The file path.
     /// </summary>
-    public required string AbsolutePath { get; set; }
+    public required string FilePath { get; set; }
 
     /// <summary>
     /// The file size in bytes.
     /// </summary>
-    public long Size { get; set; }
+    public long FileSize { get; set; }
 
     /// <summary>
     /// Media information about the file contents.

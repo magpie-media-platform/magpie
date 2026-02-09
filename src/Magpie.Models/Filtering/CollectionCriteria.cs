@@ -1,7 +1,5 @@
 using System.Collections.Generic;
 
-using Magpie.Models.Enums;
-
 namespace Magpie.Models.Filtering;
 
 /// <summary>
@@ -10,12 +8,14 @@ namespace Magpie.Models.Filtering;
 public record CollectionCriteria<TCriteria>
 {
     /// <summary>
-    /// The operator to apply to the collection
+    /// Items that must be present (OR within Some, AND between Some and None).
+    /// Each item represents a set of conditions that at least one collection item must match.
     /// </summary>
-    public CollectionCriteriaOperator Operator { get; init; } = CollectionCriteriaOperator.Some;
+    public List<TCriteria> Some { get; init; } = [];
 
     /// <summary>
-    /// The criteria to apply to items in the collection
+    /// Items that must not be present.
+    /// Each item represents a set of conditions that no collection item should match.
     /// </summary>
-    public List<TCriteria> Items { get; init; } = [];
+    public List<TCriteria> None { get; init; } = [];
 }

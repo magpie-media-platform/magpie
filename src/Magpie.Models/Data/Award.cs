@@ -25,7 +25,7 @@ public record Award
     /// <summary>
     /// The organization that grants the award (e.g., "Academy Awards", "Emmy Awards").
     /// </summary>
-    public required string AwardBody { get; set; }
+    public required string Body { get; set; }
 
     /// <summary>
     /// The name of the award.

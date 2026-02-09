@@ -100,9 +100,9 @@ public sealed record MetadataCriteria
     /// <summary>
     /// The criteria for <see cref="MetadataContribution.Genres"/>.
     /// </summary>
-    public CollectionCriteria<PropertyCriterion<string>> Genres { get; init; } = new();
+    public CollectionCriteria<GenreCriteria> Genres { get; init; } = new();
     /// <summary>
     /// The criteria for associated <see cref="Tag"/>s.
     /// </summary>
-    public CollectionCriteria<PropertyCriterion<string>> Tags { get; init; } = new();
+    public CollectionCriteria<TagCriteria> Tags { get; init; } = new();
 }

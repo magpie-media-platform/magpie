@@ -307,7 +307,9 @@ public class JobsEndpointGroupTests
 
         // Act
         var response = await _client.GetAsync(
-            $"/api/jobs?jobType=TestJob&extensionId={extensionId}&scheduleTriggerId={scheduleTriggerId}&status=Running")
+            "/api/jobs" +
+            $"?jobType=TestJob&extensionId={extensionId}" +
+            $"&scheduleTriggerId={scheduleTriggerId}&status=Running")
             .ConfigureAwait(false);
 
         // Assert

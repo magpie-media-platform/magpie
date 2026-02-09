@@ -184,7 +184,12 @@ public class RootFoldersEndpointGroupTests
     {
         // Arrange
         var contentTypeId = Guid.NewGuid();
-        var request = new RootFolder { Name = "New Movies", Path = "/media/new-movies", ContentTypeId = contentTypeId };
+        var request = new RootFolder
+        {
+            Name = "New Movies",
+            Path = "/media/new-movies",
+            ContentTypeId = contentTypeId
+        };
 
         _rootFolderRepository
             .Setup(m => m.CreateAsync(It.IsAny<RootFolder>(), null, It.IsAny<CancellationToken>()))

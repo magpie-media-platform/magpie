@@ -25,10 +25,10 @@ public record ContentRating
     /// <summary>
     /// The organization that issued the rating.
     /// </summary>
-    public required string RatingsBody { get; set; }
+    public required string Body { get; set; }
 
     /// <summary>
     /// The rating value.
     /// </summary>
-    public required string Value { get; set; }
+    public required string Rating { get; set; }
 }

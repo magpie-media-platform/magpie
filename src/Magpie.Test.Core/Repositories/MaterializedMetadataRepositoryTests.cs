@@ -396,7 +396,7 @@ public class MaterializedMetadataRepositoryTests
             Ordinal = 0,
             CreatedAt = DateTime.UtcNow
         };
-        contribution1.ContentRatings.Add(new() { Ordinal = 0, RatingsBody = "MPAA", Value = "PG-13" });
+        contribution1.ContentRatings.Add(new() { Ordinal = 0, Body = "MPAA", Rating = "PG-13" });
 
         var contribution2 = new MetadataContribution
         {
@@ -404,7 +404,7 @@ public class MaterializedMetadataRepositoryTests
             Ordinal = 1,
             CreatedAt = DateTime.UtcNow
         };
-        contribution2.ContentRatings.Add(new() { Ordinal = 0, RatingsBody = "BBFC", Value = "12A" });
+        contribution2.ContentRatings.Add(new() { Ordinal = 0, Body = "BBFC", Rating = "12A" });
 
         container.Contributions.Add(contribution1);
         container.Contributions.Add(contribution2);
@@ -429,7 +429,7 @@ public class MaterializedMetadataRepositoryTests
             Ordinal = 0,
             CreatedAt = DateTime.UtcNow
         };
-        contribution1.ContentRatings.Add(new() { Ordinal = 0, RatingsBody = "MPAA", Value = "PG-13" });
+        contribution1.ContentRatings.Add(new() { Ordinal = 0, Body = "MPAA", Rating = "PG-13" });
 
         var contribution2 = new MetadataContribution
         {
@@ -437,7 +437,7 @@ public class MaterializedMetadataRepositoryTests
             Ordinal = 1,
             CreatedAt = DateTime.UtcNow
         };
-        contribution2.ContentRatings.Add(new() { Ordinal = 0, RatingsBody = "mpaa", Value = "R" });
+        contribution2.ContentRatings.Add(new() { Ordinal = 0, Body = "mpaa", Rating = "R" });
 
         container.Contributions.Add(contribution1);
         container.Contributions.Add(contribution2);
@@ -452,7 +452,7 @@ public class MaterializedMetadataRepositoryTests
         {
             Assert.That(result, Has.Property(nameof(result.ContentRatings)).With.Exactly(1).Items);
             Assert.That(result, Has.Property(nameof(result.ContentRatings))
-                .One.Property(nameof(ContentRating.Value)).EqualTo("PG-13"));
+                .One.Property(nameof(ContentRating.Rating)).EqualTo("PG-13"));
         }
     }
 
@@ -470,7 +470,7 @@ public class MaterializedMetadataRepositoryTests
         contribution1.Awards.Add(new()
         {
             Ordinal = 0,
-            AwardBody = "Academy Awards",
+            Body = "Academy Awards",
             Name = "Best Picture",
             Year = 2020,
             Category = null
@@ -485,7 +485,7 @@ public class MaterializedMetadataRepositoryTests
         contribution2.Awards.Add(new()
         {
             Ordinal = 0,
-            AwardBody = "Golden Globes",
+            Body = "Golden Globes",
             Name = "Best Drama",
             Year = 2020,
             Category = null
@@ -517,7 +517,7 @@ public class MaterializedMetadataRepositoryTests
         contribution1.Awards.Add(new()
         {
             Ordinal = 0,
-            AwardBody = "Academy Awards",
+            Body = "Academy Awards",
             Name = "Best Picture",
             Year = 2020,
             Category = "Feature Film",
@@ -533,7 +533,7 @@ public class MaterializedMetadataRepositoryTests
         contribution2.Awards.Add(new()
         {
             Ordinal = 0,
-            AwardBody = "ACADEMY AWARDS",
+            Body = "ACADEMY AWARDS",
             Name = "BEST PICTURE",
             Year = 2020,
             Category = "FEATURE FILM",
@@ -862,7 +862,7 @@ public class MaterializedMetadataRepositoryTests
         contribution1.Images.Add(new()
         {
             Ordinal = 0,
-            Kind = "poster",
+            Type = "poster",
             Url = new("https://example.com/poster1.jpg")
         });
 
@@ -875,7 +875,7 @@ public class MaterializedMetadataRepositoryTests
         contribution2.Images.Add(new()
         {
             Ordinal = 0,
-            Kind = "backdrop",
+            Type = "backdrop",
             Url = new("https://example.com/backdrop1.jpg")
         });
 
@@ -905,7 +905,7 @@ public class MaterializedMetadataRepositoryTests
         contribution1.Images.Add(new()
         {
             Ordinal = 0,
-            Kind = "poster",
+            Type = "poster",
             Url = new("https://example.com/poster-primary.jpg")
         });
 
@@ -918,7 +918,7 @@ public class MaterializedMetadataRepositoryTests
         contribution2.Images.Add(new()
         {
             Ordinal = 0,
-            Kind = "POSTER",
+            Type = "POSTER",
             Url = new("https://example.com/poster-secondary.jpg")
         });
 
@@ -1401,7 +1401,7 @@ public class MaterializedMetadataRepositoryTests
         contribution1.Awards.Add(new()
         {
             Ordinal = 0,
-            AwardBody = "Academy Awards",
+            Body = "Academy Awards",
             Name = "Best Picture",
             Year = 2020
         });
@@ -1423,10 +1423,9 @@ public class MaterializedMetadataRepositoryTests
         {
             Awards = new()
             {
-                Operator = CollectionCriteriaOperator.Some,
-                Items = [new()
+                Some = [new()
                 {
-                    AwardBody = new()
+                    Body = new()
                     {
                         And = [new() { Value = "Academy Awards" }]
                     }
@@ -1461,7 +1460,7 @@ public class MaterializedMetadataRepositoryTests
         contribution1.Awards.Add(new()
         {
             Ordinal = 0,
-            AwardBody = "Academy Awards",
+            Body = "Academy Awards",
             Name = "Best Picture",
             Year = 2020
         });
@@ -1483,10 +1482,9 @@ public class MaterializedMetadataRepositoryTests
         {
             Awards = new()
             {
-                Operator = CollectionCriteriaOperator.None,
-                Items = [new()
+                None = [new()
                 {
-                    AwardBody = new()
+                    Body = new()
                     {
                         And = [new() { Value = "Academy Awards" }]
                     }
@@ -1743,7 +1741,7 @@ public class MaterializedMetadataRepositoryTests
     }
 
     [Test]
-    public async Task QueryAsync_FiltersByMultipleCriteriaGroups_WithAnd()
+    public async Task QueryAsync_FiltersByMultipleAwardCriteria_UsingOrSemantics()
     {
         // Arrange
         var container1 = new MetadataContainer { CreatedAt = DateTime.UtcNow };
@@ -1757,14 +1755,14 @@ public class MaterializedMetadataRepositoryTests
         contribution1.Awards.Add(new()
         {
             Ordinal = 0,
-            AwardBody = "Academy Awards",
+            Body = "Academy Awards",
             Name = "Best Picture",
             Year = 2020
         });
         contribution1.Awards.Add(new()
         {
             Ordinal = 1,
-            AwardBody = "Golden Globes",
+            Body = "Golden Globes",
             Name = "Best Drama",
             Year = 2020
         });
@@ -1781,7 +1779,7 @@ public class MaterializedMetadataRepositoryTests
         contribution2.Awards.Add(new()
         {
             Ordinal = 0,
-            AwardBody = "Academy Awards",
+            Body = "Academy Awards",
             Name = "Best Picture",
             Year = 2020
         });
@@ -1794,19 +1792,18 @@ public class MaterializedMetadataRepositoryTests
         {
             Awards = new()
             {
-                Operator = CollectionCriteriaOperator.Some,
-                Items =
+                Some =
                 [
                     new()
                     {
-                        AwardBody = new()
+                        Body = new()
                         {
                             And = [new() { Value = "Academy Awards" }]
                         }
                     },
                     new()
                     {
-                        AwardBody = new()
+                        Body = new()
                         {
                             And = [new() { Value = "Golden Globes" }]
                         }
@@ -1821,9 +1818,7 @@ public class MaterializedMetadataRepositoryTests
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(result, Has.Property(nameof(result.Items)).Exactly(1).Items);
-            Assert.That(result, Has.Property(nameof(result.Items))
-                .One.Property(nameof(MaterializedMetadata.Title)).EqualTo("Multi Award Winner"));
+            Assert.That(result, Has.Property(nameof(result.Items)).Exactly(2).Items);
         }
     }
 
@@ -1858,8 +1853,7 @@ public class MaterializedMetadataRepositoryTests
         {
             Genres = new()
             {
-                Operator = CollectionCriteriaOperator.Some,
-                Items = [new() { Value = "Action" }]
+                Some = [new() { Name = new() { And = [new() { Value = "Action" }] } }]
             }
         };
 
@@ -1906,8 +1900,7 @@ public class MaterializedMetadataRepositoryTests
         {
             Genres = new()
             {
-                Operator = CollectionCriteriaOperator.None,
-                Items = [new() { Value = "Action" }]
+                None = [new() { Name = new() { And = [new() { Value = "Action" }] } }]
             }
         };
 
@@ -1920,6 +1913,68 @@ public class MaterializedMetadataRepositoryTests
             Assert.That(result, Has.Property(nameof(result.Items)).Exactly(1).Items);
             Assert.That(result, Has.Property(nameof(result.Items))
                 .One.Property(nameof(MaterializedMetadata.Title)).EqualTo("No Genre"));
+        }
+    }
+
+    [Test]
+    public async Task QueryAsync_ReturnsMatchingItems_WhenGenreHasMultipleConditions()
+    {
+        // Arrange
+        var container1 = new MetadataContainer { CreatedAt = DateTime.UtcNow };
+        var contribution1 = new MetadataContribution
+        {
+            ProviderType = "test",
+            Ordinal = 0,
+            Title = "Action Movie",
+            CreatedAt = DateTime.UtcNow
+        };
+        contribution1.Genres.Add(new() { Ordinal = 0, Name = "Action" });
+        container1.Contributions.Add(contribution1);
+
+        var container2 = new MetadataContainer { CreatedAt = DateTime.UtcNow };
+        var contribution2 = new MetadataContribution
+        {
+            ProviderType = "test",
+            Ordinal = 0,
+            Title = "Science Fiction Movie",
+            CreatedAt = DateTime.UtcNow
+        };
+        contribution2.Genres.Add(new() { Ordinal = 0, Name = "Science Fiction" });
+        container2.Contributions.Add(contribution2);
+
+        _context.MetadataContainers.AddRange(container1, container2);
+        await _context.SaveChangesAsync();
+
+        var criteria = new MetadataCriteria
+        {
+            Genres = new()
+            {
+                Some =
+                [
+                    new()
+                    {
+                        Name = new()
+                        {
+                            And =
+                            [
+                                new() { Value = "ction", Operator = CriteriaValueOperator.EndsWithString },
+                                new() { Value = "A", Operator = CriteriaValueOperator.StartsWithString }
+                            ]
+                        }
+                    }
+                ]
+            }
+        };
+
+        // Act
+        var result = await _subject.QueryAsync(criteria, null, null);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Has.Property(nameof(result.Items)).Exactly(1).Items);
+            Assert.That(result, Has.Property(nameof(result.Items))
+                .One.Property(nameof(MaterializedMetadata.Title)).EqualTo("Action Movie"));
         }
     }
 
@@ -1954,8 +2009,7 @@ public class MaterializedMetadataRepositoryTests
         {
             ExternalIds = new()
             {
-                Operator = CollectionCriteriaOperator.Some,
-                Items = [new()
+                Some = [new()
                 {
                     Source = new() { And = [new() { Value = "imdb" }] }
                 }]
@@ -1986,7 +2040,7 @@ public class MaterializedMetadataRepositoryTests
             Title = "Rated Movie",
             CreatedAt = DateTime.UtcNow
         };
-        contribution1.ContentRatings.Add(new() { Ordinal = 0, RatingsBody = "MPAA", Value = "PG-13" });
+        contribution1.ContentRatings.Add(new() { Ordinal = 0, Body = "MPAA", Rating = "PG-13" });
         container1.Contributions.Add(contribution1);
 
         var container2 = new MetadataContainer { CreatedAt = DateTime.UtcNow };
@@ -2005,10 +2059,9 @@ public class MaterializedMetadataRepositoryTests
         {
             ContentRatings = new()
             {
-                Operator = CollectionCriteriaOperator.Some,
-                Items = [new()
+                Some = [new()
                 {
-                    RatingsBody = new() { And = [new() { Value = "MPAA" }] }
+                    Body = new() { And = [new() { Value = "MPAA" }] }
                 }]
             }
         };
@@ -2061,8 +2114,7 @@ public class MaterializedMetadataRepositoryTests
         {
             AlternateTexts = new()
             {
-                Operator = CollectionCriteriaOperator.Some,
-                Items = [new()
+                Some = [new()
                 {
                     Kind = new() { And = [new() { Value = "tagline" }] }
                 }]
@@ -2096,7 +2148,7 @@ public class MaterializedMetadataRepositoryTests
         contribution1.Images.Add(new()
         {
             Ordinal = 0,
-            Kind = "poster",
+            Type = "poster",
             Url = new Uri("https://example.com/poster.jpg")
         });
         container1.Contributions.Add(contribution1);
@@ -2117,10 +2169,9 @@ public class MaterializedMetadataRepositoryTests
         {
             Images = new()
             {
-                Operator = CollectionCriteriaOperator.Some,
-                Items = [new()
+                Some = [new()
                 {
-                    Kind = new() { And = [new() { Value = "poster" }] }
+                    Type = new() { And = [new() { Value = "poster" }] }
                 }]
             }
         };
@@ -2174,8 +2225,7 @@ public class MaterializedMetadataRepositoryTests
         {
             Previews = new()
             {
-                Operator = CollectionCriteriaOperator.Some,
-                Items = [new()
+                Some = [new()
                 {
                     Source = new() { And = [new() { Value = "youtube" }] }
                 }]
@@ -2231,8 +2281,7 @@ public class MaterializedMetadataRepositoryTests
         {
             References = new()
             {
-                Operator = CollectionCriteriaOperator.Some,
-                Items = [new()
+                Some = [new()
                 {
                     Kind = new() { And = [new() { Value = "wikipedia" }] }
                 }]
@@ -2298,8 +2347,7 @@ public class MaterializedMetadataRepositoryTests
         {
             Relationships = new()
             {
-                Operator = CollectionCriteriaOperator.Some,
-                Items = [new()
+                Some = [new()
                 {
                     Kind = new() { And = [new() { Value = "sequel" }] }
                 }]
@@ -2315,6 +2363,171 @@ public class MaterializedMetadataRepositoryTests
             Assert.That(result, Has.Property(nameof(result.Items)).Exactly(1).Items);
             Assert.That(result, Has.Property(nameof(result.Items))
                 .One.Property(nameof(MaterializedMetadata.Title)).EqualTo("Movie With Sequel"));
+        }
+    }
+
+    [Test]
+    public async Task QueryAsync_FiltersByTagsContains()
+    {
+        // Arrange
+        var container1 = new MetadataContainer { CreatedAt = DateTime.UtcNow };
+        container1.Contributions.Add(new()
+        {
+            ProviderType = "test",
+            Ordinal = 0,
+            Title = "Tagged Movie",
+            CreatedAt = DateTime.UtcNow
+        });
+
+        var container2 = new MetadataContainer { CreatedAt = DateTime.UtcNow };
+        container2.Contributions.Add(new()
+        {
+            ProviderType = "test",
+            Ordinal = 0,
+            Title = "Untagged Movie",
+            CreatedAt = DateTime.UtcNow
+        });
+
+        _context.MetadataContainers.AddRange(container1, container2);
+        await _context.SaveChangesAsync();
+
+        var tag = new Tag { Name = "favorite" };
+        tag.MetadataContainers.Add(container1);
+        _context.Tags.Add(tag);
+        await _context.SaveChangesAsync();
+
+        var criteria = new MetadataCriteria
+        {
+            Tags = new()
+            {
+                Some = [new() { Name = new() { And = [new() { Value = "favorite" }] } }]
+            }
+        };
+
+        // Act
+        var result = await _subject.QueryAsync(criteria, null, null);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Has.Property(nameof(result.Items)).Exactly(1).Items);
+            Assert.That(result, Has.Property(nameof(result.Items))
+                .One.Property(nameof(MaterializedMetadata.Title)).EqualTo("Tagged Movie"));
+        }
+    }
+
+    [Test]
+    public async Task QueryAsync_FiltersByTagsNotContains()
+    {
+        // Arrange
+        var container1 = new MetadataContainer { CreatedAt = DateTime.UtcNow };
+        container1.Contributions.Add(new()
+        {
+            ProviderType = "test",
+            Ordinal = 0,
+            Title = "Tagged Movie",
+            CreatedAt = DateTime.UtcNow
+        });
+
+        var container2 = new MetadataContainer { CreatedAt = DateTime.UtcNow };
+        container2.Contributions.Add(new()
+        {
+            ProviderType = "test",
+            Ordinal = 0,
+            Title = "Untagged Movie",
+            CreatedAt = DateTime.UtcNow
+        });
+
+        _context.MetadataContainers.AddRange(container1, container2);
+        await _context.SaveChangesAsync();
+
+        var tag = new Tag { Name = "excluded" };
+        tag.MetadataContainers.Add(container1);
+        _context.Tags.Add(tag);
+        await _context.SaveChangesAsync();
+
+        var criteria = new MetadataCriteria
+        {
+            Tags = new()
+            {
+                None = [new() { Name = new() { And = [new() { Value = "excluded" }] } }]
+            }
+        };
+
+        // Act
+        var result = await _subject.QueryAsync(criteria, null, null);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Has.Property(nameof(result.Items)).Exactly(1).Items);
+            Assert.That(result, Has.Property(nameof(result.Items))
+                .One.Property(nameof(MaterializedMetadata.Title)).EqualTo("Untagged Movie"));
+        }
+    }
+
+    [Test]
+    public async Task QueryAsync_ReturnsMatchingItems_WhenTagHasMultipleConditions()
+    {
+        // Arrange
+        var container1 = new MetadataContainer { CreatedAt = DateTime.UtcNow };
+        container1.Contributions.Add(new()
+        {
+            ProviderType = "test",
+            Ordinal = 0,
+            Title = "Action Movie",
+            CreatedAt = DateTime.UtcNow
+        });
+
+        var container2 = new MetadataContainer { CreatedAt = DateTime.UtcNow };
+        container2.Contributions.Add(new()
+        {
+            ProviderType = "test",
+            Ordinal = 0,
+            Title = "Adventure Movie",
+            CreatedAt = DateTime.UtcNow
+        });
+
+        _context.MetadataContainers.AddRange(container1, container2);
+        await _context.SaveChangesAsync();
+
+        var tag1 = new Tag { Name = "action-packed" };
+        tag1.MetadataContainers.Add(container1);
+        var tag2 = new Tag { Name = "adventurous" };
+        tag2.MetadataContainers.Add(container2);
+        _context.Tags.AddRange(tag1, tag2);
+        await _context.SaveChangesAsync();
+
+        var criteria = new MetadataCriteria
+        {
+            Tags = new()
+            {
+                Some =
+                [
+                    new()
+                    {
+                        Name = new()
+                        {
+                            And =
+                            [
+                                new() { Value = "-packed", Operator = CriteriaValueOperator.EndsWithString },
+                                new() { Value = "action", Operator = CriteriaValueOperator.StartsWithString }
+                            ]
+                        }
+                    }
+                ]
+            }
+        };
+
+        // Act
+        var result = await _subject.QueryAsync(criteria, null, null);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Has.Property(nameof(result.Items)).Exactly(1).Items);
+            Assert.That(result, Has.Property(nameof(result.Items))
+                .One.Property(nameof(MaterializedMetadata.Title)).EqualTo("Action Movie"));
         }
     }
 

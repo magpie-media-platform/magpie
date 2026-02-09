@@ -8,19 +8,19 @@ namespace Magpie.Models.Data;
 public sealed record MediaFileCriteria
 {
     /// <summary>
-    /// The criteria for <see cref="MediaFile.Kind"/>.
+    /// The criteria for <see cref="MediaFile.FileKind"/>.
     /// </summary>
-    public CriteriaSet<PropertyCriterion<string>> Kind { get; init; } = new();
+    public CriteriaSet<PropertyCriterion<string>> FileKind { get; init; } = new();
     /// <summary>
     /// The criteria for <see cref="MediaFile.MimeType"/>.
     /// </summary>
     public CriteriaSet<PropertyCriterion<string>> MimeType { get; init; } = new();
     /// <summary>
-    /// The criteria for <see cref="MediaFile.AbsolutePath"/>.
+    /// The criteria for <see cref="MediaFile.FilePath"/>.
     /// </summary>
-    public CriteriaSet<PropertyCriterion<string>> AbsolutePath { get; init; } = new();
+    public CriteriaSet<PropertyCriterion<string>> FilePath { get; init; } = new();
     /// <summary>
-    /// The criteria for <see cref="MediaFile.Size"/>.
+    /// The criteria for <see cref="MediaFile.FileSize"/>.
     /// </summary>
-    public CriteriaSet<PropertyCriterion<long>> Size { get; init; } = new();
+    public CriteriaSet<PropertyCriterion<long>> FileSize { get; init; } = new();
 }

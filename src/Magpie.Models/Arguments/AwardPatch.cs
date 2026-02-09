@@ -21,9 +21,9 @@ public sealed record AwardPatch
     public ScalarPatch<int>? Ordinal { get; init; }
 
     /// <summary>
-    /// The <see cref="Award.AwardBody"/> to patch.
+    /// The <see cref="Award.Body"/> to patch.
     /// </summary>
-    public ScalarPatch<string>? AwardBody { get; init; }
+    public ScalarPatch<string>? Body { get; init; }
 
     /// <summary>
     /// The <see cref="Award.Name"/> to patch.

@@ -8,9 +8,9 @@ namespace Magpie.Models.Data;
 public sealed record AwardCriteria
 {
     /// <summary>
-    /// The criteria for <see cref="Award.AwardBody"/>.
+    /// The criteria for <see cref="Award.Body"/>.
     /// </summary>
-    public CriteriaSet<PropertyCriterion<string>> AwardBody { get; init; } = new();
+    public CriteriaSet<PropertyCriterion<string>> Body { get; init; } = new();
     /// <summary>
     /// The criteria for <see cref="Award.Name"/>.
     /// </summary>

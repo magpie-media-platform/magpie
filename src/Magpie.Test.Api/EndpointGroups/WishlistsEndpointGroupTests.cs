@@ -187,7 +187,13 @@ public class WishlistsEndpointGroupTests
         // Arrange
         var wishlistId = Guid.NewGuid();
         var otherUserId = Guid.NewGuid();
-        var wishlist = new Wishlist { Id = wishlistId, Name = "Test Wishlist", OwnerUserId = otherUserId, Enabled = true };
+        var wishlist = new Wishlist
+        {
+            Id = wishlistId,
+            Name = "Test Wishlist",
+            OwnerUserId = otherUserId,
+            Enabled = true
+        };
 
         _wishlistRepository
             .Setup(m => m.GetByIdAsync(wishlistId, It.IsAny<CancellationToken>()))
@@ -245,7 +251,9 @@ public class WishlistsEndpointGroupTests
             .ReturnsAsync(true);
 
         // Act
-        var response = await _client.PatchAsJsonAsync($"/api/wishlists/my/{wishlistId}", request).ConfigureAwait(false);
+        var response = await _client
+            .PatchAsJsonAsync($"/api/wishlists/my/{wishlistId}", request)
+            .ConfigureAwait(false);
 
         // Assert
         Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NoContent));
@@ -271,7 +279,9 @@ public class WishlistsEndpointGroupTests
             .ReturnsAsync(true);
 
         // Act
-        var response = await _client.PatchAsJsonAsync($"/api/wishlists/my/{wishlistId}", request).ConfigureAwait(false);
+        var response = await _client
+            .PatchAsJsonAsync($"/api/wishlists/my/{wishlistId}", request)
+            .ConfigureAwait(false);
 
         // Assert
         Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NoContent));
@@ -297,7 +307,9 @@ public class WishlistsEndpointGroupTests
             .ReturnsAsync(true);
 
         // Act
-        var response = await _client.PatchAsJsonAsync($"/api/wishlists/my/{wishlistId}", request).ConfigureAwait(false);
+        var response = await _client
+            .PatchAsJsonAsync($"/api/wishlists/my/{wishlistId}", request)
+            .ConfigureAwait(false);
 
         // Assert
         Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NoContent));
@@ -315,7 +327,9 @@ public class WishlistsEndpointGroupTests
             .ReturnsAsync(default(Wishlist?));
 
         // Act
-        var response = await _client.PatchAsJsonAsync($"/api/wishlists/my/{wishlistId}", request).ConfigureAwait(false);
+        var response = await _client
+            .PatchAsJsonAsync($"/api/wishlists/my/{wishlistId}", request)
+            .ConfigureAwait(false);
 
         // Assert
         Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NotFound));
@@ -335,7 +349,9 @@ public class WishlistsEndpointGroupTests
             .ReturnsAsync(existingWishlist);
 
         // Act
-        var response = await _client.PatchAsJsonAsync($"/api/wishlists/my/{wishlistId}", request).ConfigureAwait(false);
+        var response = await _client
+            .PatchAsJsonAsync($"/api/wishlists/my/{wishlistId}", request)
+            .ConfigureAwait(false);
 
         // Assert
         Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NotFound));
@@ -514,14 +530,23 @@ public class WishlistsEndpointGroupTests
     {
         // Arrange
         var wishlistId = Guid.NewGuid();
-        var existingWishlist = new Wishlist { Id = wishlistId, Name = "Test", OwnerUserId = _userId, OwnerLock = false };
+        var existingWishlist = new Wishlist
+        {
+            Id = wishlistId,
+            Name = "Test",
+            OwnerUserId = _userId,
+            OwnerLock = false
+        };
 
         _wishlistRepository
             .Setup(m => m.GetByIdAsync(wishlistId, It.IsAny<CancellationToken>()))
             .ReturnsAsync(existingWishlist);
 
         _wishlistRepository
-            .Setup(m => m.UpdateAsync(It.Is<Wishlist>(w => w.OwnerLock == true), _userId, It.IsAny<CancellationToken>()))
+            .Setup(m => m.UpdateAsync(
+                It.Is<Wishlist>(w => w.OwnerLock == true),
+                _userId,
+                It.IsAny<CancellationToken>()))
             .ReturnsAsync(true);
 
         // Act
@@ -576,14 +601,23 @@ public class WishlistsEndpointGroupTests
     {
         // Arrange
         var wishlistId = Guid.NewGuid();
-        var existingWishlist = new Wishlist { Id = wishlistId, Name = "Test", OwnerUserId = _userId, OwnerLock = true };
+        var existingWishlist = new Wishlist
+        {
+            Id = wishlistId,
+            Name = "Test",
+            OwnerUserId = _userId,
+            OwnerLock = true
+        };
 
         _wishlistRepository
             .Setup(m => m.GetByIdAsync(wishlistId, It.IsAny<CancellationToken>()))
             .ReturnsAsync(existingWishlist);
 
         _wishlistRepository
-            .Setup(m => m.UpdateAsync(It.Is<Wishlist>(w => w.OwnerLock == false), _userId, It.IsAny<CancellationToken>()))
+            .Setup(m => m.UpdateAsync(
+                It.Is<Wishlist>(w => w.OwnerLock == false),
+                _userId,
+                It.IsAny<CancellationToken>()))
             .ReturnsAsync(true);
 
         // Act
@@ -620,7 +654,13 @@ public class WishlistsEndpointGroupTests
         // Arrange
         var wishlistId = Guid.NewGuid();
         var otherUserId = Guid.NewGuid();
-        var existingWishlist = new Wishlist { Id = wishlistId, Name = "Old Name", OwnerUserId = otherUserId, OwnerLock = false };
+        var existingWishlist = new Wishlist
+        {
+            Id = wishlistId,
+            Name = "Old Name",
+            OwnerUserId = otherUserId,
+            OwnerLock = false
+        };
         var request = new WishlistPatch { Id = wishlistId, Name = new() { Value = "Patched" } };
 
         _wishlistRepository
@@ -647,7 +687,13 @@ public class WishlistsEndpointGroupTests
         // Arrange
         var wishlistId = Guid.NewGuid();
         var otherUserId = Guid.NewGuid();
-        var existingWishlist = new Wishlist { Id = wishlistId, Name = "Test", OwnerUserId = otherUserId, OwnerLock = true };
+        var existingWishlist = new Wishlist
+        {
+            Id = wishlistId,
+            Name = "Test",
+            OwnerUserId = otherUserId,
+            OwnerLock = true
+        };
         var request = new WishlistPatch { Id = wishlistId, Name = new() { Value = "Patched" } };
 
         _wishlistRepository
@@ -666,7 +712,13 @@ public class WishlistsEndpointGroupTests
     {
         // Arrange
         var wishlistId = Guid.NewGuid();
-        var existingWishlist = new Wishlist { Id = wishlistId, Name = "Old Name", OwnerUserId = _userId, OwnerLock = true };
+        var existingWishlist = new Wishlist
+        {
+            Id = wishlistId,
+            Name = "Old Name",
+            OwnerUserId = _userId,
+            OwnerLock = true
+        };
         var request = new WishlistPatch { Id = wishlistId, Name = new() { Value = "Patched" } };
 
         _wishlistRepository
@@ -711,14 +763,23 @@ public class WishlistsEndpointGroupTests
         // Arrange
         var wishlistId = Guid.NewGuid();
         var otherUserId = Guid.NewGuid();
-        var existingWishlist = new Wishlist { Id = wishlistId, Name = "Test", OwnerUserId = otherUserId, OwnerLock = true };
+        var existingWishlist = new Wishlist
+        {
+            Id = wishlistId,
+            Name = "Test",
+            OwnerUserId = otherUserId,
+            OwnerLock = true
+        };
 
         _wishlistRepository
             .Setup(m => m.GetByIdAsync(wishlistId, It.IsAny<CancellationToken>()))
             .ReturnsAsync(existingWishlist);
 
         _wishlistRepository
-            .Setup(m => m.UpdateAsync(It.Is<Wishlist>(w => w.OwnerLock == false), _userId, It.IsAny<CancellationToken>()))
+            .Setup(m => m.UpdateAsync(
+                It.Is<Wishlist>(w => w.OwnerLock == false),
+                _userId,
+                It.IsAny<CancellationToken>()))
             .ReturnsAsync(true);
 
         // Act
@@ -755,7 +816,13 @@ public class WishlistsEndpointGroupTests
         // Arrange
         var targetUserId = Guid.NewGuid();
         var wishlistId = Guid.NewGuid();
-        var wishlist = new Wishlist { Id = wishlistId, Name = "UserWishlist", OwnerUserId = targetUserId, Enabled = true };
+        var wishlist = new Wishlist
+        {
+            Id = wishlistId,
+            Name = "UserWishlist",
+            OwnerUserId = targetUserId,
+            Enabled = true
+        };
 
         _wishlistRepository
             .Setup(m => m.GetByIdAsync(wishlistId, It.IsAny<CancellationToken>()))

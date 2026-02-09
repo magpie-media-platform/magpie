@@ -21,12 +21,12 @@ public sealed record ContentRatingPatch
     public ScalarPatch<int>? Ordinal { get; init; }
 
     /// <summary>
-    /// The <see cref="ContentRating.RatingsBody"/> to patch.
+    /// The <see cref="ContentRating.Body"/> to patch.
     /// </summary>
-    public ScalarPatch<string>? RatingsBody { get; init; }
+    public ScalarPatch<string>? Body { get; init; }
 
     /// <summary>
-    /// The <see cref="ContentRating.Value"/> to patch.
+    /// The <see cref="ContentRating.Rating"/> to patch.
     /// </summary>
-    public ScalarPatch<string>? Value { get; init; }
+    public ScalarPatch<string>? Rating { get; init; }
 }

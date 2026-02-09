@@ -616,7 +616,7 @@ public class ContentHierarchyItemRepositoryTests
         var paging = new PagingParameter { PageNumber = 1, PageSize = 2 };
 
         // Act
-        var result = await _subject.QueryAsync(new ContentHierarchyItemCriteria(), paging, null);
+        var result = await _subject.QueryAsync(new(), paging, null);
 
         // Assert
         var items = result.Items.ToList();
@@ -674,7 +674,7 @@ public class ContentHierarchyItemRepositoryTests
         var sort = new SortParameter { PropertyName = "Name", Direction = SortDirection.Ascending };
 
         // Act
-        var result = await _subject.QueryAsync(new ContentHierarchyItemCriteria(), null, sort);
+        var result = await _subject.QueryAsync(new(), null, sort);
 
         // Assert
         var items = result.Items.ToList();

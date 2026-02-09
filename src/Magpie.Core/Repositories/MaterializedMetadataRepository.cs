@@ -171,7 +171,7 @@ internal sealed class MaterializedMetadataRepository(
                 select new { g.Key, Items = g.Select(i => i.Item) })
                 .ToDictionary(k => k.Key, v => v.Items.ToList());
 
-            return [.. (
+            return [..
                 from s in scalars
                 select s with
                 {
@@ -185,7 +185,7 @@ internal sealed class MaterializedMetadataRepository(
                     Images = imagesByContainer.GetValueOrDefault(s.ContainerId),
                     Previews = previewsByContainer.GetValueOrDefault(s.ContainerId),
                     CustomMetadata = customMetadataByContainer.GetValueOrDefault(s.ContainerId),
-                })];
+                }];
         }
         catch (Exception ex)
         {
@@ -220,6 +220,7 @@ internal sealed class MaterializedMetadataRepository(
         query = ApplyPreviewsCriteria(query, criteria.Previews);
         query = ApplyReferencesCriteria(query, criteria.References);
         query = ApplyRelationshipsCriteria(query, criteria.Relationships);
+        query = ApplyTagsCriteria(query, criteria.Tags);
 
         return query;
     }
@@ -228,30 +229,58 @@ internal sealed class MaterializedMetadataRepository(
         IQueryable<MaterializedMetadata> query,
         CollectionCriteria<AwardCriteria> criteria)
     {
-        if (criteria.Items is not { Count: > 0 })
+        if (criteria.Some is { Count: > 0 })
         {
-            return query;
+            var includeIds = (
+                from c in context.MetadataContributions.AsNoTracking()
+                select c.MetadataContainerId).Take(0);
+
+            foreach (var itemCriteria in criteria.Some)
+            {
+                var awardsQuery = GetAwardsProjection()
+                    .ApplyCriteriaSet(itemCriteria.Body, nameof(Award.Body))
+                    .ApplyCriteriaSet(itemCriteria.Name, nameof(Award.Name))
+                    .ApplyCriteriaSet(itemCriteria.Category, nameof(Award.Category))
+                    .ApplyCriteriaSet(itemCriteria.Status, nameof(Award.Status))
+                    .ApplyCriteriaSet(itemCriteria.Year, nameof(Award.Year))
+                    .ApplyCriteriaSet(itemCriteria.Language, nameof(Award.Language))
+                    .ApplyCriteriaSet(itemCriteria.Country, nameof(Award.Country));
+
+                var containerIds =
+                    from c in context.MetadataContributions.AsNoTracking()
+                    join a in awardsQuery on c.Id equals a.MetadataContributionId
+                    select c.MetadataContainerId;
+
+                includeIds = includeIds.Union(containerIds);
+            }
+            query = query.Where(m => includeIds.Contains(m.ContainerId));
         }
 
-        foreach (var itemCriteria in criteria.Items)
+        if (criteria.None is { Count: > 0 })
         {
-            var awardsQuery = GetAwardsProjection()
-                .ApplyCriteriaSet(itemCriteria.AwardBody, nameof(Award.AwardBody))
-                .ApplyCriteriaSet(itemCriteria.Name, nameof(Award.Name))
-                .ApplyCriteriaSet(itemCriteria.Category, nameof(Award.Category))
-                .ApplyCriteriaSet(itemCriteria.Status, nameof(Award.Status))
-                .ApplyCriteriaSet(itemCriteria.Year, nameof(Award.Year))
-                .ApplyCriteriaSet(itemCriteria.Language, nameof(Award.Language))
-                .ApplyCriteriaSet(itemCriteria.Country, nameof(Award.Country));
+            var excludeIds = (
+                from c in context.MetadataContributions.AsNoTracking()
+                select c.MetadataContainerId).Take(0);
 
-            var containerIds =
-                from c in context.MetadataContributions
-                join a in awardsQuery on c.Id equals a.MetadataContributionId
-                select c.MetadataContainerId;
+            foreach (var itemCriteria in criteria.None)
+            {
+                var awardsQuery = GetAwardsProjection()
+                    .ApplyCriteriaSet(itemCriteria.Body, nameof(Award.Body))
+                    .ApplyCriteriaSet(itemCriteria.Name, nameof(Award.Name))
+                    .ApplyCriteriaSet(itemCriteria.Category, nameof(Award.Category))
+                    .ApplyCriteriaSet(itemCriteria.Status, nameof(Award.Status))
+                    .ApplyCriteriaSet(itemCriteria.Year, nameof(Award.Year))
+                    .ApplyCriteriaSet(itemCriteria.Language, nameof(Award.Language))
+                    .ApplyCriteriaSet(itemCriteria.Country, nameof(Award.Country));
 
-            query = criteria.Operator == CollectionCriteriaOperator.Some
-                ? query.Where(m => containerIds.Contains(m.ContainerId))
-                : query.Where(m => !containerIds.Contains(m.ContainerId));
+                var containerIds =
+                    from c in context.MetadataContributions.AsNoTracking()
+                    join a in awardsQuery on c.Id equals a.MetadataContributionId
+                    select c.MetadataContainerId;
+
+                excludeIds = excludeIds.Union(containerIds);
+            }
+            query = query.Where(m => !excludeIds.Contains(m.ContainerId));
         }
 
         return query;
@@ -259,30 +288,48 @@ internal sealed class MaterializedMetadataRepository(
 
     private IQueryable<MaterializedMetadata> ApplyGenresCriteria(
         IQueryable<MaterializedMetadata> query,
-        CollectionCriteria<PropertyCriterion<string>> criteria)
+        CollectionCriteria<GenreCriteria> criteria)
     {
-        if (criteria.Items is not { Count: > 0 })
+        if (criteria.Some is { Count: > 0 })
         {
-            return query;
+            var includeIds = (
+                from c in context.MetadataContributions.AsNoTracking()
+                select c.MetadataContainerId).Take(0);
+
+            foreach (var itemCriteria in criteria.Some)
+            {
+                var genresQuery = GetGenresProjection()
+                    .ApplyCriteriaSet(itemCriteria.Name, nameof(Genre.Name));
+
+                var containerIds =
+                    from c in context.MetadataContributions.AsNoTracking()
+                    join g in genresQuery on c.Id equals g.MetadataContributionId
+                    select c.MetadataContainerId;
+
+                includeIds = includeIds.Union(containerIds);
+            }
+            query = query.Where(m => includeIds.Contains(m.ContainerId));
         }
 
-        foreach (var itemCriteria in criteria.Items)
+        if (criteria.None is { Count: > 0 })
         {
-            var genresQuery = GetGenresProjection().ApplyCriteriaSet(
-                new CriteriaSet<PropertyCriterion<string>>()
-                {
-                    And = [itemCriteria]
-                },
-                nameof(Genre.Name));
+            var excludeIds = (
+                from c in context.MetadataContributions.AsNoTracking()
+                select c.MetadataContainerId).Take(0);
 
-            var containerIds =
-                from c in context.MetadataContributions
-                join g in genresQuery on c.Id equals g.MetadataContributionId
-                select c.MetadataContainerId;
+            foreach (var itemCriteria in criteria.None)
+            {
+                var genresQuery = GetGenresProjection()
+                    .ApplyCriteriaSet(itemCriteria.Name, nameof(Genre.Name));
 
-            query = criteria.Operator == CollectionCriteriaOperator.Some
-                ? query.Where(m => containerIds.Contains(m.ContainerId))
-                : query.Where(m => !containerIds.Contains(m.ContainerId));
+                var containerIds =
+                    from c in context.MetadataContributions.AsNoTracking()
+                    join g in genresQuery on c.Id equals g.MetadataContributionId
+                    select c.MetadataContainerId;
+
+                excludeIds = excludeIds.Union(containerIds);
+            }
+            query = query.Where(m => !excludeIds.Contains(m.ContainerId));
         }
 
         return query;
@@ -292,25 +339,48 @@ internal sealed class MaterializedMetadataRepository(
         IQueryable<MaterializedMetadata> query,
         CollectionCriteria<ExternalIdCriteria> criteria)
     {
-        if (criteria.Items is not { Count: > 0 })
+        if (criteria.Some is { Count: > 0 })
         {
-            return query;
+            var includeIds = (
+                from c in context.MetadataContributions.AsNoTracking()
+                select c.MetadataContainerId).Take(0);
+
+            foreach (var itemCriteria in criteria.Some)
+            {
+                var externalIdsQuery = GetExternalIdsProjection()
+                    .ApplyCriteriaSet(itemCriteria.Value, nameof(ExternalId.Value))
+                    .ApplyCriteriaSet(itemCriteria.Source, nameof(ExternalId.Source));
+
+                var containerIds =
+                    from c in context.MetadataContributions.AsNoTracking()
+                    join e in externalIdsQuery on c.Id equals e.MetadataContributionId
+                    select c.MetadataContainerId;
+
+                includeIds = includeIds.Union(containerIds);
+            }
+            query = query.Where(m => includeIds.Contains(m.ContainerId));
         }
 
-        foreach (var itemCriteria in criteria.Items)
+        if (criteria.None is { Count: > 0 })
         {
-            var externalIdsQuery = GetExternalIdsProjection()
-                .ApplyCriteriaSet(itemCriteria.Value, nameof(ExternalId.Value))
-                .ApplyCriteriaSet(itemCriteria.Source, nameof(ExternalId.Source));
+            var excludeIds = (
+                from c in context.MetadataContributions.AsNoTracking()
+                select c.MetadataContainerId).Take(0);
 
-            var containerIds =
-                from c in context.MetadataContributions
-                join e in externalIdsQuery on c.Id equals e.MetadataContributionId
-                select c.MetadataContainerId;
+            foreach (var itemCriteria in criteria.None)
+            {
+                var externalIdsQuery = GetExternalIdsProjection()
+                    .ApplyCriteriaSet(itemCriteria.Value, nameof(ExternalId.Value))
+                    .ApplyCriteriaSet(itemCriteria.Source, nameof(ExternalId.Source));
 
-            query = criteria.Operator == CollectionCriteriaOperator.Some
-                ? query.Where(m => containerIds.Contains(m.ContainerId))
-                : query.Where(m => !containerIds.Contains(m.ContainerId));
+                var containerIds =
+                    from c in context.MetadataContributions.AsNoTracking()
+                    join e in externalIdsQuery on c.Id equals e.MetadataContributionId
+                    select c.MetadataContainerId;
+
+                excludeIds = excludeIds.Union(containerIds);
+            }
+            query = query.Where(m => !excludeIds.Contains(m.ContainerId));
         }
 
         return query;
@@ -320,29 +390,56 @@ internal sealed class MaterializedMetadataRepository(
         IQueryable<MaterializedMetadata> query,
         CollectionCriteria<ImageCriteria> criteria)
     {
-        if (criteria.Items is not { Count: > 0 })
+        if (criteria.Some is { Count: > 0 })
         {
-            return query;
+            var includeIds = (
+                from c in context.MetadataContributions.AsNoTracking()
+                select c.MetadataContainerId).Take(0);
+
+            foreach (var itemCriteria in criteria.Some)
+            {
+                var imagesQuery = GetImagesProjection()
+                    .ApplyCriteriaSet(itemCriteria.Type, nameof(Image.Type))
+                    .ApplyCriteriaSet(itemCriteria.MimeType, nameof(Image.MimeType))
+                    .ApplyCriteriaSet(itemCriteria.Source, nameof(Image.Source))
+                    .ApplyCriteriaSet(itemCriteria.Language, nameof(Image.Language))
+                    .ApplyCriteriaSet(itemCriteria.Width, nameof(Image.Width))
+                    .ApplyCriteriaSet(itemCriteria.Height, nameof(Image.Height));
+
+                var containerIds =
+                    from c in context.MetadataContributions.AsNoTracking()
+                    join i in imagesQuery on c.Id equals i.MetadataContributionId
+                    select c.MetadataContainerId;
+
+                includeIds = includeIds.Union(containerIds);
+            }
+            query = query.Where(m => includeIds.Contains(m.ContainerId));
         }
 
-        foreach (var itemCriteria in criteria.Items)
+        if (criteria.None is { Count: > 0 })
         {
-            var imagesQuery = GetImagesProjection()
-                .ApplyCriteriaSet(itemCriteria.Kind, nameof(Image.Kind))
-                .ApplyCriteriaSet(itemCriteria.MimeType, nameof(Image.MimeType))
-                .ApplyCriteriaSet(itemCriteria.Source, nameof(Image.Source))
-                .ApplyCriteriaSet(itemCriteria.Language, nameof(Image.Language))
-                .ApplyCriteriaSet(itemCriteria.Width, nameof(Image.Width))
-                .ApplyCriteriaSet(itemCriteria.Height, nameof(Image.Height));
+            var excludeIds = (
+                from c in context.MetadataContributions.AsNoTracking()
+                select c.MetadataContainerId).Take(0);
 
-            var containerIds =
-                from c in context.MetadataContributions
-                join i in imagesQuery on c.Id equals i.MetadataContributionId
-                select c.MetadataContainerId;
+            foreach (var itemCriteria in criteria.None)
+            {
+                var imagesQuery = GetImagesProjection()
+                    .ApplyCriteriaSet(itemCriteria.Type, nameof(Image.Type))
+                    .ApplyCriteriaSet(itemCriteria.MimeType, nameof(Image.MimeType))
+                    .ApplyCriteriaSet(itemCriteria.Source, nameof(Image.Source))
+                    .ApplyCriteriaSet(itemCriteria.Language, nameof(Image.Language))
+                    .ApplyCriteriaSet(itemCriteria.Width, nameof(Image.Width))
+                    .ApplyCriteriaSet(itemCriteria.Height, nameof(Image.Height));
 
-            query = criteria.Operator == CollectionCriteriaOperator.Some
-                ? query.Where(m => containerIds.Contains(m.ContainerId))
-                : query.Where(m => !containerIds.Contains(m.ContainerId));
+                var containerIds =
+                    from c in context.MetadataContributions.AsNoTracking()
+                    join i in imagesQuery on c.Id equals i.MetadataContributionId
+                    select c.MetadataContainerId;
+
+                excludeIds = excludeIds.Union(containerIds);
+            }
+            query = query.Where(m => !excludeIds.Contains(m.ContainerId));
         }
 
         return query;
@@ -352,28 +449,54 @@ internal sealed class MaterializedMetadataRepository(
         IQueryable<MaterializedMetadata> query,
         CollectionCriteria<PreviewMetadataCriteria> criteria)
     {
-        if (criteria.Items is not { Count: > 0 })
+        if (criteria.Some is { Count: > 0 })
         {
-            return query;
+            var includeIds = (
+                from c in context.MetadataContributions.AsNoTracking()
+                select c.MetadataContainerId).Take(0);
+
+            foreach (var itemCriteria in criteria.Some)
+            {
+                var previewsQuery = GetPreviewsProjection()
+                    .ApplyCriteriaSet(itemCriteria.MimeType, nameof(Preview.MimeType))
+                    .ApplyCriteriaSet(itemCriteria.Source, nameof(Preview.Source))
+                    .ApplyCriteriaSet(itemCriteria.Title, nameof(Preview.Title))
+                    .ApplyCriteriaSet(itemCriteria.ReleaseDate, nameof(Preview.ReleaseDate))
+                    .ApplyCriteriaSet(itemCriteria.Language, nameof(Preview.Language));
+
+                var containerIds =
+                    from c in context.MetadataContributions.AsNoTracking()
+                    join p in previewsQuery on c.Id equals p.MetadataContributionId
+                    select c.MetadataContainerId;
+
+                includeIds = includeIds.Union(containerIds);
+            }
+            query = query.Where(m => includeIds.Contains(m.ContainerId));
         }
 
-        foreach (var itemCriteria in criteria.Items)
+        if (criteria.None is { Count: > 0 })
         {
-            var previewsQuery = GetPreviewsProjection()
-                .ApplyCriteriaSet(itemCriteria.MimeType, nameof(Preview.MimeType))
-                .ApplyCriteriaSet(itemCriteria.Source, nameof(Preview.Source))
-                .ApplyCriteriaSet(itemCriteria.Title, nameof(Preview.Title))
-                .ApplyCriteriaSet(itemCriteria.ReleaseDate, nameof(Preview.ReleaseDate))
-                .ApplyCriteriaSet(itemCriteria.Language, nameof(Preview.Language));
+            var excludeIds = (
+                from c in context.MetadataContributions.AsNoTracking()
+                select c.MetadataContainerId).Take(0);
 
-            var containerIds =
-                from c in context.MetadataContributions
-                join p in previewsQuery on c.Id equals p.MetadataContributionId
-                select c.MetadataContainerId;
+            foreach (var itemCriteria in criteria.None)
+            {
+                var previewsQuery = GetPreviewsProjection()
+                    .ApplyCriteriaSet(itemCriteria.MimeType, nameof(Preview.MimeType))
+                    .ApplyCriteriaSet(itemCriteria.Source, nameof(Preview.Source))
+                    .ApplyCriteriaSet(itemCriteria.Title, nameof(Preview.Title))
+                    .ApplyCriteriaSet(itemCriteria.ReleaseDate, nameof(Preview.ReleaseDate))
+                    .ApplyCriteriaSet(itemCriteria.Language, nameof(Preview.Language));
 
-            query = criteria.Operator == CollectionCriteriaOperator.Some
-                ? query.Where(m => containerIds.Contains(m.ContainerId))
-                : query.Where(m => !containerIds.Contains(m.ContainerId));
+                var containerIds =
+                    from c in context.MetadataContributions.AsNoTracking()
+                    join p in previewsQuery on c.Id equals p.MetadataContributionId
+                    select c.MetadataContainerId;
+
+                excludeIds = excludeIds.Union(containerIds);
+            }
+            query = query.Where(m => !excludeIds.Contains(m.ContainerId));
         }
 
         return query;
@@ -383,25 +506,48 @@ internal sealed class MaterializedMetadataRepository(
         IQueryable<MaterializedMetadata> query,
         CollectionCriteria<ContentRatingCriteria> criteria)
     {
-        if (criteria.Items is not { Count: > 0 })
+        if (criteria.Some is { Count: > 0 })
         {
-            return query;
+            var includeIds = (
+                from c in context.MetadataContributions.AsNoTracking()
+                select c.MetadataContainerId).Take(0);
+
+            foreach (var itemCriteria in criteria.Some)
+            {
+                var ratingsQuery = GetContentRatingsProjection()
+                    .ApplyCriteriaSet(itemCriteria.Body, nameof(ContentRating.Body))
+                    .ApplyCriteriaSet(itemCriteria.Rating, nameof(ContentRating.Rating));
+
+                var containerIds =
+                    from c in context.MetadataContributions.AsNoTracking()
+                    join r in ratingsQuery on c.Id equals r.MetadataContributionId
+                    select c.MetadataContainerId;
+
+                includeIds = includeIds.Union(containerIds);
+            }
+            query = query.Where(m => includeIds.Contains(m.ContainerId));
         }
 
-        foreach (var itemCriteria in criteria.Items)
+        if (criteria.None is { Count: > 0 })
         {
-            var ratingsQuery = GetContentRatingsProjection()
-                .ApplyCriteriaSet(itemCriteria.RatingsBody, nameof(ContentRating.RatingsBody))
-                .ApplyCriteriaSet(itemCriteria.Value, nameof(ContentRating.Value));
+            var excludeIds = (
+                from c in context.MetadataContributions.AsNoTracking()
+                select c.MetadataContainerId).Take(0);
 
-            var containerIds =
-                from c in context.MetadataContributions
-                join r in ratingsQuery on c.Id equals r.MetadataContributionId
-                select c.MetadataContainerId;
+            foreach (var itemCriteria in criteria.None)
+            {
+                var ratingsQuery = GetContentRatingsProjection()
+                    .ApplyCriteriaSet(itemCriteria.Body, nameof(ContentRating.Body))
+                    .ApplyCriteriaSet(itemCriteria.Rating, nameof(ContentRating.Rating));
 
-            query = criteria.Operator == CollectionCriteriaOperator.Some
-                ? query.Where(m => containerIds.Contains(m.ContainerId))
-                : query.Where(m => !containerIds.Contains(m.ContainerId));
+                var containerIds =
+                    from c in context.MetadataContributions.AsNoTracking()
+                    join r in ratingsQuery on c.Id equals r.MetadataContributionId
+                    select c.MetadataContainerId;
+
+                excludeIds = excludeIds.Union(containerIds);
+            }
+            query = query.Where(m => !excludeIds.Contains(m.ContainerId));
         }
 
         return query;
@@ -411,26 +557,50 @@ internal sealed class MaterializedMetadataRepository(
         IQueryable<MaterializedMetadata> query,
         CollectionCriteria<AlternateTextCriteria> criteria)
     {
-        if (criteria.Items is not { Count: > 0 })
+        if (criteria.Some is { Count: > 0 })
         {
-            return query;
+            var includeIds = (
+                from c in context.MetadataContributions.AsNoTracking()
+                select c.MetadataContainerId).Take(0);
+
+            foreach (var itemCriteria in criteria.Some)
+            {
+                var textsQuery = GetAlternateTextsProjection()
+                    .ApplyCriteriaSet(itemCriteria.Kind, nameof(AlternateText.Kind))
+                    .ApplyCriteriaSet(itemCriteria.Language, nameof(AlternateText.Language))
+                    .ApplyCriteriaSet(itemCriteria.Text, nameof(AlternateText.Text));
+
+                var containerIds =
+                    from c in context.MetadataContributions.AsNoTracking()
+                    join a in textsQuery on c.Id equals a.MetadataContributionId
+                    select c.MetadataContainerId;
+
+                includeIds = includeIds.Union(containerIds);
+            }
+            query = query.Where(m => includeIds.Contains(m.ContainerId));
         }
 
-        foreach (var itemCriteria in criteria.Items)
+        if (criteria.None is { Count: > 0 })
         {
-            var textsQuery = GetAlternateTextsProjection()
-                .ApplyCriteriaSet(itemCriteria.Kind, nameof(AlternateText.Kind))
-                .ApplyCriteriaSet(itemCriteria.Language, nameof(AlternateText.Language))
-                .ApplyCriteriaSet(itemCriteria.Text, nameof(AlternateText.Text));
+            var excludeIds = (
+                from c in context.MetadataContributions.AsNoTracking()
+                select c.MetadataContainerId).Take(0);
 
-            var containerIds =
-                from c in context.MetadataContributions
-                join a in textsQuery on c.Id equals a.MetadataContributionId
-                select c.MetadataContainerId;
+            foreach (var itemCriteria in criteria.None)
+            {
+                var textsQuery = GetAlternateTextsProjection()
+                    .ApplyCriteriaSet(itemCriteria.Kind, nameof(AlternateText.Kind))
+                    .ApplyCriteriaSet(itemCriteria.Language, nameof(AlternateText.Language))
+                    .ApplyCriteriaSet(itemCriteria.Text, nameof(AlternateText.Text));
 
-            query = criteria.Operator == CollectionCriteriaOperator.Some
-                ? query.Where(m => containerIds.Contains(m.ContainerId))
-                : query.Where(m => !containerIds.Contains(m.ContainerId));
+                var containerIds =
+                    from c in context.MetadataContributions.AsNoTracking()
+                    join a in textsQuery on c.Id equals a.MetadataContributionId
+                    select c.MetadataContainerId;
+
+                excludeIds = excludeIds.Union(containerIds);
+            }
+            query = query.Where(m => !excludeIds.Contains(m.ContainerId));
         }
 
         return query;
@@ -440,26 +610,50 @@ internal sealed class MaterializedMetadataRepository(
         IQueryable<MaterializedMetadata> query,
         CollectionCriteria<ReferenceMetadataCriteria> criteria)
     {
-        if (criteria.Items is not { Count: > 0 })
+        if (criteria.Some is { Count: > 0 })
         {
-            return query;
+            var includeIds = (
+                from c in context.MetadataContributions.AsNoTracking()
+                select c.MetadataContainerId).Take(0);
+
+            foreach (var itemCriteria in criteria.Some)
+            {
+                var refsQuery = GetReferencesProjection()
+                    .ApplyCriteriaSet(itemCriteria.Kind, nameof(Reference.Kind))
+                    .ApplyCriteriaSet(itemCriteria.DisplayName, nameof(Reference.DisplayName))
+                    .ApplyCriteriaSet(itemCriteria.Language, nameof(Reference.Language));
+
+                var containerIds =
+                    from c in context.MetadataContributions.AsNoTracking()
+                    join r in refsQuery on c.Id equals r.MetadataContributionId
+                    select c.MetadataContainerId;
+
+                includeIds = includeIds.Union(containerIds);
+            }
+            query = query.Where(m => includeIds.Contains(m.ContainerId));
         }
 
-        foreach (var itemCriteria in criteria.Items)
+        if (criteria.None is { Count: > 0 })
         {
-            var refsQuery = GetReferencesProjection()
-                .ApplyCriteriaSet(itemCriteria.Kind, nameof(Reference.Kind))
-                .ApplyCriteriaSet(itemCriteria.DisplayName, nameof(Reference.DisplayName))
-                .ApplyCriteriaSet(itemCriteria.Language, nameof(Reference.Language));
+            var excludeIds = (
+                from c in context.MetadataContributions.AsNoTracking()
+                select c.MetadataContainerId).Take(0);
 
-            var containerIds =
-                from c in context.MetadataContributions
-                join r in refsQuery on c.Id equals r.MetadataContributionId
-                select c.MetadataContainerId;
+            foreach (var itemCriteria in criteria.None)
+            {
+                var refsQuery = GetReferencesProjection()
+                    .ApplyCriteriaSet(itemCriteria.Kind, nameof(Reference.Kind))
+                    .ApplyCriteriaSet(itemCriteria.DisplayName, nameof(Reference.DisplayName))
+                    .ApplyCriteriaSet(itemCriteria.Language, nameof(Reference.Language));
 
-            query = criteria.Operator == CollectionCriteriaOperator.Some
-                ? query.Where(m => containerIds.Contains(m.ContainerId))
-                : query.Where(m => !containerIds.Contains(m.ContainerId));
+                var containerIds =
+                    from c in context.MetadataContributions.AsNoTracking()
+                    join r in refsQuery on c.Id equals r.MetadataContributionId
+                    select c.MetadataContainerId;
+
+                excludeIds = excludeIds.Union(containerIds);
+            }
+            query = query.Where(m => !excludeIds.Contains(m.ContainerId));
         }
 
         return query;
@@ -469,25 +663,93 @@ internal sealed class MaterializedMetadataRepository(
         IQueryable<MaterializedMetadata> query,
         CollectionCriteria<RelationshipCriteria> criteria)
     {
-        if (criteria.Items is not { Count: > 0 })
+        if (criteria.Some is { Count: > 0 })
         {
-            return query;
+            var includeIds = (
+                from c in context.MetadataContributions.AsNoTracking()
+                select c.MetadataContainerId).Take(0);
+
+            foreach (var itemCriteria in criteria.Some)
+            {
+                var relationshipsQuery = GetRelationshipsProjection()
+                    .ApplyCriteriaSet(itemCriteria.Kind, nameof(Relationship.Kind))
+                    .ApplyCriteriaSet(itemCriteria.Qualifier, nameof(Relationship.Qualifier));
+
+                var containerIds =
+                    from c in context.MetadataContributions.AsNoTracking()
+                    join r in relationshipsQuery on c.Id equals r.MetadataContributionId
+                    select c.MetadataContainerId;
+
+                includeIds = includeIds.Union(containerIds);
+            }
+            query = query.Where(m => includeIds.Contains(m.ContainerId));
         }
 
-        foreach (var itemCriteria in criteria.Items)
+        if (criteria.None is { Count: > 0 })
         {
-            var relationshipsQuery = GetRelationshipsProjection()
-                .ApplyCriteriaSet(itemCriteria.Kind, nameof(Relationship.Kind))
-                .ApplyCriteriaSet(itemCriteria.Qualifier, nameof(Relationship.Qualifier));
+            var excludeIds = (
+                from c in context.MetadataContributions.AsNoTracking()
+                select c.MetadataContainerId).Take(0);
 
-            var containerIds =
-                from c in context.MetadataContributions
-                join r in relationshipsQuery on c.Id equals r.MetadataContributionId
-                select c.MetadataContainerId;
+            foreach (var itemCriteria in criteria.None)
+            {
+                var relationshipsQuery = GetRelationshipsProjection()
+                    .ApplyCriteriaSet(itemCriteria.Kind, nameof(Relationship.Kind))
+                    .ApplyCriteriaSet(itemCriteria.Qualifier, nameof(Relationship.Qualifier));
 
-            query = criteria.Operator == CollectionCriteriaOperator.Some
-                ? query.Where(m => containerIds.Contains(m.ContainerId))
-                : query.Where(m => !containerIds.Contains(m.ContainerId));
+                var containerIds =
+                    from c in context.MetadataContributions.AsNoTracking()
+                    join r in relationshipsQuery on c.Id equals r.MetadataContributionId
+                    select c.MetadataContainerId;
+
+                excludeIds = excludeIds.Union(containerIds);
+            }
+            query = query.Where(m => !excludeIds.Contains(m.ContainerId));
+        }
+
+        return query;
+    }
+
+    private IQueryable<MaterializedMetadata> ApplyTagsCriteria(
+        IQueryable<MaterializedMetadata> query,
+        CollectionCriteria<TagCriteria> criteria)
+    {
+        if (criteria.Some is { Count: > 0 })
+        {
+            var includeIds = (
+                from t in context.Tags.AsNoTracking()
+                from mc in t.MetadataContainers
+                select mc.Id).Take(0);
+
+            foreach (var itemCriteria in criteria.Some)
+            {
+                var containerIds =
+                    from t in context.Tags.AsNoTracking().ApplyCriteriaSet(itemCriteria.Name, nameof(Tag.Name))
+                    from mc in t.MetadataContainers
+                    select mc.Id;
+
+                includeIds = includeIds.Union(containerIds);
+            }
+            query = query.Where(m => includeIds.Contains(m.ContainerId));
+        }
+
+        if (criteria.None is { Count: > 0 })
+        {
+            var excludeIds = (
+                from t in context.Tags.AsNoTracking()
+                from mc in t.MetadataContainers
+                select mc.Id).Take(0);
+
+            foreach (var itemCriteria in criteria.None)
+            {
+                var containerIds =
+                    from t in context.Tags.AsNoTracking().ApplyCriteriaSet(itemCriteria.Name, nameof(Tag.Name))
+                    from mc in t.MetadataContainers
+                    select mc.Id;
+
+                excludeIds = excludeIds.Union(containerIds);
+            }
+            query = query.Where(m => !excludeIds.Contains(m.ContainerId));
         }
 
         return query;
@@ -619,7 +881,7 @@ internal sealed class MaterializedMetadataRepository(
                 from c2 in context.MetadataContributions
                 from a2 in c2.Awards
                 where c2.MetadataContainerId == c.MetadataContainerId
-                where a2.AwardBody.ToLower() == a.AwardBody.ToLower()
+                where a2.Body.ToLower() == a.Body.ToLower()
                 where a2.Name.ToLower() == a.Name.ToLower()
                 where a2.Year == a.Year
                 where
@@ -639,7 +901,7 @@ internal sealed class MaterializedMetadataRepository(
                 from c2 in context.MetadataContributions
                 from r2 in c2.ContentRatings
                 where c2.MetadataContainerId == c.MetadataContainerId
-                where r2.RatingsBody.ToLower() == r.RatingsBody.ToLower()
+                where r2.Body.ToLower() == r.Body.ToLower()
                 select c2.Ordinal).Min()
             orderby c.Ordinal, r.Ordinal
             select r;
@@ -701,7 +963,7 @@ internal sealed class MaterializedMetadataRepository(
                 from c2 in context.MetadataContributions
                 from i2 in c2.Images
                 where c2.MetadataContainerId == c.MetadataContainerId
-                where i2.Kind.ToLower() == i.Kind.ToLower()
+                where i2.Type.ToLower() == i.Type.ToLower()
                 select c2.Ordinal).Min()
             orderby c.Ordinal, i.Ordinal
             select i;
