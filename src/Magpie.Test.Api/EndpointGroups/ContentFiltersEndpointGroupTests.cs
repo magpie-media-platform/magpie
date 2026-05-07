@@ -36,6 +36,7 @@ public class ContentFiltersEndpointGroupTests
     private IHost _host = null!;
     private HttpClient _client = null!;
     private Mock<IContentFilterRepository> _contentFilterRepository = null!;
+    private Mock<IContentHierarchyItemRepository> _contentHierarchyItemRepository = null!;
     private Guid _userId;
 
     private static readonly ContentFilterCriteria DefaultCriteria = new();
@@ -45,6 +46,7 @@ public class ContentFiltersEndpointGroupTests
     {
         _userId = Guid.NewGuid();
         _contentFilterRepository = new Mock<IContentFilterRepository>();
+        _contentHierarchyItemRepository = new Mock<IContentHierarchyItemRepository>();
 
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
@@ -68,6 +70,7 @@ public class ContentFiltersEndpointGroupTests
             .AddPolicy(nameof(Role.Admin), policy => policy.RequireAssertion(_ => true));
 
         builder.Services.AddSingleton(_contentFilterRepository.Object);
+        builder.Services.AddSingleton(_contentHierarchyItemRepository.Object);
         builder.Services.AddSingleton<IApiEndpointGroup, ContentFiltersEndpointGroup>();
 
         var app = builder.Build();

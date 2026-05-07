@@ -23,6 +23,16 @@ public record Extension
     public required string Name { get; set; }
 
     /// <summary>
+    /// The author(s) of the extension as recorded in the .nuspec metadata.
+    /// </summary>
+    public string? Author { get; set; }
+
+    /// <summary>
+    /// The free-form description of the extension as recorded in the .nuspec metadata.
+    /// </summary>
+    public string? Description { get; set; }
+
+    /// <summary>
     /// The target ABI version range the extension is compatible with.
     /// </summary>
     public string? TargetABI { get; set; }

@@ -1,0 +1,294 @@
+@layer components {
+    .badge {
+        display: inline-flex;
+        align-items: center;
+        gap: var(--space-xs);
+        font-family: var(--font-sans);
+        font-weight: var(--weight-semibold);
+        text-transform: uppercase;
+        letter-spacing: var(--tracking-wide);
+        white-space: nowrap;
+        border-radius: var(--radius-full);
+    }
+
+    .badge--sm {
+        padding: var(--space-2xs) var(--space-sm);
+        font-size: var(--text-2xs);
+    }
+
+    .badge--md {
+        padding: var(--space-xs) var(--space-sm);
+        font-size: var(--text-xs);
+    }
+
+    .badge--default {
+        background-color: var(--bg-tertiary);
+        color: var(--text-primary);
+    }
+
+    .badge--healthy {
+        background-color: color-mix(in srgb, var(--status-healthy) 20%, transparent);
+        color: var(--status-healthy);
+
+        & .badge__dot {
+            background-color: var(--status-healthy);
+        }
+    }
+
+    .badge--unhealthy {
+        background-color: color-mix(in srgb, var(--status-unhealthy) 20%, transparent);
+        color: var(--status-unhealthy);
+
+        & .badge__dot {
+            background-color: var(--status-unhealthy);
+        }
+    }
+
+    .badge--degraded {
+        background-color: color-mix(in srgb, var(--status-degraded) 20%, transparent);
+        color: var(--status-degraded);
+
+        & .badge__dot {
+            background-color: var(--status-degraded);
+        }
+    }
+
+    .badge--unknown {
+        background-color: color-mix(in srgb, var(--status-unknown) 20%, transparent);
+        color: var(--status-unknown);
+
+        & .badge__dot {
+            background-color: var(--status-unknown);
+        }
+    }
+
+    .badge--stabilizing {
+        background-color: color-mix(in srgb, var(--status-stabilizing) 20%, transparent);
+        color: var(--status-stabilizing);
+
+        & .badge__dot {
+            background-color: var(--status-stabilizing);
+            animation: pulse var(--duration-pulse) linear infinite;
+        }
+    }
+
+    .badge--stale {
+        background-color: color-mix(in srgb, var(--status-degraded) 20%, transparent);
+        color: var(--status-degraded);
+
+        & .badge__dot {
+            background-color: var(--status-degraded);
+        }
+    }
+
+    .badge--missing {
+        background-color: color-mix(in srgb, var(--fulfillment-missing) 20%, transparent);
+        color: var(--fulfillment-missing);
+
+        & .badge__dot {
+            background-color: var(--fulfillment-missing);
+        }
+    }
+
+    .badge--upgradable {
+        background-color: color-mix(in srgb, var(--fulfillment-upgradable) 20%, transparent);
+        color: var(--fulfillment-upgradable);
+
+        & .badge__dot {
+            background-color: var(--fulfillment-upgradable);
+        }
+    }
+
+    .badge--fulfilled {
+        background-color: color-mix(in srgb, var(--fulfillment-fulfilled) 20%, transparent);
+        color: var(--fulfillment-fulfilled);
+
+        & .badge__dot {
+            background-color: var(--fulfillment-fulfilled);
+        }
+    }
+
+    .badge--fulfilledExternally {
+        background-color: color-mix(in srgb, var(--fulfillment-external) 20%, transparent);
+        color: var(--fulfillment-external);
+
+        & .badge__dot {
+            background-color: var(--fulfillment-external);
+        }
+    }
+
+    .badge--primary {
+        background-color: color-mix(in srgb, var(--accent-primary) 20%, transparent);
+        color: var(--accent-primary);
+
+        & .badge__dot {
+            background-color: var(--accent-primary);
+        }
+    }
+
+    .badge--warning {
+        background-color: color-mix(in srgb, var(--status-degraded) 20%, transparent);
+        color: var(--status-degraded);
+
+        & .badge__dot {
+            background-color: var(--status-degraded);
+        }
+    }
+
+    .badge--info {
+        background-color: color-mix(in srgb, var(--accent-secondary) 20%, transparent);
+        color: var(--accent-secondary);
+
+        & .badge__dot {
+            background-color: var(--accent-secondary);
+        }
+    }
+
+    .badge--success {
+        background-color: color-mix(in srgb, var(--status-healthy) 20%, transparent);
+        color: var(--status-healthy);
+
+        & .badge__dot {
+            background-color: var(--status-healthy);
+        }
+    }
+
+    .badge--running {
+        background-color: color-mix(in srgb, var(--status-stabilizing) 20%, transparent);
+        color: var(--status-stabilizing);
+
+        & .badge__dot {
+            background-color: var(--status-stabilizing);
+            animation: pulse var(--duration-pulse) linear infinite;
+        }
+    }
+
+    .badge--pending {
+        background-color: color-mix(in srgb, var(--text-muted) 20%, transparent);
+        color: var(--text-muted);
+
+        & .badge__dot {
+            background-color: var(--text-muted);
+        }
+    }
+
+    .badge--completed {
+        background-color: color-mix(in srgb, var(--status-healthy) 20%, transparent);
+        color: var(--status-healthy);
+
+        & .badge__dot {
+            background-color: var(--status-healthy);
+        }
+    }
+
+    .badge--cancelled {
+        background-color: color-mix(in srgb, var(--status-degraded) 20%, transparent);
+        color: var(--status-degraded);
+
+        & .badge__dot {
+            background-color: var(--status-degraded);
+        }
+    }
+
+    .badge--outline {
+        background-color: var(--bg-secondary);
+        border: 1px solid var(--border-default);
+    }
+
+    .badge__count {
+        font-family: var(--font-mono);
+        font-weight: var(--weight-semibold);
+    }
+
+    .badge--downloading {
+        background-color: color-mix(in srgb, var(--accent-primary) 20%, transparent);
+        color: var(--accent-primary);
+
+        & .badge__dot {
+            background-color: var(--accent-primary);
+            animation: pulse var(--duration-pulse) linear infinite;
+        }
+    }
+
+    .badge--queued {
+        background-color: color-mix(in srgb, var(--status-degraded) 20%, transparent);
+        color: var(--status-degraded);
+
+        & .badge__dot {
+            background-color: var(--status-degraded);
+        }
+    }
+
+    .badge--grabbed {
+        background-color: color-mix(in srgb, var(--status-unknown) 20%, transparent);
+        color: var(--status-unknown);
+
+        & .badge__dot {
+            background-color: var(--status-unknown);
+        }
+    }
+
+    .badge--paused {
+        background-color: color-mix(in srgb, var(--text-muted) 20%, transparent);
+        color: var(--text-muted);
+
+        & .badge__dot {
+            background-color: var(--text-muted);
+        }
+    }
+
+    .badge--stalled {
+        background-color: color-mix(in srgb, var(--status-degraded) 20%, transparent);
+        color: var(--status-degraded);
+
+        & .badge__dot {
+            background-color: var(--status-degraded);
+        }
+    }
+
+    .badge--downloaded {
+        background-color: color-mix(in srgb, var(--status-healthy) 20%, transparent);
+        color: var(--status-healthy);
+
+        & .badge__dot {
+            background-color: var(--status-healthy);
+        }
+    }
+
+    .badge--imported {
+        background-color: color-mix(in srgb, var(--status-healthy) 20%, transparent);
+        color: var(--status-healthy);
+
+        & .badge__dot {
+            background-color: var(--status-healthy);
+        }
+    }
+
+    .badge--failed {
+        background-color: color-mix(in srgb, var(--status-unhealthy) 20%, transparent);
+        color: var(--status-unhealthy);
+
+        & .badge__dot {
+            background-color: var(--status-unhealthy);
+        }
+    }
+
+    .badge__dot {
+        width: 6px;
+        height: 6px;
+        border-radius: var(--radius-full);
+        background-color: currentColor;
+    }
+
+    @media (max-width: 480px) {
+        .badge--sm {
+            padding: var(--space-xs) var(--space-sm);
+            font-size: var(--text-xs);
+        }
+
+        .badge__dot {
+            width: 8px;
+            height: 8px;
+        }
+    }
+}

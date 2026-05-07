@@ -13,6 +13,11 @@ public record SubjectFilter
     public Guid Id { get; set; }
 
     /// <summary>
+    /// The id of the user that owns the subject filter, if applicable.
+    /// </summary>
+    public Guid? OwnerUserId { get; set; }
+
+    /// <summary>
     /// The display name.
     /// </summary>
     public required string Name { get; set; }

@@ -1,0 +1,212 @@
+@layer components {
+    .criteria-editor {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-sm);
+    }
+
+    .criteria-editor__header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: var(--space-sm);
+    }
+
+    .criteria-editor__label {
+        font-size: var(--text-sm);
+        font-weight: var(--weight-medium);
+        color: var(--text-secondary);
+        text-transform: uppercase;
+        letter-spacing: var(--tracking-wide);
+    }
+
+    .criteria-editor__empty {
+        margin: 0;
+        padding: var(--space-md);
+        text-align: center;
+        font-size: var(--text-sm);
+        color: var(--text-muted);
+        background-color: var(--bg-tertiary);
+        border-radius: var(--radius-sm);
+    }
+
+    .criteria-editor__list {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-sm);
+        margin: 0;
+        padding: 0;
+        list-style: none;
+    }
+
+    .criteria-editor__row {
+        display: flex;
+        align-items: center;
+        gap: var(--space-xs);
+        padding: var(--space-sm);
+        background-color: var(--bg-tertiary);
+        border-radius: var(--radius-sm);
+        transition: background-color var(--duration-fast) var(--easing-default);
+        min-width: 0;
+
+        &:hover {
+            background-color: color-mix(in srgb, var(--bg-tertiary) 80%, var(--border-accent) 20%);
+        }
+    }
+
+    .criteria-editor__row-number {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: var(--icon-inline-md);
+        height: var(--icon-inline-md);
+        font-size: var(--text-xs);
+        font-weight: var(--weight-bold);
+        font-family: var(--font-mono);
+        color: var(--text-muted);
+        background-color: var(--bg-primary);
+        border-radius: var(--radius-full);
+        flex-shrink: 0;
+    }
+
+    .criteria-editor__field-select.select-trigger {
+        width: 120px;
+        min-width: 0;
+        flex-shrink: 0;
+    }
+
+    .criteria-editor__operator-select.select-trigger {
+        width: 72px;
+        min-width: 0;
+        flex-shrink: 0;
+    }
+
+    .criteria-editor__operator-select .criteria-editor__operator-label {
+        display: none;
+    }
+
+    .criteria-editor__operator-item {
+        display: flex;
+        align-items: center;
+        gap: var(--space-sm);
+    }
+
+    .criteria-editor__operator-symbol {
+        font-family: var(--font-mono);
+        font-size: var(--text-xs);
+        color: var(--accent-primary);
+        width: var(--icon-inline-md);
+        text-align: center;
+    }
+
+    .criteria-editor__operator-label {
+        color: var(--text-primary);
+    }
+
+    .criteria-editor__value-input {
+        flex: 1;
+        min-width: 80px;
+    }
+
+    .criteria-editor__remove-btn {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 28px;
+        height: 28px;
+        padding: 0;
+        background: none;
+        border: 1px solid transparent;
+        border-radius: var(--radius-sm);
+        color: var(--text-muted);
+        font-size: var(--text-sm);
+        cursor: pointer;
+        flex-shrink: 0;
+        transition:
+            background-color var(--duration-fast) var(--easing-default),
+            border-color var(--duration-fast) var(--easing-default),
+            color var(--duration-fast) var(--easing-default);
+
+        &:hover {
+            background-color: color-mix(in srgb, var(--status-unhealthy) 10%, transparent);
+            border-color: var(--status-unhealthy);
+            color: var(--status-unhealthy);
+        }
+
+        &:focus-visible {
+            outline: var(--focus-ring-width) solid var(--focus-ring-color);
+            outline-offset: var(--focus-ring-offset);
+        }
+
+        &:disabled {
+            opacity: var(--opacity-disabled);
+            cursor: not-allowed;
+
+            &:hover {
+                background-color: transparent;
+                border-color: transparent;
+                color: var(--text-muted);
+            }
+        }
+
+        @media (pointer: coarse) {
+            width: var(--touch-target-min);
+            height: var(--touch-target-min);
+        }
+    }
+
+    .criteria-editor__help {
+        margin: 0;
+        font-size: var(--text-xs);
+        color: var(--text-muted);
+        line-height: var(--leading-normal);
+    }
+
+    @media (max-width: 600px) {
+        .criteria-editor__row {
+            flex-wrap: wrap;
+            gap: var(--space-sm);
+        }
+
+        .criteria-editor__row-number {
+            position: absolute;
+            top: var(--space-sm);
+            left: var(--space-sm);
+        }
+
+        .criteria-editor__row {
+            position: relative;
+            padding-left: calc(var(--space-sm) + var(--icon-inline-md) + var(--space-sm));
+        }
+
+        .criteria-editor__field-select {
+            width: calc(50% - var(--space-xs) / 2);
+        }
+
+        .criteria-editor__operator-select {
+            width: calc(50% - var(--space-xs) / 2 - 28px - var(--space-xs));
+        }
+
+        .criteria-editor__value-input {
+            width: 100%;
+            flex: none;
+        }
+
+        .criteria-editor__remove-btn {
+            position: absolute;
+            top: var(--space-sm);
+            right: var(--space-sm);
+        }
+    }
+
+    @media (max-width: 400px) {
+        .criteria-editor__field-select,
+        .criteria-editor__operator-select {
+            width: 100%;
+        }
+
+        .criteria-editor__row {
+            padding-right: calc(var(--space-sm) + 28px + var(--space-sm));
+        }
+    }
+}

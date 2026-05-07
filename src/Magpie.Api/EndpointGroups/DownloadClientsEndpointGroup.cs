@@ -1,10 +1,14 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions.Api;
+using Magpie.Abstractions.Integrations;
 using Magpie.Abstractions.Repositories;
 using Magpie.Abstractions.Security;
+using Magpie.Models;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
@@ -16,7 +20,8 @@ using Microsoft.AspNetCore.Routing;
 namespace Magpie.Api.EndpointGroups;
 
 internal sealed class DownloadClientsEndpointGroup(
-    IDownloadClientRepository downloadClientRepository) : IApiEndpointGroup
+    IDownloadClientRepository downloadClientRepository,
+    IEnumerable<IDownloadClientIntegration> downloadClientIntegrations) : IApiEndpointGroup
 {
     public string Name => "download-clients";
 
@@ -55,6 +60,12 @@ internal sealed class DownloadClientsEndpointGroup(
         builder.MapPost("{id:guid}/disable", DisableDownloadClient)
             .WithName(nameof(DisableDownloadClient))
             .Produces<DownloadClient>()
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .RequireManager();
+
+        builder.MapPost("{id:guid}/test", TestDownloadClient)
+            .WithName(nameof(TestDownloadClient))
+            .Produces<ConnectionTestResult>()
             .ProducesProblem(StatusCodes.Status404NotFound)
             .RequireManager();
 
@@ -175,6 +186,37 @@ internal sealed class DownloadClientsEndpointGroup(
             .ConfigureAwait(false);
 
         return Results.Ok(downloadClient);
+    }
+
+    private async Task<IResult> TestDownloadClient(Guid id, CancellationToken cancellationToken)
+    {
+        var downloadClient = await downloadClientRepository.GetByIdAsync(id, cancellationToken)
+            .ConfigureAwait(false);
+
+        if (downloadClient is null)
+        {
+            return Results.NotFound();
+        }
+
+        var integration = downloadClientIntegrations
+            .FirstOrDefault(i => string.Equals(
+                i.ProviderType,
+                downloadClient.ProviderType,
+                StringComparison.OrdinalIgnoreCase));
+
+        if (integration is null)
+        {
+            return Results.Ok(new ConnectionTestResult
+            {
+                Success = false,
+                Message = $"No integration registered for type '{downloadClient.ProviderType}'."
+            });
+        }
+
+        var result = await integration.TestConnectionAsync(downloadClient.Settings, cancellationToken)
+            .ConfigureAwait(false);
+
+        return Results.Ok(result);
     }
 
     private async Task<IResult> DeleteDownloadClient(

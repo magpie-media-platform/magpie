@@ -106,7 +106,7 @@ internal sealed class JobsEndpointGroup(IJobManager jobManager) : IApiEndpointGr
             userId,
             cancellationToken).ConfigureAwait(false);
 
-        return Results.Accepted($"api/{Name}/jobs/{executionId}", executionId);
+        return Results.Accepted($"api/{Name}/{executionId}", executionId);
     }
 
     private async Task<IResult> RequestJobCancellation(Guid id, CancellationToken cancellationToken)

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -8,6 +9,7 @@ using Magpie.Abstractions.Repositories;
 using Magpie.Abstractions.Security;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
+using Magpie.Models.Enums;
 
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -17,6 +19,14 @@ namespace Magpie.Api.EndpointGroups;
 
 internal sealed class SubjectsEndpointGroup(ISubjectRepository subjectRepository) : IApiEndpointGroup
 {
+    private static readonly HashSet<string> AllowedSortFields = new(StringComparer.OrdinalIgnoreCase)
+    {
+        nameof(Subject.Kind),
+        nameof(Subject.DateLastRefreshed),
+        nameof(Subject.CreatedAt),
+        nameof(Subject.ModifiedAt)
+    };
+
     public string Name => "subjects";
 
     public void MapEndpoints(IEndpointRouteBuilder builder)
@@ -24,6 +34,7 @@ internal sealed class SubjectsEndpointGroup(ISubjectRepository subjectRepository
         builder.MapGet("", GetSubjects)
             .WithName(nameof(GetSubjects))
             .Produces<Subject[]>()
+            .ProducesProblem(StatusCodes.Status400BadRequest)
             .RequireViewer();
 
         builder.MapGet("{id:guid}", GetSubjectById)
@@ -52,22 +63,72 @@ internal sealed class SubjectsEndpointGroup(ISubjectRepository subjectRepository
             .RequireManager();
     }
 
-    private async Task<IResult> GetSubjects(string? kind, string? tag, CancellationToken cancellationToken)
+    private async Task<IResult> GetSubjects(
+        string? kind,
+        string? tag,
+        string? filter,
+        string? sortBy,
+        SortDirection? sortDirection,
+        CancellationToken cancellationToken)
     {
+        if (!string.IsNullOrWhiteSpace(filter))
+        {
+            return Results.BadRequest(new
+            {
+                message = "Subject filter expressions are not yet supported. "
+                    + "Use the kind or tag query parameters to narrow results."
+            });
+        }
+
+        if (sortBy is not null && !AllowedSortFields.Contains(sortBy))
+        {
+            return Results.BadRequest(new
+            {
+                message = $"Unknown sortBy field '{sortBy}'. "
+                    + $"Allowed: {string.Join(", ", AllowedSortFields)}."
+            });
+        }
+
+        IEnumerable<Subject> subjects;
         if (kind is not null)
         {
-            var subjectsByKind = await subjectRepository.GetByKindAsync(kind, cancellationToken).ConfigureAwait(false);
-            return Results.Ok(subjectsByKind.ToArray());
+            subjects = await subjectRepository.GetByKindAsync(kind, cancellationToken).ConfigureAwait(false);
         }
-
-        if (tag is not null)
+        else if (tag is not null)
         {
-            var subjectsByTag = await subjectRepository.GetByTagAsync(tag, cancellationToken).ConfigureAwait(false);
-            return Results.Ok(subjectsByTag.ToArray());
+            subjects = await subjectRepository.GetByTagAsync(tag, cancellationToken).ConfigureAwait(false);
+        }
+        else
+        {
+            subjects = await subjectRepository.ListAllAsync(cancellationToken).ConfigureAwait(false);
         }
 
-        var subjects = await subjectRepository.ListAllAsync(cancellationToken).ConfigureAwait(false);
+        if (sortBy is not null)
+        {
+            subjects = ApplySort(subjects, sortBy, sortDirection ?? SortDirection.Ascending);
+        }
+
         return Results.Ok(subjects.ToArray());
+    }
+
+    private static IEnumerable<Subject> ApplySort(
+        IEnumerable<Subject> subjects,
+        string sortBy,
+        SortDirection direction)
+    {
+        Func<Subject, object?> keySelector = sortBy switch
+        {
+            var s when s.Equals(nameof(Subject.Kind), StringComparison.OrdinalIgnoreCase) => s => s.Kind,
+            var s when s.Equals(nameof(Subject.DateLastRefreshed), StringComparison.OrdinalIgnoreCase) =>
+                s => s.DateLastRefreshed,
+            var s when s.Equals(nameof(Subject.CreatedAt), StringComparison.OrdinalIgnoreCase) => s => s.CreatedAt,
+            var s when s.Equals(nameof(Subject.ModifiedAt), StringComparison.OrdinalIgnoreCase) => s => s.ModifiedAt,
+            _ => s => s.Kind
+        };
+
+        return direction == SortDirection.Descending
+            ? subjects.OrderByDescending(keySelector)
+            : subjects.OrderBy(keySelector);
     }
 
     private async Task<IResult> GetSubjectById(Guid id, CancellationToken cancellationToken)

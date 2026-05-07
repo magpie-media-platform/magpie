@@ -1,0 +1,83 @@
+@layer components {
+    .external-ids {
+        display: flex;
+        flex-wrap: wrap;
+        gap: var(--space-sm);
+    }
+
+    .external-ids__item {
+        display: inline-flex;
+        align-items: center;
+        gap: var(--space-xs);
+        padding: var(--space-xs) var(--space-sm);
+        background-color: var(--bg-tertiary);
+        border: 1px solid transparent;
+        border-radius: var(--radius-md);
+        font-size: var(--text-sm);
+        color: var(--text-secondary);
+        text-decoration: none;
+        transition:
+            background-color var(--duration-fast) var(--easing-default),
+            border-color var(--duration-fast) var(--easing-default);
+    }
+
+    .external-ids__item--linked {
+        cursor: pointer;
+
+        &:hover {
+            background-color: var(--bg-secondary);
+            border-color: var(--external-id-accent, var(--accent-primary));
+        }
+
+        &:hover .external-ids__link-icon {
+            opacity: 1;
+        }
+
+        &:hover .external-ids__source {
+            color: var(--external-id-accent, var(--accent-primary));
+        }
+
+        &:focus-visible {
+            outline: var(--focus-ring-width) solid var(--external-id-accent, var(--focus-ring-color));
+            outline-offset: var(--focus-ring-offset);
+            border-radius: var(--radius-md);
+        }
+    }
+
+    .external-ids__service-icon {
+        font-size: var(--text-base);
+        color: var(--external-id-accent, var(--text-muted));
+        flex-shrink: 0;
+    }
+
+    .external-ids__item--colored .external-ids__service-icon {
+        color: var(--external-id-accent);
+    }
+
+    .external-ids__source {
+        font-weight: var(--weight-semibold);
+        color: var(--text-muted);
+        text-transform: uppercase;
+        font-size: var(--text-xs);
+        letter-spacing: 0.03em;
+        transition: color var(--duration-fast) var(--easing-default);
+    }
+
+    .external-ids__value {
+        font-family: var(--font-mono);
+        font-size: var(--text-sm);
+        color: var(--text-primary);
+    }
+
+    .external-ids__item--linked .external-ids__value {
+        color: var(--accent-primary);
+    }
+
+    .external-ids__link-icon {
+        font-size: var(--text-sm);
+        color: var(--text-muted);
+        opacity: 0;
+        flex-shrink: 0;
+        transition: opacity var(--duration-fast) var(--easing-default);
+    }
+}

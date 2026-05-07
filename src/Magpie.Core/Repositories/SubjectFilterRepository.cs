@@ -102,7 +102,7 @@ public sealed class SubjectFilterRepository(
         {
             return await context.SubjectFilters
                 .AsNoTracking()
-                .Where(f => f.CreatedByUserId == userId)
+                .Where(f => f.OwnerUserId == userId)
                 .ToListAsync(cancellationToken)
                 .ConfigureAwait(false);
         }

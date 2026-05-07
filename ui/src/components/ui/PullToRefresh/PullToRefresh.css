@@ -1,0 +1,76 @@
+@layer components {
+    .pull-to-refresh {
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+        overflow: hidden;
+        touch-action: pan-y;
+    }
+
+    .pull-to-refresh--disabled {
+        touch-action: auto;
+    }
+
+    .pull-to-refresh__indicator {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+        overflow: hidden;
+        background-color: var(--bg-secondary);
+        transition: height var(--duration-fast) var(--easing-default);
+    }
+
+    .pull-to-refresh--idle .pull-to-refresh__indicator {
+        transition:
+            height var(--duration-normal) var(--easing-default),
+            opacity var(--duration-normal) var(--easing-default);
+    }
+
+    .pull-to-refresh--refreshing .pull-to-refresh__indicator {
+        transition: none;
+    }
+
+    .pull-to-refresh__default-indicator {
+        display: flex;
+        align-items: center;
+        gap: var(--space-sm);
+        padding: var(--space-sm) var(--space-md);
+        color: var(--text-secondary);
+    }
+
+    .pull-to-refresh__icon {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: var(--accent-primary);
+        transition: transform var(--duration-fast) var(--easing-default);
+    }
+
+    .pull-to-refresh__icon--spinning {
+        animation: spin var(--duration-spinner) linear infinite;
+    }
+
+    .pull-to-refresh__label {
+        font-size: var(--text-sm);
+        font-weight: var(--weight-medium);
+    }
+
+    .pull-to-refresh__content {
+        flex: 1;
+        min-height: 0;
+        overflow-y: auto;
+        overflow-x: hidden;
+        overscroll-behavior-y: contain;
+    }
+
+    @media (hover: hover) and (pointer: fine) {
+        .pull-to-refresh__indicator {
+            display: none;
+        }
+
+        .pull-to-refresh__content {
+            height: 100%;
+        }
+    }
+}

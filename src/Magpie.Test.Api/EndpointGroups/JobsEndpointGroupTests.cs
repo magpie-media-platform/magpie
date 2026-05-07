@@ -243,6 +243,9 @@ public class JobsEndpointGroupTests
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.Accepted));
             Assert.That(content, Is.EqualTo(executionId));
+            Assert.That(
+                response.Headers.Location,
+                Has.Property(nameof(Uri.OriginalString)).EqualTo($"api/jobs/{executionId}"));
         }
     }
 

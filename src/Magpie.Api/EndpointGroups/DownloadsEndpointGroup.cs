@@ -1,8 +1,11 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions.Api;
+using Magpie.Abstractions.Integrations;
 using Magpie.Abstractions.Repositories;
 using Magpie.Abstractions.Security;
 using Magpie.Models.Arguments;
@@ -16,7 +19,10 @@ using Microsoft.AspNetCore.Routing;
 
 namespace Magpie.Api.EndpointGroups;
 
-internal sealed class DownloadsEndpointGroup(IDownloadRepository downloadRepository) : IApiEndpointGroup
+internal sealed class DownloadsEndpointGroup(
+    IDownloadRepository downloadRepository,
+    IDownloadClientRepository downloadClientRepository,
+    IEnumerable<IDownloadClientIntegration> downloadClientIntegrations) : IApiEndpointGroup
 {
     public string Name => "downloads";
 
@@ -44,6 +50,20 @@ internal sealed class DownloadsEndpointGroup(IDownloadRepository downloadReposit
             .Produces(StatusCodes.Status204NoContent)
             .ProducesProblem(StatusCodes.Status404NotFound)
             .RequireManager();
+
+        builder.MapPost("{id:guid}/pause", PauseDownload)
+            .WithName(nameof(PauseDownload))
+            .Produces(StatusCodes.Status204NoContent)
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status502BadGateway)
+            .RequireRequester();
+
+        builder.MapPost("{id:guid}/resume", ResumeDownload)
+            .WithName(nameof(ResumeDownload))
+            .Produces(StatusCodes.Status204NoContent)
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status502BadGateway)
+            .RequireRequester();
     }
 
     private async Task<IResult> QueryDownloads(
@@ -122,5 +142,66 @@ internal sealed class DownloadsEndpointGroup(IDownloadRepository downloadReposit
         return deleted
             ? Results.NoContent()
             : Results.NotFound();
+    }
+
+    private async Task<IResult> PauseDownload(Guid id, CancellationToken cancellationToken)
+    {
+        return await DispatchTransitionAsync(
+            id,
+            "pause",
+            (integration, externalId, settings, ct) => integration.PauseDownloadAsync(externalId, settings, ct),
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<IResult> ResumeDownload(Guid id, CancellationToken cancellationToken)
+    {
+        return await DispatchTransitionAsync(
+            id,
+            "resume",
+            (integration, externalId, settings, ct) => integration.ResumeDownloadAsync(externalId, settings, ct),
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<IResult> DispatchTransitionAsync(
+        Guid id,
+        string action,
+        Func<IDownloadClientIntegration, string, IReadOnlyDictionary<string, string>, CancellationToken, Task<bool>> dispatch,
+        CancellationToken cancellationToken)
+    {
+        var download = await downloadRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
+
+        if (download is null)
+        {
+            return Results.NotFound();
+        }
+
+        var downloadClient = await downloadClientRepository
+            .GetByIdAsync(download.DownloadClientId, cancellationToken)
+            .ConfigureAwait(false);
+
+        if (downloadClient is null)
+        {
+            return Results.NotFound();
+        }
+
+        var integration = downloadClientIntegrations
+            .FirstOrDefault(i => string.Equals(
+                i.ProviderType,
+                downloadClient.ProviderType,
+                StringComparison.OrdinalIgnoreCase));
+
+        if (integration is null)
+        {
+            return Results.NotFound();
+        }
+
+        var success = await dispatch(integration, download.ExternalId, downloadClient.Settings, cancellationToken)
+            .ConfigureAwait(false);
+
+        return success
+            ? Results.NoContent()
+            : Results.Problem(
+                detail: $"Download client '{downloadClient.Name}' rejected the {action} request.",
+                statusCode: StatusCodes.Status502BadGateway);
     }
 }

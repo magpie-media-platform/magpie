@@ -1,0 +1,102 @@
+@layer components {
+    .dashboard-page {
+        width: 100%;
+        max-width: var(--content-max-width);
+        margin: 0 auto;
+    }
+
+    .dashboard-page__pull-to-refresh {
+        flex: 1;
+        min-height: 0;
+    }
+
+    .dashboard-page__pull-to-refresh .pull-to-refresh__content {
+        padding: var(--space-lg);
+    }
+
+    .dashboard-page__header {
+        display: flex;
+        align-items: center;
+        gap: var(--space-sm);
+        margin-bottom: var(--space-lg);
+    }
+
+    .dashboard-page__icon {
+        font-size: var(--text-2xl);
+        color: var(--accent-primary);
+    }
+
+    .dashboard-page__title {
+        margin: 0;
+        font-size: var(--text-2xl);
+        font-weight: var(--weight-semibold);
+        color: var(--text-primary);
+    }
+
+    .dashboard-page__content {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-lg);
+    }
+
+    .dashboard-page__widgets {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: var(--space-md);
+        align-items: stretch;
+    }
+
+    .dashboard-page__content-section {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: var(--space-md);
+    }
+
+    .dashboard-page__extension-widgets {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: var(--space-md);
+    }
+
+    @media (max-width: 480px) {
+        .dashboard-page__pull-to-refresh .pull-to-refresh__content {
+            padding: var(--space-md);
+        }
+
+        .dashboard-page__header {
+            margin-bottom: var(--space-lg);
+        }
+
+        .dashboard-page__title {
+            font-size: var(--text-xl);
+        }
+    }
+
+    @media (min-width: 900px) {
+        .dashboard-page__widgets {
+            grid-template-columns: repeat(2, 1fr);
+        }
+
+        .dashboard-page__content-section {
+            grid-template-columns: repeat(2, 1fr);
+        }
+
+        .dashboard-page__extension-widgets {
+            grid-template-columns: repeat(2, 1fr);
+        }
+    }
+
+    @media (min-width: 1100px) {
+        .dashboard-page__pull-to-refresh .pull-to-refresh__content {
+            padding: var(--space-xl);
+        }
+
+        .dashboard-page__content {
+            gap: var(--space-xl);
+        }
+
+        .dashboard-page__widgets {
+            gap: var(--space-lg);
+        }
+    }
+}

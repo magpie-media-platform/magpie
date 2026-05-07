@@ -332,7 +332,7 @@ public class ReleasesEndpointGroupTests
     }
 
     [Test]
-    public async Task PatchRelease_UpdatesRelease()
+    public async Task UpdateRelease_UpdatesRelease()
     {
         // Arrange
         var releaseId = Guid.NewGuid();
@@ -348,7 +348,7 @@ public class ReleasesEndpointGroupTests
             .ReturnsAsync(true);
 
         // Act
-        var response = await _client.PatchAsJsonAsync($"/api/releases/{releaseId}", request).ConfigureAwait(false);
+        var response = await _client.PutAsJsonAsync($"/api/releases/{releaseId}", request).ConfigureAwait(false);
 
         // Assert
         Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NoContent));
@@ -364,7 +364,7 @@ public class ReleasesEndpointGroupTests
     }
 
     [Test]
-    public async Task PatchRelease_ReturnsNotFound_WhenReleaseDoesNotExist()
+    public async Task UpdateRelease_ReturnsNotFound_WhenReleaseDoesNotExist()
     {
         // Arrange
         var releaseId = Guid.NewGuid();
@@ -380,7 +380,7 @@ public class ReleasesEndpointGroupTests
             .ReturnsAsync(false);
 
         // Act
-        var response = await _client.PatchAsJsonAsync($"/api/releases/{releaseId}", request).ConfigureAwait(false);
+        var response = await _client.PutAsJsonAsync($"/api/releases/{releaseId}", request).ConfigureAwait(false);
 
         // Assert
         Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NotFound));

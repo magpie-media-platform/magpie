@@ -1,3 +1,5 @@
+using System;
+
 namespace Magpie.Models.Api;
 
 /// <summary>
@@ -34,5 +36,9 @@ public sealed record SystemInfo
     /// The unique node identifier.
     /// </summary>
     public required string NodeId { get; init; }
-}
 
+    /// <summary>
+    /// The UTC time when the application started.
+    /// </summary>
+    public required DateTime StartedAt { get; init; }
+}

@@ -8,8 +8,10 @@ using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions.Api;
+using Magpie.Abstractions.Integrations;
 using Magpie.Abstractions.Repositories;
 using Magpie.Api.EndpointGroups;
+using Magpie.Models;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
@@ -37,11 +39,13 @@ public class MediaServersEndpointGroupTests
     private IHost _host = null!;
     private HttpClient _client = null!;
     private Mock<IMediaServerRepository> _repository = null!;
+    private FakeMediaServerIntegration _integration = null!;
 
     [SetUp]
     public void SetUp()
     {
         _repository = new Mock<IMediaServerRepository>();
+        _integration = new FakeMediaServerIntegration();
 
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
@@ -60,6 +64,7 @@ public class MediaServersEndpointGroupTests
             .AddPolicy(nameof(Role.Manager), policy => policy.RequireAssertion(_ => true));
 
         builder.Services.AddSingleton(_repository.Object);
+        builder.Services.AddSingleton<IMediaServerIntegration>(_integration);
         builder.Services.AddSingleton<IApiEndpointGroup, MediaServersEndpointGroup>();
 
         var app = builder.Build();
@@ -433,5 +438,115 @@ public class MediaServersEndpointGroupTests
 
         // Assert
         Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NotFound));
+    }
+
+    [Test]
+    public async Task TestMediaServer_DispatchesToMatchingIntegration()
+    {
+        // Arrange
+        var serverId = Guid.NewGuid();
+        var existing = new MediaServer
+        {
+            Id = serverId,
+            Name = "Plex",
+            ProviderType = "fake",
+            Enabled = true,
+            Status = MediaServerStatus.Unknown,
+            Settings = new() { ["Url"] = "http://plex.local" }
+        };
+
+        _repository
+            .Setup(m => m.GetByIdAsync(serverId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(existing);
+
+        // Act
+        var response = await _client.PostAsync($"/api/media-servers/{serverId}/test", null)
+            .ConfigureAwait(false);
+
+        // Assert
+        var content = await response.Content.ReadFromJsonAsync<ConnectionTestResult>().ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
+            Assert.That(content, Has.Property(nameof(content.Success)).True);
+            Assert.That(content, Has.Property(nameof(content.Message)).EqualTo("ok"));
+            Assert.That(_integration.LastSettings, Is.Not.Null);
+            Assert.That(_integration.LastSettings!["Url"], Is.EqualTo("http://plex.local"));
+        }
+    }
+
+    [Test]
+    public async Task TestMediaServer_ReturnsNotFound_WhenMediaServerDoesNotExist()
+    {
+        // Arrange
+        var serverId = Guid.NewGuid();
+
+        _repository
+            .Setup(m => m.GetByIdAsync(serverId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(default(MediaServer?));
+
+        // Act
+        var response = await _client.PostAsync($"/api/media-servers/{serverId}/test", null)
+            .ConfigureAwait(false);
+
+        // Assert
+        Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NotFound));
+    }
+
+    [Test]
+    public async Task TestMediaServer_ReturnsFailureResult_WhenNoMatchingIntegrationRegistered()
+    {
+        // Arrange
+        var serverId = Guid.NewGuid();
+        var existing = new MediaServer
+        {
+            Id = serverId,
+            Name = "Other",
+            ProviderType = "unknown-provider",
+            Enabled = true,
+            Status = MediaServerStatus.Unknown,
+            Settings = []
+        };
+
+        _repository
+            .Setup(m => m.GetByIdAsync(serverId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(existing);
+
+        // Act
+        var response = await _client.PostAsync($"/api/media-servers/{serverId}/test", null)
+            .ConfigureAwait(false);
+
+        // Assert
+        var content = await response.Content.ReadFromJsonAsync<ConnectionTestResult>().ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
+            Assert.That(content, Has.Property(nameof(content.Success)).False);
+            Assert.That(content!.Message, Does.Contain("unknown-provider"));
+        }
+    }
+
+    private sealed class FakeMediaServerIntegration : IMediaServerIntegration
+    {
+        public string MediaServerType => "fake";
+
+        public IReadOnlyDictionary<string, string>? LastSettings { get; private set; }
+
+        public Task<bool> SyncLibraryAsync(Guid libraryId, CancellationToken cancellationToken = default)
+            => throw new NotImplementedException();
+
+        public Task<bool> PushMetadataAsync(Guid contentHierarchyId, CancellationToken cancellationToken = default)
+            => throw new NotImplementedException();
+
+        public Task<bool> RefreshLibraryAsync(Guid libraryId, CancellationToken cancellationToken = default)
+            => throw new NotImplementedException();
+
+        public Task<ConnectionTestResult> TestConnectionAsync(
+            IReadOnlyDictionary<string, string> settings,
+            CancellationToken cancellationToken = default)
+        {
+            LastSettings = settings;
+            return Task.FromResult(new ConnectionTestResult { Success = true, Message = "ok" });
+        }
     }
 }

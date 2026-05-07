@@ -1,0 +1,117 @@
+@layer components {
+    .tooltip-content {
+        z-index: var(--z-tooltip, 600);
+        background-color: var(--bg-secondary);
+        border: 1px solid var(--border-default);
+        border-radius: var(--radius-sm);
+        box-shadow: var(--shadow-md);
+        padding: var(--space-xs) var(--space-sm);
+        font-family: var(--font-sans);
+        font-size: var(--text-sm);
+        color: var(--text-primary);
+        line-height: var(--leading-normal);
+        max-width: 300px;
+        overflow-wrap: break-word;
+
+        animation-duration: var(--duration-fast);
+        animation-timing-function: var(--easing-default);
+
+        &[data-state='delayed-open'][data-side='top'] {
+            animation-name: tooltip-slide-down-fade-in;
+        }
+
+        &[data-state='delayed-open'][data-side='right'] {
+            animation-name: tooltip-slide-left-fade-in;
+        }
+
+        &[data-state='delayed-open'][data-side='bottom'] {
+            animation-name: tooltip-slide-up-fade-in;
+        }
+
+        &[data-state='delayed-open'][data-side='left'] {
+            animation-name: tooltip-slide-right-fade-in;
+        }
+
+        &[data-state='instant-open'][data-side='top'] {
+            animation-name: tooltip-slide-down-fade-in;
+        }
+
+        &[data-state='instant-open'][data-side='right'] {
+            animation-name: tooltip-slide-left-fade-in;
+        }
+
+        &[data-state='instant-open'][data-side='bottom'] {
+            animation-name: tooltip-slide-up-fade-in;
+        }
+
+        &[data-state='instant-open'][data-side='left'] {
+            animation-name: tooltip-slide-right-fade-in;
+        }
+
+        &[data-state='closed'] {
+            animation-name: tooltip-fade-out;
+        }
+    }
+
+    .tooltip-arrow {
+        fill: var(--bg-secondary);
+    }
+
+    @keyframes tooltip-slide-down-fade-in {
+        from {
+            opacity: 0;
+            transform: translateY(4px);
+        }
+
+        to {
+            opacity: 1;
+            transform: translateY(0);
+        }
+    }
+
+    @keyframes tooltip-slide-up-fade-in {
+        from {
+            opacity: 0;
+            transform: translateY(-4px);
+        }
+
+        to {
+            opacity: 1;
+            transform: translateY(0);
+        }
+    }
+
+    @keyframes tooltip-slide-right-fade-in {
+        from {
+            opacity: 0;
+            transform: translateX(4px);
+        }
+
+        to {
+            opacity: 1;
+            transform: translateX(0);
+        }
+    }
+
+    @keyframes tooltip-slide-left-fade-in {
+        from {
+            opacity: 0;
+            transform: translateX(-4px);
+        }
+
+        to {
+            opacity: 1;
+            transform: translateX(0);
+        }
+    }
+
+    @keyframes tooltip-fade-out {
+        from {
+            opacity: 1;
+        }
+
+        to {
+            opacity: 0;
+        }
+    }
+}

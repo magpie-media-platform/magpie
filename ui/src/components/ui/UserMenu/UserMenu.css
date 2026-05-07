@@ -1,0 +1,41 @@
+@layer components {
+    .user-menu {
+        display: flex;
+        align-items: center;
+    }
+
+    .user-menu__trigger {
+        display: flex;
+        align-items: center;
+        gap: var(--space-sm);
+        padding: var(--space-xs) var(--space-sm);
+        min-height: var(--touch-target-min);
+        border-radius: var(--radius-full);
+    }
+
+    .user-menu__trigger:hover {
+        background-color: var(--bg-tertiary);
+    }
+
+    .user-menu__username {
+        display: none;
+        font-family: var(--font-sans);
+        font-size: var(--text-sm);
+        font-weight: var(--weight-medium);
+        color: var(--text-primary);
+        white-space: nowrap;
+
+        @media (min-width: 768px) {
+            display: inline;
+        }
+    }
+
+    .user-menu__caret {
+        color: var(--text-muted);
+        transition: transform var(--duration-fast) var(--easing-default);
+    }
+
+    .user-menu__trigger[data-state='open'] .user-menu__caret {
+        transform: rotate(180deg);
+    }
+}

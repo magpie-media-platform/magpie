@@ -326,4 +326,177 @@ public class SettingsEndpointGroupTests
         // Assert
         Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NotFound));
     }
+
+    [Test]
+    public async Task GetSystemSettingsGroupByName_ReturnsBackupSettings()
+    {
+        // Arrange
+        var group = new SettingsGroup { Name = "backups", ExtensionId = null };
+
+        _settingsRepository
+            .Setup(m => m.GetByIdAsync(
+                It.Is<SettingsGroupLookupKey>(k => k.ExtensionId == null && k.Name == "backups"),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(group);
+
+        // Act
+        var response = await _client.GetAsync("/api/settings/groups/system/backups").ConfigureAwait(false);
+
+        // Assert
+        var content = await response.Content.ReadFromJsonAsync<SettingsGroup>().ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
+            Assert.That(content, Has.Property(nameof(content.Name)).EqualTo("backups"));
+            Assert.That(content, Has.Property(nameof(content.ExtensionId)).Null);
+        }
+    }
+
+    [Test]
+    public async Task PatchSystemSettingsGroup_EnablesBackupSettings()
+    {
+        // Arrange
+        var patch = new SettingsGroupPatch
+        {
+            ExtensionId = null,
+            Name = "backups",
+            Settings = new()
+            {
+                Add = new()
+                {
+                    ["enabled"] = "true",
+                    ["interval"] = "daily",
+                    ["retention"] = "7"
+                }
+            }
+        };
+
+        _settingsRepository
+            .Setup(m => m.PatchAsync(
+                It.Is<SettingsGroupPatch>(p =>
+                    p.ExtensionId == null &&
+                    p.Name == "backups" &&
+                    p.Settings.Add != null &&
+                    p.Settings.Add["enabled"] == "true" &&
+                    p.Settings.Add["interval"] == "daily" &&
+                    p.Settings.Add["retention"] == "7"),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+
+        // Act
+        var response = await _client.PatchAsJsonAsync("/api/settings/groups/system/backups", patch)
+            .ConfigureAwait(false);
+
+        // Assert
+        Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NoContent));
+    }
+
+    [Test]
+    public async Task PatchSystemSettingsGroup_UpdatesBackupInterval()
+    {
+        // Arrange
+        var patch = new SettingsGroupPatch
+        {
+            ExtensionId = null,
+            Name = "backups",
+            Settings = new()
+            {
+                Update = new()
+                {
+                    ["interval"] = "weekly"
+                }
+            }
+        };
+
+        _settingsRepository
+            .Setup(m => m.PatchAsync(
+                It.Is<SettingsGroupPatch>(p =>
+                    p.ExtensionId == null &&
+                    p.Name == "backups" &&
+                    p.Settings.Update != null &&
+                    p.Settings.Update["interval"] == "weekly"),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+
+        // Act
+        var response = await _client.PatchAsJsonAsync("/api/settings/groups/system/backups", patch)
+            .ConfigureAwait(false);
+
+        // Assert
+        Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NoContent));
+    }
+
+    [Test]
+    public async Task PatchSystemSettingsGroup_DisablesBackupSettings()
+    {
+        // Arrange
+        var patch = new SettingsGroupPatch
+        {
+            ExtensionId = null,
+            Name = "backups",
+            Settings = new()
+            {
+                Update = new()
+                {
+                    ["enabled"] = "false"
+                }
+            }
+        };
+
+        _settingsRepository
+            .Setup(m => m.PatchAsync(
+                It.Is<SettingsGroupPatch>(p =>
+                    p.ExtensionId == null &&
+                    p.Name == "backups" &&
+                    p.Settings.Update != null &&
+                    p.Settings.Update["enabled"] == "false"),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+
+        // Act
+        var response = await _client.PatchAsJsonAsync("/api/settings/groups/system/backups", patch)
+            .ConfigureAwait(false);
+
+        // Assert
+        Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NoContent));
+    }
+
+    [Test]
+    public async Task PatchSystemSettingsGroup_UpdatesBackupRetention()
+    {
+        // Arrange
+        var patch = new SettingsGroupPatch
+        {
+            ExtensionId = null,
+            Name = "backups",
+            Settings = new()
+            {
+                Update = new()
+                {
+                    ["retention"] = "14"
+                }
+            }
+        };
+
+        _settingsRepository
+            .Setup(m => m.PatchAsync(
+                It.Is<SettingsGroupPatch>(p =>
+                    p.ExtensionId == null &&
+                    p.Name == "backups" &&
+                    p.Settings.Update != null &&
+                    p.Settings.Update["retention"] == "14"),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+
+        // Act
+        var response = await _client.PatchAsJsonAsync("/api/settings/groups/system/backups", patch)
+            .ConfigureAwait(false);
+
+        // Assert
+        Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NoContent));
+    }
 }

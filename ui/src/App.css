@@ -1,0 +1,16 @@
+@layer components {
+    .first-run-guard__loading {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        height: 100vh;
+        height: 100dvh;
+        color: var(--accent-primary);
+    }
+
+    .brand {
+        display: flex;
+        align-items: center;
+        gap: var(--space-sm);
+    }
+}

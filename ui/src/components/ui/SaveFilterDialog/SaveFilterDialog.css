@@ -1,0 +1,53 @@
+@layer components {
+    .save-filter-dialog {
+        max-width: 420px;
+    }
+
+    .save-filter-dialog__icon {
+        font-size: var(--text-xl);
+        color: var(--accent-primary);
+        vertical-align: middle;
+        margin-right: var(--space-xs);
+    }
+
+    .save-filter-dialog__form {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-md);
+    }
+
+    .save-filter-dialog__field {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-xs);
+    }
+
+    .save-filter-dialog__query-preview {
+        display: flex;
+        align-items: flex-start;
+        gap: var(--space-sm);
+        padding: var(--space-sm);
+        background-color: var(--bg-tertiary);
+        border-radius: var(--radius-sm);
+        font-size: var(--text-xs);
+    }
+
+    .save-filter-dialog__query-label {
+        flex-shrink: 0;
+        font-weight: var(--weight-medium);
+        color: var(--text-muted);
+    }
+
+    .save-filter-dialog__query-text {
+        font-family: var(--font-mono);
+        color: var(--accent-secondary);
+        word-break: break-word;
+    }
+
+    @media (max-width: 480px) {
+        .save-filter-dialog {
+            max-width: none;
+            width: calc(100% - var(--space-lg) * 2);
+        }
+    }
+}

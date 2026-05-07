@@ -1,0 +1,24 @@
+@layer components {
+    .simple-filter-builder {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: var(--space-md);
+    }
+
+    .simple-filter-builder--readonly {
+        opacity: var(--opacity-reduced);
+        pointer-events: none;
+    }
+
+    .simple-filter-builder__field {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-xs);
+    }
+
+    @media (max-width: 480px) {
+        .simple-filter-builder {
+            grid-template-columns: 1fr;
+        }
+    }
+}

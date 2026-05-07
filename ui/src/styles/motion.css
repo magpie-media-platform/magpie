@@ -1,0 +1,83 @@
+@layer base {
+    @keyframes fadeIn {
+        from {
+            opacity: 0;
+            transform: translateY(var(--space-2-5));
+        }
+
+        to {
+            opacity: 1;
+            transform: translateY(0);
+        }
+    }
+
+    @keyframes slideIn {
+        from {
+            opacity: 0;
+            transform: translateY(var(--space-sm));
+        }
+
+        to {
+            opacity: 1;
+            transform: translateY(0);
+        }
+    }
+
+    @keyframes pulse {
+        0%,
+        100% {
+            opacity: 1;
+        }
+
+        50% {
+            opacity: 0.5;
+        }
+    }
+
+    @keyframes spin {
+        from {
+            transform: rotate(0deg);
+        }
+
+        to {
+            transform: rotate(360deg);
+        }
+    }
+
+    @keyframes shimmer {
+        0% {
+            background-position: -200% 0;
+        }
+
+        100% {
+            background-position: 200% 0;
+        }
+    }
+
+    .animate-fade-in {
+        animation: fadeIn var(--duration-slow) var(--easing-default);
+    }
+
+    .animate-slide-in {
+        animation: slideIn var(--duration-slower) var(--easing-default);
+    }
+
+    .animate-pulse {
+        animation: pulse var(--duration-pulse) ease-in-out infinite;
+    }
+
+    .animate-spin {
+        animation: spin var(--duration-spinner) linear infinite;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+        *,
+        *::before,
+        *::after {
+            animation-duration: 0.01ms !important;
+            animation-iteration-count: 1 !important;
+            transition-duration: 0.01ms !important;
+            scroll-behavior: auto !important;
+        }
+    }
+}

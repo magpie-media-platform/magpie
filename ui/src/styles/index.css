@@ -1,0 +1,10 @@
+@layer reset, base, components, utilities;
+
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Outfit:wght@400;500;600&display=swap');
+
+@import './tokens.css';
+
+@import './reset.css';
+@import './base.css';
+@import './motion.css';
+@import './utilities.css';

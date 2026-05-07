@@ -1,0 +1,104 @@
+@top Query { expression }
+
+expression { orExpr }
+
+orExpr { andExpr (kw_or andExpr)* }
+
+andExpr { unaryExpr (kw_and unaryExpr)* }
+
+unaryExpr { kw_not primaryExpr | primaryExpr }
+
+primaryExpr { ParenExpr | fieldExpr }
+
+ParenExpr { "(" expression ")" }
+
+fieldExpr { ScalarExpr | CollectionExpr }
+
+ScalarExpr {
+    Identifier CompareOp Value |
+    Identifier StringOp Value |
+    Identifier NullOp |
+    Identifier InOp ValueList
+}
+
+CollectionExpr {
+    Identifier CollectionOp Value |
+    Identifier CollectionOp "(" itemExpr ")"
+}
+
+ValueList { "(" Value ("," Value)* ")" }
+
+itemExpr { itemOrExpr }
+
+itemOrExpr { itemAndExpr (kw_or itemAndExpr)* }
+
+itemAndExpr { itemTerm (kw_and itemTerm)* }
+
+itemTerm { ItemField | ItemGroup | ItemValue }
+
+ItemField { Identifier ItemOp Value }
+
+ItemGroup { "(" itemExpr ")" }
+
+ItemValue { Value }
+
+Value { String | Number | Identifier }
+
+CompareOp { "=" | "!=" | ">" | ">=" | "<" | "<=" }
+
+StringOp {
+    kw_contains | NotContains |
+    kw_startswith | NotStartsWith |
+    kw_endswith | NotEndsWith
+}
+
+NullOp { kw_null | NotNull }
+
+InOp { kw_in | NotIn }
+
+CollectionOp { kw_has | NotHas }
+
+ItemOp { "=" | "!=" | ">" | ">=" | "<" | "<=" |
+    kw_contains | NotContains |
+    kw_startswith | NotStartsWith |
+    kw_endswith | NotEndsWith
+}
+
+@external specialize {Identifier} specializeKeyword from "./keywords" {
+    kw_not[@name="not"],
+    kw_and[@name="and"],
+    kw_or[@name="or"],
+    kw_contains[@name="contains"],
+    kw_startswith[@name="startswith"],
+    kw_endswith[@name="endswith"],
+    kw_null[@name="null"],
+    kw_in[@name="in"],
+    kw_has[@name="has"]
+}
+
+@tokens {
+    Identifier { $[a-zA-Z_] $[a-zA-Z0-9_]* }
+
+    String { '"' (![\\\"] | "\\" _)* '"' }
+
+    Number { "-"? $[0-9]+ ("." $[0-9]+)? }
+
+    NotHas { "!has" }
+    NotContains { "!contains" }
+    NotStartsWith { "!startswith" }
+    NotEndsWith { "!endswith" }
+    NotIn { "!in" }
+    NotNull { "!null" }
+
+    @precedence {
+        NotContains, NotStartsWith, NotEndsWith, NotHas, NotNull, NotIn,
+        ">=", "<=", "!=", ">", "<", "=",
+        Number
+    }
+
+    space { $[ \t\n\r]+ }
+}
+
+@skip { space }
+
+@detectDelim

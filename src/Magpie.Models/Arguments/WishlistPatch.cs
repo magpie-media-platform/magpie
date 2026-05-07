@@ -29,4 +29,9 @@ public sealed record WishlistPatch : TagsPatch
     /// The <see cref="Wishlist.OwnerLock"/> to patch.
     /// </summary>
     public ScalarPatch<bool>? OwnerLock { get; init; }
+
+    /// <summary>
+    /// The <see cref="Wishlist.Enabled"/> to patch.
+    /// </summary>
+    public ScalarPatch<bool>? Enabled { get; init; }
 }

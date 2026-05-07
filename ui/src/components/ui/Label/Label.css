@@ -1,0 +1,36 @@
+@layer components {
+    .label {
+        display: inline-flex;
+        align-items: center;
+        gap: var(--space-xs);
+        font-family: var(--font-sans);
+        font-weight: var(--weight-medium);
+        color: var(--text-secondary);
+        text-transform: uppercase;
+        letter-spacing: var(--tracking-wide);
+        line-height: var(--leading-normal);
+        cursor: default;
+        user-select: none;
+    }
+
+    .label--sm {
+        font-size: var(--text-xs);
+    }
+
+    .label--md {
+        font-size: var(--text-sm);
+    }
+
+    .label--lg {
+        font-size: var(--text-base);
+    }
+
+    .label--error {
+        color: var(--status-unhealthy);
+    }
+
+    .label__required {
+        color: var(--status-unhealthy);
+        font-weight: var(--weight-semibold);
+    }
+}

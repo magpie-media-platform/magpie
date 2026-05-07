@@ -1,0 +1,39 @@
+@layer components {
+    .tags-cell {
+        display: flex;
+        flex-wrap: wrap;
+        gap: var(--space-xs);
+        align-items: center;
+    }
+
+    .tags-cell__tag--colored {
+        background-color: color-mix(in srgb, var(--tag-color, var(--bg-tertiary)) 20%, transparent);
+        border-color: var(--tag-color, var(--border-default));
+    }
+
+    .tags-cell__overflow {
+        font-size: var(--text-xs);
+        color: var(--text-muted);
+        padding: var(--space-xs);
+        cursor: default;
+    }
+
+    .tags-cell__empty {
+        display: inline-flex;
+        align-items: center;
+        gap: var(--space-xs);
+        font-size: var(--text-lg);
+        color: var(--text-muted);
+    }
+
+    .tags-cell__empty-label {
+        display: none;
+        font-size: var(--text-sm);
+    }
+
+    @media (max-width: 767px) {
+        .tags-cell__empty-label {
+            display: inline;
+        }
+    }
+}

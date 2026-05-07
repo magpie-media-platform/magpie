@@ -1,3 +1,5 @@
+using System;
+
 namespace Magpie.Abstractions.System;
 
 /// <summary>
@@ -14,4 +16,9 @@ public interface IMagpieSystem
     /// The unique id for this node.
     /// </summary>
     string NodeId { get; }
+
+    /// <summary>
+    /// The UTC time when the application started.
+    /// </summary>
+    DateTime StartedAt { get; }
 }

@@ -1,0 +1,293 @@
+@layer components {
+    .system-status-page {
+        padding: var(--space-lg);
+        width: 100%;
+        max-width: var(--content-max-width);
+        margin: 0 auto;
+    }
+
+    .system-status-page__header {
+        display: flex;
+        align-items: center;
+        gap: var(--space-sm);
+        margin-bottom: var(--space-xl);
+    }
+
+    .system-status-page__icon {
+        font-size: var(--text-2xl);
+        color: var(--accent-primary);
+    }
+
+    .system-status-page__title {
+        margin: 0;
+        font-size: var(--text-2xl);
+        font-weight: var(--weight-semibold);
+        color: var(--text-primary);
+    }
+
+    .system-status-page__content {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-xl);
+    }
+
+    .system-status-page__section {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-md);
+    }
+
+    .system-status-page__section-title {
+        display: flex;
+        align-items: center;
+        gap: var(--space-sm);
+        margin: 0;
+        font-size: var(--text-lg);
+        font-weight: var(--weight-semibold);
+        color: var(--text-primary);
+    }
+
+    .system-status-page__section-title svg {
+        color: var(--text-secondary);
+    }
+
+    .system-status-page__services {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: var(--space-md);
+    }
+
+    .system-status-page__integrations {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: var(--space-md);
+    }
+
+    .service-card {
+        display: flex;
+        align-items: flex-start;
+        gap: var(--space-md);
+        padding: var(--space-md) var(--space-lg);
+        transition: border-color var(--duration-fast) var(--easing-default);
+    }
+
+    .service-card:hover {
+        border-color: var(--border-accent);
+    }
+
+    .service-card--healthy {
+        border-left: 3px solid var(--status-healthy);
+    }
+
+    .service-card--unhealthy {
+        border-left: 3px solid var(--status-unhealthy);
+    }
+
+    .service-card--degraded {
+        border-left: 3px solid var(--status-degraded);
+    }
+
+    .service-card--unknown {
+        border-left: 3px solid var(--status-unknown);
+    }
+
+    .service-card__icon {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 40px;
+        height: 40px;
+        border-radius: var(--radius-md);
+        background-color: var(--bg-tertiary);
+        color: var(--text-secondary);
+        font-size: var(--text-lg);
+        flex-shrink: 0;
+    }
+
+    .service-card__content {
+        flex: 1;
+        min-width: 0;
+    }
+
+    .service-card__name {
+        margin: 0;
+        font-size: var(--text-base);
+        font-weight: var(--weight-semibold);
+        color: var(--text-primary);
+    }
+
+    .service-card__message {
+        margin: var(--space-xs) 0 0;
+        font-size: var(--text-sm);
+        color: var(--text-secondary);
+        overflow-wrap: break-word;
+    }
+
+    .service-card__response-time {
+        display: inline-block;
+        margin-top: var(--space-xs);
+        font-size: var(--text-xs);
+        font-family: var(--font-mono);
+        color: var(--text-muted);
+    }
+
+    .service-card__status {
+        display: flex;
+        align-items: center;
+        gap: var(--space-sm);
+        flex-shrink: 0;
+    }
+
+    .service-card__status-icon {
+        font-size: var(--text-lg);
+    }
+
+    .service-card__status-icon--healthy {
+        color: var(--status-healthy);
+    }
+
+    .service-card__status-icon--unhealthy {
+        color: var(--status-unhealthy);
+    }
+
+    .service-card__status-icon--degraded {
+        color: var(--status-degraded);
+    }
+
+    .service-card__status-icon--unknown {
+        color: var(--status-unknown);
+    }
+
+    .service-card--loading {
+        opacity: var(--opacity-muted);
+    }
+
+    .system-info {
+        padding: var(--space-md) var(--space-lg);
+    }
+
+    .system-info__grid {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: var(--space-md);
+    }
+
+    .system-info__item {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-xs);
+    }
+
+    .system-info__label {
+        font-size: var(--text-xs);
+        font-weight: var(--weight-medium);
+        color: var(--text-muted);
+        text-transform: uppercase;
+        letter-spacing: var(--tracking-wide);
+    }
+
+    .system-info__value {
+        font-size: var(--text-sm);
+        font-family: var(--font-mono);
+        color: var(--text-primary);
+    }
+
+    @media (max-width: 480px) {
+        .system-status-page {
+            padding: var(--space-md);
+        }
+
+        .system-status-page__header {
+            margin-bottom: var(--space-md);
+        }
+
+        .system-status-page__title {
+            font-size: var(--text-xl);
+        }
+
+        .system-status-page__content {
+            gap: var(--space-lg);
+        }
+
+        .system-status-page__section {
+            gap: var(--space-sm);
+        }
+
+        .system-status-page__section-title {
+            font-size: var(--text-base);
+        }
+
+        .service-card {
+            padding: var(--space-sm) var(--space-md);
+            gap: var(--space-sm);
+            flex-wrap: wrap;
+        }
+
+        .service-card__icon {
+            display: none;
+        }
+
+        .service-card__name {
+            font-size: var(--text-sm);
+        }
+
+        .service-card__message {
+            font-size: var(--text-xs);
+        }
+
+        .service-card__status {
+            margin-left: auto;
+        }
+
+        .system-info {
+            padding: var(--space-sm) var(--space-md);
+        }
+
+        .system-info__grid {
+            grid-template-columns: repeat(2, 1fr);
+            gap: var(--space-sm);
+        }
+    }
+
+    @media (min-width: 640px) {
+        .system-status-page__services {
+            grid-template-columns: repeat(2, 1fr);
+        }
+
+        .system-status-page__integrations {
+            grid-template-columns: repeat(2, 1fr);
+        }
+
+        .system-info__grid {
+            grid-template-columns: repeat(2, 1fr);
+        }
+    }
+
+    @media (min-width: 900px) {
+        .system-status-page__services {
+            grid-template-columns: repeat(3, 1fr);
+        }
+
+        .system-status-page__integrations {
+            grid-template-columns: repeat(3, 1fr);
+        }
+
+        .system-info__grid {
+            grid-template-columns: repeat(3, 1fr);
+        }
+    }
+
+    @media (min-width: 1100px) {
+        .system-status-page {
+            padding: var(--space-xl);
+        }
+
+        .system-status-page__content {
+            gap: var(--space-2xl);
+        }
+
+        .system-info__grid {
+            grid-template-columns: repeat(5, 1fr);
+        }
+    }
+}

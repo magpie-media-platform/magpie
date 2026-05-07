@@ -243,21 +243,21 @@ public class SubjectFilterRepositoryTests
             Name = "Filter1",
             Criteria = CreateTestCriteria(),
             CreatedAt = DateTime.UtcNow,
-            CreatedByUserId = _userId
+            OwnerUserId = _userId
         };
         var filter2 = new SubjectFilter
         {
             Name = "Filter2",
             Criteria = CreateTestCriteria(),
             CreatedAt = DateTime.UtcNow,
-            CreatedByUserId = _userId
+            OwnerUserId = _userId
         };
         var filter3 = new SubjectFilter
         {
             Name = "Filter3",
             Criteria = CreateTestCriteria(),
             CreatedAt = DateTime.UtcNow,
-            CreatedByUserId = Guid.NewGuid()
+            OwnerUserId = Guid.NewGuid()
         };
         _context.SubjectFilters.AddRange(filter1, filter2, filter3);
         _context.SaveChanges();

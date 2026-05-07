@@ -1,10 +1,15 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions.Api;
+using Magpie.Abstractions.Integrations;
 using Magpie.Abstractions.Repositories;
 using Magpie.Abstractions.Security;
+using Magpie.Models;
+using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 
 using Microsoft.AspNetCore.Builder;
@@ -13,7 +18,10 @@ using Microsoft.AspNetCore.Routing;
 
 namespace Magpie.Api.EndpointGroups;
 
-internal sealed class IndexersEndpointGroup(IIndexerRepository indexerRepository) : IApiEndpointGroup
+internal sealed class IndexersEndpointGroup(
+    IIndexerRepository indexerRepository,
+    IIndexerConnectionRepository indexerConnectionRepository,
+    IEnumerable<IIndexerIntegration> indexerIntegrations) : IApiEndpointGroup
 {
     public string Name => "indexers";
 
@@ -41,6 +49,12 @@ internal sealed class IndexersEndpointGroup(IIndexerRepository indexerRepository
             .Produces(StatusCodes.Status204NoContent)
             .ProducesProblem(StatusCodes.Status404NotFound)
             .ProducesProblem(StatusCodes.Status400BadRequest)
+            .RequireManager();
+
+        builder.MapPost("{id:guid}/test", TestIndexer)
+            .WithName(nameof(TestIndexer))
+            .Produces<ConnectionTestResult>()
+            .ProducesProblem(StatusCodes.Status404NotFound)
             .RequireManager();
 
         builder.MapDelete("{id:guid}", DeleteIndexer)
@@ -87,7 +101,7 @@ internal sealed class IndexersEndpointGroup(IIndexerRepository indexerRepository
     private async Task<IResult> PatchIndexer(
         HttpContext httpContext,
         Guid id,
-        Indexer request,
+        IndexerPatch request,
         CancellationToken cancellationToken)
     {
         var existing = await indexerRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
@@ -99,11 +113,14 @@ internal sealed class IndexersEndpointGroup(IIndexerRepository indexerRepository
 
         var currentUserId = httpContext.User.GetUserId();
 
-        var indexer = request with
+        var indexer = existing with
         {
-            Id = id,
-            CreatedAt = existing.CreatedAt,
-            CreatedByUserId = existing.CreatedByUserId,
+            ProviderType = request.ProviderType ?? existing.ProviderType,
+            Name = request.Name ?? existing.Name,
+            Description = request.Description ?? existing.Description,
+            Availability = request.Availability ?? existing.Availability,
+            Categories = request.Categories ?? existing.Categories,
+            Languages = request.Languages ?? existing.Languages,
             ModifiedAt = DateTime.UtcNow,
             ModifiedByUserId = currentUserId
         };
@@ -112,6 +129,82 @@ internal sealed class IndexersEndpointGroup(IIndexerRepository indexerRepository
             .ConfigureAwait(false);
 
         return Results.NoContent();
+    }
+
+    private async Task<IResult> TestIndexer(
+        Guid id,
+        Guid? connectionId,
+        CancellationToken cancellationToken)
+    {
+        var indexer = await indexerRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
+
+        if (indexer is null)
+        {
+            return Results.NotFound();
+        }
+
+        var integration = indexerIntegrations
+            .FirstOrDefault(i => string.Equals(
+                i.IndexerType,
+                indexer.ProviderType,
+                StringComparison.OrdinalIgnoreCase));
+
+        if (integration is null)
+        {
+            return Results.Ok(new ConnectionTestResult
+            {
+                Success = false,
+                Message = $"No integration registered for type '{indexer.ProviderType}'."
+            });
+        }
+
+        // Indexer-level settings are stored on IndexerConnection rather than on the Indexer entity
+        // itself. Resolve the connection whose settings should be used: either the explicit
+        // connectionId (if supplied), or the indexer's sole connection. Otherwise fail.
+        var connections = (await indexerConnectionRepository
+            .ListByIndexerIdAsync(id, cancellationToken)
+            .ConfigureAwait(false)).ToList();
+
+        IndexerConnection? connection;
+        if (connectionId is { } cid)
+        {
+            connection = connections.FirstOrDefault(c => c.Id == cid);
+            if (connection is null)
+            {
+                return Results.Ok(new ConnectionTestResult
+                {
+                    Success = false,
+                    Message = $"Connection '{cid}' was not found for this indexer."
+                });
+            }
+        }
+        else if (connections.Count == 0)
+        {
+            return Results.Ok(new ConnectionTestResult
+            {
+                Success = false,
+                Message = "No connections are configured for this indexer."
+            });
+        }
+        else if (connections.Count > 1)
+        {
+            return Results.Ok(new ConnectionTestResult
+            {
+                Success = false,
+                Message = "Multiple connections are configured; specify connectionId to choose one."
+            });
+        }
+        else
+        {
+            connection = connections[0];
+        }
+
+        IReadOnlyDictionary<string, string> settings = connection!.Settings;
+
+        var result = await integration.TestConnectionAsync(settings, cancellationToken)
+            .ConfigureAwait(false);
+
+        return Results.Ok(result);
     }
 
     private async Task<IResult> DeleteIndexer(

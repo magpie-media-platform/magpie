@@ -105,6 +105,8 @@ internal sealed class ExtensionRepository(
                         s => s
                             .SetProperty(e => e.Version, model.Version)
                             .SetProperty(e => e.Name, model.Name)
+                            .SetProperty(e => e.Author, model.Author)
+                            .SetProperty(e => e.Description, model.Description)
                             .SetProperty(e => e.TargetABI, model.TargetABI)
                             .SetProperty(e => e.FilePath, model.FilePath)
                             .SetProperty(e => e.AssemblyName, model.AssemblyName)

@@ -1,0 +1,100 @@
+@layer components {
+    .schedule-trigger-form__sheet {
+        max-width: 480px;
+    }
+
+    .schedule-trigger-form {
+        display: flex;
+        flex-direction: column;
+        flex: 1;
+        min-height: 0;
+        overflow: hidden;
+    }
+
+    .schedule-trigger-form__body {
+        flex: 1;
+        overflow-y: auto;
+        padding: var(--space-lg);
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-lg);
+    }
+
+    .schedule-trigger-form__field {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-xs);
+    }
+
+    .schedule-trigger-form__field--toggle {
+        gap: var(--space-xs);
+    }
+
+    .schedule-trigger-form__toggle-wrapper {
+        display: flex;
+        align-items: center;
+        gap: var(--space-sm);
+    }
+
+    .schedule-trigger-form__toggle-wrapper .label {
+        margin-bottom: 0;
+        cursor: pointer;
+    }
+
+    .schedule-trigger-form__label-row {
+        display: flex;
+        align-items: center;
+        gap: var(--space-xs);
+    }
+
+    .schedule-trigger-form__info-button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 0;
+        background: transparent;
+        border: none;
+        color: var(--text-muted);
+        cursor: pointer;
+        border-radius: var(--radius-sm);
+        transition: color var(--duration-fast) var(--easing-default);
+
+        & svg {
+            font-size: var(--text-sm);
+        }
+
+        &:hover {
+            color: var(--accent-primary);
+        }
+
+        &:focus-visible {
+            outline: var(--focus-ring-width) solid var(--focus-ring-color);
+            outline-offset: var(--focus-ring-offset);
+        }
+    }
+
+    .schedule-trigger-form__tooltip {
+        margin: 0;
+        font-size: var(--text-xs);
+        line-height: var(--leading-relaxed);
+    }
+
+    .schedule-trigger-form__cron-input {
+        font-family: var(--font-mono);
+        letter-spacing: 0.5px;
+    }
+
+    .schedule-trigger-form__help {
+        margin: 0;
+        font-size: var(--text-xs);
+        color: var(--text-muted);
+        line-height: var(--leading-normal);
+    }
+
+    @media (max-width: 480px) {
+        .schedule-trigger-form__sheet {
+            max-width: 100%;
+            border-radius: 0;
+        }
+    }
+}

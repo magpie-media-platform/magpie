@@ -485,6 +485,37 @@ public class WishlistRepositoryTests
     }
 
     [Test]
+    public async Task PatchAsync_PatchesEnabledField()
+    {
+        // Arrange
+        var wishlist = new Wishlist
+        {
+            Name = "ToPatchEnabled",
+            ContentFilterId = _contentFilterId,
+            OwnerUserId = _userId,
+            Enabled = true,
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.Wishlists.Add(wishlist);
+        await _context.SaveChangesAsync();
+
+        var patch = new WishlistPatch { Id = wishlist.Id, Enabled = new() { Value = false } };
+
+        // Act
+        var result = await _subject.PatchAsync(patch, _userId);
+
+        // Assert
+        Assert.That(result, Is.True);
+
+        var patched = await _subject.GetByIdAsync(wishlist.Id);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(patched, Has.Property(nameof(patched.Enabled)).False);
+            Assert.That(patched, Has.Property(nameof(patched.ModifiedByUserId)).EqualTo(_userId));
+        }
+    }
+
+    [Test]
     public async Task PatchAsync_ReturnsFalse_WhenNotExists()
     {
         // Arrange

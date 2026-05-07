@@ -258,6 +258,139 @@ public class SubjectsEndpointGroupTests
     }
 
     [Test]
+    public async Task GetSubjects_SortsByKindAscending_WhenSortByKind()
+    {
+        // Arrange
+        var studio = new Subject { Kind = "studio", MetadataContainerId = Guid.NewGuid() };
+        var person = new Subject { Kind = "person", MetadataContainerId = Guid.NewGuid() };
+        var network = new Subject { Kind = "network", MetadataContainerId = Guid.NewGuid() };
+
+        _subjectRepository
+            .Setup(m => m.ListAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([studio, person, network]);
+
+        // Act
+        var response = await _client
+            .GetAsync("/api/subjects?sortBy=Kind&sortDirection=Ascending")
+            .ConfigureAwait(false);
+
+        // Assert
+        var content = await response.Content.ReadFromJsonAsync<Subject[]>().ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
+            Assert.That(content, Has.Length.EqualTo(3));
+            Assert.That(content![0].Kind, Is.EqualTo("network"));
+            Assert.That(content[1].Kind, Is.EqualTo("person"));
+            Assert.That(content[2].Kind, Is.EqualTo("studio"));
+        }
+    }
+
+    [Test]
+    public async Task GetSubjects_SortsByKindDescending_WhenSortDirectionDescending()
+    {
+        // Arrange
+        var studio = new Subject { Kind = "studio", MetadataContainerId = Guid.NewGuid() };
+        var person = new Subject { Kind = "person", MetadataContainerId = Guid.NewGuid() };
+        var network = new Subject { Kind = "network", MetadataContainerId = Guid.NewGuid() };
+
+        _subjectRepository
+            .Setup(m => m.ListAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([network, person, studio]);
+
+        // Act
+        var response = await _client
+            .GetAsync("/api/subjects?sortBy=Kind&sortDirection=Descending")
+            .ConfigureAwait(false);
+
+        // Assert
+        var content = await response.Content.ReadFromJsonAsync<Subject[]>().ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
+            Assert.That(content, Has.Length.EqualTo(3));
+            Assert.That(content![0].Kind, Is.EqualTo("studio"));
+            Assert.That(content[1].Kind, Is.EqualTo("person"));
+            Assert.That(content[2].Kind, Is.EqualTo("network"));
+        }
+    }
+
+    [Test]
+    public async Task GetSubjects_SortsByCreatedAt_WhenSortByCreatedAt()
+    {
+        // Arrange
+        var older = new Subject
+        {
+            Kind = "person",
+            MetadataContainerId = Guid.NewGuid(),
+            CreatedAt = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc)
+        };
+        var newer = new Subject
+        {
+            Kind = "studio",
+            MetadataContainerId = Guid.NewGuid(),
+            CreatedAt = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc)
+        };
+
+        _subjectRepository
+            .Setup(m => m.ListAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([newer, older]);
+
+        // Act
+        var response = await _client
+            .GetAsync("/api/subjects?sortBy=CreatedAt&sortDirection=Ascending")
+            .ConfigureAwait(false);
+
+        // Assert
+        var content = await response.Content.ReadFromJsonAsync<Subject[]>().ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
+            Assert.That(content, Has.Length.EqualTo(2));
+            Assert.That(content![0].Kind, Is.EqualTo("person"));
+            Assert.That(content[1].Kind, Is.EqualTo("studio"));
+        }
+    }
+
+    [Test]
+    public async Task GetSubjects_ReturnsBadRequest_WhenSortByIsUnknown()
+    {
+        // Arrange
+        _subjectRepository
+            .Setup(m => m.ListAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+
+        // Act
+        var response = await _client.GetAsync("/api/subjects?sortBy=unknownField").ConfigureAwait(false);
+
+        // Assert
+        Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.BadRequest));
+    }
+
+    [Test]
+    public async Task GetSubjects_ReturnsBadRequest_WhenFilterProvided()
+    {
+        // Arrange
+        _subjectRepository
+            .Setup(m => m.ListAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+
+        // Act
+        var response = await _client
+            .GetAsync("/api/subjects?filter=kind%20%3D%20%22person%22")
+            .ConfigureAwait(false);
+
+        // Assert
+        var body = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.BadRequest));
+            Assert.That(body, Does.Contain("filter"));
+            Assert.That(body, Does.Contain("not yet supported"));
+        }
+    }
+
+    [Test]
     public async Task CreateSubject_CreatesAndReturnsSubject()
     {
         // Arrange

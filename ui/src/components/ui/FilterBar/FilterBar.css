@@ -1,0 +1,167 @@
+@layer components {
+    .filter-bar {
+        background-color: var(--bg-secondary);
+        border: 1px solid var(--border-default);
+        border-radius: var(--radius-lg);
+        overflow: hidden;
+        transition: border-color var(--duration-fast) var(--easing-default);
+    }
+
+    .filter-bar--active {
+        border-color: var(--accent-primary);
+    }
+
+    .filter-bar__header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: var(--space-md);
+        padding: var(--space-sm) var(--space-md);
+    }
+
+    .filter-bar__toggle {
+        display: flex;
+        align-items: center;
+        gap: var(--space-sm);
+        padding: var(--space-xs) var(--space-sm);
+        margin: calc(-1 * var(--space-xs)) calc(-1 * var(--space-sm));
+        font-size: var(--text-sm);
+        font-weight: var(--weight-semibold);
+        color: var(--text-secondary);
+        background: none;
+        border: none;
+        border-radius: var(--radius-md);
+        cursor: pointer;
+        transition:
+            color var(--duration-fast) var(--easing-default),
+            background-color var(--duration-fast) var(--easing-default);
+
+        &:hover {
+            color: var(--text-primary);
+            background-color: var(--bg-tertiary);
+        }
+
+        &:focus-visible {
+            outline: var(--focus-ring-width) solid var(--focus-ring-color);
+            outline-offset: var(--focus-ring-offset);
+        }
+    }
+
+    .filter-bar__icon {
+        font-size: var(--text-lg);
+        color: var(--accent-primary);
+    }
+
+    .filter-bar__label {
+        text-transform: uppercase;
+        letter-spacing: var(--tracking-wide);
+    }
+
+    .filter-bar__badge {
+        margin-left: var(--space-xs);
+    }
+
+    .filter-bar__caret {
+        font-size: var(--text-sm);
+        color: var(--text-muted);
+        margin-left: var(--space-xs);
+    }
+
+    .filter-bar__actions {
+        display: flex;
+        align-items: center;
+        gap: var(--space-sm);
+    }
+
+    .filter-bar__clear {
+        font-size: var(--text-xs);
+    }
+
+    .filter-bar__save {
+        font-size: var(--text-xs);
+    }
+
+    .filter-bar__saved-trigger {
+        font-size: var(--text-xs);
+        gap: var(--space-xs);
+    }
+
+    .filter-bar__btn-label {
+    }
+
+    .filter-bar__content {
+        padding: var(--space-md);
+        padding-top: 0;
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-md);
+        border-top: 1px solid var(--border-subtle);
+        margin-top: var(--space-xs);
+    }
+
+    .filter-bar__panel {
+    }
+
+    .filter-bar__editor-wrap {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-sm);
+    }
+
+    .filter-bar__hint {
+        margin: 0;
+        font-size: var(--text-xs);
+        color: var(--text-muted);
+        line-height: var(--leading-relaxed);
+
+        & code {
+            padding: 0 var(--space-xs);
+            font-family: var(--font-mono);
+            font-size: var(--text-xs);
+            color: var(--accent-secondary);
+            background-color: var(--bg-tertiary);
+            border-radius: var(--radius-sm);
+        }
+    }
+
+    .filter-bar__query-preview {
+        display: flex;
+        align-items: flex-start;
+        gap: var(--space-sm);
+        padding: var(--space-sm);
+        background-color: var(--bg-tertiary);
+        border-radius: var(--radius-sm);
+        font-size: var(--text-xs);
+    }
+
+    .filter-bar__query-label {
+        flex-shrink: 0;
+        font-weight: var(--weight-medium);
+        color: var(--text-muted);
+    }
+
+    .filter-bar__query-text {
+        font-family: var(--font-mono);
+        color: var(--accent-secondary);
+        word-break: break-word;
+    }
+
+    @media (max-width: 480px) {
+        .filter-bar__header {
+            padding: var(--space-xs) var(--space-sm);
+        }
+
+        .filter-bar__btn-label {
+            display: none;
+        }
+
+        .filter-bar__content {
+            padding: var(--space-sm);
+            padding-top: 0;
+        }
+
+        .filter-bar__hint {
+            display: none;
+        }
+    }
+}

@@ -1,0 +1,36 @@
+@layer components {
+    .path-input {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-xs);
+    }
+
+    .path-input__wrapper {
+        display: flex;
+        gap: var(--space-sm);
+        align-items: flex-start;
+    }
+
+    .path-input__input {
+        flex: 1;
+        min-width: 0;
+    }
+
+    .path-input__input .input-container {
+        width: 100%;
+    }
+
+    .path-input__browse {
+        flex-shrink: 0;
+    }
+
+    @media (max-width: 480px) {
+        .path-input__wrapper {
+            flex-direction: column;
+        }
+
+        .path-input__browse {
+            width: 100%;
+        }
+    }
+}

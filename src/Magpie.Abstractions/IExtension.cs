@@ -8,10 +8,19 @@ namespace Magpie.Abstractions;
 /// Entry point for a Magpie extension.
 /// </summary>
 /// <remarks>
+/// <para>
 /// Extensions are loaded at startup and given the opportunity to register services,
 /// CLI options, and other components with the host. An extension may provide one or
 /// many capabilities (content types, metadata providers, integrations, etc.) or simply
 /// add cross-cutting functionality.
+/// </para>
+/// <para>
+/// Implementations must expose a public parameterless constructor: the host instantiates
+/// extensions via <c>System.Activator.CreateInstance</c>. Authors that need dependency
+/// injection should accept dependencies through services registered in
+/// <see cref="RegisterServices"/>, or resolve them from the host service provider
+/// during a lifecycle hook (e.g. <c>OnAppInitializeAsync</c>).
+/// </para>
 /// </remarks>
 public interface IExtension
 {
@@ -21,7 +30,7 @@ public interface IExtension
     Guid Id { get; }
 
     /// <summary>
-    /// The version of the extension.
+    /// The version of the extension. Used for ordering and update detection.
     /// </summary>
     Version Version { get; }
 

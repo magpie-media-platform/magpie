@@ -1,0 +1,5 @@
+@layer components {
+    .slot {
+        display: contents;
+    }
+}

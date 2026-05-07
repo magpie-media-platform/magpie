@@ -258,6 +258,10 @@ public sealed class WishlistRepository(
                 {
                     model.OwnerLock = patch.OwnerLock.Value;
                 }
+                if (patch.Enabled is not null)
+                {
+                    model.Enabled = patch.Enabled.Value;
+                }
 
                 if (patch.Tags is not null)
                 {

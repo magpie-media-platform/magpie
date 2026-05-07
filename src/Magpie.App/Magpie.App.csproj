@@ -20,4 +20,8 @@
     <PackageReference Include="System.CommandLine" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="Magpie.Test.App" />
+  </ItemGroup>
+
 </Project>

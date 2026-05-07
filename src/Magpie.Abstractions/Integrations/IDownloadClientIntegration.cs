@@ -34,7 +34,7 @@ public interface IDownloadClientIntegration
     /// </summary>
     /// <param name="externalId">The external id of the download.</param>
     /// <param name="cancellationToken">The cancellation token.</param>
-    /// <returns>The result containing the download status on success, or an error on failure.</returns>
+    /// <returns>The current state of the download.</returns>
     Task<DownloadInfo> GetDownloadAsync(string externalId, CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -43,12 +43,40 @@ public interface IDownloadClientIntegration
     /// <param name="downloadId">The unique id of the download.</param>
     /// <param name="deleteFiles">Whether to delete the downloaded files.</param>
     /// <param name="cancellationToken">The cancellation token.</param>
-    /// <returns>The result indicating success or failure with an error reason.</returns>
+    /// <returns><see langword="true"/> if the download was removed; otherwise <see langword="false"/>.</returns>
     Task<bool> RemoveDownloadAsync(string downloadId, bool deleteFiles, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Pauses an in-flight download.
+    /// </summary>
+    /// <param name="externalId">The external id of the download in the client.</param>
+    /// <param name="settings">Provider-specific configuration (host, port, api key, etc.).</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
+    /// <returns>True if the download was paused (or already paused); false on failure.</returns>
+    Task<bool> PauseDownloadAsync(
+        string externalId,
+        IReadOnlyDictionary<string, string> settings,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Resumes a paused download.
+    /// </summary>
+    /// <param name="externalId">The external id of the download in the client.</param>
+    /// <param name="settings">Provider-specific configuration (host, port, api key, etc.).</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
+    /// <returns>True if the download was resumed (or already running); false on failure.</returns>
+    Task<bool> ResumeDownloadAsync(
+        string externalId,
+        IReadOnlyDictionary<string, string> settings,
+        CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Tests the connection to the download client.
     /// </summary>
+    /// <param name="settings">Provider-specific configuration to use for the test (host, port, api key, etc.).</param>
     /// <param name="cancellationToken">The cancellation token.</param>
-    Task<bool> TestConnectionAsync(CancellationToken cancellationToken = default);
+    /// <returns>A <see cref="ConnectionTestResult"/> describing success or failure with a message.</returns>
+    Task<ConnectionTestResult> TestConnectionAsync(
+        IReadOnlyDictionary<string, string> settings,
+        CancellationToken cancellationToken = default);
 }

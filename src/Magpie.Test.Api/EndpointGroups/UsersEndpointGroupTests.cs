@@ -10,6 +10,8 @@ using Magpie.Abstractions.Api;
 using Magpie.Abstractions.Repositories;
 using Magpie.Abstractions.Security;
 using Magpie.Api.EndpointGroups;
+using Magpie.Api.Request;
+using Magpie.Models.Api;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
@@ -39,6 +41,7 @@ public class UsersEndpointGroupTests
     private HttpClient _client = null!;
     private Mock<IUserRepository> _userRepository = null!;
     private Mock<IUserManager> _userManager = null!;
+    private Mock<IPasswordHasher> _passwordHasher = null!;
     private Guid _userId;
 
     [SetUp]
@@ -47,6 +50,10 @@ public class UsersEndpointGroupTests
         _userId = Guid.NewGuid();
         _userRepository = new Mock<IUserRepository>();
         _userManager = new Mock<IUserManager>();
+        _passwordHasher = new Mock<IPasswordHasher>();
+        _passwordHasher
+            .Setup(m => m.HashPasswordAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new IPasswordHasher.HashedPassword("hashed", "salt"));
 
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
@@ -69,6 +76,7 @@ public class UsersEndpointGroupTests
 
         builder.Services.AddSingleton(_userRepository.Object);
         builder.Services.AddSingleton(_userManager.Object);
+        builder.Services.AddSingleton(_passwordHasher.Object);
         builder.Services.AddSingleton<IApiEndpointGroup, UsersEndpointGroup>();
 
         var app = builder.Build();
@@ -122,12 +130,46 @@ public class UsersEndpointGroupTests
         var response = await _client.GetAsync("/api/users/me").ConfigureAwait(false);
 
         // Assert
-        var content = await response.Content.ReadFromJsonAsync<User>().ConfigureAwait(false);
+        var content = await response.Content.ReadFromJsonAsync<UserResponse>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
             Assert.That(content, Has.Property(nameof(content.Id)).EqualTo(_userId));
             Assert.That(content, Has.Property(nameof(content.Username)).EqualTo("TestUser"));
+        }
+    }
+
+    [Test]
+    public async Task GetCurrentUser_ExcludesCredentialFields()
+    {
+        // Arrange
+        var user = new User
+        {
+            Id = _userId,
+            Username = "TestUser",
+            Email = "test@example.com",
+            Role = Role.Viewer,
+            ProviderType = "local",
+            PasswordHash = "secret-hash",
+            PasswordSalt = "secret-salt"
+        };
+
+        _userRepository
+            .Setup(m => m.GetByIdAsync(_userId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(user);
+
+        // Act
+        var response = await _client.GetAsync("/api/users/me").ConfigureAwait(false);
+
+        // Assert
+        var json = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
+            Assert.That(json, Does.Not.Contain("secret-hash"));
+            Assert.That(json, Does.Not.Contain("secret-salt"));
+            Assert.That(json, Does.Not.Contain("PasswordHash"));
+            Assert.That(json, Does.Not.Contain("PasswordSalt"));
         }
     }
 
@@ -199,7 +241,7 @@ public class UsersEndpointGroupTests
         var response = await _client.GetAsync("/api/users").ConfigureAwait(false);
 
         // Assert
-        var content = await response.Content.ReadFromJsonAsync<PagedList<User>>().ConfigureAwait(false);
+        var content = await response.Content.ReadFromJsonAsync<PagedList<UserResponse>>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
@@ -235,14 +277,14 @@ public class UsersEndpointGroupTests
         var response = await _client.GetAsync("/api/users").ConfigureAwait(false);
 
         // Assert
-        var content = await response.Content.ReadFromJsonAsync<PagedList<User>>().ConfigureAwait(false);
+        var content = await response.Content.ReadFromJsonAsync<PagedList<UserResponse>>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
             Assert.That(content, Has.Property(nameof(content.Items)).With.Count.EqualTo(1));
-            Assert.That(content, Has.Property(nameof(content.Items)).With.One.With.Property(nameof(User.Username))
+            Assert.That(content, Has.Property(nameof(content.Items)).With.One.With.Property(nameof(UserResponse.Username))
                 .EqualTo("TestUser"));
-            Assert.That(content, Has.Property(nameof(content.Items)).With.One.With.Property(nameof(User.Email))
+            Assert.That(content, Has.Property(nameof(content.Items)).With.One.With.Property(nameof(UserResponse.Email))
                 .EqualTo("test@example.com"));
         }
     }
@@ -252,12 +294,7 @@ public class UsersEndpointGroupTests
     {
         // Arrange
         var userId = Guid.NewGuid();
-        var request = new UserCreate
-        {
-            Username = "NewUser",
-            PasswordHash = "hashedpassword",
-            Role = Role.Viewer
-        };
+        var request = new CreateUserRequest("NewUser", "plaintextpassword", Role.Viewer);
 
         var createdUser = new User
         {
@@ -269,7 +306,7 @@ public class UsersEndpointGroupTests
 
         _userManager
             .Setup(m => m.CreateLocalUserAsync(
-                It.Is<UserCreate>(c => c.Username == "NewUser"),
+                It.Is<UserCreate>(c => c.Username == "NewUser" && c.PasswordHash == "hashed" && c.PasswordSalt == "salt"),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(createdUser);
 
@@ -277,7 +314,7 @@ public class UsersEndpointGroupTests
         var response = await _client.PostAsJsonAsync("/api/users", request).ConfigureAwait(false);
 
         // Assert
-        var content = await response.Content.ReadFromJsonAsync<User>().ConfigureAwait(false);
+        var content = await response.Content.ReadFromJsonAsync<UserResponse>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.Created));
@@ -308,7 +345,7 @@ public class UsersEndpointGroupTests
         var response = await _client.GetAsync($"/api/users/{userId}").ConfigureAwait(false);
 
         // Assert
-        var content = await response.Content.ReadFromJsonAsync<User>().ConfigureAwait(false);
+        var content = await response.Content.ReadFromJsonAsync<UserResponse>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
@@ -398,7 +435,7 @@ public class UsersEndpointGroupTests
         var response = await _client.PostAsync($"/api/users/{userId}/enable", null).ConfigureAwait(false);
 
         // Assert
-        var content = await response.Content.ReadFromJsonAsync<User>().ConfigureAwait(false);
+        var content = await response.Content.ReadFromJsonAsync<UserResponse>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
@@ -451,7 +488,7 @@ public class UsersEndpointGroupTests
         var response = await _client.PostAsync($"/api/users/{userId}/disable", null).ConfigureAwait(false);
 
         // Assert
-        var content = await response.Content.ReadFromJsonAsync<User>().ConfigureAwait(false);
+        var content = await response.Content.ReadFromJsonAsync<UserResponse>().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));

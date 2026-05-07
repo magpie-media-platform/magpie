@@ -9,6 +9,7 @@ using System.Threading.Tasks;
 using Magpie.Abstractions.Api;
 using Magpie.Abstractions.Repositories;
 using Magpie.Api.EndpointGroups;
+using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Test.Shared;
@@ -222,7 +223,7 @@ public class RootFoldersEndpointGroupTests
             Path = "/media/movies",
             ContentTypeId = contentTypeId,
         };
-        var request = new RootFolder
+        var request = new RootFolderPatch
         {
             Name = "Updated Movies",
             Path = "/media/updated-movies",
@@ -259,7 +260,7 @@ public class RootFoldersEndpointGroupTests
         // Arrange
         var rootFolderId = Guid.NewGuid();
         var contentTypeId = Guid.NewGuid();
-        var request = new RootFolder
+        var request = new RootFolderPatch
         {
             Name = "Updated Movies",
             Path = "/media/updated-movies",

@@ -43,6 +43,10 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Magpie.QueryLanguage", "Mag
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Magpie.Test.QueryLanguage", "Magpie.Test.QueryLanguage\Magpie.Test.QueryLanguage.csproj", "{E3BFEC49-B0F4-405F-A817-7DE6B2849F1F}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Magpie.Extensions.SampleIndexer", "Magpie.Extensions.SampleIndexer\Magpie.Extensions.SampleIndexer.csproj", "{1A81DBED-216B-4467-8F98-80D3452B7013}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Magpie.Test.App", "Magpie.Test.App\Magpie.Test.App.csproj", "{98D8CC7E-DEBB-42EC-A9BF-DEF37DAA87D7}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -293,6 +297,30 @@ Global
 		{E3BFEC49-B0F4-405F-A817-7DE6B2849F1F}.Release|x64.Build.0 = Release|Any CPU
 		{E3BFEC49-B0F4-405F-A817-7DE6B2849F1F}.Release|x86.ActiveCfg = Release|Any CPU
 		{E3BFEC49-B0F4-405F-A817-7DE6B2849F1F}.Release|x86.Build.0 = Release|Any CPU
+		{1A81DBED-216B-4467-8F98-80D3452B7013}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{1A81DBED-216B-4467-8F98-80D3452B7013}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{1A81DBED-216B-4467-8F98-80D3452B7013}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{1A81DBED-216B-4467-8F98-80D3452B7013}.Debug|x64.Build.0 = Debug|Any CPU
+		{1A81DBED-216B-4467-8F98-80D3452B7013}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{1A81DBED-216B-4467-8F98-80D3452B7013}.Debug|x86.Build.0 = Debug|Any CPU
+		{1A81DBED-216B-4467-8F98-80D3452B7013}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{1A81DBED-216B-4467-8F98-80D3452B7013}.Release|Any CPU.Build.0 = Release|Any CPU
+		{1A81DBED-216B-4467-8F98-80D3452B7013}.Release|x64.ActiveCfg = Release|Any CPU
+		{1A81DBED-216B-4467-8F98-80D3452B7013}.Release|x64.Build.0 = Release|Any CPU
+		{1A81DBED-216B-4467-8F98-80D3452B7013}.Release|x86.ActiveCfg = Release|Any CPU
+		{1A81DBED-216B-4467-8F98-80D3452B7013}.Release|x86.Build.0 = Release|Any CPU
+		{98D8CC7E-DEBB-42EC-A9BF-DEF37DAA87D7}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{98D8CC7E-DEBB-42EC-A9BF-DEF37DAA87D7}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{98D8CC7E-DEBB-42EC-A9BF-DEF37DAA87D7}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{98D8CC7E-DEBB-42EC-A9BF-DEF37DAA87D7}.Debug|x64.Build.0 = Debug|Any CPU
+		{98D8CC7E-DEBB-42EC-A9BF-DEF37DAA87D7}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{98D8CC7E-DEBB-42EC-A9BF-DEF37DAA87D7}.Debug|x86.Build.0 = Debug|Any CPU
+		{98D8CC7E-DEBB-42EC-A9BF-DEF37DAA87D7}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{98D8CC7E-DEBB-42EC-A9BF-DEF37DAA87D7}.Release|Any CPU.Build.0 = Release|Any CPU
+		{98D8CC7E-DEBB-42EC-A9BF-DEF37DAA87D7}.Release|x64.ActiveCfg = Release|Any CPU
+		{98D8CC7E-DEBB-42EC-A9BF-DEF37DAA87D7}.Release|x64.Build.0 = Release|Any CPU
+		{98D8CC7E-DEBB-42EC-A9BF-DEF37DAA87D7}.Release|x86.ActiveCfg = Release|Any CPU
+		{98D8CC7E-DEBB-42EC-A9BF-DEF37DAA87D7}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

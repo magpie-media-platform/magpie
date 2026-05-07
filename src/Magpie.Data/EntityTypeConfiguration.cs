@@ -609,13 +609,20 @@ internal sealed class EntityTypeConfiguration :
         builder.HasIndex(e => e.Username).IsUnique();
         builder.HasIndex(e => e.Email);
 
+        // Seeded root admin. The password hash and salt below are
+        // PBKDF2-HMAC-SHA256 with 100,000 iterations, 32-byte hash, and a 32-byte
+        // salt of bytes 0..31. The plaintext is "magpie". This must round-trip with
+        // Magpie.Core.Security.LocalPasswordHasher; see UserSeedHashTests.
+        // Operators are expected to change this password on first login.
         builder.HasData(new User
         {
             Id = new Guid("11111111-1111-1111-1111-111111111112"),
             Username = "root",
-            ProviderType = "system",
+            ProviderType = "local",
             Enabled = true,
             Role = Role.Admin,
+            PasswordHash = "vsgOXycyiKgFzjiJqQTfDXzlqXbDZCN4zBxH5yDa56Y=",
+            PasswordSalt = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
             CreatedAt = DateTime.UnixEpoch
         });
     }

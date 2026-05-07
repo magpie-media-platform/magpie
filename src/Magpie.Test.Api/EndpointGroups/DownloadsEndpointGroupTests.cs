@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Json;
@@ -7,8 +8,10 @@ using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions.Api;
+using Magpie.Abstractions.Integrations;
 using Magpie.Abstractions.Repositories;
 using Magpie.Api.EndpointGroups;
+using Magpie.Models;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
@@ -37,11 +40,15 @@ public class DownloadsEndpointGroupTests
     private IHost _host = null!;
     private HttpClient _client = null!;
     private Mock<IDownloadRepository> _downloadRepository = null!;
+    private Mock<IDownloadClientRepository> _downloadClientRepository = null!;
+    private FakeDownloadClientIntegration _integration = null!;
 
     [SetUp]
     public void SetUp()
     {
         _downloadRepository = new Mock<IDownloadRepository>();
+        _downloadClientRepository = new Mock<IDownloadClientRepository>();
+        _integration = new FakeDownloadClientIntegration();
 
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
@@ -61,6 +68,8 @@ public class DownloadsEndpointGroupTests
             .AddPolicy(nameof(Role.Manager), policy => policy.RequireAssertion(_ => true));
 
         builder.Services.AddSingleton(_downloadRepository.Object);
+        builder.Services.AddSingleton(_downloadClientRepository.Object);
+        builder.Services.AddSingleton<IDownloadClientIntegration>(_integration);
         builder.Services.AddSingleton<IApiEndpointGroup, DownloadsEndpointGroup>();
 
         var app = builder.Build();
@@ -437,5 +446,339 @@ public class DownloadsEndpointGroupTests
 
         // Assert
         Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NotFound));
+    }
+
+    [Test]
+    public async Task PauseDownload_DispatchesToMatchingIntegration()
+    {
+        // Arrange
+        var downloadId = Guid.NewGuid();
+        var downloadClientId = Guid.NewGuid();
+        var download = new Download
+        {
+            Id = downloadId,
+            DownloadClientId = downloadClientId,
+            ExternalId = "torrent-pause-1",
+            Title = "Pause Me",
+            Status = DownloadStatus.Downloading,
+            CreatedAt = DateTime.UtcNow
+        };
+        var downloadClient = new DownloadClient
+        {
+            Id = downloadClientId,
+            Name = "qBittorrent",
+            ProviderType = "fake",
+            Enabled = true,
+            Status = DownloadClientStatus.Healthy,
+            Settings = new() { ["Host"] = "localhost" }
+        };
+
+        _downloadRepository
+            .Setup(m => m.GetByIdAsync(downloadId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(download);
+        _downloadClientRepository
+            .Setup(m => m.GetByIdAsync(downloadClientId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(downloadClient);
+        _integration.NextPauseResult = true;
+
+        // Act
+        var response = await _client.PostAsync($"/api/downloads/{downloadId}/pause", null)
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NoContent));
+            Assert.That(_integration.LastPauseExternalId, Is.EqualTo("torrent-pause-1"));
+            Assert.That(_integration.LastPauseSettings, Is.Not.Null);
+            Assert.That(_integration.LastPauseSettings!["Host"], Is.EqualTo("localhost"));
+        }
+    }
+
+    [Test]
+    public async Task PauseDownload_ReturnsBadGateway_WhenIntegrationReturnsFalse()
+    {
+        // Arrange
+        var downloadId = Guid.NewGuid();
+        var downloadClientId = Guid.NewGuid();
+        var download = new Download
+        {
+            Id = downloadId,
+            DownloadClientId = downloadClientId,
+            ExternalId = "torrent-pause-2",
+            Title = "Reject",
+            Status = DownloadStatus.Downloading,
+            CreatedAt = DateTime.UtcNow
+        };
+        var downloadClient = new DownloadClient
+        {
+            Id = downloadClientId,
+            Name = "qBittorrent",
+            ProviderType = "fake",
+            Enabled = true,
+            Status = DownloadClientStatus.Healthy,
+            Settings = []
+        };
+
+        _downloadRepository
+            .Setup(m => m.GetByIdAsync(downloadId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(download);
+        _downloadClientRepository
+            .Setup(m => m.GetByIdAsync(downloadClientId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(downloadClient);
+        _integration.NextPauseResult = false;
+
+        // Act
+        var response = await _client.PostAsync($"/api/downloads/{downloadId}/pause", null)
+            .ConfigureAwait(false);
+
+        // Assert
+        Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.BadGateway));
+    }
+
+    [Test]
+    public async Task PauseDownload_ReturnsNotFound_WhenDownloadDoesNotExist()
+    {
+        // Arrange
+        var downloadId = Guid.NewGuid();
+        _downloadRepository
+            .Setup(m => m.GetByIdAsync(downloadId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(default(Download?));
+
+        // Act
+        var response = await _client.PostAsync($"/api/downloads/{downloadId}/pause", null)
+            .ConfigureAwait(false);
+
+        // Assert
+        Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NotFound));
+    }
+
+    [Test]
+    public async Task PauseDownload_ReturnsNotFound_WhenDownloadClientDoesNotExist()
+    {
+        // Arrange
+        var downloadId = Guid.NewGuid();
+        var downloadClientId = Guid.NewGuid();
+        var download = new Download
+        {
+            Id = downloadId,
+            DownloadClientId = downloadClientId,
+            ExternalId = "torrent-orphan",
+            Title = "Orphan",
+            Status = DownloadStatus.Downloading,
+            CreatedAt = DateTime.UtcNow
+        };
+
+        _downloadRepository
+            .Setup(m => m.GetByIdAsync(downloadId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(download);
+        _downloadClientRepository
+            .Setup(m => m.GetByIdAsync(downloadClientId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(default(DownloadClient?));
+
+        // Act
+        var response = await _client.PostAsync($"/api/downloads/{downloadId}/pause", null)
+            .ConfigureAwait(false);
+
+        // Assert
+        Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NotFound));
+    }
+
+    [Test]
+    public async Task PauseDownload_ReturnsNotFound_WhenNoMatchingIntegrationRegistered()
+    {
+        // Arrange
+        var downloadId = Guid.NewGuid();
+        var downloadClientId = Guid.NewGuid();
+        var download = new Download
+        {
+            Id = downloadId,
+            DownloadClientId = downloadClientId,
+            ExternalId = "torrent-no-integration",
+            Title = "No Integration",
+            Status = DownloadStatus.Downloading,
+            CreatedAt = DateTime.UtcNow
+        };
+        var downloadClient = new DownloadClient
+        {
+            Id = downloadClientId,
+            Name = "Other",
+            ProviderType = "unknown-provider",
+            Enabled = true,
+            Status = DownloadClientStatus.Unknown,
+            Settings = []
+        };
+
+        _downloadRepository
+            .Setup(m => m.GetByIdAsync(downloadId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(download);
+        _downloadClientRepository
+            .Setup(m => m.GetByIdAsync(downloadClientId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(downloadClient);
+
+        // Act
+        var response = await _client.PostAsync($"/api/downloads/{downloadId}/pause", null)
+            .ConfigureAwait(false);
+
+        // Assert
+        Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NotFound));
+    }
+
+    [Test]
+    public async Task ResumeDownload_DispatchesToMatchingIntegration()
+    {
+        // Arrange
+        var downloadId = Guid.NewGuid();
+        var downloadClientId = Guid.NewGuid();
+        var download = new Download
+        {
+            Id = downloadId,
+            DownloadClientId = downloadClientId,
+            ExternalId = "torrent-resume-1",
+            Title = "Resume Me",
+            Status = DownloadStatus.Paused,
+            CreatedAt = DateTime.UtcNow
+        };
+        var downloadClient = new DownloadClient
+        {
+            Id = downloadClientId,
+            Name = "qBittorrent",
+            ProviderType = "fake",
+            Enabled = true,
+            Status = DownloadClientStatus.Healthy,
+            Settings = new() { ["Host"] = "remote-host" }
+        };
+
+        _downloadRepository
+            .Setup(m => m.GetByIdAsync(downloadId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(download);
+        _downloadClientRepository
+            .Setup(m => m.GetByIdAsync(downloadClientId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(downloadClient);
+        _integration.NextResumeResult = true;
+
+        // Act
+        var response = await _client.PostAsync($"/api/downloads/{downloadId}/resume", null)
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NoContent));
+            Assert.That(_integration.LastResumeExternalId, Is.EqualTo("torrent-resume-1"));
+            Assert.That(_integration.LastResumeSettings, Is.Not.Null);
+            Assert.That(_integration.LastResumeSettings!["Host"], Is.EqualTo("remote-host"));
+        }
+    }
+
+    [Test]
+    public async Task ResumeDownload_ReturnsBadGateway_WhenIntegrationReturnsFalse()
+    {
+        // Arrange
+        var downloadId = Guid.NewGuid();
+        var downloadClientId = Guid.NewGuid();
+        var download = new Download
+        {
+            Id = downloadId,
+            DownloadClientId = downloadClientId,
+            ExternalId = "torrent-resume-fail",
+            Title = "Fail",
+            Status = DownloadStatus.Paused,
+            CreatedAt = DateTime.UtcNow
+        };
+        var downloadClient = new DownloadClient
+        {
+            Id = downloadClientId,
+            Name = "qBittorrent",
+            ProviderType = "fake",
+            Enabled = true,
+            Status = DownloadClientStatus.Healthy,
+            Settings = []
+        };
+
+        _downloadRepository
+            .Setup(m => m.GetByIdAsync(downloadId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(download);
+        _downloadClientRepository
+            .Setup(m => m.GetByIdAsync(downloadClientId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(downloadClient);
+        _integration.NextResumeResult = false;
+
+        // Act
+        var response = await _client.PostAsync($"/api/downloads/{downloadId}/resume", null)
+            .ConfigureAwait(false);
+
+        // Assert
+        Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.BadGateway));
+    }
+
+    [Test]
+    public async Task ResumeDownload_ReturnsNotFound_WhenDownloadDoesNotExist()
+    {
+        // Arrange
+        var downloadId = Guid.NewGuid();
+        _downloadRepository
+            .Setup(m => m.GetByIdAsync(downloadId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(default(Download?));
+
+        // Act
+        var response = await _client.PostAsync($"/api/downloads/{downloadId}/resume", null)
+            .ConfigureAwait(false);
+
+        // Assert
+        Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NotFound));
+    }
+
+    private sealed class FakeDownloadClientIntegration : IDownloadClientIntegration
+    {
+        public string ProviderType => "fake";
+
+        public IEnumerable<string> SupportedProtocols => ["torrent"];
+
+        public bool NextPauseResult { get; set; } = true;
+
+        public bool NextResumeResult { get; set; } = true;
+
+        public string? LastPauseExternalId { get; private set; }
+
+        public IReadOnlyDictionary<string, string>? LastPauseSettings { get; private set; }
+
+        public string? LastResumeExternalId { get; private set; }
+
+        public IReadOnlyDictionary<string, string>? LastResumeSettings { get; private set; }
+
+        public Task<DownloadInfo> DownloadReleaseAsync(Release release, CancellationToken cancellationToken = default)
+            => throw new NotImplementedException();
+
+        public Task<DownloadInfo> GetDownloadAsync(string externalId, CancellationToken cancellationToken = default)
+            => throw new NotImplementedException();
+
+        public Task<bool> RemoveDownloadAsync(string downloadId, bool deleteFiles, CancellationToken cancellationToken = default)
+            => throw new NotImplementedException();
+
+        public Task<bool> PauseDownloadAsync(
+            string externalId,
+            IReadOnlyDictionary<string, string> settings,
+            CancellationToken cancellationToken = default)
+        {
+            LastPauseExternalId = externalId;
+            LastPauseSettings = settings;
+            return Task.FromResult(NextPauseResult);
+        }
+
+        public Task<bool> ResumeDownloadAsync(
+            string externalId,
+            IReadOnlyDictionary<string, string> settings,
+            CancellationToken cancellationToken = default)
+        {
+            LastResumeExternalId = externalId;
+            LastResumeSettings = settings;
+            return Task.FromResult(NextResumeResult);
+        }
+
+        public Task<ConnectionTestResult> TestConnectionAsync(
+            IReadOnlyDictionary<string, string> settings,
+            CancellationToken cancellationToken = default)
+            => Task.FromResult(new ConnectionTestResult { Success = true, Message = "ok" });
     }
 }

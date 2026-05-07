@@ -1,0 +1,23 @@
+@layer components {
+    .logo {
+        display: inline-block;
+        flex-shrink: 0;
+        background-color: currentColor;
+        mask-size: contain;
+        mask-repeat: no-repeat;
+        mask-position: center;
+        -webkit-mask-size: contain;
+        -webkit-mask-repeat: no-repeat;
+        -webkit-mask-position: center;
+    }
+
+    .logo--default {
+        mask-image: url('/magpie.png');
+        -webkit-mask-image: url('/magpie.png');
+    }
+
+    .logo--solid {
+        mask-image: url('/magpie-solid.png');
+        -webkit-mask-image: url('/magpie-solid.png');
+    }
+}

@@ -1,0 +1,32 @@
+@layer components {
+    .route-loading {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-xl);
+        padding: var(--space-xl);
+        width: 100%;
+        max-width: var(--content-max-width);
+        margin: 0 auto;
+    }
+
+    .route-loading__header {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-sm);
+    }
+
+    .route-loading__content {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-lg);
+    }
+
+    .route-loading__card {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-sm);
+        padding: var(--space-lg);
+        background-color: var(--bg-secondary);
+        border-radius: var(--radius-md);
+    }
+}

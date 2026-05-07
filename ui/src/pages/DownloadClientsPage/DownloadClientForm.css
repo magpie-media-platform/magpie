@@ -1,0 +1,74 @@
+@layer components {
+    .download-client-form__sheet {
+        max-width: 480px;
+    }
+
+    .download-client-form {
+        display: flex;
+        flex-direction: column;
+        flex: 1;
+        min-height: 0;
+        overflow: hidden;
+    }
+
+    .download-client-form__body {
+        flex: 1;
+        overflow-y: auto;
+        padding: var(--space-lg);
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-lg);
+    }
+
+    .download-client-form__field {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-xs);
+    }
+
+    .download-client-form__field--toggle {
+        gap: var(--space-xs);
+    }
+
+    .download-client-form__toggle-wrapper {
+        display: flex;
+        align-items: center;
+        gap: var(--space-sm);
+    }
+
+    .download-client-form__toggle-wrapper .label {
+        margin-bottom: 0;
+        cursor: pointer;
+    }
+
+    .download-client-form__help {
+        margin: 0;
+        font-size: var(--text-xs);
+        color: var(--text-muted);
+        line-height: var(--leading-normal);
+    }
+
+    .download-client-form__settings {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-md);
+        padding-top: var(--space-md);
+        border-top: 1px solid var(--border-default);
+    }
+
+    .download-client-form__settings-title {
+        margin: 0;
+        font-size: var(--text-sm);
+        font-weight: var(--weight-semibold);
+        color: var(--text-primary);
+        text-transform: uppercase;
+        letter-spacing: var(--tracking-wide);
+    }
+
+    @media (max-width: 480px) {
+        .download-client-form__sheet {
+            max-width: 100%;
+            border-radius: 0;
+        }
+    }
+}

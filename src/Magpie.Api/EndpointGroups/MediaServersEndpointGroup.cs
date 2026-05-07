@@ -1,10 +1,14 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions.Api;
+using Magpie.Abstractions.Integrations;
 using Magpie.Abstractions.Repositories;
 using Magpie.Abstractions.Security;
+using Magpie.Models;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
@@ -15,7 +19,9 @@ using Microsoft.AspNetCore.Routing;
 
 namespace Magpie.Api.EndpointGroups;
 
-internal sealed class MediaServersEndpointGroup(IMediaServerRepository mediaServerRepository) : IApiEndpointGroup
+internal sealed class MediaServersEndpointGroup(
+    IMediaServerRepository mediaServerRepository,
+    IEnumerable<IMediaServerIntegration> mediaServerIntegrations) : IApiEndpointGroup
 {
     public string Name => "media-servers";
 
@@ -54,6 +60,12 @@ internal sealed class MediaServersEndpointGroup(IMediaServerRepository mediaServ
         builder.MapPost("{id:guid}/disable", DisableMediaServer)
             .WithName(nameof(DisableMediaServer))
             .Produces<MediaServer>()
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .RequireManager();
+
+        builder.MapPost("{id:guid}/test", TestMediaServer)
+            .WithName(nameof(TestMediaServer))
+            .Produces<ConnectionTestResult>()
             .ProducesProblem(StatusCodes.Status404NotFound)
             .RequireManager();
 
@@ -173,6 +185,37 @@ internal sealed class MediaServersEndpointGroup(IMediaServerRepository mediaServ
             .ConfigureAwait(false);
 
         return Results.Ok(mediaServer);
+    }
+
+    private async Task<IResult> TestMediaServer(Guid id, CancellationToken cancellationToken)
+    {
+        var mediaServer = await mediaServerRepository.GetByIdAsync(id, cancellationToken)
+            .ConfigureAwait(false);
+
+        if (mediaServer is null)
+        {
+            return Results.NotFound();
+        }
+
+        var integration = mediaServerIntegrations
+            .FirstOrDefault(i => string.Equals(
+                i.MediaServerType,
+                mediaServer.ProviderType,
+                StringComparison.OrdinalIgnoreCase));
+
+        if (integration is null)
+        {
+            return Results.Ok(new ConnectionTestResult
+            {
+                Success = false,
+                Message = $"No integration registered for type '{mediaServer.ProviderType}'."
+            });
+        }
+
+        var result = await integration.TestConnectionAsync(mediaServer.Settings, cancellationToken)
+            .ConfigureAwait(false);
+
+        return Results.Ok(result);
     }
 
     private async Task<IResult> DeleteMediaServer(

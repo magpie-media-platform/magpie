@@ -19,8 +19,24 @@ internal sealed class AuthEndpointGroup(
 {
     public string Name => "auth";
 
+    private static readonly LoginProviderResponse[] LocalProviders =
+    [
+        new LoginProviderResponse
+        {
+            Id = "local",
+            Name = "Local",
+            Type = "local",
+            UsesCredentials = true,
+        }
+    ];
+
     public void MapEndpoints(IEndpointRouteBuilder builder)
     {
+        builder.MapGet("login/providers", () => Results.Ok(LocalProviders))
+            .WithName("GetLoginProviders")
+            .Produces<LoginProviderResponse[]>()
+            .AllowAnonymous();
+
         builder.MapPost("login", AuthLogin)
             .WithName(nameof(AuthLogin))
             .Produces<AuthTokenResponse>()

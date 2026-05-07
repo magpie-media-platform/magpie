@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using Magpie.Abstractions.Api;
 using Magpie.Abstractions.Repositories;
 using Magpie.Abstractions.Security;
+using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 
 using Microsoft.AspNetCore.Builder;
@@ -92,7 +93,7 @@ internal sealed class RootFoldersEndpointGroup(
     private async Task<IResult> PatchRootFolder(
         HttpContext httpContext,
         Guid id,
-        RootFolder request,
+        RootFolderPatch request,
         CancellationToken cancellationToken)
     {
         var existing = await rootFolderRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
@@ -104,11 +105,11 @@ internal sealed class RootFoldersEndpointGroup(
 
         var currentUserId = httpContext.User.GetUserId();
 
-        var rootFolder = request with
+        var rootFolder = existing with
         {
-            Id = id,
-            CreatedAt = existing.CreatedAt,
-            CreatedByUserId = existing.CreatedByUserId,
+            Name = request.Name ?? existing.Name,
+            Path = request.Path ?? existing.Path,
+            ContentTypeId = request.ContentTypeId ?? existing.ContentTypeId,
             ModifiedAt = DateTime.UtcNow,
             ModifiedByUserId = currentUserId
         };

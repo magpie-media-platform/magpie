@@ -20,6 +20,7 @@
     <ProjectReference Include="..\Magpie.Core\Magpie.Core.csproj" />
     <ProjectReference Include="..\Magpie.Data\Magpie.Data.csproj" />
     <ProjectReference Include="..\Magpie.Models.Api\Magpie.Models.Api.csproj" />
+    <ProjectReference Include="..\Magpie.QueryLanguage\Magpie.QueryLanguage.csproj" />
   </ItemGroup>
 
 </Project>

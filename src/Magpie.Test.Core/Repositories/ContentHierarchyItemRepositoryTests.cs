@@ -778,6 +778,85 @@ public class ContentHierarchyItemRepositoryTests
     }
 
     [Test]
+    public async Task PatchAsync_UpdatesQualityTierListId()
+    {
+        // Arrange
+        var tierList = new QualityTierList { Name = "Test Tier List", CreatedAt = DateTime.UtcNow };
+        _context.QualityTierLists.Add(tierList);
+        await _context.SaveChangesAsync();
+
+        var item = new ContentHierarchyItem
+        {
+            MetadataContainerId = _metadataContainerId,
+            ContentType = "movies",
+            Level = "movie",
+            Slug = "quality-movie",
+            Name = "Quality Movie",
+            Monitoring = MonitoringIntent.Active,
+            CreatedAt = DateTime.UtcNow,
+            MetadataContainer = await _context.MetadataContainers.FindAsync(_metadataContainerId)
+        };
+
+        _context.ContentHierarchyItems.Add(item);
+        await _context.SaveChangesAsync();
+
+        var patch = new ContentHierarchyItemPatch
+        {
+            Id = item.Id,
+            QualityTierListId = new() { Value = tierList.Id }
+        };
+
+        // Act
+        var result = await _subject.PatchAsync(patch, _userId);
+
+        // Assert
+        Assert.That(result, Is.True);
+
+        var updated = await _subject.GetByIdAsync(item.Id);
+        Assert.That(updated, Has.Property(nameof(updated.QualityTierListId)).EqualTo(tierList.Id));
+    }
+
+    [Test]
+    public async Task PatchAsync_ClearsQualityTierListId()
+    {
+        // Arrange
+        var tierList = new QualityTierList { Name = "To Clear Tier List", CreatedAt = DateTime.UtcNow };
+        _context.QualityTierLists.Add(tierList);
+        await _context.SaveChangesAsync();
+
+        var item = new ContentHierarchyItem
+        {
+            MetadataContainerId = _metadataContainerId,
+            ContentType = "movies",
+            Level = "movie",
+            Slug = "clear-quality-movie",
+            Name = "Clear Quality Movie",
+            Monitoring = MonitoringIntent.Active,
+            QualityTierListId = tierList.Id,
+            CreatedAt = DateTime.UtcNow,
+            MetadataContainer = await _context.MetadataContainers.FindAsync(_metadataContainerId)
+        };
+
+        _context.ContentHierarchyItems.Add(item);
+        await _context.SaveChangesAsync();
+
+        var patch = new ContentHierarchyItemPatch
+        {
+            Id = item.Id,
+            QualityTierListId = new() { Value = null }
+        };
+
+        // Act
+        var result = await _subject.PatchAsync(patch, _userId);
+
+        // Assert
+        Assert.That(result, Is.True);
+
+        var updated = await _subject.GetByIdAsync(item.Id);
+        Assert.That(updated, Has.Property(nameof(updated.QualityTierListId)).Null);
+    }
+
+    [Test]
     public async Task PatchAsync_UpdatesPath()
     {
         // Arrange
@@ -1154,6 +1233,90 @@ public class ContentHierarchyItemRepositoryTests
         {
             Assert.That(items, Has.Exactly(1).Items);
             Assert.That(items, Has.One.With.Property(nameof(ContentHierarchyItem.Path)).Contains("action"));
+        }
+    }
+
+    [Test]
+    public async Task GetStatsAsync_ReturnsZeroes_WhenLibraryIsEmpty()
+    {
+        // Act
+        var stats = await _subject.GetStatsAsync();
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(stats, Has.Property(nameof(stats.Total)).EqualTo(0));
+            Assert.That(stats, Has.Property(nameof(stats.Missing)).EqualTo(0));
+            Assert.That(stats, Has.Property(nameof(stats.Upgradable)).EqualTo(0));
+            Assert.That(stats, Has.Property(nameof(stats.Fulfilled)).EqualTo(0));
+            Assert.That(stats, Has.Property(nameof(stats.FulfilledExternally)).EqualTo(0));
+        }
+    }
+
+    [Test]
+    public async Task GetStatsAsync_AggregatesAcrossEntireLibrary()
+    {
+        // Arrange: build a library with mixed fulfillment states. Items without a
+        // ContentItem must count as missing alongside items whose ContentItem.Fulfillment
+        // is Missing.
+        var fulfillmentByIndex = new[]
+        {
+            (FulfillmentStatus?)null,
+            (FulfillmentStatus?)null,
+            FulfillmentStatus.Missing,
+            FulfillmentStatus.Upgradable,
+            FulfillmentStatus.Upgradable,
+            FulfillmentStatus.Upgradable,
+            FulfillmentStatus.Fulfilled,
+            FulfillmentStatus.Fulfilled,
+            FulfillmentStatus.Fulfilled,
+            FulfillmentStatus.Fulfilled,
+            FulfillmentStatus.FulfilledExternally
+        };
+
+        for (var i = 0; i < fulfillmentByIndex.Length; i++)
+        {
+            var container = new MetadataContainer { CreatedAt = DateTime.UtcNow };
+            _context.MetadataContainers.Add(container);
+            await _context.SaveChangesAsync();
+
+            var hierarchy = new ContentHierarchyItem
+            {
+                MetadataContainerId = container.Id,
+                ContentType = "movies",
+                Level = "movie",
+                Slug = $"movie-{i}",
+                Name = $"Movie {i}",
+                Monitoring = MonitoringIntent.Active,
+                CreatedAt = DateTime.UtcNow
+            };
+            _context.ContentHierarchyItems.Add(hierarchy);
+            await _context.SaveChangesAsync();
+
+            if (fulfillmentByIndex[i] is { } status)
+            {
+                _context.ContentItems.Add(new ContentItem
+                {
+                    ContentHierarchyItemId = hierarchy.Id,
+                    Fulfillment = status,
+                    CreatedAt = DateTime.UtcNow
+                });
+            }
+        }
+
+        await _context.SaveChangesAsync();
+
+        // Act
+        var stats = await _subject.GetStatsAsync();
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(stats, Has.Property(nameof(stats.Total)).EqualTo(11));
+            Assert.That(stats, Has.Property(nameof(stats.Missing)).EqualTo(3));
+            Assert.That(stats, Has.Property(nameof(stats.Upgradable)).EqualTo(3));
+            Assert.That(stats, Has.Property(nameof(stats.Fulfilled)).EqualTo(4));
+            Assert.That(stats, Has.Property(nameof(stats.FulfilledExternally)).EqualTo(1));
         }
     }
 }

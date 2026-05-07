@@ -1,0 +1,104 @@
+@layer components {
+    .checkbox {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        background-color: var(--bg-primary);
+        border: 1px solid var(--border-default);
+        border-radius: var(--radius-sm);
+        cursor: pointer;
+        flex-shrink: 0;
+        transition:
+            border-color var(--duration-fast) var(--easing-default),
+            background-color var(--duration-fast) var(--easing-default),
+            box-shadow var(--duration-fast) var(--easing-default);
+
+        &:hover:not(:disabled):not([data-disabled]) {
+            border-color: var(--border-accent);
+        }
+
+        &:focus-visible {
+            outline: var(--focus-ring-width) solid var(--focus-ring-color);
+            outline-offset: var(--focus-ring-offset);
+        }
+
+        &[data-state='checked'],
+        &[data-state='indeterminate'] {
+            background-color: var(--accent-primary);
+            border-color: var(--accent-primary);
+        }
+
+        &:disabled,
+        &[data-disabled] {
+            cursor: not-allowed;
+            opacity: var(--opacity-disabled);
+        }
+    }
+
+    .checkbox--sm {
+        width: 16px;
+        height: 16px;
+    }
+
+    .checkbox--md {
+        width: 20px;
+        height: 20px;
+    }
+
+    .checkbox--lg {
+        width: 24px;
+        height: 24px;
+    }
+
+    .checkbox--error {
+        border-color: var(--status-unhealthy);
+
+        &:hover:not(:disabled):not([data-disabled]) {
+            border-color: var(--status-unhealthy);
+        }
+
+        &:focus-visible {
+            border-color: var(--status-unhealthy);
+            box-shadow: var(--glow-error);
+        }
+
+        &[data-state='checked'],
+        &[data-state='indeterminate'] {
+            background-color: var(--status-unhealthy);
+            border-color: var(--status-unhealthy);
+        }
+    }
+
+    .checkbox__indicator {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: var(--bg-primary);
+
+        animation-duration: var(--duration-fast);
+        animation-timing-function: var(--easing-default);
+
+        &[data-state='checked'],
+        &[data-state='indeterminate'] {
+            animation-name: checkbox-indicator-show;
+        }
+    }
+
+    @keyframes checkbox-indicator-show {
+        from {
+            opacity: 0;
+            transform: scale(0.8);
+        }
+        to {
+            opacity: 1;
+            transform: scale(1);
+        }
+    }
+
+    @media (pointer: coarse) {
+        .checkbox {
+            min-width: var(--touch-target-min);
+            min-height: var(--touch-target-min);
+        }
+    }
+}

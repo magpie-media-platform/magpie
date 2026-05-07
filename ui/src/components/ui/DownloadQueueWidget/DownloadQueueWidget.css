@@ -1,0 +1,296 @@
+@layer components {
+    .download-queue-widget {
+        display: flex;
+        flex-direction: column;
+        background-color: var(--bg-secondary);
+        border: 1px solid var(--border-default);
+        border-radius: var(--radius-lg);
+        box-shadow: var(--shadow-md);
+        overflow: hidden;
+    }
+
+    .download-queue-widget__header {
+        display: flex;
+        align-items: center;
+        gap: var(--space-sm);
+        padding: var(--space-md) var(--space-lg);
+        border-bottom: 1px solid var(--border-default);
+    }
+
+    .download-queue-widget__icon {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: var(--text-secondary);
+        font-size: var(--text-lg);
+    }
+
+    .download-queue-widget__title {
+        flex: 1;
+        margin: 0;
+        font-size: var(--text-sm);
+        font-weight: var(--weight-semibold);
+        color: var(--text-primary);
+        text-transform: uppercase;
+        letter-spacing: var(--tracking-wide);
+    }
+
+    .download-queue-widget__total {
+        font-size: var(--text-lg);
+        font-weight: var(--weight-semibold);
+        color: var(--text-primary);
+        font-family: var(--font-mono);
+    }
+
+    .download-queue-widget__summary {
+        padding: var(--space-sm) 0;
+        border-bottom: 1px solid var(--border-default);
+    }
+
+    .download-queue-widget__row {
+        display: flex;
+        align-items: center;
+        gap: var(--space-sm);
+        padding: var(--space-sm) var(--space-lg);
+        transition: background-color var(--duration-fast) var(--easing-default);
+        text-decoration: none;
+        color: inherit;
+    }
+
+    .download-queue-widget__row--clickable {
+        cursor: pointer;
+
+        &:hover {
+            background-color: var(--bg-tertiary);
+        }
+
+        &:focus-visible {
+            outline: var(--focus-ring-width) solid var(--focus-ring-color);
+            outline-offset: calc(-1 * var(--focus-ring-offset));
+        }
+    }
+
+    .download-queue-widget__indicator {
+        width: 8px;
+        height: 8px;
+        border-radius: var(--radius-full);
+        flex-shrink: 0;
+    }
+
+    .download-queue-widget__row--downloading .download-queue-widget__indicator {
+        background-color: var(--accent-primary);
+        animation: pulse var(--duration-pulse) ease-in-out infinite;
+    }
+
+    .download-queue-widget__row--queued .download-queue-widget__indicator {
+        background-color: var(--status-degraded);
+    }
+
+    .download-queue-widget__row--stalled .download-queue-widget__indicator {
+        background-color: var(--status-unhealthy);
+    }
+
+    .download-queue-widget__label {
+        flex: 1;
+        font-size: var(--text-sm);
+        color: var(--text-secondary);
+    }
+
+    .download-queue-widget__row--downloading .download-queue-widget__label {
+        color: var(--accent-primary);
+    }
+
+    .download-queue-widget__row--queued .download-queue-widget__label {
+        color: var(--status-degraded);
+    }
+
+    .download-queue-widget__row--stalled .download-queue-widget__label {
+        color: var(--status-unhealthy);
+    }
+
+    .download-queue-widget__count {
+        font-size: var(--text-sm);
+        font-weight: var(--weight-semibold);
+        font-family: var(--font-mono);
+        color: var(--text-primary);
+        min-width: 2ch;
+        text-align: right;
+    }
+
+    .download-queue-widget__items {
+        flex: 1;
+        padding: var(--space-sm) var(--space-lg);
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-sm);
+    }
+
+    .download-queue-widget__item {
+        display: block;
+        padding: var(--space-sm);
+        background-color: var(--bg-primary);
+        border-radius: var(--radius-sm);
+        transition: background-color var(--duration-fast) var(--easing-default);
+        text-decoration: none;
+        color: inherit;
+    }
+
+    .download-queue-widget__item--clickable {
+        cursor: pointer;
+
+        &:hover {
+            background-color: var(--bg-tertiary);
+        }
+
+        &:focus-visible {
+            outline: var(--focus-ring-width) solid var(--focus-ring-color);
+            outline-offset: var(--focus-ring-offset);
+        }
+    }
+
+    .download-queue-widget__item-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: var(--space-xs);
+    }
+
+    .download-queue-widget__item-title {
+        font-size: var(--text-sm);
+        font-weight: var(--weight-medium);
+        color: var(--text-primary);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        flex: 1;
+        min-width: 0;
+    }
+
+    .download-queue-widget__item-meta {
+        display: flex;
+        align-items: center;
+        gap: var(--space-sm);
+        font-size: var(--text-xs);
+        color: var(--text-muted);
+        flex-shrink: 0;
+    }
+
+    .download-queue-widget__item-eta {
+        font-family: var(--font-mono);
+    }
+
+    .download-queue-widget__item-size {
+        font-family: var(--font-mono);
+    }
+
+    .download-queue-widget__item-percent {
+        font-size: var(--text-xs);
+        font-family: var(--font-mono);
+        color: var(--text-muted);
+        margin-top: var(--space-xs);
+        text-align: right;
+    }
+
+    .download-queue-widget__progress-bar {
+        height: 6px;
+        background-color: var(--bg-tertiary);
+        border-radius: var(--radius-full);
+        overflow: hidden;
+        margin-top: var(--space-xs);
+    }
+
+    .download-queue-widget__progress-fill {
+        height: 100%;
+        border-radius: var(--radius-full);
+        transition: width var(--duration-normal) var(--easing-default);
+    }
+
+    .download-queue-widget__item--downloading .download-queue-widget__progress-fill {
+        background-color: var(--accent-primary);
+    }
+
+    .download-queue-widget__item--queued .download-queue-widget__progress-fill {
+        background-color: var(--status-degraded);
+    }
+
+    .download-queue-widget__item--stalled .download-queue-widget__progress-fill {
+        background-color: var(--status-unhealthy);
+    }
+
+    .download-queue-widget__footer {
+        padding: var(--space-sm) var(--space-lg);
+        border-top: 1px solid var(--border-default);
+    }
+
+    .download-queue-widget__view-all {
+        display: block;
+        width: 100%;
+        padding: var(--space-sm);
+        background: none;
+        border: none;
+        border-radius: var(--radius-sm);
+        font-size: var(--text-sm);
+        font-weight: var(--weight-medium);
+        color: var(--accent-primary);
+        cursor: pointer;
+        text-align: center;
+        text-decoration: none;
+        transition: background-color var(--duration-fast) var(--easing-default);
+
+        &:hover {
+            background-color: var(--bg-tertiary);
+        }
+
+        &:focus-visible {
+            outline: var(--focus-ring-width) solid var(--focus-ring-color);
+            outline-offset: var(--focus-ring-offset);
+        }
+    }
+
+    .download-queue-widget__row--skeleton {
+        pointer-events: none;
+    }
+
+    .download-queue-widget__indicator--skeleton {
+        background-color: var(--bg-tertiary);
+        animation: pulse var(--duration-pulse) ease-in-out infinite;
+    }
+
+    .download-queue-widget__label--skeleton {
+        width: 80px;
+        height: 14px;
+        background-color: var(--bg-tertiary);
+        border-radius: var(--radius-sm);
+        animation: pulse var(--duration-pulse) ease-in-out infinite;
+    }
+
+    .download-queue-widget__count--skeleton {
+        width: 20px;
+        height: 14px;
+        background-color: var(--bg-tertiary);
+        border-radius: var(--radius-sm);
+        animation: pulse var(--duration-pulse) ease-in-out infinite;
+    }
+
+    .download-queue-widget__item--skeleton {
+        pointer-events: none;
+    }
+
+    .download-queue-widget__item-title--skeleton {
+        width: 70%;
+        height: 14px;
+        background-color: var(--bg-tertiary);
+        border-radius: var(--radius-sm);
+        animation: pulse var(--duration-pulse) ease-in-out infinite;
+    }
+
+    .download-queue-widget__progress-bar--skeleton {
+        background-color: var(--bg-tertiary);
+        animation: pulse var(--duration-pulse) ease-in-out infinite;
+    }
+
+    .download-queue-widget__progress-fill--skeleton {
+        width: 45%;
+        background-color: var(--bg-secondary);
+    }
+}

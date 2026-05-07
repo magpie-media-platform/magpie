@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using Magpie.Abstractions.Api;
 using Magpie.Abstractions.Repositories;
 using Magpie.Abstractions.Security;
+using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 
 using Microsoft.AspNetCore.Builder;
@@ -100,7 +101,7 @@ internal sealed class IndexerFeedsEndpointGroup(IIndexerFeedRepository indexerFe
     private async Task<IResult> PatchIndexerFeed(
         HttpContext httpContext,
         Guid id,
-        IndexerFeed request,
+        IndexerFeedPatch request,
         CancellationToken cancellationToken)
     {
         var existing = await indexerFeedRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
@@ -112,12 +113,13 @@ internal sealed class IndexerFeedsEndpointGroup(IIndexerFeedRepository indexerFe
 
         var currentUserId = httpContext.User.GetUserId();
 
-        var feed = request with
+        var feed = existing with
         {
-            Id = id,
-            LastSync = existing.LastSync,
-            CreatedAt = existing.CreatedAt,
-            CreatedByUserId = existing.CreatedByUserId,
+            ProviderType = request.ProviderType ?? existing.ProviderType,
+            Name = request.Name ?? existing.Name,
+            Description = request.Description ?? existing.Description,
+            Settings = request.Settings ?? existing.Settings,
+            Enabled = request.Enabled ?? existing.Enabled,
             ModifiedAt = DateTime.UtcNow,
             ModifiedByUserId = currentUserId
         };

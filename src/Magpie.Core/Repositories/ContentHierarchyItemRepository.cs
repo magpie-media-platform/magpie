@@ -87,6 +87,68 @@ internal sealed class ContentHierarchyItemRepository(
         }
     }
 
+    public async Task<ContentStats> GetStatsAsync(CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var total = await context.ContentHierarchyItems
+                .AsNoTracking()
+                .CountAsync(cancellationToken)
+                .ConfigureAwait(false);
+
+            var groups = await context.ContentHierarchyItems
+                .AsNoTracking()
+                .GroupBy(i => i.ContentItem != null ? (FulfillmentStatus?)i.ContentItem.Fulfillment : null)
+                .Select(g => new { Fulfillment = g.Key, Count = g.Count() })
+                .ToListAsync(cancellationToken)
+                .ConfigureAwait(false);
+
+            var missing = 0;
+            var upgradable = 0;
+            var fulfilled = 0;
+            var fulfilledExternally = 0;
+
+            foreach (var group in groups)
+            {
+                if (group.Fulfillment is null)
+                {
+                    missing += group.Count;
+                    continue;
+                }
+
+                switch (group.Fulfillment.Value)
+                {
+                    case FulfillmentStatus.Missing:
+                        missing += group.Count;
+                        break;
+                    case FulfillmentStatus.Upgradable:
+                        upgradable += group.Count;
+                        break;
+                    case FulfillmentStatus.Fulfilled:
+                        fulfilled += group.Count;
+                        break;
+                    case FulfillmentStatus.FulfilledExternally:
+                        fulfilledExternally += group.Count;
+                        break;
+                }
+            }
+
+            return new()
+            {
+                Total = total,
+                Missing = missing,
+                Upgradable = upgradable,
+                Fulfilled = fulfilled,
+                FulfilledExternally = fulfilledExternally
+            };
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Error computing content stats");
+            throw;
+        }
+    }
+
     public async Task<PagedList<ContentHierarchyItem>> QueryAsync(
         ContentHierarchyItemCriteria query,
         PagingParameter? paging,
@@ -302,6 +364,10 @@ internal sealed class ContentHierarchyItemRepository(
                 }
 
                 var now = DateTime.UtcNow;
+                if (patch.QualityTierListId is not null)
+                {
+                    model.QualityTierListId = patch.QualityTierListId.Value;
+                }
                 if (patch.RootFolderId is not null)
                 {
                     model.RootFolderId = patch.RootFolderId.Value;

@@ -114,7 +114,7 @@ internal sealed class ApiKeysEndpointGroup(IApiKeyManager apiKeyManager) : IApiE
             userId,
             cancellationToken).ConfigureAwait(false);
 
-        return Results.Created($"{Name}/my/{result.ApiKey.Id}", result.ToCreatedResponse());
+        return Results.Created($"api/{Name}/my/{result.ApiKey.Id}", result.ToCreatedResponse());
     }
 
     private async Task<IResult> GetMyApiKey(

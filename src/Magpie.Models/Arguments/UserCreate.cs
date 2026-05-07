@@ -19,6 +19,11 @@ public record UserCreate
     public required string PasswordHash { get; init; }
 
     /// <summary>
+    /// The <see cref="User.PasswordSalt"/> for the new user.
+    /// </summary>
+    public required string PasswordSalt { get; init; }
+
+    /// <summary>
     /// The <see cref="User.Role"/> for the new user.
     /// </summary>
     public required Role Role { get; init; }

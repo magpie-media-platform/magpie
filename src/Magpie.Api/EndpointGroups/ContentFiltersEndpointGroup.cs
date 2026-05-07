@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -7,6 +8,7 @@ using Magpie.Abstractions.Repositories;
 using Magpie.Abstractions.Security;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
+using Magpie.Models.Paging;
 
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -14,7 +16,9 @@ using Microsoft.AspNetCore.Routing;
 
 namespace Magpie.Api.EndpointGroups;
 
-internal sealed class ContentFiltersEndpointGroup(IContentFilterRepository contentFilterRepository) : IApiEndpointGroup
+internal sealed class ContentFiltersEndpointGroup(
+    IContentFilterRepository contentFilterRepository,
+    IContentHierarchyItemRepository contentHierarchyItemRepository) : IApiEndpointGroup
 {
     public string Name => "content-filters";
 
@@ -79,6 +83,18 @@ internal sealed class ContentFiltersEndpointGroup(IContentFilterRepository conte
             .Produces(StatusCodes.Status204NoContent)
             .ProducesProblem(StatusCodes.Status404NotFound)
             .RequireManager();
+
+        builder.MapGet("{id:guid}/preview", PreviewContentFilter)
+            .WithName(nameof(PreviewContentFilter))
+            .Produces<PagedList<ContentHierarchyItem>>()
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .RequireViewer();
+
+        builder.MapGet("my/{id:guid}/preview", PreviewMyContentFilter)
+            .WithName(nameof(PreviewMyContentFilter))
+            .Produces<PagedList<ContentHierarchyItem>>()
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .RequireViewer();
     }
 
     private async Task<IResult> GetMyContentFilters(
@@ -293,5 +309,65 @@ internal sealed class ContentFiltersEndpointGroup(IContentFilterRepository conte
             .ConfigureAwait(false);
 
         return deleted ? Results.NoContent() : Results.NotFound();
+    }
+
+    private async Task<IResult> PreviewContentFilter(
+        Guid id,
+        int? page,
+        int? pageSize,
+        CancellationToken cancellationToken)
+    {
+        var filter = await contentFilterRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
+
+        if (filter is null || filter.OwnerUserId is not null)
+        {
+            return Results.NotFound();
+        }
+
+        return await ExecutePreview(filter, page, pageSize, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<IResult> PreviewMyContentFilter(
+        HttpContext httpContext,
+        Guid id,
+        int? page,
+        int? pageSize,
+        CancellationToken cancellationToken)
+    {
+        var userId = httpContext.User.GetUserId();
+        if (userId is null)
+        {
+            return Results.Problem(statusCode: StatusCodes.Status401Unauthorized);
+        }
+
+        var filter = await contentFilterRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
+
+        if (filter is null || filter.OwnerUserId != userId)
+        {
+            return Results.NotFound();
+        }
+
+        return await ExecutePreview(filter, page, pageSize, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<IResult> ExecutePreview(
+        ContentFilter filter,
+        int? page,
+        int? pageSize,
+        CancellationToken cancellationToken)
+    {
+        var criteria = filter.Criteria?.ContentHierarchyItem?.And?.FirstOrDefault()
+            ?? new ContentHierarchyItemCriteria();
+
+        var paging = new PagingParameter
+        {
+            PageNumber = page ?? 1,
+            PageSize = pageSize ?? 10
+        };
+
+        var result = await contentHierarchyItemRepository.QueryAsync(criteria, paging, null, cancellationToken)
+            .ConfigureAwait(false);
+
+        return Results.Ok(result);
     }
 }

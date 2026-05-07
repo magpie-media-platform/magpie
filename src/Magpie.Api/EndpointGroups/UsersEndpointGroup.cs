@@ -1,12 +1,14 @@
 using System;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions.Api;
 using Magpie.Abstractions.Repositories;
 using Magpie.Abstractions.Security;
+using Magpie.Api.Request;
+using Magpie.Models.Api;
 using Magpie.Models.Arguments;
-using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Models.Paging;
 
@@ -18,7 +20,8 @@ namespace Magpie.Api.EndpointGroups;
 
 internal sealed class UsersEndpointGroup(
     IUserRepository userRepository,
-    IUserManager userManager) : IApiEndpointGroup
+    IUserManager userManager,
+    IPasswordHasher passwordHasher) : IApiEndpointGroup
 {
     public string Name => "users";
 
@@ -26,7 +29,7 @@ internal sealed class UsersEndpointGroup(
     {
         builder.MapGet("me", GetCurrentUser)
             .WithName(nameof(GetCurrentUser))
-            .Produces<User>()
+            .Produces<UserResponse>()
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .RequireViewer();
 
@@ -39,17 +42,17 @@ internal sealed class UsersEndpointGroup(
 
         builder.MapGet("", GetUsers)
             .WithName(nameof(GetUsers))
-            .Produces<PagedList<User>>()
+            .Produces<PagedList<UserResponse>>()
             .RequireAdmin();
 
         builder.MapPost("", CreateUser)
             .WithName(nameof(CreateUser))
-            .Produces<User>(StatusCodes.Status201Created)
+            .Produces<UserResponse>(StatusCodes.Status201Created)
             .RequireAdmin();
 
         builder.MapGet("{id:guid}", GetUser)
             .WithName(nameof(GetUser))
-            .Produces<User>()
+            .Produces<UserResponse>()
             .ProducesProblem(StatusCodes.Status404NotFound)
             .RequireAdmin();
 
@@ -61,13 +64,13 @@ internal sealed class UsersEndpointGroup(
 
         builder.MapPost("{id:guid}/enable", EnableUser)
             .WithName(nameof(EnableUser))
-            .Produces<User>()
+            .Produces<UserResponse>()
             .ProducesProblem(StatusCodes.Status404NotFound)
             .RequireAdmin();
 
         builder.MapPost("{id:guid}/disable", DisableUser)
             .WithName(nameof(DisableUser))
-            .Produces<User>()
+            .Produces<UserResponse>()
             .ProducesProblem(StatusCodes.Status404NotFound)
             .RequireAdmin();
 
@@ -90,7 +93,7 @@ internal sealed class UsersEndpointGroup(
 
         return user is null
             ? Results.NotFound()
-            : Results.Ok(user);
+            : Results.Ok(user.ToResponse());
     }
 
     private async Task<IResult> PatchCurrentUser(
@@ -133,17 +136,36 @@ internal sealed class UsersEndpointGroup(
         var result = await userRepository.QueryAsync(query, paging, sort, cancellationToken)
             .ConfigureAwait(false);
 
-        return Results.Ok(result);
+        var response = new PagedList<UserResponse>
+        {
+            Items = result.Items.Select(u => u.ToResponse()),
+            PageNumber = result.PageNumber,
+            PageSize = result.PageSize,
+            TotalItems = result.TotalItems
+        };
+
+        return Results.Ok(response);
     }
 
     private async Task<IResult> CreateUser(
         HttpContext httpContext,
-        UserCreate request,
+        CreateUserRequest request,
         CancellationToken cancellationToken)
     {
-        var user = await userManager.CreateLocalUserAsync(request, cancellationToken).ConfigureAwait(false);
+        var hashedPassword = await passwordHasher.HashPasswordAsync(request.Password, cancellationToken)
+            .ConfigureAwait(false);
 
-        return Results.Created($"api/{Name}/{user.Id}", user);
+        var createArgs = new UserCreate
+        {
+            Username = request.Username,
+            PasswordHash = hashedPassword.Hash,
+            PasswordSalt = hashedPassword.Salt,
+            Role = request.Role,
+        };
+
+        var user = await userManager.CreateLocalUserAsync(createArgs, cancellationToken).ConfigureAwait(false);
+
+        return Results.Created($"api/{Name}/{user.Id}", user.ToResponse());
     }
 
     private async Task<IResult> GetUser(Guid id, CancellationToken cancellationToken)
@@ -152,7 +174,7 @@ internal sealed class UsersEndpointGroup(
 
         return user is null
             ? Results.NotFound()
-            : Results.Ok(user);
+            : Results.Ok(user.ToResponse());
     }
 
     private async Task<IResult> PatchUser(
@@ -184,7 +206,7 @@ internal sealed class UsersEndpointGroup(
             .ConfigureAwait(false);
 
         var user = await userRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
-        return Results.Ok(user);
+        return Results.Ok(user?.ToResponse());
     }
 
     private async Task<IResult> DisableUser(HttpContext httpContext, Guid id, CancellationToken cancellationToken)
@@ -201,7 +223,7 @@ internal sealed class UsersEndpointGroup(
             .ConfigureAwait(false);
 
         var user = await userRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
-        return Results.Ok(user);
+        return Results.Ok(user?.ToResponse());
     }
 
     private async Task<IResult> DeleteUser(HttpContext httpContext, Guid id, CancellationToken cancellationToken)

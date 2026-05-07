@@ -1,0 +1,419 @@
+import { useState, useCallback, useEffect, useMemo, type ComponentType } from 'react';
+import {
+    FloppyDisk,
+    MagnifyingGlass,
+    X,
+    Tag,
+    Plus,
+    Minus,
+    CheckSquare,
+    Square,
+    MinusSquare,
+    Star,
+    Heart,
+    Lightning,
+    FilmStrip,
+    MusicNote,
+    Book,
+    GameController,
+    Globe,
+    House,
+    User,
+    Users,
+    Folder,
+    Archive,
+    Warning,
+    CheckCircle,
+    Eye,
+    Clock,
+    type IconProps,
+} from '@phosphor-icons/react';
+
+import { Button } from '../Button';
+import { Input } from '../Input';
+import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription, SheetFooter, SheetClose } from '../Sheet';
+
+import './BulkTagAssignment.css';
+
+export type TagIconName =
+    | 'tag'
+    | 'star'
+    | 'heart'
+    | 'lightning'
+    | 'film-strip'
+    | 'music-note'
+    | 'book'
+    | 'game-controller'
+    | 'globe'
+    | 'house'
+    | 'user'
+    | 'users'
+    | 'folder'
+    | 'archive'
+    | 'warning'
+    | 'check-circle'
+    | 'eye'
+    | 'clock';
+
+const ICON_COMPONENTS: Record<TagIconName, ComponentType<IconProps>> = {
+    tag: Tag,
+    star: Star,
+    heart: Heart,
+    lightning: Lightning,
+    'film-strip': FilmStrip,
+    'music-note': MusicNote,
+    book: Book,
+    'game-controller': GameController,
+    globe: Globe,
+    house: House,
+    user: User,
+    users: Users,
+    folder: Folder,
+    archive: Archive,
+    warning: Warning,
+    'check-circle': CheckCircle,
+    eye: Eye,
+    clock: Clock,
+};
+
+function getTagIconComponent(iconName?: TagIconName): ComponentType<IconProps> {
+    return iconName ? ICON_COMPONENTS[iconName] : Tag;
+}
+
+export interface BulkTagItem {
+    id: string;
+
+    name: string;
+
+    color?: string;
+
+    icon?: TagIconName;
+}
+
+export interface ContentWithTags {
+    id: string;
+    title: string;
+    tags?: string[];
+}
+
+export type TagAssignmentAction = 'add' | 'remove' | 'unchanged';
+
+export interface BulkTagAssignmentResult {
+    tagsToAdd: string[];
+
+    tagsToRemove: string[];
+}
+
+export interface BulkTagAssignmentProps {
+    open: boolean;
+
+    onOpenChange: (open: boolean) => void;
+
+    availableTags: BulkTagItem[];
+
+    selectedItems: ContentWithTags[];
+
+    onApply: (result: BulkTagAssignmentResult) => void;
+
+    isApplying?: boolean;
+}
+
+type TagPresence = 'all' | 'some' | 'none';
+
+interface TagState {
+    presence: TagPresence;
+    action: TagAssignmentAction;
+}
+
+export function BulkTagAssignment({
+    open,
+    onOpenChange,
+    availableTags,
+    selectedItems,
+    onApply,
+    isApplying = false,
+}: BulkTagAssignmentProps) {
+    const initialTagStates = useMemo(() => {
+        const states: Record<string, TagState> = {};
+
+        for (const tag of availableTags) {
+            const itemsWithTag = selectedItems.filter((item) => item.tags?.includes(tag.id)).length;
+
+            let presence: TagPresence;
+            if (itemsWithTag === 0) {
+                presence = 'none';
+            } else if (itemsWithTag === selectedItems.length) {
+                presence = 'all';
+            } else {
+                presence = 'some';
+            }
+
+            states[tag.id] = {
+                presence,
+                action: 'unchanged',
+            };
+        }
+
+        return states;
+    }, [availableTags, selectedItems]);
+
+    const [tagStates, setTagStates] = useState<Record<string, TagState>>(initialTagStates);
+    const [searchQuery, setSearchQuery] = useState('');
+
+    useEffect(() => {
+        if (open) {
+            setTagStates(initialTagStates);
+            setSearchQuery('');
+        }
+    }, [open, initialTagStates]);
+
+    const filteredTags = useMemo(() => {
+        if (!searchQuery) {
+            return availableTags;
+        }
+        const query = searchQuery.toLowerCase();
+        return availableTags.filter((tag) => tag.name.toLowerCase().includes(query));
+    }, [availableTags, searchQuery]);
+
+    const handleTagClick = useCallback((tagId: string) => {
+        setTagStates((prev) => {
+            const current = prev[tagId];
+            if (!current) {
+                return prev;
+            }
+
+            let newAction: TagAssignmentAction;
+
+            if (current.action === 'unchanged') {
+                if (current.presence === 'all') {
+                    newAction = 'remove';
+                } else {
+                    newAction = 'add';
+                }
+            } else if (current.action === 'add') {
+                newAction = 'remove';
+            } else {
+                newAction = 'unchanged';
+            }
+
+            return {
+                ...prev,
+                [tagId]: {
+                    ...current,
+                    action: newAction,
+                },
+            };
+        });
+    }, []);
+
+    const changes = useMemo(() => {
+        const tagsToAdd: string[] = [];
+        const tagsToRemove: string[] = [];
+
+        for (const [tagId, state] of Object.entries(tagStates)) {
+            if (state.action === 'add') {
+                tagsToAdd.push(tagId);
+            } else if (state.action === 'remove') {
+                tagsToRemove.push(tagId);
+            }
+        }
+
+        return { tagsToAdd, tagsToRemove };
+    }, [tagStates]);
+
+    const hasChanges = changes.tagsToAdd.length > 0 || changes.tagsToRemove.length > 0;
+
+    const handleApply = useCallback(() => {
+        onApply(changes);
+    }, [onApply, changes]);
+
+    const getCheckboxState = (
+        tagId: string,
+    ): { icon: 'checked' | 'unchecked' | 'indeterminate'; actionIndicator?: 'add' | 'remove' } => {
+        const state = tagStates[tagId];
+        if (!state) {
+            return { icon: 'unchecked' };
+        }
+
+        if (state.action === 'add') {
+            return { icon: 'checked', actionIndicator: 'add' };
+        }
+        if (state.action === 'remove') {
+            return { icon: 'unchecked', actionIndicator: 'remove' };
+        }
+
+        if (state.presence === 'all') {
+            return { icon: 'checked' };
+        }
+        if (state.presence === 'some') {
+            return { icon: 'indeterminate' };
+        }
+        return { icon: 'unchecked' };
+    };
+
+    return (
+        <Sheet open={open} onOpenChange={onOpenChange}>
+            <SheetContent side="right" className="bulk-tag-assignment__sheet" data-component="bulk-tag-assignment">
+                <SheetHeader>
+                    <SheetTitle>
+                        <Tag weight="duotone" aria-hidden="true" />
+                        Assign Tags
+                    </SheetTitle>
+                    <SheetDescription>
+                        {selectedItems.length === 1
+                            ? `Modify tags for "${selectedItems[0].title}"`
+                            : `Modify tags for ${selectedItems.length} selected items`}
+                    </SheetDescription>
+                </SheetHeader>
+
+                <div className="bulk-tag-assignment__body">
+                    {availableTags.length > 0 && (
+                        <div className="bulk-tag-assignment__search">
+                            <Input
+                                type="search"
+                                placeholder="Search tags..."
+                                size="sm"
+                                value={searchQuery}
+                                onChange={(e) => setSearchQuery(e.target.value)}
+                                leadingIcon={<MagnifyingGlass weight="regular" />}
+                                trailingIcon={
+                                    searchQuery ? (
+                                        <button
+                                            type="button"
+                                            className="bulk-tag-assignment__clear-btn"
+                                            onClick={() => setSearchQuery('')}
+                                            aria-label="Clear search"
+                                        >
+                                            <X weight="bold" />
+                                        </button>
+                                    ) : undefined
+                                }
+                            />
+                        </div>
+                    )}
+
+                    <div className="bulk-tag-assignment__tags" role="group" aria-label="Available tags">
+                        {availableTags.length === 0 ? (
+                            <div className="bulk-tag-assignment__empty">
+                                <Tag weight="thin" aria-hidden="true" />
+                                <p>No tags available</p>
+                                <p className="bulk-tag-assignment__empty-hint">Create tags in the Tags page first</p>
+                            </div>
+                        ) : filteredTags.length === 0 ? (
+                            <div className="bulk-tag-assignment__empty">
+                                <MagnifyingGlass weight="thin" aria-hidden="true" />
+                                <p>No matching tags</p>
+                                <p className="bulk-tag-assignment__empty-hint">Try a different search term</p>
+                            </div>
+                        ) : (
+                            filteredTags.map((tag) => {
+                                const checkboxState = getCheckboxState(tag.id);
+                                const IconComponent = getTagIconComponent(tag.icon);
+                                const tagColor = tag.color || 'var(--accent-secondary)';
+
+                                return (
+                                    <button
+                                        key={tag.id}
+                                        type="button"
+                                        className={`bulk-tag-assignment__tag ${
+                                            checkboxState.actionIndicator
+                                                ? `bulk-tag-assignment__tag--${checkboxState.actionIndicator}`
+                                                : ''
+                                        }`}
+                                        onClick={() => handleTagClick(tag.id)}
+                                        disabled={isApplying}
+                                        data-tag-id={tag.id}
+                                        aria-pressed={checkboxState.icon === 'checked'}
+                                    >
+                                        <span className="bulk-tag-assignment__checkbox">
+                                            {checkboxState.icon === 'checked' && (
+                                                <CheckSquare weight="fill" aria-hidden="true" />
+                                            )}
+                                            {checkboxState.icon === 'unchecked' && (
+                                                <Square weight="regular" aria-hidden="true" />
+                                            )}
+                                            {checkboxState.icon === 'indeterminate' && (
+                                                <MinusSquare weight="fill" aria-hidden="true" />
+                                            )}
+                                        </span>
+                                        <span
+                                            className="bulk-tag-assignment__tag-icon"
+                                            style={{ '--tag-color': tagColor } as React.CSSProperties}
+                                        >
+                                            <IconComponent weight="duotone" aria-hidden="true" />
+                                        </span>
+                                        <span
+                                            className="bulk-tag-assignment__tag-name"
+                                            style={{ '--tag-color': tagColor } as React.CSSProperties}
+                                        >
+                                            {tag.name}
+                                        </span>
+                                        {checkboxState.actionIndicator && (
+                                            <span
+                                                className={`bulk-tag-assignment__action-badge bulk-tag-assignment__action-badge--${checkboxState.actionIndicator}`}
+                                            >
+                                                {checkboxState.actionIndicator === 'add' ? (
+                                                    <>
+                                                        <Plus weight="bold" aria-hidden="true" />
+                                                        <span>Add</span>
+                                                    </>
+                                                ) : (
+                                                    <>
+                                                        <Minus weight="bold" aria-hidden="true" />
+                                                        <span>Remove</span>
+                                                    </>
+                                                )}
+                                            </span>
+                                        )}
+                                    </button>
+                                );
+                            })
+                        )}
+                    </div>
+
+                    {hasChanges && (
+                        <div className="bulk-tag-assignment__summary">
+                            <span className="bulk-tag-assignment__summary-label">Changes:</span>
+                            {changes.tagsToAdd.length > 0 && (
+                                <span className="bulk-tag-assignment__summary-item bulk-tag-assignment__summary-item--add">
+                                    <Plus weight="bold" aria-hidden="true" />
+                                    {changes.tagsToAdd.length} tag{changes.tagsToAdd.length !== 1 ? 's' : ''} to add
+                                </span>
+                            )}
+                            {changes.tagsToRemove.length > 0 && (
+                                <span className="bulk-tag-assignment__summary-item bulk-tag-assignment__summary-item--remove">
+                                    <Minus weight="bold" aria-hidden="true" />
+                                    {changes.tagsToRemove.length} tag{changes.tagsToRemove.length !== 1 ? 's' : ''} to
+                                    remove
+                                </span>
+                            )}
+                        </div>
+                    )}
+                </div>
+
+                <SheetFooter>
+                    <SheetClose asChild>
+                        <Button type="button" variant="ghost" disabled={isApplying} data-action="cancel">
+                            <X weight="bold" aria-hidden="true" />
+                            Cancel
+                        </Button>
+                    </SheetClose>
+                    <Button
+                        type="button"
+                        variant="primary"
+                        disabled={isApplying || !hasChanges}
+                        onClick={handleApply}
+                        data-action="apply"
+                    >
+                        <FloppyDisk weight="bold" aria-hidden="true" />
+                        {isApplying ? 'Applying...' : 'Apply'}
+                    </Button>
+                </SheetFooter>
+            </SheetContent>
+        </Sheet>
+    );
+}
+
+BulkTagAssignment.displayName = 'BulkTagAssignment';
+
+export default BulkTagAssignment;

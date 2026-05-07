@@ -12,6 +12,11 @@ namespace Magpie.Models.Arguments;
 public sealed record ContentHierarchyItemPatch : TagsPatch
 {
     /// <summary>
+    /// The <see cref="ContentHierarchyItem.QualityTierListId"/> patch
+    /// </summary>
+    public ScalarPatch<Guid?>? QualityTierListId { get; init; }
+
+    /// <summary>
     /// The <see cref="ContentHierarchyItem.RootFolderId"/> patch
     /// </summary>
     public ScalarPatch<Guid?>? RootFolderId { get; init; }

@@ -43,4 +43,5 @@ internal sealed class TagsEndpointGroup(ITagRepository tagRepository) : IApiEndp
         var tags = await tagRepository.ListAllAsync(cancellationToken).ConfigureAwait(false);
         return Results.Ok(tags);
     }
+
 }

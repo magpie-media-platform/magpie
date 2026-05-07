@@ -288,6 +288,34 @@ public class WishlistsEndpointGroupTests
     }
 
     [Test]
+    public async Task PatchMyWishlist_PatchesEnabledField()
+    {
+        // Arrange
+        var wishlistId = Guid.NewGuid();
+        var existingWishlist = new Wishlist { Id = wishlistId, Name = "Test", OwnerUserId = _userId, Enabled = true };
+        var request = new WishlistPatch { Id = wishlistId, Enabled = new() { Value = false } };
+
+        _wishlistRepository
+            .Setup(m => m.GetByIdAsync(wishlistId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(existingWishlist);
+
+        _wishlistRepository
+            .Setup(m => m.PatchAsync(
+                It.Is<WishlistPatch>(p => p.Id == wishlistId && p.Enabled!.Value == false),
+                _userId,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+
+        // Act
+        var response = await _client
+            .PatchAsJsonAsync($"/api/wishlists/my/{wishlistId}", request)
+            .ConfigureAwait(false);
+
+        // Assert
+        Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NoContent));
+    }
+
+    [Test]
     public async Task PatchMyWishlist_PatchesTags()
     {
         // Arrange

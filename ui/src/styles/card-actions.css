@@ -1,0 +1,92 @@
+@layer components {
+    .card-actions {
+        display: flex;
+        align-items: center;
+        gap: var(--space-xs);
+        flex-shrink: 0;
+    }
+
+    .card-actions__btn {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: var(--touch-target-min);
+        height: var(--touch-target-min);
+        padding: 0;
+        background: none;
+        border: 1px solid var(--border-default);
+        border-radius: var(--radius-sm);
+        color: var(--text-secondary);
+        font-size: var(--text-base);
+        cursor: pointer;
+        transition:
+            background-color var(--duration-fast) var(--easing-default),
+            border-color var(--duration-fast) var(--easing-default),
+            color var(--duration-fast) var(--easing-default);
+
+        &:hover {
+            background-color: var(--bg-tertiary);
+            color: var(--text-primary);
+            border-color: var(--text-muted);
+        }
+
+        &:focus-visible {
+            outline: var(--focus-ring-width) solid var(--focus-ring-color);
+            outline-offset: var(--focus-ring-offset);
+        }
+
+        &:disabled {
+            opacity: var(--opacity-disabled);
+            cursor: not-allowed;
+
+            &:hover {
+                background-color: transparent;
+                color: var(--text-secondary);
+                border-color: var(--border-default);
+            }
+        }
+    }
+
+    .card-actions__btn--danger:not(:disabled) {
+        &:hover {
+            color: var(--status-unhealthy);
+            border-color: var(--status-unhealthy);
+            background-color: color-mix(in srgb, var(--status-unhealthy) 10%, transparent);
+        }
+    }
+
+    .card-actions__btn--loading {
+        cursor: wait;
+        color: var(--accent-primary);
+        border-color: var(--accent-primary);
+
+        &:hover {
+            background-color: transparent;
+            color: var(--accent-primary);
+            border-color: var(--accent-primary);
+        }
+    }
+
+    .card-actions__btn--loading-danger {
+        cursor: wait;
+        color: var(--status-unhealthy);
+        border-color: var(--status-unhealthy);
+
+        &:hover {
+            background-color: transparent;
+            color: var(--status-unhealthy);
+            border-color: var(--status-unhealthy);
+        }
+    }
+
+    .card-actions__spinner {
+        animation: spin var(--duration-spinner) linear infinite;
+    }
+
+    @media (min-width: 900px) and (pointer: fine) {
+        .card-actions__btn {
+            width: 36px;
+            height: 36px;
+        }
+    }
+}

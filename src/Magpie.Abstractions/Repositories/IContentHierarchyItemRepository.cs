@@ -27,4 +27,11 @@ public interface IContentHierarchyItemRepository :
         string level,
         string slug,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Compute aggregate fulfillment counts across the entire content library.
+    /// </summary>
+    /// <param name="cancellationToken">The cancellation token.</param>
+    /// <returns>The aggregate <see cref="ContentStats"/>.</returns>
+    Task<ContentStats> GetStatsAsync(CancellationToken cancellationToken = default);
 }

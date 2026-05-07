@@ -9,6 +9,7 @@ using System.Threading.Tasks;
 using Magpie.Abstractions.Api;
 using Magpie.Abstractions.Repositories;
 using Magpie.Api.EndpointGroups;
+using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Test.Shared;
@@ -235,10 +236,9 @@ public class IndexerFeedsEndpointGroupTests
             ProviderType = "newznab",
             Enabled = true
         };
-        var request = new IndexerFeed
+        var request = new IndexerFeedPatch
         {
             Name = "Updated Feed",
-            ProviderType = "newznab",
             Enabled = false
         };
 
@@ -267,14 +267,59 @@ public class IndexerFeedsEndpointGroupTests
     }
 
     [Test]
+    public async Task PatchIndexerFeed_MergesPartialUpdate_PreservingOmittedFields()
+    {
+        // Arrange
+        var feedId = Guid.NewGuid();
+        var existingFeed = new IndexerFeed
+        {
+            Id = feedId,
+            Name = "Original Feed",
+            ProviderType = "newznab",
+            Description = "Original description",
+            Enabled = true,
+            Settings = new() { ["apiKey"] = "original-key" }
+        };
+        var request = new IndexerFeedPatch
+        {
+            Name = "Renamed Feed"
+        };
+
+        _indexerFeedRepository
+            .Setup(m => m.GetByIdAsync(feedId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(existingFeed);
+
+        _indexerFeedRepository
+            .Setup(m => m.UpdateAsync(It.IsAny<IndexerFeed>(), null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+
+        // Act
+        var response = await _client.PatchAsJsonAsync($"/api/indexer-feeds/{feedId}", request).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NoContent));
+        _indexerFeedRepository.Verify(
+            r => r.UpdateAsync(
+                It.Is<IndexerFeed>(f =>
+                    f.Id == feedId &&
+                    f.Name == "Renamed Feed" &&
+                    f.ProviderType == "newznab" &&
+                    f.Description == "Original description" &&
+                    f.Enabled == true &&
+                    f.Settings.ContainsKey("apiKey")),
+                null,
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Test]
     public async Task PatchIndexerFeed_ReturnsNotFound_WhenIndexerFeedDoesNotExist()
     {
         // Arrange
         var feedId = Guid.NewGuid();
-        var request = new IndexerFeed
+        var request = new IndexerFeedPatch
         {
             Name = "Updated Feed",
-            ProviderType = "newznab",
             Enabled = true
         };
 

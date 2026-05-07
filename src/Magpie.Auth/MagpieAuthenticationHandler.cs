@@ -25,7 +25,7 @@ internal sealed class MagpieAuthenticationHandler(
         loggerFactory,
         encoder)
 {
-    public const string SchemeName = "Magpie";
+    public const string SchemeName = MagpieAuthSchemes.Magpie;
 
     protected override async Task<AuthenticateResult> HandleAuthenticateAsync()
     {

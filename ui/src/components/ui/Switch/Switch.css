@@ -1,0 +1,116 @@
+@layer components {
+    .switch {
+        display: inline-flex;
+        align-items: center;
+        background-color: var(--bg-tertiary);
+        border-radius: var(--radius-full);
+        cursor: pointer;
+        flex-shrink: 0;
+        position: relative;
+        transition:
+            background-color var(--duration-fast) var(--easing-default),
+            box-shadow var(--duration-fast) var(--easing-default);
+
+        &:hover:not(:disabled):not([data-disabled]) {
+            background-color: var(--border-default);
+        }
+
+        &:focus-visible {
+            outline: var(--focus-ring-width) solid var(--focus-ring-color);
+            outline-offset: var(--focus-ring-offset);
+        }
+
+        &[data-state='checked'] {
+            background-color: var(--accent-primary);
+
+            &:hover:not(:disabled):not([data-disabled]) {
+                background-color: var(--accent-secondary);
+            }
+        }
+
+        &:disabled,
+        &[data-disabled] {
+            cursor: not-allowed;
+            opacity: var(--opacity-disabled);
+        }
+    }
+
+    .switch--sm {
+        width: 32px;
+        height: 18px;
+    }
+
+    .switch--md {
+        width: 40px;
+        height: 22px;
+    }
+
+    .switch--lg {
+        width: 48px;
+        height: 26px;
+    }
+
+    .switch--error {
+        background-color: var(--status-unhealthy);
+
+        &:hover:not(:disabled):not([data-disabled]) {
+            background-color: var(--status-unhealthy);
+        }
+
+        &:focus-visible {
+            box-shadow: var(--glow-error);
+        }
+
+        &[data-state='checked'] {
+            background-color: var(--status-unhealthy);
+
+            &:hover:not(:disabled):not([data-disabled]) {
+                background-color: var(--status-unhealthy);
+            }
+        }
+    }
+
+    .switch__thumb {
+        display: block;
+        background-color: var(--text-primary);
+        border-radius: var(--radius-full);
+        transition: transform var(--duration-fast) var(--easing-default);
+        will-change: transform;
+
+        .switch--sm & {
+            width: 14px;
+            height: 14px;
+            transform: translateX(2px);
+        }
+
+        .switch--sm &[data-state='checked'] {
+            transform: translateX(16px);
+        }
+
+        .switch--md & {
+            width: 18px;
+            height: 18px;
+            transform: translateX(2px);
+        }
+
+        .switch--md &[data-state='checked'] {
+            transform: translateX(20px);
+        }
+
+        .switch--lg & {
+            width: 22px;
+            height: 22px;
+            transform: translateX(2px);
+        }
+
+        .switch--lg &[data-state='checked'] {
+            transform: translateX(24px);
+        }
+    }
+
+    @media (pointer: coarse) {
+        .switch {
+            min-height: var(--touch-target-min);
+        }
+    }
+}

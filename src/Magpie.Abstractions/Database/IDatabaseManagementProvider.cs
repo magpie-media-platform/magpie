@@ -14,8 +14,10 @@ public interface IDatabaseManagementProvider
     /// Information about a database backup.
     /// </summary>
     /// <param name="Id">The backup id.</param>
+    /// <param name="Name">The human-readable backup name.</param>
     /// <param name="CreatedAt">The backup creation timestamp.</param>
-    public record BackupInfo(string Id, DateTime CreatedAt);
+    /// <param name="SizeBytes">The backup file size in bytes.</param>
+    public record BackupInfo(string Id, string Name, DateTime CreatedAt, long SizeBytes);
 
     /// <summary>
     /// The provider id.
@@ -35,7 +37,8 @@ public interface IDatabaseManagementProvider
     /// </summary>
     /// <param name="backupId">The backup id returned from BackupAsync.</param>
     /// <param name="cancellationToken">The cancellation token.</param>
-    Task RestoreAsync(string backupId, CancellationToken cancellationToken = default);
+    /// <returns>True if the backup was restored; false if the backup was not found.</returns>
+    Task<bool> RestoreAsync(string backupId, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Lists available backups.
@@ -49,7 +52,16 @@ public interface IDatabaseManagementProvider
     /// </summary>
     /// <param name="backupId">The backup id.</param>
     /// <param name="cancellationToken">The cancellation token.</param>
-    Task DeleteBackupAsync(string backupId, CancellationToken cancellationToken = default);
+    /// <returns>True if the backup was deleted; false if the backup was not found.</returns>
+    Task<bool> DeleteBackupAsync(string backupId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Get the file path for a backup.
+    /// </summary>
+    /// <param name="backupId">The backup id.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
+    /// <returns>The full file path to the backup file, or null if the backup was not found.</returns>
+    Task<string?> GetBackupFilePathAsync(string backupId, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Optimize the database to reclaim space and improve performance.

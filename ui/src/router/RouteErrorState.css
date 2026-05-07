@@ -1,0 +1,36 @@
+@layer components {
+    .route-error {
+        display: flex;
+        flex: 1 0 auto;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        min-height: 0;
+        padding: var(--space-xl);
+        text-align: center;
+    }
+
+    .route-error__actions {
+        display: flex;
+        gap: var(--space-md);
+        flex-wrap: wrap;
+        justify-content: center;
+    }
+
+    .route-error__actions > * {
+        min-width: 160px;
+        justify-content: center;
+    }
+
+    @media (max-width: 480px) {
+        .route-error__actions {
+            flex-direction: column;
+            width: 100%;
+            max-width: 280px;
+        }
+
+        .route-error__actions > * {
+            width: 100%;
+        }
+    }
+}

@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Json;
@@ -7,8 +9,11 @@ using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions.Api;
+using Magpie.Abstractions.Integrations;
 using Magpie.Abstractions.Repositories;
 using Magpie.Api.EndpointGroups;
+using Magpie.Models;
+using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Test.Shared;
@@ -35,11 +40,15 @@ public class IndexersEndpointGroupTests
     private IHost _host = null!;
     private HttpClient _client = null!;
     private Mock<IIndexerRepository> _indexerRepository = null!;
+    private Mock<IIndexerConnectionRepository> _indexerConnectionRepository = null!;
+    private FakeIndexerIntegration _integration = null!;
 
     [SetUp]
     public void SetUp()
     {
         _indexerRepository = new Mock<IIndexerRepository>();
+        _indexerConnectionRepository = new Mock<IIndexerConnectionRepository>();
+        _integration = new FakeIndexerIntegration();
 
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
@@ -58,6 +67,8 @@ public class IndexersEndpointGroupTests
             .AddPolicy(nameof(Role.Manager), policy => policy.RequireAssertion(_ => true));
 
         builder.Services.AddSingleton(_indexerRepository.Object);
+        builder.Services.AddSingleton(_indexerConnectionRepository.Object);
+        builder.Services.AddSingleton<IIndexerIntegration>(_integration);
         builder.Services.AddSingleton<IApiEndpointGroup, IndexersEndpointGroup>();
 
         var app = builder.Build();
@@ -205,14 +216,17 @@ public class IndexersEndpointGroupTests
     {
         // Arrange
         var indexerId = Guid.NewGuid();
-        var existingIndexer = new Indexer { Id = indexerId, Name = "Original Indexer", ProviderType = "newznab" };
-
-        var request = new Indexer
+        var existingIndexer = new Indexer
         {
-            Name = "Updated Indexer",
+            Id = indexerId,
+            Name = "Original Indexer",
             ProviderType = "newznab",
-            Availability = IndexerAvailability.Private
+            Availability = IndexerAvailability.Public,
+            Categories = ["Movies"],
+            Languages = ["en"]
         };
+
+        var request = new IndexerPatch { Name = "Updated Indexer" };
 
         _indexerRepository
             .Setup(m => m.GetByIdAsync(indexerId, It.IsAny<CancellationToken>()))
@@ -231,7 +245,11 @@ public class IndexersEndpointGroupTests
             r => r.UpdateAsync(
                 It.Is<Indexer>(i =>
                     i.Id == indexerId &&
-                    i.Name == "Updated Indexer"),
+                    i.Name == "Updated Indexer" &&
+                    i.ProviderType == "newznab" &&
+                    i.Availability == IndexerAvailability.Public &&
+                    i.Categories.SequenceEqual(new[] { "Movies" }) &&
+                    i.Languages.SequenceEqual(new[] { "en" })),
                 null,
                 It.IsAny<CancellationToken>()),
             Times.Once);
@@ -242,7 +260,7 @@ public class IndexersEndpointGroupTests
     {
         // Arrange
         var indexerId = Guid.NewGuid();
-        var request = new Indexer
+        var request = new IndexerPatch
         {
             Name = "Updated Indexer",
             ProviderType = "newznab"
@@ -291,5 +309,254 @@ public class IndexersEndpointGroupTests
 
         // Assert
         Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NotFound));
+    }
+
+    [Test]
+    public async Task TestIndexer_DispatchesToMatchingIntegration_WithSoleConnectionSettings()
+    {
+        // Arrange
+        var indexerId = Guid.NewGuid();
+        var indexer = new Indexer { Id = indexerId, Name = "Drunken Slug", ProviderType = "fake" };
+        var connection = new IndexerConnection
+        {
+            Id = Guid.NewGuid(),
+            IndexerId = indexerId,
+            Name = "primary",
+            Settings = new Dictionary<string, string>
+            {
+                ["url"] = "https://example.test",
+                ["apiKey"] = "secret-1"
+            }
+        };
+
+        _indexerRepository
+            .Setup(m => m.GetByIdAsync(indexerId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(indexer);
+        _indexerConnectionRepository
+            .Setup(m => m.ListByIndexerIdAsync(indexerId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync([connection]);
+
+        // Act
+        var response = await _client.PostAsync($"/api/indexers/{indexerId}/test", null)
+            .ConfigureAwait(false);
+
+        // Assert
+        var content = await response.Content.ReadFromJsonAsync<ConnectionTestResult>().ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
+            Assert.That(content, Has.Property(nameof(content.Success)).True);
+            Assert.That(content, Has.Property(nameof(content.Message)).EqualTo("ok"));
+            Assert.That(_integration.WasCalled, Is.True);
+            Assert.That(_integration.LastSettings, Is.Not.Null);
+            Assert.That(_integration.LastSettings, Is.Not.Empty);
+            Assert.That(_integration.LastSettings!["url"], Is.EqualTo("https://example.test"));
+            Assert.That(_integration.LastSettings!["apiKey"], Is.EqualTo("secret-1"));
+        }
+    }
+
+    [Test]
+    public async Task TestIndexer_UsesExplicitConnectionId_WhenMultipleConnectionsExist()
+    {
+        // Arrange
+        var indexerId = Guid.NewGuid();
+        var indexer = new Indexer { Id = indexerId, Name = "Multi", ProviderType = "fake" };
+        var connectionA = new IndexerConnection
+        {
+            Id = Guid.NewGuid(),
+            IndexerId = indexerId,
+            Name = "A",
+            Settings = new Dictionary<string, string> { ["apiKey"] = "key-a" }
+        };
+        var connectionB = new IndexerConnection
+        {
+            Id = Guid.NewGuid(),
+            IndexerId = indexerId,
+            Name = "B",
+            Settings = new Dictionary<string, string> { ["apiKey"] = "key-b" }
+        };
+
+        _indexerRepository
+            .Setup(m => m.GetByIdAsync(indexerId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(indexer);
+        _indexerConnectionRepository
+            .Setup(m => m.ListByIndexerIdAsync(indexerId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync([connectionA, connectionB]);
+
+        // Act
+        var response = await _client
+            .PostAsync($"/api/indexers/{indexerId}/test?connectionId={connectionB.Id}", null)
+            .ConfigureAwait(false);
+
+        // Assert
+        var content = await response.Content.ReadFromJsonAsync<ConnectionTestResult>().ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
+            Assert.That(content, Has.Property(nameof(content.Success)).True);
+            Assert.That(_integration.LastSettings!["apiKey"], Is.EqualTo("key-b"));
+        }
+    }
+
+    [Test]
+    public async Task TestIndexer_ReturnsFailureResult_WhenNoConnectionsConfigured()
+    {
+        // Arrange
+        var indexerId = Guid.NewGuid();
+        var indexer = new Indexer { Id = indexerId, Name = "NoConn", ProviderType = "fake" };
+
+        _indexerRepository
+            .Setup(m => m.GetByIdAsync(indexerId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(indexer);
+        _indexerConnectionRepository
+            .Setup(m => m.ListByIndexerIdAsync(indexerId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+
+        // Act
+        var response = await _client.PostAsync($"/api/indexers/{indexerId}/test", null)
+            .ConfigureAwait(false);
+
+        // Assert
+        var content = await response.Content.ReadFromJsonAsync<ConnectionTestResult>().ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
+            Assert.That(content, Has.Property(nameof(content.Success)).False);
+            Assert.That(content!.Message, Does.Contain("No connections"));
+            Assert.That(_integration.WasCalled, Is.False);
+        }
+    }
+
+    [Test]
+    public async Task TestIndexer_ReturnsFailureResult_WhenMultipleConnectionsAndNoConnectionId()
+    {
+        // Arrange
+        var indexerId = Guid.NewGuid();
+        var indexer = new Indexer { Id = indexerId, Name = "Multi", ProviderType = "fake" };
+        var connections = new[]
+        {
+            new IndexerConnection { Id = Guid.NewGuid(), IndexerId = indexerId, Name = "A" },
+            new IndexerConnection { Id = Guid.NewGuid(), IndexerId = indexerId, Name = "B" }
+        };
+
+        _indexerRepository
+            .Setup(m => m.GetByIdAsync(indexerId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(indexer);
+        _indexerConnectionRepository
+            .Setup(m => m.ListByIndexerIdAsync(indexerId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(connections);
+
+        // Act
+        var response = await _client.PostAsync($"/api/indexers/{indexerId}/test", null)
+            .ConfigureAwait(false);
+
+        // Assert
+        var content = await response.Content.ReadFromJsonAsync<ConnectionTestResult>().ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
+            Assert.That(content, Has.Property(nameof(content.Success)).False);
+            Assert.That(content!.Message, Does.Contain("Multiple connections"));
+            Assert.That(_integration.WasCalled, Is.False);
+        }
+    }
+
+    [Test]
+    public async Task TestIndexer_ReturnsFailureResult_WhenConnectionIdNotFound()
+    {
+        // Arrange
+        var indexerId = Guid.NewGuid();
+        var indexer = new Indexer { Id = indexerId, Name = "NoMatch", ProviderType = "fake" };
+        var connection = new IndexerConnection { Id = Guid.NewGuid(), IndexerId = indexerId, Name = "A" };
+        var bogusConnectionId = Guid.NewGuid();
+
+        _indexerRepository
+            .Setup(m => m.GetByIdAsync(indexerId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(indexer);
+        _indexerConnectionRepository
+            .Setup(m => m.ListByIndexerIdAsync(indexerId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync([connection]);
+
+        // Act
+        var response = await _client
+            .PostAsync($"/api/indexers/{indexerId}/test?connectionId={bogusConnectionId}", null)
+            .ConfigureAwait(false);
+
+        // Assert
+        var content = await response.Content.ReadFromJsonAsync<ConnectionTestResult>().ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
+            Assert.That(content, Has.Property(nameof(content.Success)).False);
+            Assert.That(content!.Message, Does.Contain("not found"));
+            Assert.That(_integration.WasCalled, Is.False);
+        }
+    }
+
+    [Test]
+    public async Task TestIndexer_ReturnsNotFound_WhenIndexerDoesNotExist()
+    {
+        // Arrange
+        var indexerId = Guid.NewGuid();
+
+        _indexerRepository
+            .Setup(m => m.GetByIdAsync(indexerId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(default(Indexer?));
+
+        // Act
+        var response = await _client.PostAsync($"/api/indexers/{indexerId}/test", null)
+            .ConfigureAwait(false);
+
+        // Assert
+        Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.NotFound));
+    }
+
+    [Test]
+    public async Task TestIndexer_ReturnsFailureResult_WhenNoMatchingIntegrationRegistered()
+    {
+        // Arrange
+        var indexerId = Guid.NewGuid();
+        var indexer = new Indexer { Id = indexerId, Name = "Other", ProviderType = "unknown-provider" };
+
+        _indexerRepository
+            .Setup(m => m.GetByIdAsync(indexerId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(indexer);
+
+        // Act
+        var response = await _client.PostAsync($"/api/indexers/{indexerId}/test", null)
+            .ConfigureAwait(false);
+
+        // Assert
+        var content = await response.Content.ReadFromJsonAsync<ConnectionTestResult>().ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(response, Has.Property(nameof(response.StatusCode)).EqualTo(HttpStatusCode.OK));
+            Assert.That(content, Has.Property(nameof(content.Success)).False);
+            Assert.That(content!.Message, Does.Contain("unknown-provider"));
+        }
+    }
+
+    private sealed class FakeIndexerIntegration : IIndexerIntegration
+    {
+        public string IndexerType => "fake";
+
+        public bool WasCalled { get; private set; }
+
+        public IReadOnlyDictionary<string, string>? LastSettings { get; private set; }
+
+        public Task<IEnumerable<Release>> SearchAsync(
+            string query,
+            IEnumerable<string>? categories,
+            CancellationToken cancellationToken)
+            => throw new NotImplementedException();
+
+        public Task<ConnectionTestResult> TestConnectionAsync(
+            IReadOnlyDictionary<string, string> settings,
+            CancellationToken cancellationToken = default)
+        {
+            WasCalled = true;
+            LastSettings = settings;
+            return Task.FromResult(new ConnectionTestResult { Success = true, Message = "ok" });
+        }
     }
 }

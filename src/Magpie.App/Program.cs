@@ -1,6 +1,12 @@
 using System.CommandLine;
 
-var rootCommand = new RootCommand("magpie");
+using Magpie.App.Commands;
+
+var rootCommand = new RootCommand("magpie")
+{
+    new VersionCommand(),
+    new RunCommand()
+};
 
 return await rootCommand.Parse(args)
     .InvokeAsync()

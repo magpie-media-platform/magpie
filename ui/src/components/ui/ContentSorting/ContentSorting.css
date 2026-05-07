@@ -1,0 +1,98 @@
+@layer components {
+    .content-sorting {
+        display: flex;
+        align-items: center;
+        gap: var(--space-md);
+        padding: var(--space-sm) var(--space-md);
+        background-color: var(--bg-secondary);
+        border: 1px solid var(--border-default);
+        border-radius: var(--radius-lg);
+    }
+
+    .content-sorting__label {
+        display: flex;
+        align-items: center;
+        gap: var(--space-xs);
+        font-size: var(--text-sm);
+        font-weight: var(--weight-semibold);
+        color: var(--text-secondary);
+        text-transform: uppercase;
+        letter-spacing: var(--tracking-wide);
+        white-space: nowrap;
+
+        & svg {
+            font-size: var(--text-lg);
+            color: var(--accent-primary);
+        }
+    }
+
+    .content-sorting__controls {
+        display: flex;
+        align-items: center;
+        gap: var(--space-sm);
+    }
+
+    .content-sorting__direction {
+        display: inline-flex;
+        align-items: center;
+        gap: var(--space-xs);
+        padding: var(--space-xs) var(--space-sm);
+        min-width: auto;
+
+        & svg {
+            font-size: var(--text-base);
+        }
+    }
+
+    .content-sorting__direction-label {
+        font-size: var(--text-xs);
+        text-transform: uppercase;
+        letter-spacing: var(--tracking-wide);
+    }
+
+    @media (max-width: 480px) {
+        .content-sorting {
+            flex-direction: column;
+            align-items: stretch;
+            gap: var(--space-sm);
+            padding: var(--space-sm);
+        }
+
+        .content-sorting__label {
+            margin-bottom: var(--space-xs);
+        }
+
+        .content-sorting__controls {
+            flex-wrap: wrap;
+        }
+
+        .content-sorting__controls .select-trigger {
+            flex: 1;
+            min-width: 120px;
+        }
+
+        .content-sorting__direction {
+            flex: 0 0 auto;
+        }
+    }
+
+    @media (min-width: 481px) {
+        .content-sorting {
+            flex-wrap: wrap;
+        }
+
+        .content-sorting__label {
+            flex: 0 0 auto;
+        }
+
+        .content-sorting__controls {
+            flex: 1;
+        }
+    }
+
+    @media (min-width: 1024px) {
+        .content-sorting {
+            padding: var(--space-sm) var(--space-md);
+        }
+    }
+}

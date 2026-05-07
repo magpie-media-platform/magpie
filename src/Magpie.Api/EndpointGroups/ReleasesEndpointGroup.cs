@@ -39,8 +39,8 @@ internal sealed class ReleasesEndpointGroup(IReleaseRepository releaseRepository
             .ProducesProblem(StatusCodes.Status400BadRequest)
             .RequireManager();
 
-        builder.MapPatch("{id:guid}", PatchRelease)
-            .WithName(nameof(PatchRelease))
+        builder.MapPut("{id:guid}", UpdateRelease)
+            .WithName(nameof(UpdateRelease))
             .Produces(StatusCodes.Status204NoContent)
             .ProducesProblem(StatusCodes.Status404NotFound)
             .ProducesProblem(StatusCodes.Status400BadRequest)
@@ -108,7 +108,7 @@ internal sealed class ReleasesEndpointGroup(IReleaseRepository releaseRepository
         return Results.Created($"api/{Name}/{created.Id}", created);
     }
 
-    private async Task<IResult> PatchRelease(
+    private async Task<IResult> UpdateRelease(
         HttpContext httpContext,
         Guid id,
         Release request,

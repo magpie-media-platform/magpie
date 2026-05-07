@@ -1,0 +1,33 @@
+@layer components {
+    .skip-link {
+        position: fixed;
+        top: var(--space-sm);
+        left: var(--space-sm);
+        z-index: var(--z-max);
+        padding: var(--space-sm) var(--space-md);
+        background-color: var(--accent-primary);
+        color: var(--bg-primary);
+        font-size: var(--text-sm);
+        font-weight: var(--weight-semibold);
+        text-decoration: none;
+        border-radius: var(--radius-sm);
+        box-shadow: var(--shadow-lg);
+
+        transform: translateY(-200%);
+        opacity: 0;
+        transition:
+            transform var(--duration-fast) var(--easing-default),
+            opacity var(--duration-fast) var(--easing-default);
+
+        &:focus {
+            transform: translateY(0);
+            opacity: 1;
+            outline: var(--focus-ring-width) solid var(--accent-secondary);
+            outline-offset: var(--focus-ring-offset);
+        }
+
+        &:hover {
+            background-color: var(--accent-secondary);
+        }
+    }
+}

@@ -29,6 +29,32 @@ public static class ResponseModelExtensions
     }
 
     /// <summary>
+    /// Convert a user to a response model that excludes credential fields.
+    /// </summary>
+    public static UserResponse ToResponse(this User user)
+    {
+        return new()
+        {
+            Id = user.Id,
+            Username = user.Username,
+            Email = user.Email,
+            ExtensionId = user.ExtensionId,
+            ProviderType = user.ProviderType,
+            ExternalId = user.ExternalId,
+            Settings = user.Settings,
+            Enabled = user.Enabled,
+            Role = user.Role,
+            FailedLoginAttempts = user.FailedLoginAttempts,
+            LockedUntil = user.LockedUntil,
+            LastLoginAt = user.LastLoginAt,
+            CreatedAt = user.CreatedAt,
+            CreatedByUserId = user.CreatedByUserId,
+            ModifiedAt = user.ModifiedAt,
+            ModifiedByUserId = user.ModifiedByUserId
+        };
+    }
+
+    /// <summary>
     /// Convert an API key with plaintext key to a response model.
     /// </summary>
     public static ApiKeyCreatedResponse ToCreatedResponse(this ApiKeyWithPlaintextKey result)
