@@ -1,49 +1,83 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, it, expect, vi } from 'vitest';
+import type { ReactNode } from 'react';
+
+import { ProviderTypesWrapper } from '@/test/providerTypesTestUtils';
+import { SchemaDataType, type IntegrationSettingDefinition } from '@/hooks/useProviderSchema';
 
 import { IndexerFeedForm } from './IndexerFeedForm';
+
+const PROVIDER_TYPES = ['jackett', 'prowlarr'];
+
+function TestWrapper({ children }: { children: ReactNode }) {
+    return <ProviderTypesWrapper seed={{ indexerFeeds: PROVIDER_TYPES }}>{children}</ProviderTypesWrapper>;
+}
+
+async function selectIntegration(user: ReturnType<typeof userEvent.setup>, integrationName: string): Promise<void> {
+    await user.click(screen.getByRole('combobox', { name: /integration/i }));
+    await user.click(screen.getByRole('option', { name: integrationName }));
+}
 
 describe('IndexerFeedForm', () => {
     describe('add mode', () => {
         it('renders add form when no initial values', () => {
-            render(<IndexerFeedForm open={true} onOpenChange={vi.fn()} initialValues={null} onSubmit={vi.fn()} />);
+            render(
+                <TestWrapper>
+                    <IndexerFeedForm open={true} onOpenChange={vi.fn()} initialValues={null} onSubmit={vi.fn()} />
+                </TestWrapper>,
+            );
 
             expect(screen.getByText('Add Feed')).toBeInTheDocument();
             expect(screen.getByText('Configure a new feed to sync indexer definitions.')).toBeInTheDocument();
         });
 
-        it('shows name, description, and provider fields', () => {
-            render(<IndexerFeedForm open={true} onOpenChange={vi.fn()} initialValues={null} onSubmit={vi.fn()} />);
+        it('shows name, description, and integration fields', () => {
+            render(
+                <TestWrapper>
+                    <IndexerFeedForm open={true} onOpenChange={vi.fn()} initialValues={null} onSubmit={vi.fn()} />
+                </TestWrapper>,
+            );
 
             expect(screen.getByLabelText(/Name/)).toBeInTheDocument();
             expect(screen.getByLabelText(/Description/)).toBeInTheDocument();
-            expect(screen.getByLabelText(/Provider/)).toBeInTheDocument();
+            expect(document.querySelector('[data-field="provider"]')).toBeInTheDocument();
         });
 
         it('shows enabled toggle defaulting to on', () => {
-            render(<IndexerFeedForm open={true} onOpenChange={vi.fn()} initialValues={null} onSubmit={vi.fn()} />);
+            render(
+                <TestWrapper>
+                    <IndexerFeedForm open={true} onOpenChange={vi.fn()} initialValues={null} onSubmit={vi.fn()} />
+                </TestWrapper>,
+            );
 
             const toggle = screen.getByRole('switch');
             expect(toggle).toBeChecked();
         });
 
         it('shows settings section with add button', () => {
-            render(<IndexerFeedForm open={true} onOpenChange={vi.fn()} initialValues={null} onSubmit={vi.fn()} />);
+            render(
+                <TestWrapper>
+                    <IndexerFeedForm open={true} onOpenChange={vi.fn()} initialValues={null} onSubmit={vi.fn()} />
+                </TestWrapper>,
+            );
 
-            expect(screen.getByText('Settings')).toBeInTheDocument();
-            expect(screen.getByRole('button', { name: /add setting/i })).toBeInTheDocument();
+            expect(screen.queryByText('Settings')).not.toBeInTheDocument();
+            expect(screen.queryByRole('button', { name: /add setting/i })).not.toBeInTheDocument();
         });
 
-        it('adds a key-value row when Add Setting is clicked', async () => {
-            const user = userEvent.setup();
-            render(<IndexerFeedForm open={true} onOpenChange={vi.fn()} initialValues={null} onSubmit={vi.fn()} />);
+        it('shows empty-state copy when no integrations are registered', () => {
+            render(
+                <ProviderTypesWrapper seed={{ indexerFeeds: [] }}>
+                    <IndexerFeedForm open={true} onOpenChange={vi.fn()} initialValues={null} onSubmit={vi.fn()} />
+                </ProviderTypesWrapper>,
+            );
 
-            await user.click(screen.getByRole('button', { name: /add setting/i }));
-
-            expect(screen.getByPlaceholderText('Key')).toBeInTheDocument();
-            expect(screen.getByPlaceholderText('Value')).toBeInTheDocument();
-            expect(screen.getByRole('button', { name: /remove setting/i })).toBeInTheDocument();
+            expect(
+                screen.getByText(
+                    'No feed integrations are available. An extension that provides one must be installed.',
+                ),
+            ).toBeInTheDocument();
         });
     });
 
@@ -59,7 +93,14 @@ describe('IndexerFeedForm', () => {
 
         it('renders edit form with initial values', () => {
             render(
-                <IndexerFeedForm open={true} onOpenChange={vi.fn()} initialValues={existingFeed} onSubmit={vi.fn()} />,
+                <TestWrapper>
+                    <IndexerFeedForm
+                        open={true}
+                        onOpenChange={vi.fn()}
+                        initialValues={existingFeed}
+                        onSubmit={vi.fn()}
+                    />
+                </TestWrapper>,
             );
 
             expect(screen.getByText('Edit Feed')).toBeInTheDocument();
@@ -68,7 +109,14 @@ describe('IndexerFeedForm', () => {
 
         it('populates name from initial values', () => {
             render(
-                <IndexerFeedForm open={true} onOpenChange={vi.fn()} initialValues={existingFeed} onSubmit={vi.fn()} />,
+                <TestWrapper>
+                    <IndexerFeedForm
+                        open={true}
+                        onOpenChange={vi.fn()}
+                        initialValues={existingFeed}
+                        onSubmit={vi.fn()}
+                    />
+                </TestWrapper>,
             );
 
             expect(screen.getByDisplayValue('My Feed')).toBeInTheDocument();
@@ -76,38 +124,32 @@ describe('IndexerFeedForm', () => {
 
         it('populates description from initial values', () => {
             render(
-                <IndexerFeedForm open={true} onOpenChange={vi.fn()} initialValues={existingFeed} onSubmit={vi.fn()} />,
+                <TestWrapper>
+                    <IndexerFeedForm
+                        open={true}
+                        onOpenChange={vi.fn()}
+                        initialValues={existingFeed}
+                        onSubmit={vi.fn()}
+                    />
+                </TestWrapper>,
             );
 
             expect(screen.getByDisplayValue('Test feed description')).toBeInTheDocument();
         });
 
-        it('populates provider from initial values', () => {
+        it('populates integration from initial values', () => {
             render(
-                <IndexerFeedForm open={true} onOpenChange={vi.fn()} initialValues={existingFeed} onSubmit={vi.fn()} />,
+                <TestWrapper>
+                    <IndexerFeedForm
+                        open={true}
+                        onOpenChange={vi.fn()}
+                        initialValues={existingFeed}
+                        onSubmit={vi.fn()}
+                    />
+                </TestWrapper>,
             );
 
             expect(screen.getByDisplayValue('prowlarr')).toBeInTheDocument();
-        });
-
-        it('populates settings entries from initial values', () => {
-            render(
-                <IndexerFeedForm open={true} onOpenChange={vi.fn()} initialValues={existingFeed} onSubmit={vi.fn()} />,
-            );
-
-            expect(screen.getByDisplayValue('baseUrl')).toBeInTheDocument();
-            expect(screen.getByDisplayValue('http://localhost:9696')).toBeInTheDocument();
-            expect(screen.getByDisplayValue('apiKey')).toBeInTheDocument();
-            expect(screen.getByDisplayValue('secret123')).toBeInTheDocument();
-        });
-
-        it('shows remove buttons for each settings entry', () => {
-            render(
-                <IndexerFeedForm open={true} onOpenChange={vi.fn()} initialValues={existingFeed} onSubmit={vi.fn()} />,
-            );
-
-            const removeButtons = screen.getAllByRole('button', { name: /remove setting/i });
-            expect(removeButtons.length).toBe(2);
         });
     });
 
@@ -115,7 +157,11 @@ describe('IndexerFeedForm', () => {
         it('shows error when name is empty on submit', async () => {
             const user = userEvent.setup();
             const onSubmit = vi.fn();
-            render(<IndexerFeedForm open={true} onOpenChange={vi.fn()} initialValues={null} onSubmit={onSubmit} />);
+            render(
+                <TestWrapper>
+                    <IndexerFeedForm open={true} onOpenChange={vi.fn()} initialValues={null} onSubmit={onSubmit} />
+                </TestWrapper>,
+            );
 
             await user.click(screen.getByText('Save'));
 
@@ -123,66 +169,20 @@ describe('IndexerFeedForm', () => {
             expect(onSubmit).not.toHaveBeenCalled();
         });
 
-        it('shows error when provider is empty on submit', async () => {
+        it('shows error when integration is empty on submit', async () => {
             const user = userEvent.setup();
             const onSubmit = vi.fn();
-            render(<IndexerFeedForm open={true} onOpenChange={vi.fn()} initialValues={null} onSubmit={onSubmit} />);
+            render(
+                <TestWrapper>
+                    <IndexerFeedForm open={true} onOpenChange={vi.fn()} initialValues={null} onSubmit={onSubmit} />
+                </TestWrapper>,
+            );
 
             await user.type(screen.getByLabelText(/Name/), 'Test Feed');
             await user.click(screen.getByText('Save'));
 
-            expect(screen.getByText('Provider is required')).toBeInTheDocument();
+            expect(screen.getByText('Integration is required')).toBeInTheDocument();
             expect(onSubmit).not.toHaveBeenCalled();
-        });
-
-        it('shows duplicate key errors when settings have the same key', async () => {
-            const user = userEvent.setup();
-            const onSubmit = vi.fn();
-            render(<IndexerFeedForm open={true} onOpenChange={vi.fn()} initialValues={null} onSubmit={onSubmit} />);
-
-            await user.type(screen.getByLabelText(/Name/), 'Test');
-            await user.type(screen.getByLabelText(/Provider/), 'test');
-
-            await user.click(screen.getByRole('button', { name: /add setting/i }));
-            const keyInputs = screen.getAllByPlaceholderText('Key');
-            await user.type(keyInputs[0], 'baseUrl');
-
-            await user.click(screen.getByRole('button', { name: /add setting/i }));
-            const keyInputs2 = screen.getAllByPlaceholderText('Key');
-            await user.type(keyInputs2[1], 'baseUrl');
-
-            await user.click(screen.getByText('Save'));
-
-            const errors = screen.getAllByText('Duplicate key');
-            expect(errors.length).toBe(2);
-            expect(onSubmit).not.toHaveBeenCalled();
-        });
-
-        it('clears duplicate key error when key is changed', async () => {
-            const user = userEvent.setup();
-            const onSubmit = vi.fn();
-            render(<IndexerFeedForm open={true} onOpenChange={vi.fn()} initialValues={null} onSubmit={onSubmit} />);
-
-            await user.type(screen.getByLabelText(/Name/), 'Test');
-            await user.type(screen.getByLabelText(/Provider/), 'test');
-
-            await user.click(screen.getByRole('button', { name: /add setting/i }));
-            const keyInputs = screen.getAllByPlaceholderText('Key');
-            await user.type(keyInputs[0], 'baseUrl');
-
-            await user.click(screen.getByRole('button', { name: /add setting/i }));
-            const keyInputs2 = screen.getAllByPlaceholderText('Key');
-            await user.type(keyInputs2[1], 'baseUrl');
-
-            await user.click(screen.getByText('Save'));
-            expect(screen.getAllByText('Duplicate key').length).toBe(2);
-
-            const keyInputsAfter = screen.getAllByPlaceholderText('Key');
-            await user.clear(keyInputsAfter[1]);
-            await user.type(keyInputsAfter[1], 'apiKey');
-
-            await user.click(screen.getByText('Save'));
-            expect(onSubmit).toHaveBeenCalled();
         });
     });
 
@@ -200,7 +200,14 @@ describe('IndexerFeedForm', () => {
             };
 
             render(
-                <IndexerFeedForm open={true} onOpenChange={vi.fn()} initialValues={existingFeed} onSubmit={onSubmit} />,
+                <TestWrapper>
+                    <IndexerFeedForm
+                        open={true}
+                        onOpenChange={vi.fn()}
+                        initialValues={existingFeed}
+                        onSubmit={onSubmit}
+                    />
+                </TestWrapper>,
             );
 
             await user.click(screen.getByText('Save'));
@@ -208,19 +215,18 @@ describe('IndexerFeedForm', () => {
             expect(onSubmit).toHaveBeenCalledWith(existingFeed);
         });
 
-        it('submits settings from key-value entries', async () => {
+        it('submits with empty settings dict when adding a new feed', async () => {
             const user = userEvent.setup();
             const onSubmit = vi.fn();
 
-            render(<IndexerFeedForm open={true} onOpenChange={vi.fn()} initialValues={null} onSubmit={onSubmit} />);
+            render(
+                <TestWrapper>
+                    <IndexerFeedForm open={true} onOpenChange={vi.fn()} initialValues={null} onSubmit={onSubmit} />
+                </TestWrapper>,
+            );
 
             await user.type(screen.getByLabelText(/Name/), 'New Feed');
-            await user.type(screen.getByLabelText(/Provider/), 'jackett');
-
-            await user.click(screen.getByRole('button', { name: /add setting/i }));
-            await user.type(screen.getByPlaceholderText('Key'), 'baseUrl');
-            await user.type(screen.getByPlaceholderText('Value'), 'http://localhost:9117');
-
+            await selectIntegration(user, 'jackett');
             await user.click(screen.getByText('Save'));
 
             expect(onSubmit).toHaveBeenCalledWith({
@@ -229,19 +235,21 @@ describe('IndexerFeedForm', () => {
                 description: '',
                 provider: 'jackett',
                 enabled: true,
-                settings: { baseUrl: 'http://localhost:9117' },
+                settings: {},
             });
         });
 
         it('disables buttons when submitting', () => {
             render(
-                <IndexerFeedForm
-                    open={true}
-                    onOpenChange={vi.fn()}
-                    initialValues={null}
-                    onSubmit={vi.fn()}
-                    isSubmitting={true}
-                />,
+                <TestWrapper>
+                    <IndexerFeedForm
+                        open={true}
+                        onOpenChange={vi.fn()}
+                        initialValues={null}
+                        onSubmit={vi.fn()}
+                        isSubmitting={true}
+                    />
+                </TestWrapper>,
             );
 
             const saveButton = screen.getByRole('button', { name: /save/i });
@@ -255,7 +263,11 @@ describe('IndexerFeedForm', () => {
         it('calls onOpenChange with false when cancel clicked on clean form', async () => {
             const user = userEvent.setup();
             const onOpenChange = vi.fn();
-            render(<IndexerFeedForm open={true} onOpenChange={onOpenChange} initialValues={null} onSubmit={vi.fn()} />);
+            render(
+                <TestWrapper>
+                    <IndexerFeedForm open={true} onOpenChange={onOpenChange} initialValues={null} onSubmit={vi.fn()} />
+                </TestWrapper>,
+            );
 
             await user.click(screen.getByText('Cancel'));
 
@@ -267,7 +279,11 @@ describe('IndexerFeedForm', () => {
         it('shows unsaved changes dialog when cancelling a dirty form', async () => {
             const user = userEvent.setup();
             const onOpenChange = vi.fn();
-            render(<IndexerFeedForm open={true} onOpenChange={onOpenChange} initialValues={null} onSubmit={vi.fn()} />);
+            render(
+                <TestWrapper>
+                    <IndexerFeedForm open={true} onOpenChange={onOpenChange} initialValues={null} onSubmit={vi.fn()} />
+                </TestWrapper>,
+            );
 
             await user.type(screen.getByLabelText(/Name/), 'Modified');
             await user.click(screen.getByText('Cancel'));
@@ -279,7 +295,11 @@ describe('IndexerFeedForm', () => {
         it('closes the form when discard is clicked in unsaved dialog', async () => {
             const user = userEvent.setup();
             const onOpenChange = vi.fn();
-            render(<IndexerFeedForm open={true} onOpenChange={onOpenChange} initialValues={null} onSubmit={vi.fn()} />);
+            render(
+                <TestWrapper>
+                    <IndexerFeedForm open={true} onOpenChange={onOpenChange} initialValues={null} onSubmit={vi.fn()} />
+                </TestWrapper>,
+            );
 
             await user.type(screen.getByLabelText(/Name/), 'Modified');
             await user.click(screen.getByText('Cancel'));
@@ -291,7 +311,11 @@ describe('IndexerFeedForm', () => {
         it('returns to editing when keep editing is clicked in unsaved dialog', async () => {
             const user = userEvent.setup();
             const onOpenChange = vi.fn();
-            render(<IndexerFeedForm open={true} onOpenChange={onOpenChange} initialValues={null} onSubmit={vi.fn()} />);
+            render(
+                <TestWrapper>
+                    <IndexerFeedForm open={true} onOpenChange={onOpenChange} initialValues={null} onSubmit={vi.fn()} />
+                </TestWrapper>,
+            );
 
             await user.type(screen.getByLabelText(/Name/), 'Modified');
             await user.click(screen.getByText('Cancel'));
@@ -301,24 +325,16 @@ describe('IndexerFeedForm', () => {
             expect(screen.queryByText('Unsaved Changes')).not.toBeInTheDocument();
         });
 
-        it('detects dirty state from provider change', async () => {
+        it('detects dirty state from integration change', async () => {
             const user = userEvent.setup();
             const onOpenChange = vi.fn();
-            render(<IndexerFeedForm open={true} onOpenChange={onOpenChange} initialValues={null} onSubmit={vi.fn()} />);
+            render(
+                <TestWrapper>
+                    <IndexerFeedForm open={true} onOpenChange={onOpenChange} initialValues={null} onSubmit={vi.fn()} />
+                </TestWrapper>,
+            );
 
-            await user.type(screen.getByLabelText(/Provider/), 'prowlarr');
-            await user.click(screen.getByText('Cancel'));
-
-            expect(onOpenChange).not.toHaveBeenCalled();
-            expect(screen.getByText('Unsaved Changes')).toBeInTheDocument();
-        });
-
-        it('detects dirty state from settings change', async () => {
-            const user = userEvent.setup();
-            const onOpenChange = vi.fn();
-            render(<IndexerFeedForm open={true} onOpenChange={onOpenChange} initialValues={null} onSubmit={vi.fn()} />);
-
-            await user.click(screen.getByRole('button', { name: /add setting/i }));
+            await selectIntegration(user, 'prowlarr');
             await user.click(screen.getByText('Cancel'));
 
             expect(onOpenChange).not.toHaveBeenCalled();
@@ -326,48 +342,119 @@ describe('IndexerFeedForm', () => {
         });
     });
 
-    describe('settings editor', () => {
-        it('removes a settings entry when remove button is clicked', async () => {
+    describe('integration selection persists (MAGPIE-566)', () => {
+        const PROVIDER_SCHEMA: IntegrationSettingDefinition[] = [
+            { key: 'baseUrl', type: SchemaDataType.String, displayName: 'Base URL', required: true },
+        ];
+
+        function SchemaSelectWrapper({ children }: { children: ReactNode }) {
+            return (
+                <ProviderTypesWrapper
+                    seed={{
+                        indexerFeeds: PROVIDER_TYPES,
+                        schemas: { indexerFeeds: { prowlarr: PROVIDER_SCHEMA } },
+                    }}
+                >
+                    {children}
+                </ProviderTypesWrapper>
+            );
+        }
+
+        it('keeps the integration selected, preserves the name, and renders its settings', async () => {
             const user = userEvent.setup();
-            const existingFeed = {
-                id: 'feed-1',
-                name: 'My Feed',
-                description: '',
-                provider: 'prowlarr',
-                enabled: true,
-                settings: { baseUrl: 'http://localhost:9696', apiKey: 'secret' },
-            };
 
             render(
-                <IndexerFeedForm open={true} onOpenChange={vi.fn()} initialValues={existingFeed} onSubmit={vi.fn()} />,
+                <SchemaSelectWrapper>
+                    <IndexerFeedForm open={true} onOpenChange={vi.fn()} initialValues={null} onSubmit={vi.fn()} />
+                </SchemaSelectWrapper>,
             );
 
-            const removeButtons = screen.getAllByRole('button', { name: /remove setting/i });
-            expect(removeButtons.length).toBe(2);
+            await user.type(screen.getByLabelText(/Name/), 'My Feed');
+            await selectIntegration(user, 'prowlarr');
 
-            await user.click(removeButtons[0]);
+            expect(screen.getByRole('combobox', { name: /integration/i })).toHaveTextContent('prowlarr');
+            expect(screen.getByDisplayValue('My Feed')).toBeInTheDocument();
+            expect(await screen.findByLabelText(/Base URL/)).toBeInTheDocument();
+        });
+    });
 
-            await waitFor(() => {
-                expect(screen.getAllByRole('button', { name: /remove setting/i }).length).toBe(1);
-            });
+    describe('schema-default dirty baseline', () => {
+        const SCHEMA_WITH_DEFAULTS: IntegrationSettingDefinition[] = [
+            { key: 'baseUrl', type: SchemaDataType.String, displayName: 'Base URL', required: true },
+            { key: 'syncInterval', type: SchemaDataType.String, displayName: 'Sync interval', defaultValue: '60' },
+        ];
+
+        function SchemaWrapper({ children }: { children: ReactNode }) {
+            return (
+                <ProviderTypesWrapper
+                    seed={{
+                        indexerFeeds: PROVIDER_TYPES,
+                        schemas: { indexerFeeds: { prowlarr: SCHEMA_WITH_DEFAULTS } },
+                    }}
+                >
+                    {children}
+                </ProviderTypesWrapper>
+            );
+        }
+
+        it('stays not-dirty after schema defaults seed with no user edits', async () => {
+            const user = userEvent.setup();
+            const onOpenChange = vi.fn();
+
+            render(
+                <SchemaWrapper>
+                    <IndexerFeedForm
+                        open={true}
+                        onOpenChange={onOpenChange}
+                        initialValues={{
+                            name: 'My Feed',
+                            description: '',
+                            provider: 'prowlarr',
+                            enabled: true,
+                            settings: {},
+                        }}
+                        onSubmit={vi.fn()}
+                    />
+                </SchemaWrapper>,
+            );
+
+            await screen.findByDisplayValue('60');
+
+            await user.click(screen.getByText('Cancel'));
+
+            expect(screen.queryByText('Unsaved Changes')).not.toBeInTheDocument();
+            expect(onOpenChange).toHaveBeenCalledWith(false);
         });
 
-        it('excludes entries with empty keys from submitted settings', async () => {
+        it('becomes dirty after a real edit to a seeded-default form', async () => {
             const user = userEvent.setup();
-            const onSubmit = vi.fn();
+            const onOpenChange = vi.fn();
 
-            render(<IndexerFeedForm open={true} onOpenChange={vi.fn()} initialValues={null} onSubmit={onSubmit} />);
+            render(
+                <SchemaWrapper>
+                    <IndexerFeedForm
+                        open={true}
+                        onOpenChange={onOpenChange}
+                        initialValues={{
+                            name: 'My Feed',
+                            description: '',
+                            provider: 'prowlarr',
+                            enabled: true,
+                            settings: {},
+                        }}
+                        onSubmit={vi.fn()}
+                    />
+                </SchemaWrapper>,
+            );
 
-            await user.type(screen.getByLabelText(/Name/), 'Test');
-            await user.type(screen.getByLabelText(/Provider/), 'test');
+            const syncInput = await screen.findByDisplayValue('60');
+            await user.clear(syncInput);
+            await user.type(syncInput, '120');
 
-            await user.click(screen.getByRole('button', { name: /add setting/i }));
+            await user.click(screen.getByText('Cancel'));
 
-            await user.type(screen.getByPlaceholderText('Value'), 'some-value');
-
-            await user.click(screen.getByText('Save'));
-
-            expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ settings: {} }));
+            expect(screen.getByText('Unsaved Changes')).toBeInTheDocument();
+            expect(onOpenChange).not.toHaveBeenCalled();
         });
     });
 });

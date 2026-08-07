@@ -2,4 +2,5 @@ dist
 node_modules
 scripts
 e2e
-src/editor/filter-query-parser.ts
+src/editor/filter-query-parser.gen.ts
+src/editor/filter-query-parser.gen.terms.ts

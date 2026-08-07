@@ -1,6 +1,12 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useCallback, useRef } from 'react';
+import { useQuery, useQueries, useMutation, useQueryClient } from '@tanstack/react-query';
 
 import { apiGet, apiPost, apiPatch, apiDelete } from '@/lib/api';
+import { executeImmediateJobRequest, type JobActionDisposition } from '@/lib/jobActions';
+import type { ConnectionTestResult } from '@/hooks/useTestConnection';
+import { useJobAction, type JobActionLifecycleOptions } from '@/hooks/useJobAction';
+import { useInvalidateQueriesOnEvents } from '@/hooks/useInvalidateQueriesOnEvents';
+import type { DictionaryPatch, ScalarPatch } from '@/hooks/useScheduleTriggers';
 import { POLLING_INTERVALS } from '@/lib/queryClient';
 import { queryErrorOrNull } from '@/lib/utils';
 import { healthStatusLabels, healthStatusVariants } from '@/types/healthStatus';
@@ -11,7 +17,7 @@ export type IndexerStatusValue = HealthStatusValue;
 export const indexerStatusLabels = healthStatusLabels;
 export const indexerStatusVariants = healthStatusVariants;
 
-export type IndexerAvailabilityValue = 0 | 1 | 2 | 3;
+export type IndexerAvailabilityValue = 'Unknown' | 'Public' | 'Private' | 'SemiPrivate';
 
 export interface ApiIndexer {
     id: string;
@@ -39,6 +45,10 @@ export interface ApiIndexer {
     modifiedAt?: string | null;
 
     modifiedByUserId?: string | null;
+
+    connectionCount?: number;
+
+    definitionType?: string | null;
 }
 
 export interface ApiIndexerConnection {
@@ -76,8 +86,6 @@ export interface ApiIndexerFeed {
 
     description?: string | null;
 
-    settings?: Record<string, string>;
-
     enabled: boolean;
 
     lastSync?: string | null;
@@ -89,6 +97,8 @@ export interface ApiIndexerFeed {
     modifiedAt?: string | null;
 
     modifiedByUserId?: string | null;
+
+    settings?: Record<string, string>;
 }
 
 export interface IndexerFeedItem {
@@ -109,7 +119,7 @@ export interface IndexerFeedItem {
     settings: Record<string, string>;
 }
 
-export interface IndexerCreateRequest {
+interface IndexerCreateRequest {
     providerType: string;
 
     name: string;
@@ -121,9 +131,11 @@ export interface IndexerCreateRequest {
     categories?: string[];
 
     languages?: string[];
+
+    settings?: Record<string, string>;
 }
 
-export interface IndexerUpdateRequest {
+interface IndexerUpdateRequest {
     providerType?: string;
 
     name?: string;
@@ -135,9 +147,27 @@ export interface IndexerUpdateRequest {
     categories?: string[];
 
     languages?: string[];
+
+    settings?: Record<string, string>;
 }
 
-export interface IndexerFeedCreateRequest {
+interface IndexerConnectionUpdateRequest {
+    name?: ScalarPatch<string>;
+
+    enabled?: ScalarPatch<boolean>;
+
+    settings?: DictionaryPatch<string, string>;
+}
+
+interface IndexerTestSettingsRequest {
+    providerType?: string;
+
+    id?: string;
+
+    settings?: Record<string, string>;
+}
+
+interface IndexerFeedCreateRequest {
     providerType: string;
 
     name: string;
@@ -149,7 +179,7 @@ export interface IndexerFeedCreateRequest {
     enabled?: boolean;
 }
 
-export interface IndexerFeedUpdateRequest {
+interface IndexerFeedUpdateRequest {
     providerType?: string;
 
     name?: string;
@@ -165,10 +195,15 @@ export const indexerQueryKeys = {
     all: ['indexers'] as const,
     list: () => ['indexers', 'list'] as const,
     connections: () => ['indexers', 'connections'] as const,
+    connectionsByIndexer: (indexerId: string) => ['indexers', 'connections', indexerId] as const,
     feeds: () => ['indexers', 'feeds'] as const,
     detail: (id: string) => ['indexers', 'detail', id] as const,
     feedDetail: (id: string) => ['indexers', 'feeds', id] as const,
 };
+
+export function countConfiguredIndexerInstances(indexers: readonly ApiIndexer[]): number {
+    return indexers.reduce((total, indexer) => total + Math.max(0, indexer.connectionCount ?? 0), 0);
+}
 
 function transformFeed(feed: ApiIndexerFeed): IndexerFeedItem {
     return {
@@ -187,6 +222,10 @@ async function fetchIndexers(): Promise<ApiIndexer[]> {
     return apiGet<ApiIndexer[]>('/indexers');
 }
 
+async function fetchIndexerConnections(indexerId: string): Promise<ApiIndexerConnection[]> {
+    return apiGet<ApiIndexerConnection[]>(`/indexers/${indexerId}/connections`);
+}
+
 async function fetchIndexerFeeds(): Promise<ApiIndexerFeed[]> {
     return apiGet<ApiIndexerFeed[]>('/indexer-feeds');
 }
@@ -203,12 +242,55 @@ async function deleteIndexer(id: string): Promise<void> {
     return apiDelete(`/indexers/${id}`);
 }
 
+interface IndexerConnectionCreateRequest {
+    name: string;
+    enabled: boolean;
+    settings: Record<string, string>;
+}
+
+async function createIndexerConnection(
+    indexerId: string,
+    request: IndexerConnectionCreateRequest,
+): Promise<ApiIndexerConnection> {
+    return apiPost<ApiIndexerConnection>(`/indexers/${indexerId}/connections`, request);
+}
+
+async function updateIndexerConnection(
+    indexerId: string,
+    connectionId: string,
+    request: IndexerConnectionUpdateRequest,
+): Promise<void> {
+    return apiPatch(`/indexers/${indexerId}/connections/${connectionId}`, request);
+}
+
+async function deleteIndexerConnection(indexerId: string, connectionId: string): Promise<void> {
+    return apiDelete(`/indexers/${indexerId}/connections/${connectionId}`);
+}
+
+async function testIndexerConnection(indexerId: string, connectionId: string): Promise<ConnectionTestResult> {
+    return apiPost<ConnectionTestResult>(`/indexers/${indexerId}/connections/${connectionId}/test`);
+}
+
+async function testIndexerSettings(
+    request: IndexerTestSettingsRequest,
+    signal?: AbortSignal,
+): Promise<ConnectionTestResult> {
+    return apiPost<ConnectionTestResult>('/indexers/test', request, { signal });
+}
+
 async function enableIndexerFeed(id: string): Promise<void> {
-    return apiPost(`/indexer-feeds/${id}/enable`);
+    return apiPatch(`/indexer-feeds/${id}`, { enabled: true });
 }
 
 async function disableIndexerFeed(id: string): Promise<void> {
-    return apiPost(`/indexer-feeds/${id}/disable`);
+    return apiPatch(`/indexer-feeds/${id}`, { enabled: false });
+}
+
+async function syncIndexerFeed(id: string): Promise<JobActionDisposition> {
+    return executeImmediateJobRequest({
+        jobType: 'IndexerFeedSyncItem',
+        parameters: { feedId: id },
+    });
 }
 
 async function createIndexerFeed(request: IndexerFeedCreateRequest): Promise<ApiIndexerFeed> {
@@ -223,69 +305,96 @@ async function deleteIndexerFeed(id: string): Promise<void> {
     return apiDelete(`/indexer-feeds/${id}`);
 }
 
-export function useIndexers() {
+export function useIndexers(options?: { syncFeed?: JobActionLifecycleOptions<string> }) {
+    useInvalidateQueriesOnEvents(
+        [
+            'indexer.created',
+            'indexer.updated',
+            'indexer.deleted',
+            'indexerFeed.created',
+            'indexerFeed.updated',
+            'indexerFeed.deleted',
+        ],
+        [indexerQueryKeys.list(), indexerQueryKeys.feeds()],
+        { exact: true, owner: 'indexer-settings' },
+    );
+    useInvalidateQueriesOnEvents(['integration.health.changed'], [indexerQueryKeys.list()], {
+        context: { 'integration.type': 'indexer' },
+        debounceMs: 150,
+        exact: true,
+        maxWaitMs: 600,
+        owner: 'indexer-settings',
+    });
     const queryClient = useQueryClient();
 
     const indexersQuery = useQuery({
         queryKey: indexerQueryKeys.list(),
         queryFn: fetchIndexers,
-        refetchInterval: POLLING_INTERVALS.normal,
         staleTime: POLLING_INTERVALS.normal / 2,
     });
 
     const feedsQuery = useQuery({
         queryKey: indexerQueryKeys.feeds(),
         queryFn: fetchIndexerFeeds,
-        refetchInterval: POLLING_INTERVALS.normal,
         staleTime: POLLING_INTERVALS.normal / 2,
     });
 
     const deleteIndexerMutation = useMutation({
         mutationFn: deleteIndexer,
         onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: indexerQueryKeys.list() });
+            void queryClient.invalidateQueries({ queryKey: indexerQueryKeys.list() });
         },
     });
 
     const enableFeedMutation = useMutation({
         mutationFn: enableIndexerFeed,
         onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: indexerQueryKeys.feeds() });
+            void queryClient.invalidateQueries({ queryKey: indexerQueryKeys.feeds() });
         },
     });
 
     const disableFeedMutation = useMutation({
         mutationFn: disableIndexerFeed,
         onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: indexerQueryKeys.feeds() });
+            void queryClient.invalidateQueries({ queryKey: indexerQueryKeys.feeds() });
         },
     });
 
     const deleteFeedMutation = useMutation({
         mutationFn: deleteIndexerFeed,
         onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: indexerQueryKeys.feeds() });
+            void queryClient.invalidateQueries({ queryKey: indexerQueryKeys.feeds() });
         },
+    });
+
+    const syncFeedMutation = useJobAction<string>({
+        mutationFn: syncIndexerFeed,
+        onJobStarted: (disposition, id) => {
+            void queryClient.invalidateQueries({ queryKey: indexerQueryKeys.feeds() });
+            options?.syncFeed?.onJobStarted?.(disposition, id);
+        },
+        onJobExecutionSettled: options?.syncFeed?.onJobExecutionSettled,
+        trackExecution: options?.syncFeed?.trackExecution,
     });
 
     const createIndexerMutation = useMutation({
         mutationFn: createIndexer,
         onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: indexerQueryKeys.list() });
+            void queryClient.invalidateQueries({ queryKey: indexerQueryKeys.list() });
         },
     });
 
     const updateIndexerMutation = useMutation({
         mutationFn: ({ id, request }: { id: string; request: IndexerUpdateRequest }) => updateIndexer(id, request),
         onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: indexerQueryKeys.list() });
+            void queryClient.invalidateQueries({ queryKey: indexerQueryKeys.list() });
         },
     });
 
     const createFeedMutation = useMutation({
         mutationFn: createIndexerFeed,
         onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: indexerQueryKeys.feeds() });
+            void queryClient.invalidateQueries({ queryKey: indexerQueryKeys.feeds() });
         },
     });
 
@@ -293,7 +402,7 @@ export function useIndexers() {
         mutationFn: ({ id, request }: { id: string; request: IndexerFeedUpdateRequest }) =>
             updateIndexerFeed(id, request),
         onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: indexerQueryKeys.feeds() });
+            void queryClient.invalidateQueries({ queryKey: indexerQueryKeys.feeds() });
         },
     });
 
@@ -329,16 +438,139 @@ export function useIndexers() {
         updateFeed: (id: string, request: IndexerFeedUpdateRequest) => updateFeedMutation.mutateAsync({ id, request }),
         toggleFeedEnabled,
         deleteFeed: deleteFeedMutation.mutateAsync,
+        syncFeed: syncFeedMutation.mutateAsync,
         isCreatingFeed: createFeedMutation.isPending,
         isUpdatingFeed: updateFeedMutation.isPending,
         isTogglingFeed: enableFeedMutation.isPending || disableFeedMutation.isPending,
         isDeletingFeed: deleteFeedMutation.isPending,
+        isSyncingFeed: syncFeedMutation.isPending,
+        syncingFeedId: syncFeedMutation.isPending ? syncFeedMutation.variables : undefined,
 
-        refetch: () => {
-            indexersQuery.refetch();
-            feedsQuery.refetch();
+        refetch: async () => {
+            await Promise.all([indexersQuery.refetch(), feedsQuery.refetch()]);
         },
         refetchIndexers: indexersQuery.refetch,
         refetchFeeds: feedsQuery.refetch,
+    };
+}
+
+export interface ConfiguredConnectionRow {
+    connection: ApiIndexerConnection;
+    indexer: ApiIndexer;
+}
+
+export function useAllIndexerConnections(indexers: ApiIndexer[]) {
+    useInvalidateQueriesOnEvents(['indexer.updated', 'indexer.deleted'], [indexerQueryKeys.connections()], {
+        exact: false,
+        owner: 'indexer-connections',
+    });
+    useInvalidateQueriesOnEvents(['integration.health.changed'], [indexerQueryKeys.connections()], {
+        context: { 'integration.type': 'indexer' },
+        debounceMs: 150,
+        exact: false,
+        maxWaitMs: 600,
+        owner: 'indexer-connections',
+    });
+    const configured = indexers.filter((i) => (i.connectionCount ?? 0) > 0);
+
+    const results = useQueries({
+        queries: configured.map((indexer) => ({
+            queryKey: indexerQueryKeys.connectionsByIndexer(indexer.id),
+            queryFn: () => fetchIndexerConnections(indexer.id),
+            staleTime: POLLING_INTERVALS.normal / 2,
+        })),
+    });
+
+    const byId = new Map(configured.map((i) => [i.id, i]));
+    const rows: ConfiguredConnectionRow[] = [];
+    for (const result of results) {
+        for (const connection of result.data ?? []) {
+            const indexer = byId.get(connection.indexerId);
+            if (indexer) {
+                rows.push({ connection, indexer });
+            }
+        }
+    }
+
+    return {
+        rows,
+        isLoading: results.some((r) => r.isLoading),
+    };
+}
+
+export function useIndexerConnectionMutations() {
+    const queryClient = useQueryClient();
+
+    const invalidate = () => {
+        void queryClient.invalidateQueries({ queryKey: indexerQueryKeys.list() });
+        void queryClient.invalidateQueries({ queryKey: indexerQueryKeys.connections() });
+    };
+
+    const createMutation = useMutation({
+        mutationFn: ({ indexerId, request }: { indexerId: string; request: IndexerConnectionCreateRequest }) =>
+            createIndexerConnection(indexerId, request),
+        onSuccess: invalidate,
+    });
+
+    const updateMutation = useMutation({
+        mutationFn: ({
+            indexerId,
+            connectionId,
+            request,
+        }: {
+            indexerId: string;
+            connectionId: string;
+            request: IndexerConnectionUpdateRequest;
+        }) => updateIndexerConnection(indexerId, connectionId, request),
+        onSuccess: invalidate,
+    });
+
+    const deleteMutation = useMutation({
+        mutationFn: ({ indexerId, connectionId }: { indexerId: string; connectionId: string }) =>
+            deleteIndexerConnection(indexerId, connectionId),
+        onSuccess: invalidate,
+    });
+
+    const testMutation = useMutation({
+        mutationFn: ({ indexerId, connectionId }: { indexerId: string; connectionId: string }) =>
+            testIndexerConnection(indexerId, connectionId),
+        onSettled: invalidate,
+    });
+
+    const testSettingsAbortRef = useRef<AbortController | null>(null);
+    const testSettingsMutation = useMutation({
+        mutationFn: (request: IndexerTestSettingsRequest) => {
+            testSettingsAbortRef.current?.abort();
+            const controller = new AbortController();
+            testSettingsAbortRef.current = controller;
+            return testIndexerSettings(request, controller.signal);
+        },
+    });
+
+    const testSettingsMutationRef = useRef(testSettingsMutation);
+    testSettingsMutationRef.current = testSettingsMutation;
+
+    const cancelTestSettings = useCallback(() => {
+        testSettingsAbortRef.current?.abort();
+        testSettingsAbortRef.current = null;
+        testSettingsMutationRef.current.reset();
+    }, []);
+
+    return {
+        createConnection: (indexerId: string, request: IndexerConnectionCreateRequest) =>
+            createMutation.mutateAsync({ indexerId, request }),
+        updateConnection: (indexerId: string, connectionId: string, request: IndexerConnectionUpdateRequest) =>
+            updateMutation.mutateAsync({ indexerId, connectionId, request }),
+        deleteConnection: (indexerId: string, connectionId: string) =>
+            deleteMutation.mutateAsync({ indexerId, connectionId }),
+        testConnection: (indexerId: string, connectionId: string) =>
+            testMutation.mutateAsync({ indexerId, connectionId }),
+        testSettings: (request: IndexerTestSettingsRequest) => testSettingsMutation.mutateAsync(request),
+        cancelTestSettings,
+        isCreating: createMutation.isPending,
+        isUpdating: updateMutation.isPending,
+        isDeleting: deleteMutation.isPending,
+        isTesting: testMutation.isPending,
+        isTestingSettings: testSettingsMutation.isPending,
     };
 }

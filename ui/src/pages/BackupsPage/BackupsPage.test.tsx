@@ -1,4 +1,4 @@
-import { render, screen, within, waitFor } from '@testing-library/react';
+import { act, render, screen, within, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
@@ -7,6 +7,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 import { ToastList, ToastProvider, ToastStateProvider, ToastViewport } from '@/components/ui/Toast';
 import { TooltipProvider } from '@/components/ui/Tooltip';
+import { apiDelete, apiGet, apiPost } from '@/lib/api';
 
 import { BackupsPage } from './BackupsPage';
 
@@ -23,6 +24,7 @@ function createMockBackups() {
             name: 'Scheduled 20240115_000000',
             createdAt: new Date(Date.now() - 12 * 60 * 60 * 1000).toISOString(),
             sizeBytes: 15466496,
+            kind: 'Scheduled',
         },
         {
             id: 'backup-3',
@@ -53,47 +55,41 @@ function createMockBackups() {
 
 let mockApiBackups = createMockBackups();
 
+function defaultApiGet(url: string) {
+    if (url === '/database') {
+        return Promise.resolve({
+            provider: 'SQLite',
+            backupRestoreSupported: true,
+            optimizeSupported: true,
+        });
+    }
+    if (url === '/database/backups') {
+        return Promise.resolve([...mockApiBackups]);
+    }
+    return Promise.resolve([]);
+}
+
+function defaultApiPost(url: string) {
+    if (url === '/jobs/enqueue') {
+        return Promise.resolve('execution-1');
+    }
+    return Promise.resolve(undefined);
+}
+
+function defaultApiDelete(url: string) {
+    const match = url.match(/\/backups\/(.+)$/);
+    if (match) {
+        const id = decodeURIComponent(match[1]);
+        mockApiBackups = mockApiBackups.filter((b) => b.id !== id);
+    }
+    return Promise.resolve(undefined);
+}
+
 vi.mock('@/lib/api', () => ({
-    apiGet: vi.fn().mockImplementation((url: string) => {
-        if (url === '/backups') {
-            return Promise.resolve([...mockApiBackups]);
-        }
-        if (url === '/settings/groups/system/backups') {
-            return Promise.resolve({
-                id: 'system-backups',
-                name: 'backups',
-                extensionId: null,
-                settings: [
-                    { id: '1', settingsGroupId: 'system-backups', key: 'enabled', value: 'false' },
-                    { id: '2', settingsGroupId: 'system-backups', key: 'interval', value: 'daily' },
-                    { id: '3', settingsGroupId: 'system-backups', key: 'retention', value: '7' },
-                ],
-            });
-        }
-        return Promise.resolve([]);
-    }),
-    apiPost: vi.fn().mockImplementation((url: string) => {
-        if (url === '/backups') {
-            const newBackup = {
-                id: 'new-backup',
-                name: 'new-backup',
-                createdAt: new Date().toISOString(),
-                sizeBytes: 15728640,
-            };
-            mockApiBackups = [newBackup, ...mockApiBackups];
-            return Promise.resolve({ id: newBackup.id });
-        }
-        return Promise.resolve(undefined);
-    }),
-    apiPatch: vi.fn().mockResolvedValue(undefined),
-    apiDelete: vi.fn().mockImplementation((url: string) => {
-        const match = url.match(/\/backups\/(.+)$/);
-        if (match) {
-            const id = decodeURIComponent(match[1]);
-            mockApiBackups = mockApiBackups.filter((b) => b.id !== id);
-        }
-        return Promise.resolve(undefined);
-    }),
+    apiGet: vi.fn().mockImplementation(defaultApiGet),
+    apiPost: vi.fn().mockImplementation(defaultApiPost),
+    apiDelete: vi.fn().mockImplementation(defaultApiDelete),
+    apiFetchResponse: vi.fn(),
     isApiError: vi.fn(() => false),
 }));
 
@@ -129,12 +125,19 @@ function createWrapper() {
     };
 }
 
-describe('BackupsPage', () => {
-    beforeEach(() => {
-        vi.clearAllMocks();
-        mockApiBackups = createMockBackups();
-    });
+function resetApiMocks() {
+    vi.clearAllMocks();
+    mockApiBackups = createMockBackups();
+    vi.mocked(apiGet).mockImplementation(defaultApiGet);
+    vi.mocked(apiPost).mockImplementation(defaultApiPost);
+    vi.mocked(apiDelete).mockImplementation(defaultApiDelete);
+}
 
+beforeEach(() => {
+    resetApiMocks();
+});
+
+describe('BackupsPage', () => {
     it('renders with correct data-page attribute', async () => {
         render(<BackupsPage />, { wrapper: createWrapper() });
 
@@ -147,17 +150,7 @@ describe('BackupsPage', () => {
         render(<BackupsPage />, { wrapper: createWrapper() });
 
         await waitFor(() => {
-            expect(screen.getByRole('heading', { name: 'Backups', level: 1 })).toBeInTheDocument();
-        });
-    });
-
-    it('renders the backup count', async () => {
-        render(<BackupsPage />, { wrapper: createWrapper() });
-
-        await waitFor(() => {
-            const count = screen.getByTestId('backups-page__count');
-            expect(count).toBeInTheDocument();
-            expect(count).toHaveTextContent('6');
+            expect(screen.getByRole('heading', { name: 'Database', level: 1 })).toBeInTheDocument();
         });
     });
 
@@ -190,6 +183,41 @@ describe('BackupsPage', () => {
             expect(summaryValue?.textContent).toMatch(/\d+(\.\d+)?\s*MB/);
         });
     });
+
+    it('renders unsupported state when backups are unavailable for the provider', async () => {
+        const { apiGet } = await import('@/lib/api');
+        vi.mocked(apiGet).mockImplementation((url: string) => {
+            if (url === '/database') {
+                return Promise.resolve({
+                    provider: 'PostgreSQL',
+                    backupRestoreSupported: false,
+                    optimizeSupported: false,
+                    unsupportedReason: 'Database backup and restore are not implemented for PostgreSQL deployments.',
+                });
+            }
+            return Promise.resolve([]);
+        });
+
+        render(<BackupsPage />, { wrapper: createWrapper() });
+
+        await waitFor(() => {
+            expect(screen.getByText('Database backups unavailable')).toBeInTheDocument();
+            expect(screen.queryByRole('button', { name: /create backup/i })).not.toBeInTheDocument();
+            expect(screen.queryByText('Schedule Settings')).not.toBeInTheDocument();
+        });
+    });
+
+    it('does not fetch or render legacy automatic backup settings', async () => {
+        render(<BackupsPage />, { wrapper: createWrapper() });
+
+        await waitFor(() => {
+            expect(screen.getByRole('list', { name: /backups/i })).toBeInTheDocument();
+        });
+
+        expect(apiGet).not.toHaveBeenCalledWith('/settings/groups/system/backups');
+        expect(screen.queryByText('Schedule Settings')).not.toBeInTheDocument();
+        expect(screen.queryByText('Automatic Backups')).not.toBeInTheDocument();
+    });
 });
 
 describe('BackupsPage list items', () => {
@@ -213,8 +241,8 @@ describe('BackupsPage list items', () => {
         render(<BackupsPage />, { wrapper: createWrapper() });
 
         await waitFor(() => {
-            expect(screen.getByText('backup-1.db')).toBeInTheDocument();
-            expect(screen.getByText('backup-5.db')).toBeInTheDocument();
+            expect(screen.getByText('backup-1')).toBeInTheDocument();
+            expect(screen.getByText('backup-5')).toBeInTheDocument();
         });
     });
 
@@ -340,25 +368,75 @@ describe('BackupsPage actions', () => {
         });
     });
 
-    it('creates a new backup when create button is clicked', async () => {
+    it('queues a backup and acknowledges it when the create button is clicked', async () => {
         const user = userEvent.setup();
         render(<BackupsPage />, { wrapper: createWrapper() });
 
         await waitFor(() => {
-            expect(screen.getByTestId('backups-page__count')).toHaveTextContent('6');
+            const list = screen.getByRole('list', { name: /backups/i });
+            expect(within(list).getAllByRole('listitem')).toHaveLength(6);
         });
 
         const createButton = screen.getAllByRole('button', { name: /create backup/i })[0];
         await user.click(createButton);
 
-        await waitFor(
-            () => {
-                const count = screen.getByTestId('backups-page__count');
-                expect(count).toHaveTextContent('7');
-            },
-            { timeout: 3000 },
-        );
-    }, 5000);
+        expect(await screen.findByText('Backup Queued')).toBeInTheDocument();
+        expect(apiPost).toHaveBeenCalledWith('/jobs/enqueue', {
+            jobType: 'DatabaseBackup',
+            parameters: undefined,
+        });
+        expect(within(screen.getByRole('list', { name: /backups/i })).getAllByRole('listitem')).toHaveLength(6);
+    });
+
+    it('acknowledges an accepted backup enqueue without an execution id and refreshes the list', async () => {
+        const user = userEvent.setup();
+        let resolveEnqueue: (() => void) | undefined;
+        const enqueuePromise = new Promise<void>((resolve) => {
+            resolveEnqueue = resolve;
+        });
+        vi.mocked(apiGet).mockImplementation((url: string) => {
+            if (url === '/database') {
+                return Promise.resolve({
+                    provider: 'SQLite',
+                    backupRestoreSupported: true,
+                    optimizeSupported: true,
+                });
+            }
+            if (url === '/database/backups') {
+                return Promise.resolve([]);
+            }
+            return Promise.resolve([]);
+        });
+        vi.mocked(apiPost).mockImplementation((url: string) => {
+            return url === '/jobs/enqueue' ? enqueuePromise : Promise.resolve(undefined);
+        });
+
+        render(<BackupsPage />, { wrapper: createWrapper() });
+
+        await waitFor(() => {
+            expect(screen.getAllByRole('button', { name: 'Create Backup' }).length).toBeGreaterThan(0);
+        });
+
+        await user.click(screen.getAllByRole('button', { name: 'Create Backup' })[0]);
+
+        await waitFor(() => {
+            expect(screen.getByRole('button', { name: 'Queueing...' })).toBeDisabled();
+        });
+        expect(apiPost).toHaveBeenCalledWith('/jobs/enqueue', {
+            jobType: 'DatabaseBackup',
+            parameters: undefined,
+        });
+
+        await act(async () => {
+            resolveEnqueue?.();
+        });
+
+        expect(await screen.findByText('Backup Queued')).toBeInTheDocument();
+        await waitFor(() => {
+            const backupRequests = vi.mocked(apiGet).mock.calls.filter(([url]) => url === '/database/backups');
+            expect(backupRequests).toHaveLength(2);
+        });
+    });
 });
 
 describe('BackupsPage restore dialog', () => {
@@ -382,7 +460,7 @@ describe('BackupsPage restore dialog', () => {
             const dialog = screen.getByRole('dialog');
             expect(dialog).toBeInTheDocument();
 
-            expect(within(dialog).getByText('backup-1.db')).toBeInTheDocument();
+            expect(within(dialog).getByText('backup-1')).toBeInTheDocument();
 
             expect(dialog).toHaveTextContent(/MB/);
         });
@@ -431,7 +509,7 @@ describe('BackupsPage delete dialog', () => {
 
         await waitFor(() => {
             const dialog = screen.getByRole('dialog');
-            expect(within(dialog).getByText('backup-1.db')).toBeInTheDocument();
+            expect(within(dialog).getByText('backup-1')).toBeInTheDocument();
         });
     });
 
@@ -485,6 +563,47 @@ describe('BackupsPage delete dialog', () => {
 
         await waitFor(() => {
             expect(document.querySelectorAll('[data-backup-id]').length).toBe(5);
+        });
+    }, 5000);
+
+    it('submits delete once and disables confirm while deletion is pending', async () => {
+        const user = userEvent.setup();
+        let resolveDelete: (() => void) | undefined;
+        vi.mocked(apiDelete).mockImplementation((url: string) => {
+            void defaultApiDelete(url);
+
+            return new Promise<void>((resolve) => {
+                resolveDelete = resolve;
+            });
+        });
+
+        render(<BackupsPage />, { wrapper: createWrapper() });
+
+        await waitFor(() => {
+            expect(screen.getByRole('button', { name: /delete backup-1/i })).toBeInTheDocument();
+        });
+
+        const deleteButton = screen.getByRole('button', { name: /delete backup-1/i });
+        await user.click(deleteButton);
+
+        await waitFor(() => {
+            expect(screen.getByRole('dialog')).toBeInTheDocument();
+        });
+
+        const confirmButton = within(screen.getByRole('dialog')).getByRole('button', { name: /delete/i });
+        await user.dblClick(confirmButton);
+
+        expect(apiDelete).toHaveBeenCalledTimes(1);
+        expect(apiDelete).toHaveBeenCalledWith('/database/backups/backup-1');
+
+        await waitFor(() => {
+            expect(within(screen.getByRole('dialog')).getByRole('button', { name: /deleting/i })).toBeDisabled();
+        });
+
+        resolveDelete?.();
+
+        await waitFor(() => {
+            expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
         });
     }, 5000);
 
@@ -569,172 +688,6 @@ describe('BackupsPage accessibility', () => {
     });
 });
 
-describe('BackupsPage settings', () => {
-    beforeEach(() => {
-        vi.clearAllMocks();
-        mockApiBackups = createMockBackups();
-    });
-
-    it('renders schedule settings section', async () => {
-        render(<BackupsPage />, { wrapper: createWrapper() });
-
-        await waitFor(() => {
-            expect(screen.getByText('Schedule Settings')).toBeInTheDocument();
-        });
-    });
-
-    it('renders automatic backups toggle', async () => {
-        render(<BackupsPage />, { wrapper: createWrapper() });
-
-        await waitFor(() => {
-            const toggle = document.querySelector('[data-setting="enabled"]');
-            expect(toggle).toBeInTheDocument();
-            expect(screen.getByText('Automatic Backups')).toBeInTheDocument();
-        });
-    });
-
-    it('renders backup interval selector', async () => {
-        render(<BackupsPage />, { wrapper: createWrapper() });
-
-        await waitFor(() => {
-            const intervalSelect = document.querySelector('[data-setting="interval"]');
-            expect(intervalSelect).toBeInTheDocument();
-            expect(screen.getByText('Backup Interval')).toBeInTheDocument();
-        });
-    });
-
-    it('renders retention policy input', async () => {
-        render(<BackupsPage />, { wrapper: createWrapper() });
-
-        await waitFor(() => {
-            const retentionInput = document.querySelector('[data-setting="retention"]');
-            expect(retentionInput).toBeInTheDocument();
-            expect(screen.getByText('Keep Last')).toBeInTheDocument();
-        });
-    });
-
-    it('renders save settings button', async () => {
-        render(<BackupsPage />, { wrapper: createWrapper() });
-
-        await waitFor(() => {
-            const saveButton = screen.getByRole('button', { name: /save settings/i });
-            expect(saveButton).toBeInTheDocument();
-
-            expect(saveButton).toBeDisabled();
-        });
-    });
-
-    it('enables save button when settings are changed', async () => {
-        const user = userEvent.setup();
-        render(<BackupsPage />, { wrapper: createWrapper() });
-
-        await waitFor(() => {
-            const saveButton = screen.getByRole('button', { name: /save settings/i });
-            expect(saveButton).toBeDisabled();
-        });
-
-        const toggle = document.querySelector('[data-setting="enabled"]') as HTMLButtonElement;
-        await user.click(toggle);
-
-        const retentionInput = document.querySelector('[data-setting="retention"]') as HTMLInputElement;
-        await user.clear(retentionInput);
-        await user.type(retentionInput, '14');
-
-        await waitFor(() => {
-            expect(screen.getByRole('button', { name: /save settings/i })).not.toBeDisabled();
-        });
-    });
-
-    it('disables interval and retention when automatic backups are disabled', async () => {
-        const user = userEvent.setup();
-        render(<BackupsPage />, { wrapper: createWrapper() });
-
-        await waitFor(() => {
-            expect(document.querySelector('[data-setting="enabled"]')).toBeInTheDocument();
-        });
-
-        const toggle = document.querySelector('[data-setting="enabled"]') as HTMLButtonElement;
-
-        await user.click(toggle);
-
-        await waitFor(() => {
-            const intervalSelect = document.querySelector('[data-setting="interval"]');
-            const retentionInput = document.querySelector('[data-setting="retention"]');
-            expect(intervalSelect).not.toBeDisabled();
-            expect(retentionInput).not.toBeDisabled();
-        });
-
-        await user.click(toggle);
-
-        await waitFor(() => {
-            const intervalSelectAfter = document.querySelector('[data-setting="interval"]');
-            const retentionInputAfter = document.querySelector('[data-setting="retention"]');
-            expect(intervalSelectAfter).toBeDisabled();
-            expect(retentionInputAfter).toBeDisabled();
-        });
-    });
-
-    it('saves settings when save button is clicked', async () => {
-        const user = userEvent.setup();
-
-        let resolvePatch: () => void;
-        const patchPromise = new Promise<void>((resolve) => {
-            resolvePatch = resolve;
-        });
-
-        const { apiPatch } = await import('@/lib/api');
-        vi.mocked(apiPatch).mockReturnValue(patchPromise);
-
-        render(<BackupsPage />, { wrapper: createWrapper() });
-
-        await waitFor(() => {
-            expect(document.querySelector('[data-setting="retention"]')).toBeInTheDocument();
-        });
-
-        const toggle = document.querySelector('[data-setting="enabled"]') as HTMLButtonElement;
-        await user.click(toggle);
-
-        const retentionInput = document.querySelector('[data-setting="retention"]') as HTMLInputElement;
-        await user.clear(retentionInput);
-        await user.type(retentionInput, '14');
-
-        const saveButton = screen.getByRole('button', { name: /save settings/i });
-        await user.click(saveButton);
-
-        await waitFor(() => {
-            expect(screen.getByText(/saving/i)).toBeInTheDocument();
-        });
-
-        resolvePatch!();
-
-        await waitFor(
-            () => {
-                expect(screen.getByRole('button', { name: /save settings/i })).toBeDisabled();
-            },
-            { timeout: 3000 },
-        );
-    }, 5000);
-
-    it('has data-component attribute on settings section', async () => {
-        render(<BackupsPage />, { wrapper: createWrapper() });
-
-        await waitFor(() => {
-            const settingsSection = document.querySelector('[data-component="backup-settings"]');
-            expect(settingsSection).toBeInTheDocument();
-        });
-    });
-
-    it('settings section has accessible heading', async () => {
-        render(<BackupsPage />, { wrapper: createWrapper() });
-
-        await waitFor(() => {
-            const settingsSection = screen.getByRole('region', { name: /schedule settings/i });
-            expect(settingsSection).toHaveAttribute('aria-labelledby', 'backup-settings-title');
-            expect(screen.getByRole('heading', { name: 'Schedule Settings', level: 2 })).toBeInTheDocument();
-        });
-    });
-});
-
 describe('BackupsPage error state', () => {
     beforeEach(() => {
         vi.clearAllMocks();
@@ -744,16 +697,8 @@ describe('BackupsPage error state', () => {
     it('shows error state when API fails', async () => {
         const { apiGet } = await import('@/lib/api');
         vi.mocked(apiGet).mockImplementation((url: string) => {
-            if (url === '/backups') {
+            if (url === '/database/backups') {
                 return Promise.reject(new Error('Network error'));
-            }
-            if (url === '/settings/groups/system/backups') {
-                return Promise.resolve({
-                    id: 'system-backups',
-                    name: 'backups',
-                    extensionId: null,
-                    settings: [],
-                });
             }
             return Promise.resolve([]);
         });
@@ -768,16 +713,8 @@ describe('BackupsPage error state', () => {
     it('shows error message from API', async () => {
         const { apiGet } = await import('@/lib/api');
         vi.mocked(apiGet).mockImplementation((url: string) => {
-            if (url === '/backups') {
+            if (url === '/database/backups') {
                 return Promise.reject(new Error('Server unavailable'));
-            }
-            if (url === '/settings/groups/system/backups') {
-                return Promise.resolve({
-                    id: 'system-backups',
-                    name: 'backups',
-                    extensionId: null,
-                    settings: [],
-                });
             }
             return Promise.resolve([]);
         });
@@ -792,16 +729,8 @@ describe('BackupsPage error state', () => {
     it('shows retry button in error state', async () => {
         const { apiGet } = await import('@/lib/api');
         vi.mocked(apiGet).mockImplementation((url: string) => {
-            if (url === '/backups') {
+            if (url === '/database/backups') {
                 return Promise.reject(new Error('Network error'));
-            }
-            if (url === '/settings/groups/system/backups') {
-                return Promise.resolve({
-                    id: 'system-backups',
-                    name: 'backups',
-                    extensionId: null,
-                    settings: [],
-                });
             }
             return Promise.resolve([]);
         });
@@ -816,16 +745,8 @@ describe('BackupsPage error state', () => {
     it('still shows page title in error state', async () => {
         const { apiGet } = await import('@/lib/api');
         vi.mocked(apiGet).mockImplementation((url: string) => {
-            if (url === '/backups') {
+            if (url === '/database/backups') {
                 return Promise.reject(new Error('Network error'));
-            }
-            if (url === '/settings/groups/system/backups') {
-                return Promise.resolve({
-                    id: 'system-backups',
-                    name: 'backups',
-                    extensionId: null,
-                    settings: [],
-                });
             }
             return Promise.resolve([]);
         });
@@ -833,7 +754,7 @@ describe('BackupsPage error state', () => {
         render(<BackupsPage />, { wrapper: createWrapper() });
 
         await waitFor(() => {
-            expect(screen.getByRole('heading', { name: 'Backups', level: 1 })).toBeInTheDocument();
+            expect(screen.getByRole('heading', { name: 'Database', level: 1 })).toBeInTheDocument();
         });
     });
 });

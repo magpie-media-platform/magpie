@@ -10,6 +10,7 @@ vi.mock('@/lib/api', () => ({
 
 import { apiGet, apiPatch } from '@/lib/api';
 import {
+    hasConfiguredExtensionSettings,
     settingsToRecord,
     settingsQueryKeys,
     useSystemSettingsGroup,
@@ -66,6 +67,82 @@ describe('settingsToRecord', () => {
     });
 });
 
+describe('hasConfiguredExtensionSettings', () => {
+    const baseGroup: ApiSettingsGroup = {
+        id: 'group-1',
+        name: 'metadata',
+        extensionId: 'ext-1',
+        createdAt: '2025-01-01T00:00:00Z',
+        settings: [],
+    };
+
+    it('returns false for an available extension group with no configured values', () => {
+        expect(
+            hasConfiguredExtensionSettings({
+                ...baseGroup,
+                settings: [
+                    {
+                        id: 'setting-1',
+                        settingsGroupId: 'group-1',
+                        key: 'apiKey',
+                        value: '',
+                        createdAt: '2025-01-01T00:00:00Z',
+                    },
+                ],
+                secretSettings: {
+                    apiKey: { isSet: false },
+                },
+            }),
+        ).toBe(false);
+    });
+
+    it('returns true when an extension group has a visible configured value', () => {
+        expect(
+            hasConfiguredExtensionSettings({
+                ...baseGroup,
+                settings: [
+                    {
+                        id: 'setting-1',
+                        settingsGroupId: 'group-1',
+                        key: 'apiKey',
+                        value: 'configured',
+                        createdAt: '2025-01-01T00:00:00Z',
+                    },
+                ],
+            }),
+        ).toBe(true);
+    });
+
+    it('returns true when an extension group has a configured secret value', () => {
+        expect(
+            hasConfiguredExtensionSettings({
+                ...baseGroup,
+                secretSettings: {
+                    apiKey: { isSet: true },
+                },
+            }),
+        ).toBe(true);
+    });
+
+    it('returns false for configured system settings', () => {
+        expect(
+            hasConfiguredExtensionSettings({
+                ...baseGroup,
+                extensionId: null,
+                settings: [
+                    {
+                        id: 'setting-1',
+                        settingsGroupId: 'group-1',
+                        key: 'theme',
+                        value: 'dark',
+                        createdAt: '2025-01-01T00:00:00Z',
+                    },
+                ],
+            }),
+        ).toBe(false);
+    });
+});
+
 describe('settingsQueryKeys', () => {
     it('should produce correct all key', () => {
         expect(settingsQueryKeys.all).toEqual(['settings']);
@@ -91,7 +168,7 @@ describe('useSystemSettingsGroup', () => {
         vi.restoreAllMocks();
     });
 
-    it('should call GET /settings/groups/system/{name} and return group data', async () => {
+    it('should read the named system group from the settings-group list', async () => {
         const mockGroup: ApiSettingsGroup = {
             id: 'system-general',
             name: 'general',
@@ -107,7 +184,7 @@ describe('useSystemSettingsGroup', () => {
                 },
             ],
         };
-        mockApiGet.mockResolvedValue(mockGroup);
+        mockApiGet.mockResolvedValue([mockGroup]);
 
         const { result } = renderHook(() => useSystemSettingsGroup('general'), {
             wrapper: createWrapper(),
@@ -120,14 +197,35 @@ describe('useSystemSettingsGroup', () => {
             expect(result.current.isLoading).toBe(false);
         });
 
-        expect(mockApiGet).toHaveBeenCalledWith('/settings/groups/system/general');
+        expect(mockApiGet).toHaveBeenCalledWith('/settings/groups');
         expect(result.current.group).toEqual(mockGroup);
         expect(result.current.error).toBeNull();
     });
 
+    it('should return null when a dynamic system group has not been created yet', async () => {
+        mockApiGet.mockResolvedValue([
+            {
+                id: 'system-setup',
+                name: 'setup',
+                extensionId: null,
+                createdAt: '2025-01-01T00:00:00Z',
+                settings: [],
+            },
+        ]);
+
+        const { result } = renderHook(() => useSystemSettingsGroup('general'), {
+            wrapper: createWrapper(),
+        });
+
+        await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+        expect(result.current.group).toBeNull();
+        expect(result.current.error).toBeNull();
+    });
+
     it('should return null group while loading', async () => {
-        let resolveGet: (value: ApiSettingsGroup) => void;
-        const getPromise = new Promise<ApiSettingsGroup>((resolve) => {
+        let resolveGet: (value: ApiSettingsGroup[]) => void;
+        const getPromise = new Promise<ApiSettingsGroup[]>((resolve) => {
             resolveGet = resolve;
         });
         mockApiGet.mockReturnValue(getPromise);
@@ -140,13 +238,15 @@ describe('useSystemSettingsGroup', () => {
         expect(result.current.group).toBeNull();
 
         act(() => {
-            resolveGet!({
-                id: 'system-general',
-                name: 'general',
-                extensionId: null,
-                createdAt: '2025-01-01T00:00:00Z',
-                settings: [],
-            });
+            resolveGet!([
+                {
+                    id: 'system-general',
+                    name: 'general',
+                    extensionId: null,
+                    createdAt: '2025-01-01T00:00:00Z',
+                    settings: [],
+                },
+            ]);
         });
 
         await waitFor(() => {
@@ -267,7 +367,7 @@ describe('useUpdateSystemSettingsGroup', () => {
         });
 
         act(() => {
-            result.current.updateSettings({
+            void result.current.updateSettings({
                 values: { theme: 'dark' },
                 existingKeys: new Set<string>(),
             });
@@ -440,7 +540,7 @@ describe('useUpdateExtensionSettingsGroup', () => {
         });
 
         act(() => {
-            result.current.updateSettings({
+            void result.current.updateSettings({
                 values: { apiKey: 'new-secret' },
                 existingKeys: new Set<string>(),
             });

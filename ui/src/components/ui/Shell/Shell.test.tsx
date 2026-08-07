@@ -102,7 +102,6 @@ describe('Shell', () => {
     it('calls onSidebarCollapsedChange when sidebar collapsed state changes', async () => {
         const onChange = vi.fn();
 
-        // Use a consumer to trigger the collapse
         function TestWithConsumer() {
             return (
                 <Shell onSidebarCollapsedChange={onChange}>
@@ -111,7 +110,6 @@ describe('Shell', () => {
             );
         }
 
-        // Mock matchMedia to return desktop width (triggers collapse toggle)
         Object.defineProperty(window, 'matchMedia', {
             writable: true,
             value: vi.fn().mockReturnValue({ matches: true }),
@@ -126,7 +124,6 @@ describe('Shell', () => {
 
 describe('useShell', () => {
     it('throws when used outside Shell', () => {
-        // Suppress error output
         const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
         expect(() => render(<ShellConsumer />)).toThrow('Shell components must be used within a Shell');
         spy.mockRestore();

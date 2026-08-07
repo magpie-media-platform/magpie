@@ -6,11 +6,13 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
     <PackageReference Include="System.Reactive" />
+    <PackageReference Include="System.Text.Json" />
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\Magpie.Models\Magpie.Models.csproj" />
+    <ProjectReference Include="..\Magpie.Sdk\Magpie.Sdk.csproj" />
   </ItemGroup>
 
 </Project>

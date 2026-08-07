@@ -1,6 +1,6 @@
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
 import type { ReactNode } from 'react';
 
@@ -18,6 +18,10 @@ function TestWrapper({ children }: { children: ReactNode }) {
 }
 
 const mockTags: ApiTag[] = [{ name: 'Movies' }, { name: 'TV Shows' }, { name: 'Anime' }];
+
+beforeEach(() => {
+    vi.restoreAllMocks();
+});
 
 describe('TierListForm', () => {
     it('renders nothing when closed', () => {
@@ -49,6 +53,7 @@ describe('TierListForm', () => {
                     initialValues={{
                         id: 'qtl-1',
                         name: 'HD Standard',
+                        mimeTypes: ['video/*'],
                         upgradeAllowed: true,
                         tags: [],
                     }}
@@ -70,6 +75,7 @@ describe('TierListForm', () => {
                     initialValues={{
                         id: 'qtl-1',
                         name: 'HD Standard',
+                        mimeTypes: ['video/*'],
                         upgradeAllowed: true,
                         tags: ['Movies'],
                     }}
@@ -188,10 +194,46 @@ describe('TierListForm', () => {
         expect(onSubmit).toHaveBeenCalledWith(
             expect.objectContaining({
                 name: '4K Ultra HD',
+                mimeTypes: [],
                 upgradeAllowed: true,
                 tags: [],
             }),
         );
+    });
+
+    it('normalizes MIME types on submit', async () => {
+        const user = userEvent.setup();
+        const onSubmit = vi.fn();
+        render(
+            <TestWrapper>
+                <TierListForm open={true} onOpenChange={vi.fn()} tags={mockTags} onSubmit={onSubmit} />
+            </TestWrapper>,
+        );
+
+        await user.type(screen.getByLabelText(/^Name/), 'Audio');
+        await user.type(screen.getByRole('combobox', { name: 'MIME Types' }), 'AUDIO/*{Enter}');
+        await user.click(screen.getByRole('button', { name: /save/i }));
+
+        expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ mimeTypes: ['audio/*'] }));
+    });
+
+    it('rejects invalid MIME types with a field-level error', async () => {
+        const user = userEvent.setup();
+        const onSubmit = vi.fn();
+        render(
+            <TestWrapper>
+                <TierListForm open={true} onOpenChange={vi.fn()} tags={mockTags} onSubmit={onSubmit} />
+            </TestWrapper>,
+        );
+
+        await user.type(screen.getByLabelText(/^Name/), 'Invalid');
+        const input = screen.getByRole('combobox', { name: 'MIME Types' });
+        await user.type(input, 'audio{Enter}');
+        await user.click(screen.getByRole('button', { name: /save/i }));
+
+        expect(screen.getByRole('alert')).toHaveTextContent('audio is not a valid MIME pattern.');
+        expect(input).toHaveAttribute('aria-invalid', 'true');
+        expect(onSubmit).not.toHaveBeenCalled();
     });
 
     it('toggles upgrade allowed state', async () => {
@@ -284,6 +326,7 @@ describe('TierListForm', () => {
                     initialValues={{
                         id: 'qtl-1',
                         name: 'HD Standard',
+                        mimeTypes: ['video/*'],
                         upgradeAllowed: true,
                         tags: ['Movies', 'Anime'],
                     }}
@@ -368,6 +411,7 @@ describe('TierListForm', () => {
         );
 
         expect(document.querySelector('[data-field="name"]')).toBeInTheDocument();
+        expect(document.querySelector('[data-field="mimeTypes"]')).toBeInTheDocument();
         expect(document.querySelector('[data-field="upgradeAllowed"]')).toBeInTheDocument();
         expect(document.querySelector('[data-field="tags"]')).toBeInTheDocument();
     });
@@ -422,7 +466,7 @@ describe('TierListForm', () => {
             </TestWrapper>,
         );
 
-        expect(screen.getByText(/configure a new quality tier list/i)).toBeInTheDocument();
+        expect(screen.getByText(/configure a new tier list/i)).toBeInTheDocument();
     });
 
     it('renders description text for edit mode', () => {
@@ -434,6 +478,7 @@ describe('TierListForm', () => {
                     initialValues={{
                         id: 'qtl-1',
                         name: 'HD Standard',
+                        mimeTypes: ['video/*'],
                         upgradeAllowed: true,
                         tags: [],
                     }}
@@ -455,6 +500,7 @@ describe('TierListForm', () => {
                     initialValues={{
                         id: 'qtl-1',
                         name: 'First List',
+                        mimeTypes: [],
                         upgradeAllowed: false,
                         tags: ['Movies'],
                     }}
@@ -474,6 +520,7 @@ describe('TierListForm', () => {
                     initialValues={{
                         id: 'qtl-2',
                         name: 'Second List',
+                        mimeTypes: ['audio/*'],
                         upgradeAllowed: true,
                         tags: [],
                     }}
@@ -491,6 +538,7 @@ describe('TierListForm', () => {
                     initialValues={{
                         id: 'qtl-2',
                         name: 'Second List',
+                        mimeTypes: ['audio/*'],
                         upgradeAllowed: true,
                         tags: [],
                     }}
@@ -512,6 +560,7 @@ describe('TierListForm', () => {
                     initialValues={{
                         id: 'qtl-1',
                         name: 'Existing List',
+                        mimeTypes: ['video/*'],
                         upgradeAllowed: false,
                         tags: ['Movies'],
                     }}
@@ -562,6 +611,7 @@ describe('TierListForm accessibility', () => {
                     initialValues={{
                         id: 'qtl-1',
                         name: 'Test',
+                        mimeTypes: [],
                         upgradeAllowed: true,
                         tags: ['Movies'],
                     }}
@@ -626,6 +676,7 @@ describe('TierListForm tier configuration hint', () => {
                     initialValues={{
                         id: 'qtl-1',
                         name: 'HD Standard',
+                        mimeTypes: ['video/*'],
                         upgradeAllowed: true,
                         tags: [],
                     }}
@@ -636,5 +687,136 @@ describe('TierListForm tier configuration hint', () => {
         );
 
         expect(document.querySelector('[data-hint="tiers"]')).not.toBeInTheDocument();
+    });
+});
+
+describe('TierListForm unsaved-changes guard', () => {
+    function trackGuard() {
+        const state = { active: 0 };
+        const originalAdd = window.addEventListener.bind(window);
+        const originalRemove = window.removeEventListener.bind(window);
+        vi.spyOn(window, 'addEventListener').mockImplementation((type, ...rest) => {
+            if (type === 'beforeunload') {
+                state.active += 1;
+            }
+            return originalAdd(type, ...(rest as [EventListenerOrEventListenerObject]));
+        });
+        vi.spyOn(window, 'removeEventListener').mockImplementation((type, ...rest) => {
+            if (type === 'beforeunload') {
+                state.active -= 1;
+            }
+            return originalRemove(type, ...(rest as [EventListenerOrEventListenerObject]));
+        });
+        return state;
+    }
+
+    it('does not arm the guard when opening an untouched add form', () => {
+        const guard = trackGuard();
+        render(
+            <TestWrapper>
+                <TierListForm open={true} onOpenChange={vi.fn()} tags={mockTags} onSubmit={vi.fn()} />
+            </TestWrapper>,
+        );
+
+        expect(guard.active).toBe(0);
+    });
+
+    it('arms the guard after a real edit', async () => {
+        const user = userEvent.setup();
+        const guard = trackGuard();
+        render(
+            <TestWrapper>
+                <TierListForm open={true} onOpenChange={vi.fn()} tags={mockTags} onSubmit={vi.fn()} />
+            </TestWrapper>,
+        );
+
+        await user.type(screen.getByLabelText(/name/i), 'HD Standard');
+
+        expect(guard.active).toBeGreaterThan(0);
+    });
+
+    it('disarms the guard while a save is in flight, before navigation', async () => {
+        const user = userEvent.setup();
+        const onSubmit = vi.fn();
+        const guard = trackGuard();
+        const { rerender } = render(
+            <TestWrapper>
+                <TierListForm
+                    open={true}
+                    onOpenChange={vi.fn()}
+                    tags={mockTags}
+                    onSubmit={onSubmit}
+                    isSubmitting={false}
+                />
+            </TestWrapper>,
+        );
+
+        await user.type(screen.getByLabelText(/name/i), 'HD Standard');
+        expect(guard.active).toBeGreaterThan(0);
+
+        await user.click(screen.getByRole('button', { name: /save/i }));
+        expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ name: 'HD Standard' }));
+
+        // the parent flips isSubmitting while the create is in flight, so the guard
+        // disarms before the parent navigates on success
+        rerender(
+            <TestWrapper>
+                <TierListForm
+                    open={true}
+                    onOpenChange={vi.fn()}
+                    tags={mockTags}
+                    onSubmit={onSubmit}
+                    isSubmitting={true}
+                />
+            </TestWrapper>,
+        );
+        expect(guard.active).toBe(0);
+    });
+
+    it('keeps the guard armed when a save fails', async () => {
+        const user = userEvent.setup();
+        const onSubmit = vi.fn();
+        const guard = trackGuard();
+        const { rerender } = render(
+            <TestWrapper>
+                <TierListForm
+                    open={true}
+                    onOpenChange={vi.fn()}
+                    tags={mockTags}
+                    onSubmit={onSubmit}
+                    isSubmitting={false}
+                />
+            </TestWrapper>,
+        );
+
+        await user.type(screen.getByLabelText(/name/i), 'HD Standard');
+        await user.click(screen.getByRole('button', { name: /save/i }));
+
+        // save in flight
+        rerender(
+            <TestWrapper>
+                <TierListForm
+                    open={true}
+                    onOpenChange={vi.fn()}
+                    tags={mockTags}
+                    onSubmit={onSubmit}
+                    isSubmitting={true}
+                />
+            </TestWrapper>,
+        );
+        // save failed: the parent resets isSubmitting, the form stays open with unsaved
+        // data, so the guard must re-arm
+        rerender(
+            <TestWrapper>
+                <TierListForm
+                    open={true}
+                    onOpenChange={vi.fn()}
+                    tags={mockTags}
+                    onSubmit={onSubmit}
+                    isSubmitting={false}
+                />
+            </TestWrapper>,
+        );
+        expect(guard.active).toBeGreaterThan(0);
     });
 });

@@ -8,6 +8,19 @@ vi.mock('@/lib/api', () => ({
     apiPost: vi.fn(),
     apiPatch: vi.fn(),
     apiDelete: vi.fn(),
+    buildUrl: vi.fn((path: string, params?: Record<string, unknown>) => {
+        if (!params) {
+            return path;
+        }
+        const search = new URLSearchParams();
+        for (const [key, value] of Object.entries(params)) {
+            if (value !== undefined && value !== null) {
+                search.set(key, String(value));
+            }
+        }
+        const query = search.toString();
+        return query ? `${path}?${query}` : path;
+    }),
     isApiError: vi.fn((value: unknown) => {
         return typeof value === 'object' && value !== null && 'status' in value && 'message' in value;
     }),
@@ -20,10 +33,10 @@ const mockApiTriggers: ApiScheduleTrigger[] = [
     {
         id: 'trigger-1',
         jobType: 'RssSync',
-        scope: 1,
+        scope: 'Administrative',
         name: 'Hourly RSS Sync',
         schedule: '0 * * * *',
-        executionMode: 0,
+        executionMode: 'Queue',
         enabled: true,
         lastRunAt: '2024-01-15T11:00:00Z',
         nextRunAt: '2024-01-15T12:00:00Z',
@@ -31,11 +44,11 @@ const mockApiTriggers: ApiScheduleTrigger[] = [
     },
     {
         id: 'trigger-2',
-        jobType: 'RefreshMetadata',
-        scope: 2,
+        jobType: 'ContentMetadataRefreshItem',
+        scope: 'Content',
         name: 'Daily Metadata Refresh',
         schedule: '0 6 * * *',
-        executionMode: 0,
+        executionMode: 'Queue',
         enabled: true,
         lastRunAt: '2024-01-15T06:00:00Z',
         nextRunAt: '2024-01-16T06:00:00Z',
@@ -44,10 +57,10 @@ const mockApiTriggers: ApiScheduleTrigger[] = [
     {
         id: 'trigger-3',
         jobType: 'SearchMissing',
-        scope: 2,
+        scope: 'Content',
         name: 'Nightly Missing Search',
         schedule: '0 2 * * *',
-        executionMode: 0,
+        executionMode: 'Queue',
         enabled: false,
         lastRunAt: '2024-01-14T02:00:00Z',
         createdAt: '2024-01-01T00:00:00Z',
@@ -165,7 +178,7 @@ describe('useScheduleTriggers', () => {
 
             const newTrigger = {
                 jobType: 'BackupDatabase',
-                scope: 1 as const,
+                scope: 'Administrative' as const,
                 name: 'Weekly Backup',
                 schedule: '0 0 * * 0',
             };
@@ -195,9 +208,9 @@ describe('useScheduleTriggers', () => {
             });
 
             act(() => {
-                result.current.createTrigger({
+                void result.current.createTrigger({
                     jobType: 'BackupDatabase',
-                    scope: 1,
+                    scope: 'Administrative',
                     name: 'Weekly Backup',
                     schedule: '0 0 * * 0',
                 });
@@ -284,7 +297,7 @@ describe('useScheduleTriggers', () => {
             });
 
             act(() => {
-                result.current.updateTrigger({
+                void result.current.updateTrigger({
                     id: 'trigger-1',
                     patch: { enabled: { value: false } },
                 });
@@ -342,7 +355,7 @@ describe('useScheduleTriggers', () => {
             });
 
             act(() => {
-                result.current.deleteTrigger('trigger-1');
+                void result.current.deleteTrigger('trigger-1');
             });
 
             await waitFor(() => {
@@ -374,10 +387,10 @@ describe('useScheduleTriggers', () => {
             const trigger = result.current.triggers[0];
             expect(trigger.id).toBe('trigger-1');
             expect(trigger.jobType).toBe('RssSync');
-            expect(trigger.scope).toBe(1);
+            expect(trigger.scope).toBe('Administrative');
             expect(trigger.name).toBe('Hourly RSS Sync');
             expect(trigger.schedule).toBe('0 * * * *');
-            expect(trigger.executionMode).toBe(0);
+            expect(trigger.executionMode).toBe('Queue');
             expect(trigger.enabled).toBe(true);
             expect(trigger.lastRunAt).toBe('2024-01-15T11:00:00Z');
             expect(trigger.nextRunAt).toBe('2024-01-15T12:00:00Z');

@@ -1,17 +1,17 @@
 namespace Magpie.Models.Enums;
 
 /// <summary>
-/// Specifies how job executions are created.
+/// The way a job execution starts.
 /// </summary>
 public enum JobExecutionMode
 {
     /// <summary>
-    /// The job is queued for execution and will run at the runtimes discretion.
+    /// The job goes to the queue and runs at the discretion of the runtime.
     /// </summary>
     Queue,
 
     /// <summary>
-    /// The job will be executed immediately.
+    /// The job runs at once.
     /// </summary>
     Immediate
 }

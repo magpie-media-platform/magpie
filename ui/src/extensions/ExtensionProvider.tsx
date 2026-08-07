@@ -1,7 +1,6 @@
-/* eslint-disable react-refresh/only-export-components */
-import { createContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { createContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 
-import { ExtensionLoader, type ExtensionLoaderConfig } from './ExtensionLoader';
+import { ExtensionLoader } from './ExtensionLoader';
 import type { ExtensionLoaderState, UIContext, UIExtension } from './types';
 
 export interface ExtensionContextValue {
@@ -56,9 +55,11 @@ export function ExtensionProvider({
     role = null,
     theme = null,
 }: ExtensionProviderProps) {
-    const [loader] = useState(() => new ExtensionLoader({ apiBaseUrl } as ExtensionLoaderConfig));
+    const [loader] = useState(() => new ExtensionLoader({ apiBaseUrl }));
 
     const [loaderState, setLoaderState] = useState<ExtensionLoaderState>(loader.state);
+    const automaticRetryCountRef = useRef(0);
+    const automaticRetryKeyRef = useRef<string | null>(null);
 
     useEffect(() => {
         const unsubscribe = loader.subscribe(setLoaderState);
@@ -66,8 +67,41 @@ export function ExtensionProvider({
     }, [loader]);
 
     useEffect(() => {
-        loader.init().catch((err) => console.error('[ExtensionProvider] init failed:', err));
-    }, [loader]);
+        if (!userId) {
+            return;
+        }
+        void loader.init().catch(() => undefined);
+    }, [loader, userId]);
+
+    useEffect(() => {
+        if (loaderState.state === 'ready') {
+            automaticRetryCountRef.current = 0;
+            automaticRetryKeyRef.current = null;
+            return;
+        }
+
+        if (loaderState.state !== 'error' || !userId) {
+            return;
+        }
+
+        const retryKey = `${userId}:${role ?? ''}`;
+        if (automaticRetryKeyRef.current !== retryKey) {
+            automaticRetryKeyRef.current = retryKey;
+            automaticRetryCountRef.current = 0;
+        }
+
+        if (automaticRetryCountRef.current >= 10) {
+            return;
+        }
+
+        const timeoutId = setTimeout(() => {
+            automaticRetryCountRef.current += 1;
+            loader.reset();
+            void loader.init().catch(() => undefined);
+        }, 3000);
+
+        return () => clearTimeout(timeoutId);
+    }, [loader, loaderState.state, role, userId]);
 
     const contextValue = useMemo<ExtensionContextValue>(
         () => ({

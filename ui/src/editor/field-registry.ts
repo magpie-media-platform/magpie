@@ -1,6 +1,6 @@
-export type FieldType = 'string' | 'number' | 'long' | 'date' | 'timespan' | 'guid' | 'enum';
+export type FieldType = 'string' | 'number' | 'long' | 'date' | 'timespan' | 'guid' | 'boolean' | 'enum';
 
-export interface ScalarFieldDef {
+interface ScalarFieldDef {
     name: string;
     type: FieldType;
     enumValues?: string[];
@@ -24,22 +24,21 @@ export const contentFieldRegistry: FieldRegistry = {
         { name: 'name', type: 'string', description: 'Content name' },
         { name: 'slug', type: 'string', description: 'URL slug' },
         { name: 'path', type: 'string', description: 'File path' },
-        { name: 'contentType', type: 'string', description: 'Content type (show, movie, etc.)' },
-        { name: 'level', type: 'string', description: 'Hierarchy level (series, season, episode, etc.)' },
+        { name: 'contentType', type: 'string', description: 'Registered content type' },
+        { name: 'level', type: 'string', description: 'Registered hierarchy level' },
         {
             name: 'monitoring',
-            type: 'enum',
-            enumValues: ['None', 'Active', 'Excluded'],
-            description: 'Monitoring status',
+            type: 'boolean',
+            description: 'Whether content is effectively monitored',
         },
         { name: 'rootFolderId', type: 'guid', description: 'Root folder ID' },
         { name: 'parentId', type: 'guid', description: 'Parent content ID' },
         { name: 'title', type: 'string', description: 'Metadata title' },
         { name: 'originalTitle', type: 'string', description: 'Original language title' },
-        { name: 'overview', type: 'string', description: 'Description/synopsis' },
+        { name: 'overview', type: 'string', description: 'Description' },
         { name: 'language', type: 'string', description: 'Language code' },
         { name: 'publishDate', type: 'date', description: 'Publish/release date' },
-        { name: 'duration', type: 'timespan', description: 'Duration (e.g. "1h30m", "02:00:00")' },
+        { name: 'duration', type: 'timespan', description: 'Duration: "1h30m" or "02:00:00"' },
         { name: 'productionStatus', type: 'string', description: 'Production status' },
         { name: 'fileKind', type: 'string', description: 'Media file kind' },
         { name: 'mimeType', type: 'string', description: 'File MIME type' },
@@ -105,59 +104,31 @@ export const contentFieldRegistry: FieldRegistry = {
                 { name: 'height', type: 'number' },
             ],
         },
+        {
+            name: 'relationship',
+            aliases: ['relationships'],
+            primaryField: 'kind',
+            itemFields: [
+                { name: 'kind', type: 'string' },
+                { name: 'qualifier', type: 'string' },
+                { name: 'subject', type: 'string' },
+                { name: 'name', type: 'string' },
+            ],
+        },
     ],
 };
 
 export const subjectFieldRegistry: FieldRegistry = {
     scalarFields: [
         { name: 'kind', type: 'string', description: 'Subject kind' },
-        { name: 'dateLastRefreshed', type: 'date', description: 'Last metadata refresh date' },
-        { name: 'title', type: 'string', description: 'Subject title' },
-        { name: 'originalTitle', type: 'string', description: 'Original language title' },
-        { name: 'overview', type: 'string', description: 'Description' },
-        { name: 'language', type: 'string', description: 'Language code' },
-        { name: 'birthDate', type: 'date', description: 'Birth date (person)' },
-        { name: 'deathDate', type: 'date', description: 'Death date (person)' },
-        { name: 'established', type: 'date', description: 'Established date (organization)' },
-        { name: 'dissolved', type: 'date', description: 'Dissolved date (organization)' },
+        { name: 'title', type: 'string', description: 'Name / title' },
     ],
     collectionFields: [
         {
-            name: 'award',
-            aliases: ['awards'],
+            name: 'tag',
+            aliases: ['tags'],
             primaryField: 'name',
-            itemFields: [
-                { name: 'body', type: 'string' },
-                { name: 'name', type: 'string' },
-                { name: 'category', type: 'string' },
-                { name: 'status', type: 'string' },
-                { name: 'year', type: 'number' },
-                { name: 'language', type: 'string' },
-                { name: 'country', type: 'string' },
-            ],
-        },
-        {
-            name: 'externalId',
-            aliases: ['externalIds'],
-            primaryField: 'value',
-            itemFields: [
-                { name: 'source', type: 'string' },
-                { name: 'value', type: 'string' },
-            ],
-        },
-        {
-            name: 'image',
-            aliases: ['images'],
-            primaryField: 'type',
-            itemFields: [
-                { name: 'type', type: 'string' },
-                { name: 'mimeType', type: 'string' },
-                { name: 'url', type: 'string' },
-                { name: 'source', type: 'string' },
-                { name: 'language', type: 'string' },
-                { name: 'width', type: 'number' },
-                { name: 'height', type: 'number' },
-            ],
+            itemFields: [{ name: 'name', type: 'string' }],
         },
     ],
 };
@@ -215,6 +186,8 @@ export function getOperatorsForType(type: FieldType): string[] {
         case 'timespan':
             return ['=', '!=', '>', '>=', '<', '<=', 'null', '!null'];
         case 'guid':
+            return ['=', '!=', 'null', '!null'];
+        case 'boolean':
             return ['=', '!=', 'null', '!null'];
         case 'enum':
             return ['=', '!=', 'in', '!in', 'null', '!null'];

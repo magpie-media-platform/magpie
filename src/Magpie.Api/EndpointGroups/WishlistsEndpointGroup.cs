@@ -1,396 +1,180 @@
 using System;
-using System.Linq;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 
-using Magpie.Abstractions.Api;
-using Magpie.Abstractions.Repositories;
-using Magpie.Abstractions.Security;
+using Magpie.Models;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
+using Magpie.Models.Enums;
+using Magpie.Models.Paging;
+using Magpie.Sdk.Api;
+using Magpie.Sdk.Services;
 
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
 
 namespace Magpie.Api.EndpointGroups;
 
-internal sealed class WishlistsEndpointGroup(IWishlistRepository wishlistRepository) : IApiEndpointGroup
+internal sealed class WishlistsEndpointGroup : IApiEndpointGroup
 {
     public string Name => "wishlists";
 
     public void MapEndpoints(IEndpointRouteBuilder builder)
     {
-        builder.MapGet("my", GetMyWishlists)
-            .WithName(nameof(GetMyWishlists))
-            .Produces<Wishlist[]>()
+        builder.MapGet("", GetWishlistsAsync)
+            .WithName(nameof(GetWishlistsAsync))
+            .Produces<IReadOnlyList<Wishlist>>()
             .RequireViewer();
 
-        builder.MapPost("my", CreateMyWishlist)
-            .WithName(nameof(CreateMyWishlist))
+        builder.MapPost("", CreateWishlistAsync)
+            .WithName(nameof(CreateWishlistAsync))
             .Produces<Wishlist>(StatusCodes.Status201Created)
-            .ProducesProblem(StatusCodes.Status400BadRequest)
             .RequireRequester();
 
-        builder.MapGet("my/{id:guid}", GetMyWishlist)
-            .WithName(nameof(GetMyWishlist))
+        builder.MapGet("my", GetMyWishlistsAsync)
+            .WithName(nameof(GetMyWishlistsAsync))
+            .Produces<IReadOnlyList<Wishlist>>()
+            .RequireViewer();
+
+        builder.MapGet("{id:guid}", GetWishlistAsync)
+            .WithName(nameof(GetWishlistAsync))
             .Produces<Wishlist>()
             .ProducesProblem(StatusCodes.Status404NotFound)
             .RequireViewer();
 
-        builder.MapPatch("my/{id:guid}", PatchMyWishlist)
-            .WithName(nameof(PatchMyWishlist))
-            .Produces(StatusCodes.Status204NoContent)
-            .ProducesProblem(StatusCodes.Status404NotFound)
-            .ProducesProblem(StatusCodes.Status400BadRequest)
-            .RequireRequester();
-
-        builder.MapDelete("my/{id:guid}", DeleteMyWishlist)
-            .WithName(nameof(DeleteMyWishlist))
+        builder.MapPatch("{id:guid}", PatchWishlistAsync)
+            .WithName(nameof(PatchWishlistAsync))
             .Produces(StatusCodes.Status204NoContent)
             .ProducesProblem(StatusCodes.Status404NotFound)
             .RequireRequester();
 
-        builder.MapPost("my/{id:guid}/lock", LockMyWishlist)
-            .WithName(nameof(LockMyWishlist))
-            .Produces<Wishlist>()
+        builder.MapDelete("{id:guid}", DeleteWishlistAsync)
+            .WithName(nameof(DeleteWishlistAsync))
+            .Produces(StatusCodes.Status204NoContent)
             .ProducesProblem(StatusCodes.Status404NotFound)
             .RequireRequester();
 
-        builder.MapPost("my/{id:guid}/unlock", UnlockMyWishlist)
-            .WithName(nameof(UnlockMyWishlist))
-            .Produces<Wishlist>()
-            .ProducesProblem(StatusCodes.Status404NotFound)
-            .RequireRequester();
-        builder.MapGet("", GetWishlists)
-            .WithName(nameof(GetWishlists))
-            .Produces<Wishlist[]>()
-            .RequireViewer();
-
-        builder.MapGet("{id:guid}", GetWishlistById)
-            .WithName(nameof(GetWishlistById))
-            .Produces<Wishlist>()
+        builder.MapGet("{id:guid}/discovered", GetWishlistDiscoveredAsync)
+            .WithName(nameof(GetWishlistDiscoveredAsync))
+            .Produces<WishlistDiscoveredLedger>()
             .ProducesProblem(StatusCodes.Status404NotFound)
             .RequireViewer();
-
-        builder.MapPatch("{id:guid}", PatchSharedWishlist)
-            .WithName(nameof(PatchSharedWishlist))
-            .Produces(StatusCodes.Status204NoContent)
-            .ProducesProblem(StatusCodes.Status404NotFound)
-            .ProducesProblem(StatusCodes.Status403Forbidden)
-            .ProducesProblem(StatusCodes.Status400BadRequest)
-            .RequireRequester();
-
-        builder.MapPost("{id:guid}/unlock", UnlockWishlist)
-            .WithName(nameof(UnlockWishlist))
-            .Produces<Wishlist>()
-            .ProducesProblem(StatusCodes.Status404NotFound)
-            .RequireAdmin();
-        builder.MapGet("{userId:guid}/{id:guid}", GetUserWishlist)
-            .WithName(nameof(GetUserWishlist))
-            .Produces<Wishlist>()
-            .ProducesProblem(StatusCodes.Status404NotFound)
-            .RequireAdmin();
-
-        builder.MapDelete("{userId:guid}/{id:guid}", DeleteUserWishlist)
-            .WithName(nameof(DeleteUserWishlist))
-            .Produces(StatusCodes.Status204NoContent)
-            .ProducesProblem(StatusCodes.Status404NotFound)
-            .RequireAdmin();
     }
 
-    private async Task<IResult> GetMyWishlists(
-        HttpContext httpContext,
-        CancellationToken cancellationToken)
-    {
-        var userId = httpContext.User.GetUserId();
-        if (userId is null)
-        {
-            return Results.Problem(statusCode: StatusCodes.Status401Unauthorized);
-        }
-
-        var wishlists = await wishlistRepository.GetByUserIdAsync(userId.Value, cancellationToken)
-            .ConfigureAwait(false);
-
-        return Results.Ok(wishlists.ToArray());
-    }
-
-    private async Task<IResult> CreateMyWishlist(
-        HttpContext httpContext,
-        Wishlist request,
-        CancellationToken cancellationToken)
-    {
-        var userId = httpContext.User.GetUserId();
-        if (userId is null)
-        {
-            return Results.Problem(statusCode: StatusCodes.Status401Unauthorized);
-        }
-
-        var wishlist = request with
-        {
-            Id = Guid.NewGuid(),
-            OwnerUserId = userId.Value,
-            LastSyncedAt = null,
-            CreatedAt = DateTime.UtcNow,
-            CreatedByUserId = userId,
-            ModifiedAt = null,
-            ModifiedByUserId = null
-        };
-
-        var created = await wishlistRepository.CreateAsync(wishlist, userId, cancellationToken)
-            .ConfigureAwait(false);
-
-        return Results.Created($"api/{Name}/my/{created.Id}", created);
-    }
-
-    private async Task<IResult> GetMyWishlist(
-        HttpContext httpContext,
-        Guid id,
-        CancellationToken cancellationToken)
-    {
-        var userId = httpContext.User.GetUserId();
-        if (userId is null)
-        {
-            return Results.Problem(statusCode: StatusCodes.Status401Unauthorized);
-        }
-
-        var wishlist = await wishlistRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
-
-        if (wishlist is null || wishlist.OwnerUserId != userId)
-        {
-            return Results.NotFound();
-        }
-
-        return Results.Ok(wishlist);
-    }
-
-    private async Task<IResult> PatchMyWishlist(
-        HttpContext httpContext,
-        Guid id,
-        WishlistPatch request,
-        CancellationToken cancellationToken)
-    {
-        var userId = httpContext.User.GetUserId();
-        if (userId is null)
-        {
-            return Results.Problem(statusCode: StatusCodes.Status401Unauthorized);
-        }
-
-        var existing = await wishlistRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
-        if (existing is null || existing.OwnerUserId != userId)
-        {
-            return Results.NotFound();
-        }
-
-        var patch = request with { Id = id };
-
-        var patched = await wishlistRepository.PatchAsync(patch, userId, cancellationToken)
-            .ConfigureAwait(false);
-
-        return patched ? Results.NoContent() : Results.NotFound();
-    }
-
-    private async Task<IResult> DeleteMyWishlist(
-        HttpContext httpContext,
-        Guid id,
-        CancellationToken cancellationToken)
-    {
-        var userId = httpContext.User.GetUserId();
-        if (userId is null)
-        {
-            return Results.Problem(statusCode: StatusCodes.Status401Unauthorized);
-        }
-
-        var existing = await wishlistRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
-        if (existing is null || existing.OwnerUserId != userId)
-        {
-            return Results.NotFound();
-        }
-
-        var deleted = await wishlistRepository.DeleteAsync(id, userId, cancellationToken)
-            .ConfigureAwait(false);
-
-        return deleted ? Results.NoContent() : Results.NotFound();
-    }
-
-    private async Task<IResult> LockMyWishlist(
-        HttpContext httpContext,
-        Guid id,
-        CancellationToken cancellationToken)
-    {
-        var userId = httpContext.User.GetUserId();
-        if (userId is null)
-        {
-            return Results.Problem(statusCode: StatusCodes.Status401Unauthorized);
-        }
-
-        var existing = await wishlistRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
-        if (existing is null || existing.OwnerUserId != userId)
-        {
-            return Results.NotFound();
-        }
-
-        var wishlist = existing with
-        {
-            OwnerLock = true,
-            ModifiedAt = DateTime.UtcNow,
-            ModifiedByUserId = userId
-        };
-
-        await wishlistRepository.UpdateAsync(wishlist, userId, cancellationToken).ConfigureAwait(false);
-
-        return Results.Ok(wishlist);
-    }
-
-    private async Task<IResult> UnlockMyWishlist(
-        HttpContext httpContext,
-        Guid id,
-        CancellationToken cancellationToken)
-    {
-        var userId = httpContext.User.GetUserId();
-        if (userId is null)
-        {
-            return Results.Problem(statusCode: StatusCodes.Status401Unauthorized);
-        }
-
-        var existing = await wishlistRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
-        if (existing is null || existing.OwnerUserId != userId)
-        {
-            return Results.NotFound();
-        }
-
-        var wishlist = existing with
-        {
-            OwnerLock = false,
-            ModifiedAt = DateTime.UtcNow,
-            ModifiedByUserId = userId
-        };
-
-        await wishlistRepository.UpdateAsync(wishlist, userId, cancellationToken).ConfigureAwait(false);
-
-        return Results.Ok(wishlist);
-    }
-
-    private async Task<IResult> GetWishlists(
+    internal async Task<IResult> GetWishlistsAsync(
+        [FromServices] IWishlistService wishlistService,
+        AuthenticatedUser user,
         bool? monitored,
-        Guid? userId,
         CancellationToken cancellationToken)
     {
-        if (userId.HasValue)
-        {
-            var userWishlists = await wishlistRepository.GetByUserIdAsync(userId.Value, cancellationToken)
-                .ConfigureAwait(false);
-            return Results.Ok(userWishlists.ToArray());
-        }
+        var wishlists = await wishlistService.ListVisibleAsync(monitored, user.Id, cancellationToken)
+            .ConfigureAwait(false);
 
-        if (monitored == true)
-        {
-            var monitoredWishlists = await wishlistRepository.GetMonitoredAsync(cancellationToken)
-                .ConfigureAwait(false);
-            return Results.Ok(monitoredWishlists.ToArray());
-        }
-
-        var wishlists = await wishlistRepository.ListAllAsync(cancellationToken).ConfigureAwait(false);
-        return Results.Ok(wishlists.ToArray());
+        return Results.Ok(wishlists);
     }
 
-    private async Task<IResult> GetWishlistById(
+    internal async Task<IResult> CreateWishlistAsync(
+        [FromServices] IWishlistService wishlistService,
+        AuthenticatedUser user,
+        WishlistCreate create,
+        CancellationToken cancellationToken)
+    {
+        var created = await wishlistService.CreateAsync(create, user.Id, cancellationToken).ConfigureAwait(false);
+
+        return Results.Created($"api/{Name}/{created.Id}", created);
+    }
+
+    internal async Task<IResult> GetMyWishlistsAsync(
+        [FromServices] IWishlistService wishlistService,
+        AuthenticatedUser user,
+        CancellationToken cancellationToken)
+    {
+        var wishlists = await wishlistService.ListOwnAsync(user.Id, cancellationToken).ConfigureAwait(false);
+
+        return Results.Ok(wishlists);
+    }
+
+    internal async Task<IResult> GetWishlistAsync(
+        [FromServices] IWishlistService wishlistService,
+        AuthenticatedUser user,
         Guid id,
         CancellationToken cancellationToken)
     {
-        var wishlist = await wishlistRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
+        var wishlist = await wishlistService.GetAsync(id, user.Id, user.IsInRole(Role.Admin), cancellationToken)
+            .ConfigureAwait(false);
 
         return wishlist is null ? Results.NotFound() : Results.Ok(wishlist);
     }
 
-    private async Task<IResult> PatchSharedWishlist(
-        HttpContext httpContext,
+    internal async Task<IResult> PatchWishlistAsync(
+        [FromServices] IWishlistService wishlistService,
+        AuthenticatedUser user,
         Guid id,
-        WishlistPatch request,
+        WishlistPatch patch,
         CancellationToken cancellationToken)
     {
-        var userId = httpContext.User.GetUserId();
-        if (userId is null)
-        {
-            return Results.Problem(statusCode: StatusCodes.Status401Unauthorized);
-        }
-
-        var existing = await wishlistRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
-        if (existing is null)
-        {
-            return Results.NotFound();
-        }
-
-        if (existing.OwnerLock && existing.OwnerUserId != userId)
-        {
-            return Results.Problem(statusCode: StatusCodes.Status403Forbidden);
-        }
-
-        var patch = request with { Id = id };
-
-        var patched = await wishlistRepository.PatchAsync(patch, userId, cancellationToken)
+        var patched = await wishlistService.PatchAsync(id, patch, user.Id, user.IsInRole(Role.Admin), cancellationToken)
             .ConfigureAwait(false);
 
         return patched ? Results.NoContent() : Results.NotFound();
     }
 
-    private async Task<IResult> UnlockWishlist(
-        HttpContext httpContext,
+    internal async Task<IResult> DeleteWishlistAsync(
+        [FromServices] IWishlistService wishlistService,
+        AuthenticatedUser user,
         Guid id,
+        bool? deleteFilter,
         CancellationToken cancellationToken)
     {
-        var userId = httpContext.User.GetUserId();
-
-        var existing = await wishlistRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
-        if (existing is null)
-        {
-            return Results.NotFound();
-        }
-
-        var wishlist = existing with
-        {
-            OwnerLock = false,
-            ModifiedAt = DateTime.UtcNow,
-            ModifiedByUserId = userId
-        };
-
-        await wishlistRepository.UpdateAsync(wishlist, userId, cancellationToken).ConfigureAwait(false);
-
-        return Results.Ok(wishlist);
-    }
-
-    private async Task<IResult> GetUserWishlist(
-        Guid userId,
-        Guid id,
-        CancellationToken cancellationToken)
-    {
-        var wishlist = await wishlistRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
-
-        if (wishlist is null || wishlist.OwnerUserId != userId)
-        {
-            return Results.NotFound();
-        }
-
-        return Results.Ok(wishlist);
-    }
-
-    private async Task<IResult> DeleteUserWishlist(
-        HttpContext httpContext,
-        Guid userId,
-        Guid id,
-        CancellationToken cancellationToken)
-    {
-        var currentUserId = httpContext.User.GetUserId();
-
-        var existing = await wishlistRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
-        if (existing is null || existing.OwnerUserId != userId)
-        {
-            return Results.NotFound();
-        }
-
-        var deleted = await wishlistRepository.DeleteAsync(id, currentUserId, cancellationToken)
+        var deleted = await wishlistService.DeleteAsync(
+            id,
+            deleteFilter ?? false,
+            user.Id,
+            user.IsInRole(Role.Admin),
+            cancellationToken)
             .ConfigureAwait(false);
 
         return deleted ? Results.NoContent() : Results.NotFound();
+    }
+
+    internal async Task<IResult> GetWishlistDiscoveredAsync(
+        [FromServices] IWishlistService wishlistService,
+        AuthenticatedUser user,
+        Guid id,
+        int? pageNumber,
+        int? pageSize,
+        bool? inLibrary,
+        WishlistDiscoveredItemStatus? status,
+        WishlistDiscoveredSort? sort,
+        bool? sortDescending,
+        string? search,
+        CancellationToken cancellationToken)
+    {
+        var query = new WishlistDiscoveredQuery
+        {
+            Paging = new PagingParameter
+            {
+                PageNumber = pageNumber ?? 1,
+                PageSize = pageSize ?? 25,
+            },
+            InLibrary = inLibrary,
+            Status = status,
+            Sort = sort ?? WishlistDiscoveredSort.Discovered,
+            SortDescending = sortDescending,
+            TitleSearch = search,
+        };
+
+        var ledger = await wishlistService.GetDiscoveredAsync(
+            id,
+            query,
+            user.Id,
+            user.IsInRole(Role.Admin),
+            cancellationToken)
+            .ConfigureAwait(false);
+
+        return ledger is null ? Results.NotFound() : Results.Ok(ledger);
     }
 }

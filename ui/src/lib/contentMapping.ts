@@ -1,17 +1,19 @@
 import { extractImageUrl, extractPublishDate, extractTitle, type MetadataContainer } from '@/lib/metadata';
-import type { ApiContentHierarchyItem, ContentKind, FulfillmentStatus, FulfillmentStatusValue } from '@/types/content';
-import { mapContentType, mapFulfillmentStatus } from '@/types/content';
+import type { ApiContentHierarchyItem, FulfillmentStatus } from '@/types/content';
+import { formatLevelLabel, mapFulfillmentStatus } from '@/types/content';
 
 export interface ApiContentItemWithMetadata extends Omit<ApiContentHierarchyItem, 'metadataContainer'> {
     metadataContainer?: MetadataContainer | null;
 }
 
-export interface MappedContentFields {
+interface MappedContentFields {
     title: string;
     subtitle?: string;
     date: string | undefined;
     posterUrl?: string;
-    kind: ContentKind;
+    contentType: string;
+    level: string;
+    levelLabel: string;
     fulfillment: FulfillmentStatus;
 }
 
@@ -19,24 +21,21 @@ export function extractContentFields(item: ApiContentItemWithMetadata): MappedCo
     const metadata = item.metadataContainer;
     const contentItem = item.contentItem;
 
-    const kind: ContentKind = mapContentType(item.contentType);
-    const fulfillment: FulfillmentStatus = contentItem
-        ? mapFulfillmentStatus(contentItem.fulfillment as FulfillmentStatusValue)
-        : 'missing';
+    const fulfillment: FulfillmentStatus = contentItem ? mapFulfillmentStatus(contentItem.fulfillment) : 'missing';
 
     const title = extractTitle(metadata) ?? item.name;
 
-    let subtitle: string | undefined;
-    if (kind === 'episode' && item.level === 'episode') {
-        subtitle = item.name !== title ? item.name : undefined;
-    }
+    const trimmedName = item.name?.trim();
+    const subtitle = trimmedName && trimmedName !== title ? trimmedName : undefined;
 
     return {
         title,
         subtitle,
         date: extractPublishDate(metadata),
         posterUrl: extractImageUrl(metadata) ?? undefined,
-        kind,
+        contentType: item.contentType,
+        level: item.level,
+        levelLabel: formatLevelLabel(item.level),
         fulfillment,
     };
 }

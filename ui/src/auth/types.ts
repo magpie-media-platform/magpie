@@ -17,6 +17,29 @@ export const RoleName: Record<Role, string> = {
     [Role.Admin]: 'Admin',
 };
 
+const ROLE_NAME_TO_VALUE: Record<string, Role> = {
+    Viewer: Role.Viewer,
+    Requester: Role.Requester,
+    Manager: Role.Manager,
+    Admin: Role.Admin,
+};
+
+export function roleFromApi(value: Role | string | number | null | undefined): Role {
+    if (typeof value === 'number') {
+        return value as Role;
+    }
+    if (typeof value === 'string') {
+        if (value in ROLE_NAME_TO_VALUE) {
+            return ROLE_NAME_TO_VALUE[value];
+        }
+        const numeric = Number(value);
+        if (!Number.isNaN(numeric)) {
+            return numeric as Role;
+        }
+    }
+    return Role.Viewer;
+}
+
 export type Permission =
     | 'content.view'
     | 'content.edit'
@@ -26,6 +49,7 @@ export type Permission =
     | 'subjects.view'
     | 'subjects.edit'
     | 'downloads.view'
+    | 'downloads.control'
     | 'downloads.manage'
     | 'indexers.manage'
     | 'clients.manage'
@@ -33,6 +57,7 @@ export type Permission =
     | 'folders.manage'
     | 'jobs.view'
     | 'jobs.run'
+    | 'jobs.schedule'
     | 'jobs.manage'
     | 'wishlists.view'
     | 'wishlists.own'
@@ -54,64 +79,26 @@ export type Permission =
     | 'backups.manage'
     | 'files.browse';
 
-const permissionMatrix: Record<Permission, Role> = {
-    'content.view': Role.Viewer,
-    'content.edit': Role.Requester,
-    'content.add': Role.Manager,
-    'content.delete': Role.Manager,
-    'content.request': Role.Requester,
+export interface PermissionGrant {
+    requiredRole: Role;
 
-    'subjects.view': Role.Viewer,
-    'subjects.edit': Role.Requester,
-
-    'downloads.view': Role.Viewer,
-    'downloads.manage': Role.Manager,
-
-    'indexers.manage': Role.Manager,
-    'clients.manage': Role.Manager,
-    'servers.manage': Role.Manager,
-    'folders.manage': Role.Manager,
-
-    'jobs.view': Role.Viewer,
-    'jobs.run': Role.Manager,
-    'jobs.manage': Role.Admin,
-
-    'wishlists.view': Role.Viewer,
-    'wishlists.own': Role.Requester,
-    'wishlists.manage': Role.Manager,
-
-    'quality.view': Role.Viewer,
-    'quality.manage': Role.Manager,
-
-    'tags.view': Role.Viewer,
-    'tags.manage': Role.Manager,
-
-    'filters.view': Role.Viewer,
-    'filters.own': Role.Requester,
-    'filters.manage': Role.Manager,
-
-    'activity.view': Role.Viewer,
-    'calendar.view': Role.Viewer,
-
-    'system.view': Role.Viewer,
-
-    'settings.view': Role.Manager,
-    'settings.edit': Role.Admin,
-
-    'users.manage': Role.Admin,
-    'extensions.manage': Role.Manager,
-    'backups.manage': Role.Admin,
-
-    'files.browse': Role.Admin,
-};
-
-export function hasPermission(role: Role, permission: Permission): boolean {
-    const requiredRole = permissionMatrix[permission];
-    return role >= requiredRole;
+    granted: boolean;
 }
 
-export function getRequiredRole(permission: Permission): Role {
-    return permissionMatrix[permission];
+export interface EffectivePermissions {
+    role: Role;
+
+    permissions: Record<string, PermissionGrant>;
+}
+
+export type PermissionCatalog = Partial<Record<Permission, Role>>;
+
+export function permissionCatalogFromEffective(effective: EffectivePermissions): PermissionCatalog {
+    const catalog: PermissionCatalog = {};
+    for (const [key, grant] of Object.entries(effective.permissions)) {
+        catalog[key as Permission] = grant.requiredRole;
+    }
+    return catalog;
 }
 
 export function meetsRoleRequirement(userRole: Role, requiredRole: Role): boolean {

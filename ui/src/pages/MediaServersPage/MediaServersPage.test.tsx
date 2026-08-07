@@ -19,6 +19,18 @@ vi.mock('@/hooks/useMediaServers', async () => {
     };
 });
 
+const mockTestServer = vi.fn().mockResolvedValue({ success: true, message: 'Connected.' });
+const mockTestServerSettings = vi.fn().mockResolvedValue({ success: true, message: 'Connected.' });
+vi.mock('@/hooks/useTestConnection', () => ({
+    useTestMediaServer: () => ({ test: mockTestServer, isPending: false, error: null, cancel: vi.fn() }),
+    useTestMediaServerSettings: () => ({
+        test: mockTestServerSettings,
+        isPending: false,
+        error: null,
+        cancel: vi.fn(),
+    }),
+}));
+
 import { useMediaServers } from '@/hooks/useMediaServers';
 
 const mockApiServers: ApiMediaServer[] = [
@@ -27,19 +39,22 @@ const mockApiServers: ApiMediaServer[] = [
         providerType: 'plex',
         name: 'Plex Media Server',
         enabled: true,
-        status: 1,
+        status: 'Healthy',
         lastChecked: '2024-01-15T10:30:00Z',
-        settings: { host: 'localhost', port: '32400' },
         createdAt: '2024-01-01T00:00:00Z',
     },
     {
         id: 'server-2',
-        providerType: 'jellyfin',
-        name: 'Jellyfin',
+        providerType: 'mediaserver-a',
+        name: 'MediaServer A',
         enabled: true,
-        status: 1,
+        status: 'Healthy',
         lastChecked: '2024-01-15T10:28:00Z',
-        settings: { host: 'localhost', port: '8096' },
+        settings: {
+            host: 'http://localhost:8096',
+            apiKey: '********',
+            libraryMappings: '[{"libraryId":"movies","rootFolderId":"root-1"}]',
+        },
         createdAt: '2024-01-01T00:00:00Z',
     },
     {
@@ -47,9 +62,8 @@ const mockApiServers: ApiMediaServer[] = [
         providerType: 'emby',
         name: 'Emby',
         enabled: true,
-        status: 2,
+        status: 'Unhealthy',
         lastChecked: '2024-01-15T10:25:00Z',
-        settings: { host: 'media.example.com', port: '8920' },
         createdAt: '2024-01-02T00:00:00Z',
     },
     {
@@ -57,9 +71,8 @@ const mockApiServers: ApiMediaServer[] = [
         providerType: 'kodi',
         name: 'Kodi',
         enabled: true,
-        status: 1,
+        status: 'Healthy',
         lastChecked: '2024-01-15T10:32:00Z',
-        settings: { host: '192.168.1.100', port: '8080' },
         createdAt: '2024-01-03T00:00:00Z',
     },
     {
@@ -67,9 +80,8 @@ const mockApiServers: ApiMediaServer[] = [
         providerType: 'plex',
         name: 'Plex (Remote)',
         enabled: false,
-        status: 0,
+        status: 'Unknown',
         lastChecked: null,
-        settings: { host: 'remote.example.com', port: '32400' },
         createdAt: '2024-01-04T00:00:00Z',
     },
     {
@@ -77,9 +89,8 @@ const mockApiServers: ApiMediaServer[] = [
         providerType: 'subsonic',
         name: 'Subsonic',
         enabled: true,
-        status: 3,
+        status: 'Stale',
         lastChecked: '2024-01-15T10:20:00Z',
-        settings: { host: 'localhost', port: '4040' },
         createdAt: '2024-01-05T00:00:00Z',
     },
 ];
@@ -101,811 +112,299 @@ function createMockHookReturn(servers: ApiMediaServer[] = mockApiServers) {
     };
 }
 
-function TestWrapper({ children }: { children: ReactNode }) {
-    const queryClient = new QueryClient({
-        defaultOptions: {
-            queries: {
-                retry: false,
-                gcTime: 0,
-            },
-        },
-    });
+function createWrapper(initialEntries: string[] = ['/media-servers']) {
+    return function TestWrapper({ children }: { children: ReactNode }) {
+        const queryClient = new QueryClient({
+            defaultOptions: { queries: { retry: false, gcTime: 0 } },
+        });
 
-    return (
-        <QueryClientProvider client={queryClient}>
-            <MemoryRouter>
-                <TooltipProvider>
-                    <ToastProvider>
-                        <ToastStateProvider>
-                            {children}
-                            <ToastList />
-                            <ToastViewport />
-                        </ToastStateProvider>
-                    </ToastProvider>
-                </TooltipProvider>
-            </MemoryRouter>
-        </QueryClientProvider>
-    );
+        return (
+            <QueryClientProvider client={queryClient}>
+                <MemoryRouter initialEntries={initialEntries}>
+                    <TooltipProvider>
+                        <ToastProvider>
+                            <ToastStateProvider>
+                                {children}
+                                <ToastList />
+                                <ToastViewport />
+                            </ToastStateProvider>
+                        </ToastProvider>
+                    </TooltipProvider>
+                </MemoryRouter>
+            </QueryClientProvider>
+        );
+    };
+}
+
+function dataRows() {
+    const table = screen.getByRole('grid');
+    return within(table)
+        .getAllByRole('row')
+        .filter((r) => within(r).queryAllByRole('cell').length > 0);
 }
 
 describe('MediaServersPage', () => {
     beforeEach(() => {
+        vi.clearAllMocks();
         vi.mocked(useMediaServers).mockReturnValue(createMockHookReturn());
     });
 
     it('renders with correct data-page attribute', () => {
-        render(
-            <TestWrapper>
-                <MediaServersPage />
-            </TestWrapper>,
-        );
+        render(<MediaServersPage />, { wrapper: createWrapper() });
 
         expect(document.querySelector('[data-page="media-servers"]')).toBeInTheDocument();
     });
 
     it('renders the page title', () => {
-        render(
-            <TestWrapper>
-                <MediaServersPage />
-            </TestWrapper>,
-        );
+        render(<MediaServersPage />, { wrapper: createWrapper() });
 
         expect(screen.getByRole('heading', { name: 'Media Servers', level: 1 })).toBeInTheDocument();
     });
 
-    it('renders the server count', () => {
-        render(
-            <TestWrapper>
-                <MediaServersPage />
-            </TestWrapper>,
-        );
-
-        const count = screen.getByTestId('media-servers-page__count');
-        expect(count).toBeInTheDocument();
-        expect(count).toHaveTextContent('6');
-    });
-
     it('renders the page icon as decorative', () => {
-        render(
-            <TestWrapper>
-                <MediaServersPage />
-            </TestWrapper>,
-        );
+        render(<MediaServersPage />, { wrapper: createWrapper() });
 
-        const icon = screen.getByTestId('media-servers-page__icon');
-        expect(icon).toHaveAttribute('aria-hidden', 'true');
+        expect(screen.getByTestId('media-servers-page__icon')).toHaveAttribute('aria-hidden', 'true');
     });
 
     it('renders an Add Server button', () => {
-        render(
-            <TestWrapper>
-                <MediaServersPage />
-            </TestWrapper>,
-        );
+        render(<MediaServersPage />, { wrapper: createWrapper() });
 
-        const addButtons = screen.getAllByRole('button', { name: /add server/i });
-        expect(addButtons.length).toBeGreaterThanOrEqual(1);
+        expect(screen.getAllByRole('button', { name: /add server/i }).length).toBeGreaterThanOrEqual(1);
+    });
+
+    it('does not render health-summary stat pills', () => {
+        render(<MediaServersPage />, { wrapper: createWrapper() });
+
+        expect(document.querySelector('[aria-label="Health summary"]')).not.toBeInTheDocument();
     });
 });
 
-describe('MediaServersPage summary badges', () => {
+describe('MediaServersPage table', () => {
     beforeEach(() => {
+        vi.clearAllMocks();
         vi.mocked(useMediaServers).mockReturnValue(createMockHookReturn());
     });
 
-    it('renders summary badges for each health status', () => {
-        render(
-            <TestWrapper>
-                <MediaServersPage />
-            </TestWrapper>,
-        );
+    it('renders one row per server in a table', () => {
+        render(<MediaServersPage />, { wrapper: createWrapper() });
 
-        expect(screen.getAllByText('Healthy').length).toBeGreaterThanOrEqual(1);
-        expect(screen.getAllByText('Unhealthy').length).toBeGreaterThanOrEqual(1);
-        expect(screen.getAllByText('Stale').length).toBeGreaterThanOrEqual(1);
-        expect(screen.getAllByText('Unknown').length).toBeGreaterThanOrEqual(1);
+        expect(dataRows().length).toBe(6);
     });
 
-    it('applies data-status attributes to summary badges', () => {
-        render(
-            <TestWrapper>
-                <MediaServersPage />
-            </TestWrapper>,
-        );
-
-        const summary = document.querySelector('[aria-label="Health summary"]');
-        const badges = summary?.querySelectorAll('[data-component="badge"]') ?? [];
-        const statuses = Array.from(badges).map((b) => b.getAttribute('data-status'));
-
-        expect(statuses).toContain('healthy');
-        expect(statuses).toContain('unhealthy');
-        expect(statuses).toContain('stale');
-        expect(statuses).toContain('unknown');
-    });
-
-    it('renders badge dots as decorative', () => {
-        render(
-            <TestWrapper>
-                <MediaServersPage />
-            </TestWrapper>,
-        );
-
-        const summary = document.querySelector('[aria-label="Health summary"]');
-        const dots = summary?.querySelectorAll('[data-component="badge"] [aria-hidden="true"]') ?? [];
-        dots.forEach((dot) => {
-            expect(dot).toHaveAttribute('aria-hidden', 'true');
-        });
-    });
-
-    it('shows correct count for healthy servers', () => {
-        render(
-            <TestWrapper>
-                <MediaServersPage />
-            </TestWrapper>,
-        );
-
-        const summary = document.querySelector('[aria-label="Health summary"]');
-        const healthyBadge = summary?.querySelector('[data-component="badge"][data-status="healthy"]');
-        const count = healthyBadge?.querySelector('[data-component="badge"] .badge__count');
-
-        expect(count).toHaveTextContent('3');
-    });
-});
-
-describe('MediaServersPage list items', () => {
-    beforeEach(() => {
-        vi.mocked(useMediaServers).mockReturnValue(createMockHookReturn());
-    });
-
-    it('renders server items in the list', () => {
-        render(
-            <TestWrapper>
-                <MediaServersPage />
-            </TestWrapper>,
-        );
-
-        const list = screen.getByRole('list', { name: /media servers/i });
-        const items = within(list).getAllByRole('listitem');
-
-        expect(items.length).toBe(6);
-    });
-
-    it('renders server names', () => {
-        render(
-            <TestWrapper>
-                <MediaServersPage />
-            </TestWrapper>,
-        );
+    it('renders server names and provider types', () => {
+        render(<MediaServersPage />, { wrapper: createWrapper() });
 
         expect(screen.getByText('Plex Media Server')).toBeInTheDocument();
-        expect(screen.getByText('Jellyfin')).toBeInTheDocument();
-        expect(screen.getByText('Emby')).toBeInTheDocument();
-        expect(screen.getByText('Kodi')).toBeInTheDocument();
+        expect(screen.getByText('mediaserver-a')).toBeInTheDocument();
     });
 
-    it('renders provider names', () => {
-        render(
-            <TestWrapper>
-                <MediaServersPage />
-            </TestWrapper>,
+    it('keeps a long unbroken server name contained with the full name available', () => {
+        const longName = `MediaServer${'UnbrokenNameSegment'.repeat(8)}`;
+        vi.mocked(useMediaServers).mockReturnValue(
+            createMockHookReturn([{ ...mockApiServers[0], id: 'server-long', name: longName }]),
         );
 
-        expect(screen.getAllByText('plex').length).toBeGreaterThanOrEqual(1);
-        expect(screen.getByText('jellyfin')).toBeInTheDocument();
-        expect(screen.getByText('emby')).toBeInTheDocument();
-        expect(screen.getByText('kodi')).toBeInTheDocument();
+        render(<MediaServersPage />, { wrapper: createWrapper() });
+
+        const name = screen.getByTitle(longName);
+        expect(name).toHaveClass('media-servers-table__name');
+        expect(name.closest('[data-column="name"]')).toBeInTheDocument();
     });
 
-    it('renders last checked time with label', () => {
-        render(
-            <TestWrapper>
-                <MediaServersPage />
-            </TestWrapper>,
-        );
+    it('renders a sortable Name column header', () => {
+        render(<MediaServersPage />, { wrapper: createWrapper() });
 
-        expect(screen.getByText('Checked Never')).toBeInTheDocument();
-    });
-
-    it('applies data-server-id to items', () => {
-        render(
-            <TestWrapper>
-                <MediaServersPage />
-            </TestWrapper>,
-        );
-
-        const items = document.querySelectorAll('[data-server-id]');
-        expect(items.length).toBe(6);
-        expect(items[0]).toHaveAttribute('data-server-id', 'server-1');
-    });
-
-    it('applies data-status to items', () => {
-        render(
-            <TestWrapper>
-                <MediaServersPage />
-            </TestWrapper>,
-        );
-
-        const healthyItems = document.querySelectorAll('[data-status="healthy"]');
-
-        expect(healthyItems.length).toBeGreaterThanOrEqual(3);
-    });
-
-    it('applies data-enabled attribute to items', () => {
-        render(
-            <TestWrapper>
-                <MediaServersPage />
-            </TestWrapper>,
-        );
-
-        const enabledItems = document.querySelectorAll('[data-testid="media-servers-page__item"][data-enabled="true"]');
-        const disabledItems = document.querySelectorAll(
-            '[data-testid="media-servers-page__item"][data-enabled="false"]',
-        );
-        expect(enabledItems.length).toBe(5);
-        expect(disabledItems.length).toBe(1);
-    });
-
-    it('applies disabled styling to disabled servers', () => {
-        render(
-            <TestWrapper>
-                <MediaServersPage />
-            </TestWrapper>,
-        );
-
-        const disabledItems = document.querySelectorAll(
-            '[data-testid="media-servers-page__item"][data-enabled="false"]',
-        );
-        expect(disabledItems.length).toBe(1);
+        expect(screen.getByRole('button', { name: /sort by name/i })).toBeInTheDocument();
     });
 });
 
-describe('MediaServersPage health badges', () => {
+describe('MediaServersPage row actions', () => {
     beforeEach(() => {
+        vi.clearAllMocks();
         vi.mocked(useMediaServers).mockReturnValue(createMockHookReturn());
     });
 
-    it('renders health badges with dot indicators', () => {
-        render(
-            <TestWrapper>
-                <MediaServersPage />
-            </TestWrapper>,
-        );
+    it('exposes test, enable toggle, edit and delete per row', () => {
+        render(<MediaServersPage />, { wrapper: createWrapper() });
 
-        const items = screen.getAllByTestId('media-servers-page__item');
-        items.forEach((item) => {
-            expect(item.querySelector('[data-component="badge"]')).toBeInTheDocument();
-            expect(item.querySelector('[data-component="badge"] [aria-hidden="true"]')).toBeInTheDocument();
+        expect(document.querySelectorAll('[data-action="test"]').length).toBe(6);
+        expect(document.querySelectorAll('[data-action="toggle-enabled"]').length).toBe(6);
+        expect(document.querySelectorAll('[data-action="edit"]').length).toBe(6);
+        expect(document.querySelectorAll('[data-action="delete"]').length).toBe(6);
+    });
+
+    it('tests the targeted server by id', async () => {
+        const user = userEvent.setup();
+        render(<MediaServersPage />, { wrapper: createWrapper() });
+
+        await user.click(screen.getByRole('button', { name: /^test plex media server$/i }));
+
+        await waitFor(() => {
+            expect(mockTestServer).toHaveBeenCalledWith('server-1');
         });
     });
 
-    it('applies correct variant to healthy servers', () => {
-        render(
-            <TestWrapper>
-                <MediaServersPage />
-            </TestWrapper>,
-        );
-
-        const plexItem = document.querySelector('[data-server-id="server-1"]');
-        expect(plexItem?.querySelector('[data-component="badge"][data-variant="healthy"]')).toBeInTheDocument();
-    });
-
-    it('applies correct variant to unhealthy servers', () => {
-        render(
-            <TestWrapper>
-                <MediaServersPage />
-            </TestWrapper>,
-        );
-
-        const unhealthyItem = document.querySelector('[data-server-id="server-3"]');
-        expect(unhealthyItem?.querySelector('[data-component="badge"][data-variant="unhealthy"]')).toBeInTheDocument();
-    });
-
-    it('applies correct variant to stale servers', () => {
-        render(
-            <TestWrapper>
-                <MediaServersPage />
-            </TestWrapper>,
-        );
-
-        const staleItem = document.querySelector('[data-server-id="server-6"]');
-        expect(staleItem?.querySelector('[data-component="badge"][data-variant="stale"]')).toBeInTheDocument();
-    });
-});
-
-describe('MediaServersPage actions', () => {
-    beforeEach(() => {
-        vi.mocked(useMediaServers).mockReturnValue(createMockHookReturn());
-    });
-
-    it('renders enable/disable toggle for each server', () => {
-        render(
-            <TestWrapper>
-                <MediaServersPage />
-            </TestWrapper>,
-        );
-
-        const toggles = document.querySelectorAll('[data-action="toggle-enabled"]');
-        expect(toggles.length).toBe(6);
-    });
-
-    it('toggle shows checked state for enabled servers', () => {
-        render(
-            <TestWrapper>
-                <MediaServersPage />
-            </TestWrapper>,
-        );
-
-        const plexItem = document.querySelector('[data-server-id="server-1"]');
-        const toggle = plexItem?.querySelector('[data-action="toggle-enabled"]');
-        expect(toggle).toHaveAttribute('aria-checked', 'true');
-    });
-
-    it('toggle shows unchecked state for disabled servers', () => {
-        render(
-            <TestWrapper>
-                <MediaServersPage />
-            </TestWrapper>,
-        );
-
-        const remoteItem = document.querySelector('[data-server-id="server-5"]');
-        const toggle = remoteItem?.querySelector('[data-action="toggle-enabled"]');
-        expect(toggle).toHaveAttribute('aria-checked', 'false');
-    });
-
-    it('renders edit button for each server', () => {
-        render(
-            <TestWrapper>
-                <MediaServersPage />
-            </TestWrapper>,
-        );
-
-        const editButtons = document.querySelectorAll('[data-action="edit"]');
-        expect(editButtons.length).toBe(6);
-    });
-
-    it('renders delete button for each server', () => {
-        render(
-            <TestWrapper>
-                <MediaServersPage />
-            </TestWrapper>,
-        );
-
-        const deleteButtons = document.querySelectorAll('[data-action="delete"]');
-        expect(deleteButtons.length).toBe(6);
-    });
-
-    it('edit button has correct aria-label', () => {
-        render(
-            <TestWrapper>
-                <MediaServersPage />
-            </TestWrapper>,
-        );
-
-        const editButton = screen.getByRole('button', { name: /^edit plex media server$/i });
-        expect(editButton).toHaveAttribute('data-action', 'edit');
-    });
-
-    it('delete button has correct aria-label', () => {
-        render(
-            <TestWrapper>
-                <MediaServersPage />
-            </TestWrapper>,
-        );
-
-        const deleteButton = screen.getByRole('button', { name: /^delete plex media server$/i });
-        expect(deleteButton).toHaveAttribute('data-action', 'delete');
-    });
-
-    it('opens edit form when edit button is clicked', async () => {
+    it('toggles a server through toggleServerEnabled', async () => {
+        const hook = createMockHookReturn();
+        vi.mocked(useMediaServers).mockReturnValue(hook);
         const user = userEvent.setup();
+        render(<MediaServersPage />, { wrapper: createWrapper() });
 
-        render(
-            <TestWrapper>
-                <MediaServersPage />
-            </TestWrapper>,
-        );
+        await user.click(screen.getByRole('switch', { name: /disable plex media server/i }));
 
-        const editButton = screen.getByRole('button', { name: /^edit plex media server$/i });
-        await user.click(editButton);
+        await waitFor(() => {
+            expect(hook.toggleServerEnabled).toHaveBeenCalledWith('server-1', false);
+        });
+    });
+
+    it('keeps the row enabled and surfaces the server error detail when the toggle fails', async () => {
+        const hook = createMockHookReturn();
+        hook.toggleServerEnabled = vi.fn().mockRejectedValue(new Error('Media server is unreachable.'));
+        vi.mocked(useMediaServers).mockReturnValue(hook);
+        const user = userEvent.setup();
+        render(<MediaServersPage />, { wrapper: createWrapper() });
+
+        await user.click(screen.getByRole('switch', { name: /disable plex media server/i }));
+
+        await waitFor(() => {
+            expect(screen.getByText('Media server is unreachable.')).toBeInTheDocument();
+        });
+        expect(screen.getByRole('switch', { name: /disable plex media server/i })).toBeChecked();
+    });
+
+    it('opens the edit form when edit is clicked', async () => {
+        const user = userEvent.setup();
+        render(<MediaServersPage />, { wrapper: createWrapper() });
+
+        await user.click(screen.getByRole('button', { name: /^edit plex media server$/i }));
 
         await waitFor(() => {
             expect(screen.getByText('Edit Media Server')).toBeInTheDocument();
-            expect(screen.getByDisplayValue('Plex Media Server')).toBeInTheDocument();
         });
     });
 
-    it('opens confirmation dialog when delete button is clicked', async () => {
-        const mockHookReturn = createMockHookReturn();
-        vi.mocked(useMediaServers).mockReturnValue(mockHookReturn);
-
+    it('keeps saved settings when an edited server is saved without changes', async () => {
+        const hook = createMockHookReturn();
+        vi.mocked(useMediaServers).mockReturnValue(hook);
         const user = userEvent.setup();
+        render(<MediaServersPage />, { wrapper: createWrapper() });
 
-        render(
-            <TestWrapper>
-                <MediaServersPage />
-            </TestWrapper>,
-        );
+        await user.click(screen.getByRole('button', { name: /^edit mediaserver a$/i }));
 
-        const deleteButton = screen.getByRole('button', { name: /^delete plex media server$/i });
-        await user.click(deleteButton);
+        await waitFor(() => {
+            expect(screen.getByText('Edit Media Server')).toBeInTheDocument();
+        });
+
+        await user.click(screen.getByRole('button', { name: /save/i }));
+
+        await waitFor(() => {
+            expect(hook.updateServer).toHaveBeenCalledWith('server-2', {
+                name: { value: 'MediaServer A' },
+                enabled: { value: true },
+                settings: {
+                    update: {
+                        host: 'http://localhost:8096',
+                        apiKey: '********',
+                        libraryMappings: '[{"libraryId":"movies","rootFolderId":"root-1"}]',
+                    },
+                },
+            });
+        });
+    });
+
+    it('deletes the targeted server after confirming', async () => {
+        const hook = createMockHookReturn();
+        vi.mocked(useMediaServers).mockReturnValue(hook);
+        const user = userEvent.setup();
+        render(<MediaServersPage />, { wrapper: createWrapper() });
+
+        await user.click(screen.getByRole('button', { name: /^delete plex media server$/i }));
 
         await waitFor(() => {
             expect(screen.getByText('Delete Media Server')).toBeInTheDocument();
         });
-        const dialog = document.querySelector('[data-component="delete-confirm-dialog"]')!;
-        expect(within(dialog).getByText(/Plex Media Server/)).toBeInTheDocument();
-        expect(mockHookReturn.deleteServer).not.toHaveBeenCalled();
-    });
 
-    it('calls deleteServer after confirming deletion', async () => {
-        const mockHookReturn = createMockHookReturn();
-        vi.mocked(useMediaServers).mockReturnValue(mockHookReturn);
+        await user.click(screen.getByRole('button', { name: /^delete$/i }));
 
-        const user = userEvent.setup();
-
-        render(
-            <TestWrapper>
-                <MediaServersPage />
-            </TestWrapper>,
-        );
-
-        const deleteButton = screen.getByRole('button', { name: /^delete plex media server$/i });
-        await user.click(deleteButton);
-
-        const confirmButton = await screen.findByRole('button', { name: /^delete$/i });
-        await user.click(confirmButton);
-
-        expect(mockHookReturn.deleteServer).toHaveBeenCalledWith('server-1');
-    });
-
-    it('does not call deleteServer when cancel is clicked', async () => {
-        const mockHookReturn = createMockHookReturn();
-        vi.mocked(useMediaServers).mockReturnValue(mockHookReturn);
-
-        const user = userEvent.setup();
-
-        render(
-            <TestWrapper>
-                <MediaServersPage />
-            </TestWrapper>,
-        );
-
-        const deleteButton = screen.getByRole('button', { name: /^delete plex media server$/i });
-        await user.click(deleteButton);
-
-        const cancelButton = await screen.findByRole('button', { name: /^cancel$/i });
-        await user.click(cancelButton);
-
-        expect(mockHookReturn.deleteServer).not.toHaveBeenCalled();
+        await waitFor(() => {
+            expect(hook.deleteServer).toHaveBeenCalledWith('server-1');
+        });
     });
 });
 
-describe('MediaServersPage filters', () => {
+describe('MediaServersPage column-header filters', () => {
     beforeEach(() => {
+        vi.clearAllMocks();
         vi.mocked(useMediaServers).mockReturnValue(createMockHookReturn());
     });
 
-    it('renders status and enabled filter dropdowns', () => {
-        render(
-            <TestWrapper>
-                <MediaServersPage />
-            </TestWrapper>,
-        );
+    it('exposes provider, status and enabled column-header filters', () => {
+        render(<MediaServersPage />, { wrapper: createWrapper() });
 
-        expect(document.querySelector('[data-filter="status"]')).toBeInTheDocument();
-        expect(document.querySelector('[data-filter="enabled"]')).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: /filter by provider/i })).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: /filter by status/i })).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: /filter by enabled/i })).toBeInTheDocument();
     });
 
-    it('status filter displays "All Status" by default', () => {
-        render(
-            <TestWrapper>
-                <MediaServersPage />
-            </TestWrapper>,
-        );
+    it('renders the full "Enabled" column header label', () => {
+        render(<MediaServersPage />, { wrapper: createWrapper() });
 
-        const statusTrigger = document.querySelector('[data-filter="status"]');
-        expect(statusTrigger).toHaveTextContent('All Status');
+        const enabledHeader = screen
+            .getAllByRole('columnheader')
+            .find((cell) => cell.getAttribute('data-column') === 'enabled');
+        expect(enabledHeader).toBeDefined();
+        expect(enabledHeader).toHaveTextContent('Enabled');
     });
 
-    it('enabled filter displays "All Enabled" by default', () => {
-        render(
-            <TestWrapper>
-                <MediaServersPage />
-            </TestWrapper>,
-        );
-
-        const enabledTrigger = document.querySelector('[data-filter="enabled"]');
-        expect(enabledTrigger).toHaveTextContent('All Enabled');
-    });
-
-    it('filters items by status when selection changes', async () => {
+    it('filters rows by status', async () => {
         const user = userEvent.setup();
-        render(
-            <TestWrapper>
-                <MediaServersPage />
-            </TestWrapper>,
-        );
+        render(<MediaServersPage />, { wrapper: createWrapper() });
 
-        const statusTrigger = document.querySelector('[data-filter="status"]') as HTMLElement;
-        await user.click(statusTrigger);
+        await user.click(screen.getByRole('button', { name: /filter by status/i }));
+        await user.click(await screen.findByRole('menuitemradio', { name: 'Unhealthy' }));
 
-        const unhealthyOption = await screen.findByRole('option', { name: 'Unhealthy' });
-        await user.click(unhealthyOption);
-
-        const list = screen.getByRole('list', { name: /media servers/i });
-        const items = within(list).getAllByRole('listitem');
-        expect(items.length).toBe(1);
+        await waitFor(() => {
+            expect(dataRows().length).toBe(1);
+        });
         expect(screen.getByText('Emby')).toBeInTheDocument();
     });
 
-    it('filters items by enabled state when selection changes', async () => {
+    it('filters rows by enabled state', async () => {
         const user = userEvent.setup();
-        render(
-            <TestWrapper>
-                <MediaServersPage />
-            </TestWrapper>,
-        );
+        render(<MediaServersPage />, { wrapper: createWrapper() });
 
-        const enabledTrigger = document.querySelector('[data-filter="enabled"]') as HTMLElement;
-        await user.click(enabledTrigger);
+        await user.click(screen.getByRole('button', { name: /filter by enabled/i }));
+        await user.click(await screen.findByRole('menuitemradio', { name: 'Disabled' }));
 
-        const disabledOption = await screen.findByRole('option', { name: 'Disabled' });
-        await user.click(disabledOption);
-
-        const list = screen.getByRole('list', { name: /media servers/i });
-        const items = within(list).getAllByRole('listitem');
-        expect(items.length).toBe(1);
+        await waitFor(() => {
+            expect(dataRows().length).toBe(1);
+        });
         expect(screen.getByText('Plex (Remote)')).toBeInTheDocument();
     });
 
-    it('shows clear button when filters are active', async () => {
+    it('shows a clear-filters control once a filter is active', async () => {
         const user = userEvent.setup();
-        render(
-            <TestWrapper>
-                <MediaServersPage />
-            </TestWrapper>,
-        );
+        render(<MediaServersPage />, { wrapper: createWrapper() });
 
         expect(document.querySelector('[data-action="clear-filters"]')).not.toBeInTheDocument();
 
-        const statusTrigger = document.querySelector('[data-filter="status"]') as HTMLElement;
-        await user.click(statusTrigger);
-
-        const healthyOption = await screen.findByRole('option', { name: 'Healthy' });
-        await user.click(healthyOption);
+        await user.click(screen.getByRole('button', { name: /filter by status/i }));
+        await user.click(await screen.findByRole('menuitemradio', { name: 'Healthy' }));
 
         expect(document.querySelector('[data-action="clear-filters"]')).toBeInTheDocument();
     });
-
-    it('clears filters when clear button is clicked', async () => {
-        const user = userEvent.setup();
-        render(
-            <TestWrapper>
-                <MediaServersPage />
-            </TestWrapper>,
-        );
-
-        const statusTrigger = document.querySelector('[data-filter="status"]') as HTMLElement;
-        await user.click(statusTrigger);
-
-        const healthyOption = await screen.findByRole('option', { name: 'Healthy' });
-        await user.click(healthyOption);
-
-        const clearButton = document.querySelector('[data-action="clear-filters"]') as HTMLElement;
-        await user.click(clearButton);
-
-        const list = screen.getByRole('list', { name: /media servers/i });
-        const items = within(list).getAllByRole('listitem');
-        expect(items.length).toBe(6);
-    });
-
-    it('shows empty state when filters match nothing', async () => {
-        const user = userEvent.setup();
-        render(
-            <TestWrapper>
-                <MediaServersPage />
-            </TestWrapper>,
-        );
-
-        const enabledTrigger = document.querySelector('[data-filter="enabled"]') as HTMLElement;
-        await user.click(enabledTrigger);
-
-        const disabledOption = await screen.findByRole('option', { name: 'Disabled' });
-        await user.click(disabledOption);
-
-        const statusTrigger = document.querySelector('[data-filter="status"]') as HTMLElement;
-        await user.click(statusTrigger);
-
-        const healthyOption = await screen.findByRole('option', { name: 'Healthy' });
-        await user.click(healthyOption);
-
-        expect(screen.getByText('No media servers found')).toBeInTheDocument();
-        expect(screen.getByText('Try adjusting your filters')).toBeInTheDocument();
-    });
 });
 
-describe('MediaServersPage empty state', () => {
+describe('MediaServersPage URL state', () => {
     beforeEach(() => {
+        vi.clearAllMocks();
         vi.mocked(useMediaServers).mockReturnValue(createMockHookReturn());
     });
 
-    it('shows empty state icon as decorative when no results', async () => {
-        const user = userEvent.setup();
-        render(
-            <TestWrapper>
-                <MediaServersPage />
-            </TestWrapper>,
-        );
+    it('initializes the status filter from a legacy lowercase URL param', () => {
+        render(<MediaServersPage />, { wrapper: createWrapper(['/media-servers?status=healthy']) });
 
-        const enabledTrigger = document.querySelector('[data-filter="enabled"]') as HTMLElement;
-        await user.click(enabledTrigger);
-
-        const disabledOption = await screen.findByRole('option', { name: 'Disabled' });
-        await user.click(disabledOption);
-
-        const statusTrigger = document.querySelector('[data-filter="status"]') as HTMLElement;
-        await user.click(statusTrigger);
-
-        const healthyOption = await screen.findByRole('option', { name: 'Healthy' });
-        await user.click(healthyOption);
-
-        expect(screen.getByTestId('empty-state__icon')).toHaveAttribute('aria-hidden', 'true');
-    });
-});
-
-describe('MediaServersPage accessibility', () => {
-    beforeEach(() => {
-        vi.mocked(useMediaServers).mockReturnValue(createMockHookReturn());
-    });
-
-    it('list has accessible label', () => {
-        render(
-            <TestWrapper>
-                <MediaServersPage />
-            </TestWrapper>,
-        );
-
-        expect(screen.getByRole('list', { name: /media servers/i })).toBeInTheDocument();
-    });
-
-    it('summary section has accessible label', () => {
-        render(
-            <TestWrapper>
-                <MediaServersPage />
-            </TestWrapper>,
-        );
-
-        const summary = document.querySelector('[aria-label="Health summary"]');
-        expect(summary).toBeInTheDocument();
-    });
-
-    it('toggle switches have aria-labels', () => {
-        render(
-            <TestWrapper>
-                <MediaServersPage />
-            </TestWrapper>,
-        );
-
-        const toggles = document.querySelectorAll('[data-action="toggle-enabled"]');
-        toggles.forEach((toggle) => {
-            expect(toggle).toHaveAttribute('aria-label');
-        });
-    });
-
-    it('action buttons have aria-labels', () => {
-        render(
-            <TestWrapper>
-                <MediaServersPage />
-            </TestWrapper>,
-        );
-
-        const actionButtons = screen.getAllByTestId('media-servers-page__action-btn');
-        actionButtons.forEach((btn) => {
-            expect(btn).toHaveAttribute('aria-label');
-        });
-    });
-
-    it('filter triggers have aria-labels', () => {
-        render(
-            <TestWrapper>
-                <MediaServersPage />
-            </TestWrapper>,
-        );
-
-        const statusFilter = document.querySelector('[data-filter="status"]');
-        expect(statusFilter).toHaveAttribute('aria-label', 'Filter by status');
-
-        const enabledFilter = document.querySelector('[data-filter="enabled"]');
-        expect(enabledFilter).toHaveAttribute('aria-label', 'Filter by enabled state');
-    });
-});
-
-describe('MediaServersPage URL param initialization', () => {
-    beforeEach(() => {
-        vi.mocked(useMediaServers).mockReturnValue(createMockHookReturn());
-    });
-
-    it('initializes status filter from URL search params', () => {
-        const queryClient = new QueryClient({
-            defaultOptions: {
-                queries: {
-                    retry: false,
-                    gcTime: 0,
-                },
-            },
-        });
-
-        function TestWrapperWithUrl({ children }: { children: ReactNode }) {
-            return (
-                <QueryClientProvider client={queryClient}>
-                    <MemoryRouter initialEntries={['/media-servers?status=healthy']}>
-                        <TooltipProvider>
-                            <ToastProvider>
-                                <ToastStateProvider>
-                                    {children}
-                                    <ToastList />
-                                    <ToastViewport />
-                                </ToastStateProvider>
-                            </ToastProvider>
-                        </TooltipProvider>
-                    </MemoryRouter>
-                </QueryClientProvider>
-            );
-        }
-
-        render(
-            <TestWrapperWithUrl>
-                <MediaServersPage />
-            </TestWrapperWithUrl>,
-        );
-
-        const list = screen.getByRole('list', { name: /media servers/i });
-        const items = within(list).getAllByRole('listitem');
-        expect(items.length).toBe(3);
-
-        const statusTrigger = document.querySelector('[data-filter="status"]');
-        expect(statusTrigger).toHaveTextContent('Healthy');
-    });
-});
-
-describe('MediaServersPage enable/disable toggle', () => {
-    it('calls toggleServerEnabled when toggle is clicked', async () => {
-        const mockHookReturn = createMockHookReturn();
-        vi.mocked(useMediaServers).mockReturnValue(mockHookReturn);
-
-        const user = userEvent.setup();
-
-        render(
-            <TestWrapper>
-                <MediaServersPage />
-            </TestWrapper>,
-        );
-
-        const plexItem = document.querySelector('[data-server-id="server-1"]');
-        const toggle = plexItem?.querySelector('[data-action="toggle-enabled"]') as HTMLElement;
-
-        await user.click(toggle);
-
-        expect(mockHookReturn.toggleServerEnabled).toHaveBeenCalledWith('server-1', false);
-    });
-
-    it('enables a disabled server when toggle is clicked', async () => {
-        const mockHookReturn = createMockHookReturn();
-        vi.mocked(useMediaServers).mockReturnValue(mockHookReturn);
-
-        const user = userEvent.setup();
-
-        render(
-            <TestWrapper>
-                <MediaServersPage />
-            </TestWrapper>,
-        );
-
-        const remoteItem = document.querySelector('[data-server-id="server-5"]');
-        const toggle = remoteItem?.querySelector('[data-action="toggle-enabled"]') as HTMLElement;
-
-        await user.click(toggle);
-
-        expect(mockHookReturn.toggleServerEnabled).toHaveBeenCalledWith('server-5', true);
+        expect(dataRows().length).toBe(3);
     });
 });

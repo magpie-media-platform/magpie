@@ -4,6 +4,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 import { AuthProvider, Role, type User } from '@/auth';
+import { testEffectivePermissions } from '@/test/permissions';
 import { DashboardPage } from './DashboardPage';
 
 const mockUseExtensions = vi.fn();
@@ -14,7 +15,6 @@ vi.mock('@/extensions/useExtensions', () => ({
     useSlotExtensions: (slot: string) => mockUseSlotExtensions(slot),
 }));
 
-const mockIndexerHealthResult = vi.fn();
 const mockClientHealthResult = vi.fn();
 const mockServerHealthResult = vi.fn();
 const mockActiveDownloadsResult = vi.fn();
@@ -26,7 +26,6 @@ const mockUpcomingContentResult = vi.fn();
 vi.mock('@/hooks/useDashboard', () => ({
     dashboardQueryKeys: {
         all: ['dashboard'],
-        indexers: ['dashboard', 'indexers'],
         downloadClients: ['dashboard', 'download-clients'],
         mediaServers: ['dashboard', 'media-servers'],
         downloads: ['dashboard', 'downloads'],
@@ -35,7 +34,6 @@ vi.mock('@/hooks/useDashboard', () => ({
         recentContent: ['dashboard', 'recent-content'],
         upcomingContent: ['dashboard', 'upcoming-content'],
     },
-    useIndexerHealth: () => mockIndexerHealthResult(),
     useDownloadClientHealth: () => mockClientHealthResult(),
     useMediaServerHealth: () => mockServerHealthResult(),
     useActiveDownloads: () => mockActiveDownloadsResult(),
@@ -45,12 +43,11 @@ vi.mock('@/hooks/useDashboard', () => ({
     useUpcomingContent: () => mockUpcomingContentResult(),
 }));
 
-const defaultIndexerHealth = { healthy: 4, unhealthy: 1, unknown: 0, stale: 1 };
-const defaultClientHealth = { healthy: 2, unhealthy: 0, unknown: 1, stale: 0 };
-const defaultServerHealth = { healthy: 1, unhealthy: 0, unknown: 0, stale: 0 };
+const defaultClientHealth = { healthy: 2, unhealthy: 0, degraded: 0, stabilizing: 0, unknown: 1, stale: 0 };
+const defaultServerHealth = { healthy: 1, unhealthy: 0, degraded: 0, stabilizing: 0, unknown: 0, stale: 0 };
 
 const defaultActiveDownloads = {
-    counts: { downloading: 3, queued: 7, stalled: 1 },
+    counts: { downloading: 3, queued: 7, paused: 2, stalled: 1 },
     items: [
         {
             id: 'dl-1',
@@ -80,12 +77,36 @@ const defaultActiveDownloads = {
 };
 
 const defaultRecentJobs = [
-    { id: 'job-1', name: 'Refresh Metadata', status: 'completed' as const, duration: '2m 15s', timestamp: '5 min ago' },
-    { id: 'job-2', name: 'Search Missing', status: 'running' as const, timestamp: '10 min ago' },
-    { id: 'job-3', name: 'Sync Plex Library', status: 'completed' as const, duration: '45s', timestamp: '1h ago' },
+    {
+        id: '11111111-1111-4111-8111-111111111111',
+        name: 'Content metadata refresh item',
+        status: 'completed' as const,
+        duration: '2m 15s',
+        timestamp: '5 min ago',
+    },
+    {
+        id: '22222222-2222-4222-8222-222222222222',
+        name: 'Search Missing',
+        status: 'running' as const,
+        timestamp: '10 min ago',
+    },
+    {
+        id: '33333333-3333-4333-8333-333333333333',
+        name: 'Sync Plex Library',
+        status: 'completed' as const,
+        duration: '45s',
+        timestamp: '1h ago',
+    },
 ];
 
-const defaultContentCounts = { total: 307, missing: 42, upgradable: 15, fulfilled: 238, fulfilledExternally: 12 };
+const defaultContentCounts = {
+    total: 307,
+    missing: 42,
+    upgradable: 15,
+    fulfilled: 238,
+    fulfilledExternally: 12,
+    partial: 18,
+};
 
 const defaultRecentContent = [
     { id: 'content-1', title: 'Shogun (2024)', addedAt: '2h ago', fulfillment: 'fulfilled' as const },
@@ -99,8 +120,8 @@ const defaultUpcomingContent = [
         contentId: 'content-1',
         title: 'Shogun',
         subtitle: 'S01E10 - A Dream of a Dream',
-        airDate: new Date().toISOString(),
-        posterUrl: 'https://image.tmdb.org/t/p/w92/7O4iVfOMQmdCSxhOg1WnzG1AgYT.jpg',
+        date: new Date().toISOString(),
+        posterUrl: 'https://image.provider-a.example/t/p/w92/7O4iVfOMQmdCSxhOg1WnzG1AgYT.jpg',
         kind: 'episode' as const,
         fulfillment: 'missing' as const,
     },
@@ -109,8 +130,8 @@ const defaultUpcomingContent = [
         contentId: 'content-4',
         title: 'Fallout',
         subtitle: 'S01E08 - The Beginning',
-        airDate: new Date().toISOString(),
-        posterUrl: 'https://image.tmdb.org/t/p/w92/AnsSKR9LuK0T9bSHlYNWIJgJzlX.jpg',
+        date: new Date().toISOString(),
+        posterUrl: 'https://image.provider-a.example/t/p/w92/AnsSKR9LuK0T9bSHlYNWIJgJzlX.jpg',
         kind: 'episode' as const,
         fulfillment: 'fulfilled' as const,
     },
@@ -121,7 +142,6 @@ function makeResult<T>(data: T, loading = false, error: Error | null = null) {
 }
 
 function setDefaultMocks() {
-    mockIndexerHealthResult.mockReturnValue(makeResult(defaultIndexerHealth));
     mockClientHealthResult.mockReturnValue(makeResult(defaultClientHealth));
     mockServerHealthResult.mockReturnValue(makeResult(defaultServerHealth));
     mockActiveDownloadsResult.mockReturnValue(makeResult(defaultActiveDownloads));
@@ -132,7 +152,6 @@ function setDefaultMocks() {
 }
 
 function setLoadingMocks() {
-    mockIndexerHealthResult.mockReturnValue(makeResult(undefined, true));
     mockClientHealthResult.mockReturnValue(makeResult(undefined, true));
     mockServerHealthResult.mockReturnValue(makeResult(undefined, true));
     mockActiveDownloadsResult.mockReturnValue(makeResult(undefined, true));
@@ -161,7 +180,7 @@ async function renderDashboard(user: User = adminUser) {
 
     const result = render(
         <QueryClientProvider client={queryClient}>
-            <AuthProvider initialUser={user} skipSessionInit>
+            <AuthProvider initialUser={user} skipSessionInit initialPermissions={testEffectivePermissions()}>
                 <MemoryRouter>
                     <DashboardPage />
                 </MemoryRouter>
@@ -223,20 +242,12 @@ describe('DashboardPage', () => {
             expect(screen.getByRole('heading', { level: 2, name: 'Service Health' })).toBeInTheDocument();
         });
 
-        it('displays all three service names', async () => {
+        it('displays both service names', async () => {
             await renderDashboard();
 
             const healthBar = document.querySelector('[data-component="service-health-bar"]')!;
-            expect(within(healthBar as HTMLElement).getByText('Indexers')).toBeInTheDocument();
             expect(within(healthBar as HTMLElement).getByText('Download Clients')).toBeInTheDocument();
             expect(within(healthBar as HTMLElement).getByText('Media Servers')).toBeInTheDocument();
-        });
-
-        it('shows unhealthy summary for indexers with problems', async () => {
-            await renderDashboard();
-
-            const indexerSegment = screen.getByLabelText(/indexers: 1 unhealthy/i);
-            expect(indexerSegment).toBeInTheDocument();
         });
 
         it('shows unknown summary for clients with unknown status', async () => {
@@ -253,20 +264,41 @@ describe('DashboardPage', () => {
             expect(serverSegment).toBeInTheDocument();
         });
 
-        it('links unhealthy service to filtered page', async () => {
-            await renderDashboard();
-
-            const indexerLink = screen.getByLabelText(/indexers: 1 unhealthy/i);
-            expect(indexerLink.tagName).toBe('A');
-            expect(indexerLink).toHaveAttribute('href', '/admin/indexers?status=unhealthy');
-        });
-
         it('links healthy service to filtered page', async () => {
             await renderDashboard();
 
             const serverLink = screen.getByLabelText(/media servers: 1 ok/i);
             expect(serverLink.tagName).toBe('A');
             expect(serverLink).toHaveAttribute('href', '/admin/media-servers?status=healthy');
+        });
+
+        it('keeps download-client add-first navigation for empty admin state', async () => {
+            mockClientHealthResult.mockReturnValue(
+                makeResult({ healthy: 0, unhealthy: 0, degraded: 0, stabilizing: 0, unknown: 0, stale: 0 }),
+            );
+
+            await renderDashboard();
+
+            const clientLink = screen.getByLabelText(/download clients: add first/i);
+            expect(clientLink.tagName).toBe('A');
+            expect(clientLink).toHaveAttribute('href', '/admin/download-clients');
+        });
+
+        it('does not link integration health to admin pages for non-admin users', async () => {
+            await renderDashboard(viewerUser);
+
+            const clientSegment = screen.getByLabelText(/download clients: 1 unknown/i);
+            expect(clientSegment.tagName).not.toBe('A');
+            expect(clientSegment).not.toHaveAttribute('href');
+        });
+
+        it('renders the health summary for a Viewer (not gated on system.view)', async () => {
+            await renderDashboard(viewerUser);
+
+            const healthBar = document.querySelector('[data-component="service-health-bar"]');
+            expect(healthBar).toBeInTheDocument();
+            expect(within(healthBar as HTMLElement).getByText('Download Clients')).toBeInTheDocument();
+            expect(within(healthBar as HTMLElement).getByText('Media Servers')).toBeInTheDocument();
         });
     });
 
@@ -277,7 +309,7 @@ describe('DashboardPage', () => {
             const widgetSection = screen.getByRole('region', { name: /dashboard widgets/i });
             const downloadWidget = within(widgetSection)
                 .getByRole('heading', { name: 'Downloads' })
-                .closest('[data-component="download-queue-widget"]');
+                .closest<HTMLElement>('[data-component="download-queue-widget"]');
 
             expect(downloadWidget).toBeInTheDocument();
 
@@ -292,7 +324,7 @@ describe('DashboardPage', () => {
             const widgetSection = screen.getByRole('region', { name: /dashboard widgets/i });
             const downloadWidget = within(widgetSection)
                 .getByRole('heading', { name: 'Downloads' })
-                .closest('[data-component="download-queue-widget"]');
+                .closest<HTMLElement>('[data-component="download-queue-widget"]');
 
             expect(within(downloadWidget!).getByText('Breaking Bad S01E01 (1080p BluRay)')).toBeInTheDocument();
             expect(within(downloadWidget!).getByText('The Office S03E07 (720p WEB)')).toBeInTheDocument();
@@ -306,6 +338,17 @@ describe('DashboardPage', () => {
 
             expect(viewAllLink).toHaveAttribute('href', '/downloads');
         });
+
+        it('deep-links status rows to the active-tab qstate filter', async () => {
+            await renderDashboard();
+
+            expect(screen.getByText('Downloading').closest('a')).toHaveAttribute(
+                'href',
+                '/downloads?qstate=Downloading',
+            );
+            expect(screen.getByText('Queued').closest('a')).toHaveAttribute('href', '/downloads?qstate=Queued');
+            expect(screen.getByText('Stalled').closest('a')).toHaveAttribute('href', '/downloads?qstate=Stalled');
+        });
     });
 
     describe('Recent Jobs Widget', () => {
@@ -315,7 +358,7 @@ describe('DashboardPage', () => {
             const widgetSection = screen.getByRole('region', { name: /dashboard widgets/i });
             const jobsWidget = within(widgetSection)
                 .getByRole('heading', { name: 'Recent Jobs' })
-                .closest('[data-component="recent-jobs-widget"]');
+                .closest<HTMLElement>('[data-component="recent-jobs-widget"]');
 
             expect(jobsWidget).toBeInTheDocument();
         });
@@ -323,7 +366,7 @@ describe('DashboardPage', () => {
         it('renders job items from API data', async () => {
             await renderDashboard();
 
-            expect(screen.getByText('Refresh Metadata')).toBeInTheDocument();
+            expect(screen.getByText('Content metadata refresh item')).toBeInTheDocument();
             expect(screen.getByText('Search Missing')).toBeInTheDocument();
             expect(screen.getByText('Sync Plex Library')).toBeInTheDocument();
         });
@@ -347,17 +390,17 @@ describe('DashboardPage', () => {
         it('generates role-aware job item URLs for admin users', async () => {
             await renderDashboard(adminUser);
 
-            const jobLink = screen.getByRole('link', { name: /view refresh metadata job details/i });
+            const jobLink = screen.getByRole('link', { name: /view content metadata refresh item job details/i });
 
-            expect(jobLink).toHaveAttribute('href', '/admin/jobs?job=job-1');
+            expect(jobLink).toHaveAttribute('href', '/admin/jobs?job=11111111-1111-4111-8111-111111111111');
         });
 
         it('generates role-aware job item URLs for non-admin users', async () => {
             await renderDashboard(viewerUser);
 
-            const jobLink = screen.getByRole('link', { name: /view refresh metadata job details/i });
+            const jobLink = screen.getByRole('link', { name: /view content metadata refresh item job details/i });
 
-            expect(jobLink).toHaveAttribute('href', '/my-jobs?job=job-1');
+            expect(jobLink).toHaveAttribute('href', '/my-jobs?job=11111111-1111-4111-8111-111111111111');
         });
     });
 
@@ -368,7 +411,7 @@ describe('DashboardPage', () => {
             const statsSection = screen.getByRole('region', { name: /content overview/i });
             const contentWidget = within(statsSection)
                 .getByRole('heading', { name: 'Content' })
-                .closest('[data-component="content-stats-widget"]');
+                .closest<HTMLElement>('[data-component="content-stats-widget"]');
 
             expect(contentWidget).toBeInTheDocument();
         });
@@ -379,7 +422,7 @@ describe('DashboardPage', () => {
             const statsSection = screen.getByRole('region', { name: /content overview/i });
             const contentWidget = within(statsSection)
                 .getByRole('heading', { name: 'Content' })
-                .closest('[data-component="content-stats-widget"]');
+                .closest<HTMLElement>('[data-component="content-stats-widget"]');
 
             expect(within(contentWidget!).getAllByText('Fulfilled').length).toBeGreaterThanOrEqual(1);
             expect(within(contentWidget!).getAllByText('Missing').length).toBeGreaterThanOrEqual(1);
@@ -393,7 +436,7 @@ describe('DashboardPage', () => {
             const statsSection = screen.getByRole('region', { name: /content overview/i });
             const contentWidget = within(statsSection)
                 .getByRole('heading', { name: 'Content' })
-                .closest('[data-component="content-stats-widget"]');
+                .closest<HTMLElement>('[data-component="content-stats-widget"]');
 
             expect(within(contentWidget!).getByText('Shogun (2024)')).toBeInTheDocument();
             expect(within(contentWidget!).getByText('The Gentlemen')).toBeInTheDocument();
@@ -414,13 +457,13 @@ describe('DashboardPage', () => {
             const statsSection = screen.getByRole('region', { name: /content overview/i });
             const contentWidget = within(statsSection)
                 .getByRole('heading', { name: 'Content' })
-                .closest('[data-component="content-stats-widget"]');
+                .closest<HTMLElement>('[data-component="content-stats-widget"]');
 
             const missingLink = within(contentWidget!).getByRole('link', {
                 name: /view 42 missing items/i,
             });
 
-            expect(missingLink).toHaveAttribute('href', '/library?fulfillment=missing');
+            expect(missingLink).toHaveAttribute('href', '/library/all?fulfillment=missing');
         });
     });
 
@@ -431,7 +474,7 @@ describe('DashboardPage', () => {
             const statsSection = screen.getByRole('region', { name: /content overview/i });
             const upcomingWidget = within(statsSection)
                 .getByRole('heading', { name: 'Upcoming' })
-                .closest('[data-component="upcoming-content-widget"]');
+                .closest<HTMLElement>('[data-component="upcoming-content-widget"]');
 
             expect(upcomingWidget).toBeInTheDocument();
         });
@@ -442,7 +485,7 @@ describe('DashboardPage', () => {
             const statsSection = screen.getByRole('region', { name: /content overview/i });
             const upcomingWidget = within(statsSection)
                 .getByRole('heading', { name: 'Upcoming' })
-                .closest('[data-component="upcoming-content-widget"]');
+                .closest<HTMLElement>('[data-component="upcoming-content-widget"]');
 
             expect(within(upcomingWidget!).getByText('Shogun')).toBeInTheDocument();
             expect(within(upcomingWidget!).getByText('Fallout')).toBeInTheDocument();
@@ -473,7 +516,11 @@ describe('DashboardPage', () => {
 
             render(
                 <QueryClientProvider client={queryClient}>
-                    <AuthProvider initialUser={adminUser} skipSessionInit>
+                    <AuthProvider
+                        initialUser={adminUser}
+                        skipSessionInit
+                        initialPermissions={testEffectivePermissions()}
+                    >
                         <MemoryRouter>
                             <DashboardPage />
                         </MemoryRouter>
@@ -485,7 +532,7 @@ describe('DashboardPage', () => {
             expect(healthSkeletons.length).toBe(3);
 
             const downloadSkeletons = screen.getAllByTestId('download-queue-widget__row--skeleton');
-            expect(downloadSkeletons.length).toBe(3);
+            expect(downloadSkeletons.length).toBe(4);
 
             const jobSkeletons = screen.getAllByTestId('recent-jobs-widget__item--skeleton');
             expect(jobSkeletons.length).toBe(3);
@@ -497,7 +544,11 @@ describe('DashboardPage', () => {
 
             render(
                 <QueryClientProvider client={queryClient}>
-                    <AuthProvider initialUser={adminUser} skipSessionInit>
+                    <AuthProvider
+                        initialUser={adminUser}
+                        skipSessionInit
+                        initialPermissions={testEffectivePermissions()}
+                    >
                         <MemoryRouter>
                             <DashboardPage />
                         </MemoryRouter>
@@ -506,7 +557,6 @@ describe('DashboardPage', () => {
             );
 
             const healthBar = document.querySelector('[data-component="service-health-bar"]')!;
-            expect(within(healthBar as HTMLElement).queryByText('Indexers')).not.toBeInTheDocument();
             expect(within(healthBar as HTMLElement).queryByText('Download Clients')).not.toBeInTheDocument();
             expect(within(healthBar as HTMLElement).queryByText('Media Servers')).not.toBeInTheDocument();
         });

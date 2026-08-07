@@ -1,7 +1,9 @@
 import { useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 
-import { apiGet, apiPost, apiDelete } from '@/lib/api';
+import { apiFetchResponse, apiGet, apiPost, apiDelete } from '@/lib/api';
+import { useInvalidateQueriesOnEvents } from '@/hooks/useInvalidateQueriesOnEvents';
+import { executeJobRequest } from '@/lib/jobActions';
 import { POLLING_INTERVALS } from '@/lib/queryClient';
 import { queryErrorOrNull } from '@/lib/utils';
 
@@ -15,6 +17,8 @@ export interface ApiBackup {
     createdAt: string;
 
     sizeBytes: number;
+
+    kind?: 'Manual' | 'Scheduled' | 'manual' | 'scheduled';
 }
 
 export interface BackupItem {
@@ -29,31 +33,28 @@ export interface BackupItem {
     type: BackupType;
 }
 
-export interface BackupCreateRequest {
+interface BackupCreateRequest {
     name?: string;
 }
 
-export interface BackupCreateResponse {
-    id: string;
-}
+export interface BackupCapabilities {
+    provider: string;
 
-export interface BackupSettings {
-    enabled: boolean;
+    backupRestoreSupported: boolean;
 
-    interval: 'daily' | 'weekly' | 'biweekly' | 'monthly';
+    optimizeSupported: boolean;
 
-    retention: number;
+    lastOptimizedAt?: string | null;
 }
 
 export const backupQueryKeys = {
     all: ['backups'] as const,
+    capabilities: () => ['backups', 'capabilities'] as const,
     list: () => ['backups', 'list'] as const,
-    settings: () => ['backups', 'settings'] as const,
 };
 
-/** Server-generated scheduled backups have names starting with "Scheduled "; everything else is a user-supplied name. */
-function inferBackupType(backup: ApiBackup): BackupType {
-    return backup.name.startsWith('Scheduled ') ? 'scheduled' : 'manual';
+function backupTypeFromKind(kind: ApiBackup['kind']): BackupType {
+    return kind?.toLowerCase() === 'scheduled' ? 'scheduled' : 'manual';
 }
 
 function transformBackup(backup: ApiBackup): BackupItem {
@@ -62,47 +63,73 @@ function transformBackup(backup: ApiBackup): BackupItem {
         name: backup.name,
         createdAt: backup.createdAt,
         sizeBytes: backup.sizeBytes ?? 0,
-        type: inferBackupType(backup),
+        type: backupTypeFromKind(backup.kind),
     };
 }
 
 async function fetchBackups(): Promise<ApiBackup[]> {
-    return apiGet<ApiBackup[]>('/backups');
+    return apiGet<ApiBackup[]>('/database/backups');
 }
 
-async function createBackup(request?: BackupCreateRequest): Promise<BackupCreateResponse> {
-    return apiPost<BackupCreateResponse>('/backups', request);
+async function fetchBackupCapabilities(): Promise<BackupCapabilities> {
+    return apiGet<BackupCapabilities>('/database');
+}
+
+async function createBackup(request?: BackupCreateRequest): Promise<void> {
+    await executeJobRequest({
+        jobType: 'DatabaseBackup',
+        parameters: request?.name ? { name: request.name } : undefined,
+    });
 }
 
 async function deleteBackup(id: string): Promise<void> {
-    return apiDelete(`/backups/${encodeURIComponent(id)}`);
+    return apiDelete(`/database/backups/${encodeURIComponent(id)}`);
 }
 
 async function restoreBackup(id: string): Promise<void> {
-    return apiPost(`/backups/${encodeURIComponent(id)}/restore`);
+    return apiPost(`/database/backups/${encodeURIComponent(id)}/restore`);
+}
+
+async function downloadBackup(id: string): Promise<void> {
+    const response = await apiFetchResponse(`/database/backups/${encodeURIComponent(id)}/download`);
+    const blobUrl = URL.createObjectURL(await response.blob());
+    const anchor = document.createElement('a');
+    anchor.href = blobUrl;
+    anchor.download = `magpie-backup-${id}.db`;
+    anchor.click();
+    URL.revokeObjectURL(blobUrl);
 }
 
 export function useBackups() {
     const queryClient = useQueryClient();
+    useInvalidateQueriesOnEvents(['backup.completed', 'backup.failed', 'backup.deleted'], [backupQueryKeys.list()], {
+        exact: true,
+        owner: 'backups',
+    });
+
+    const capabilitiesQuery = useQuery({
+        queryKey: backupQueryKeys.capabilities(),
+        queryFn: fetchBackupCapabilities,
+        staleTime: POLLING_INTERVALS.slow,
+    });
+
+    const backupRestoreSupported = capabilitiesQuery.data?.backupRestoreSupported !== false;
 
     const backupsQuery = useQuery({
         queryKey: backupQueryKeys.list(),
         queryFn: fetchBackups,
-        refetchInterval: POLLING_INTERVALS.slow,
-        staleTime: POLLING_INTERVALS.slow / 2,
+        enabled: capabilitiesQuery.isSuccess && backupRestoreSupported,
     });
 
     const createMutation = useMutation({
         mutationFn: createBackup,
-        onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: backupQueryKeys.list() });
-        },
+        onSuccess: () => queryClient.invalidateQueries({ queryKey: backupQueryKeys.list() }),
     });
 
     const deleteMutation = useMutation({
         mutationFn: deleteBackup,
         onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: backupQueryKeys.list() });
+            void queryClient.invalidateQueries({ queryKey: backupQueryKeys.list() });
         },
     });
 
@@ -110,12 +137,19 @@ export function useBackups() {
         mutationFn: restoreBackup,
     });
 
+    const downloadMutation = useMutation({
+        mutationFn: downloadBackup,
+    });
+
     const backups: BackupItem[] = useMemo(() => backupsQuery.data?.map(transformBackup) ?? [], [backupsQuery.data]);
 
     return {
         backups,
-        isLoading: backupsQuery.isLoading,
-        error: queryErrorOrNull(backupsQuery),
+        capabilities: capabilitiesQuery.data,
+        backupRestoreSupported,
+        isCapabilityLoading: capabilitiesQuery.isLoading,
+        isLoading: capabilitiesQuery.isLoading || backupsQuery.isLoading,
+        error: queryErrorOrNull(capabilitiesQuery) ?? queryErrorOrNull(backupsQuery),
 
         createBackup: createMutation.mutateAsync,
         isCreating: createMutation.isPending,
@@ -128,6 +162,10 @@ export function useBackups() {
         restoreBackup: restoreMutation.mutateAsync,
         isRestoring: restoreMutation.isPending,
         restoreError: queryErrorOrNull(restoreMutation),
+
+        downloadBackup: downloadMutation.mutateAsync,
+        isDownloading: downloadMutation.isPending,
+        downloadError: queryErrorOrNull(downloadMutation),
 
         refetch: backupsQuery.refetch,
     };

@@ -5,12 +5,12 @@ using Magpie.Models.Filtering;
 namespace Magpie.Models.Data;
 
 /// <summary>
-/// Filter criteria for <see cref="Reference"/>.
+/// The filter criteria for a <see cref="Reference"/>.
 /// </summary>
 public sealed record ReferenceMetadataCriteria
 {
     /// <summary>
-    /// The criteria for <see cref="Reference.Ordinal"/>.
+    /// The criteria on the position in display order.
     /// </summary>
     public CriteriaSet<PropertyCriterion<int>> Ordinal { get; init; } = new();
     /// <inheritdoc cref="Reference.Kind" />

@@ -1,0 +1,36 @@
+@layer components {
+    .extension-page {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-lg);
+        height: 100%;
+        width: 100%;
+        max-width: var(--content-max-width);
+        margin: 0 auto;
+        padding: var(--space-lg);
+    }
+
+    .extension-page > [data-slot-extension] {
+        width: 100%;
+    }
+
+    .extension-page__title {
+        margin: 0;
+        color: var(--text-primary);
+        font-size: var(--text-2xl);
+        font-weight: var(--weight-bold);
+        line-height: var(--leading-tight);
+    }
+
+    @media (max-width: 480px) {
+        .extension-page {
+            padding: var(--space-md);
+        }
+    }
+
+    @media (min-width: 1100px) {
+        .extension-page {
+            padding: var(--space-xl);
+        }
+    }
+}

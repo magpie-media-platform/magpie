@@ -8,6 +8,12 @@ vi.mock('@/lib/api', () => ({
     apiPost: vi.fn(),
     apiPatch: vi.fn(),
     apiDelete: vi.fn(),
+    buildUrl: (path: string, params?: Record<string, string | undefined>) => {
+        const query = new URLSearchParams(
+            Object.entries(params ?? {}).filter((entry): entry is [string, string] => entry[1] !== undefined),
+        ).toString();
+        return query ? `${path}?${query}` : path;
+    },
     isApiError: vi.fn((value: unknown) => {
         return typeof value === 'object' && value !== null && 'status' in value && 'message' in value;
     }),
@@ -20,6 +26,7 @@ const mockApiTierLists: ApiQualityTierList[] = [
     {
         id: 'qtl-1',
         name: 'HD Standard',
+        mimeTypes: ['video/*'],
         upgradeAllowed: true,
         createdAt: '2024-01-01T00:00:00Z',
         qualityTierRanks: [
@@ -36,8 +43,8 @@ const mockApiTierLists: ApiQualityTierList[] = [
                         and: [
                             {
                                 items: {
-                                    source: { operator: 0, value: 'Bluray' },
-                                    resolution: { operator: 0, value: '1080p' },
+                                    source: { operator: 'Equals', value: 'Bluray' },
+                                    resolution: { operator: 'Equals', value: '1080p' },
                                 },
                             },
                         ],
@@ -58,8 +65,8 @@ const mockApiTierLists: ApiQualityTierList[] = [
                         and: [
                             {
                                 items: {
-                                    source: { operator: 0, value: 'HDTV' },
-                                    resolution: { operator: 0, value: '1080p' },
+                                    source: { operator: 'Equals', value: 'HDTV' },
+                                    resolution: { operator: 'Equals', value: '1080p' },
                                 },
                             },
                         ],
@@ -72,6 +79,7 @@ const mockApiTierLists: ApiQualityTierList[] = [
     {
         id: 'qtl-2',
         name: '4K Ultra HD',
+        mimeTypes: ['video/*'],
         upgradeAllowed: true,
         createdAt: '2024-01-02T00:00:00Z',
         qualityTierRanks: [
@@ -88,9 +96,9 @@ const mockApiTierLists: ApiQualityTierList[] = [
                         and: [
                             {
                                 items: {
-                                    source: { operator: 0, value: 'Bluray' },
-                                    resolution: { operator: 0, value: '2160p' },
-                                    hdr: { operator: 0, value: 'true' },
+                                    source: { operator: 'Equals', value: 'Bluray' },
+                                    resolution: { operator: 'Equals', value: '2160p' },
+                                    hdr: { operator: 'Equals', value: 'true' },
                                 },
                             },
                         ],
@@ -103,6 +111,7 @@ const mockApiTierLists: ApiQualityTierList[] = [
     {
         id: 'qtl-3',
         name: 'Any Quality',
+        mimeTypes: [],
         upgradeAllowed: false,
         createdAt: '2024-01-03T00:00:00Z',
         qualityTierRanks: [],
@@ -188,6 +197,29 @@ describe('useQualityTierLists', () => {
             expect(mockApiGet).toHaveBeenCalledWith('/quality-tier-lists?tag=movies');
         });
 
+        it('should request MIME-compatible lists for a content hierarchy level', async () => {
+            mockApiGet.mockResolvedValue([mockApiTierLists[0], mockApiTierLists[2]]);
+
+            const { result } = renderHook(() => useQualityTierLists({ contentType: 'movies', level: 'movie' }), {
+                wrapper: createWrapper(),
+            });
+
+            await waitFor(() => {
+                expect(result.current.isLoading).toBe(false);
+            });
+
+            expect(mockApiGet).toHaveBeenCalledWith('/quality-tier-lists?contentType=movies&level=movie');
+        });
+
+        it('should not request unscoped lists while the target content type is unknown', () => {
+            const { result } = renderHook(() => useQualityTierLists({ enabled: false }), {
+                wrapper: createWrapper(),
+            });
+
+            expect(result.current.isLoading).toBe(false);
+            expect(mockApiGet).not.toHaveBeenCalled();
+        });
+
         it('should return empty array on error', async () => {
             mockApiGet.mockRejectedValue(new Error('Network error'));
 
@@ -225,6 +257,7 @@ describe('useQualityTierLists', () => {
             mockApiPost.mockResolvedValue({
                 id: 'qtl-4',
                 name: 'New Tier List',
+                mimeTypes: ['audio/*'],
                 upgradeAllowed: true,
                 createdAt: '2024-01-04T00:00:00Z',
                 qualityTierRanks: [],
@@ -241,12 +274,14 @@ describe('useQualityTierLists', () => {
             await act(async () => {
                 await result.current.createTierList({
                     name: 'New Tier List',
+                    mimeTypes: ['audio/*'],
                     upgradeAllowed: true,
                 });
             });
 
             expect(mockApiPost).toHaveBeenCalledWith('/quality-tier-lists', {
                 name: 'New Tier List',
+                mimeTypes: ['audio/*'],
                 upgradeAllowed: true,
             });
         });
@@ -269,8 +304,9 @@ describe('useQualityTierLists', () => {
             });
 
             act(() => {
-                result.current.createTierList({
+                void result.current.createTierList({
                     name: 'New Tier List',
+                    mimeTypes: [],
                 });
             });
 
@@ -282,6 +318,7 @@ describe('useQualityTierLists', () => {
                 resolvePost!({
                     id: 'qtl-4',
                     name: 'New Tier List',
+                    mimeTypes: [],
                     upgradeAllowed: false,
                     createdAt: '2024-01-04T00:00:00Z',
                     qualityTierRanks: [],
@@ -359,7 +396,7 @@ describe('useQualityTierLists', () => {
             });
 
             act(() => {
-                result.current.updateTierList('qtl-1', {
+                void result.current.updateTierList('qtl-1', {
                     name: { value: 'Updated' },
                 });
             });
@@ -484,7 +521,7 @@ describe('useQualityTierLists', () => {
             });
 
             act(() => {
-                result.current.deleteTierList('qtl-1');
+                void result.current.deleteTierList('qtl-1');
             });
 
             await waitFor(() => {
@@ -516,6 +553,7 @@ describe('useQualityTierLists', () => {
             const tierList = result.current.tierLists[0];
             expect(tierList.id).toBe('qtl-1');
             expect(tierList.name).toBe('HD Standard');
+            expect(tierList.mimeTypes).toEqual(['video/*']);
             expect(tierList.upgradeAllowed).toBe(true);
             expect(tierList.createdAt).toBe('2024-01-01T00:00:00Z');
             expect(tierList.qualityTierRanks).toHaveLength(2);

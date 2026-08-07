@@ -1,0 +1,956 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
+
+using Magpie.Abstractions.Repositories;
+using Magpie.Core;
+using Magpie.Models;
+using Magpie.Models.Api;
+using Magpie.Models.Arguments;
+using Magpie.Models.Data;
+using Magpie.Models.Enums;
+using Magpie.Models.Patch;
+using Magpie.Sdk.Configuration;
+using Magpie.Sdk.Integrations;
+using Magpie.Sdk.Services;
+
+using Microsoft.Extensions.Logging.Abstractions;
+
+using Moq;
+
+using NUnit.Framework;
+
+namespace Magpie.Test.Core.Configuration;
+
+[TestFixture]
+public class SettingsServiceValidationTests
+{
+    private ISettingsService _subject = null!;
+
+    [SetUp]
+    public void SetUp()
+    {
+        _subject = new SettingsService(
+            new Mock<ISettingsRepository>().Object,
+            [],
+            [],
+            NullLogger<SettingsService>.Instance);
+    }
+
+    [Test]
+    public async Task ValidateAsync_AllValid_ReturnsValidResultWithNoIssues()
+    {
+        // Arrange
+        var schema = new List<SettingSchemaDefinition> {
+            new() { Key = "host", Type = DataType.String, Required = true },
+            new() { Key = "port", Type = DataType.Number },
+            new() { Key = "useSsl", Type = DataType.Boolean },
+            new() { Key = "since", Type = DataType.Date },
+            new() { Key = "protocol", Type = DataType.String, Options = ["http", "https"] }
+        };
+        var settings = new Dictionary<string, string>
+        {
+            ["host"] = "example.test",
+            ["port"] = "8080",
+            ["useSsl"] = "true",
+            ["since"] = "2025-01-01T00:00:00Z",
+            ["protocol"] = "https"
+        };
+
+        // Act
+        var result = await _subject
+            .ValidateAsync(schema, settings, new object(), default)
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.IsValid, Is.True);
+            Assert.That(result.Issues, Is.Empty);
+        }
+    }
+
+    [Test]
+    public async Task ValidateAsync_MissingRequired_ReportsKeyIssue()
+    {
+        // Arrange
+        var schema = new List<SettingSchemaDefinition> {
+            new() { Key = "host", Type = DataType.String, Required = true, DisplayName = "Host" }
+        };
+        var settings = new Dictionary<string, string>();
+
+        // Act
+        var result = await _subject
+            .ValidateAsync(schema, settings, new object(), default)
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.IsValid, Is.False);
+            Assert.That(result.Issues, Has.Count.EqualTo(1));
+            Assert.That(result.Issues[0].Key, Is.EqualTo("host"));
+            Assert.That(result.Issues[0].Message, Is.EqualTo("Host is required."));
+        }
+    }
+
+    [Test]
+    public async Task ValidateAsync_RequiredPresentButWhitespace_ReportsKeyIssue()
+    {
+        // Arrange
+        var schema = new List<SettingSchemaDefinition> {
+            new() { Key = "apiKey", Type = DataType.String, Required = true }
+        };
+        var settings = new Dictionary<string, string> { ["apiKey"] = "   " };
+
+        // Act
+        var result = await _subject
+            .ValidateAsync(schema, settings, new object(), default)
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.IsValid, Is.False);
+            Assert.That(result.Issues, Has.Count.EqualTo(1));
+            Assert.That(result.Issues[0].Key, Is.EqualTo("apiKey"));
+        }
+    }
+
+    [Test]
+    public async Task ValidateAsync_RequiredMissing_FallsBackToKeyWhenDisplayNameMissing()
+    {
+        // Arrange
+        var schema = new List<SettingSchemaDefinition> {
+            new() { Key = "apiKey", Type = DataType.String, Required = true }
+        };
+        var settings = new Dictionary<string, string>();
+
+        // Act
+        var result = await _subject
+            .ValidateAsync(schema, settings, new object(), default)
+            .ConfigureAwait(false);
+
+        // Assert
+        Assert.That(result.Issues[0].Message, Is.EqualTo("apiKey is required."));
+    }
+
+    [Test]
+    public async Task ValidateAsync_NumberWithNonNumericValue_ReportsTypeIssue()
+    {
+        // Arrange
+        var schema = new List<SettingSchemaDefinition> {
+            new() { Key = "port", Type = DataType.Number, DisplayName = "Port" }
+        };
+        var settings = new Dictionary<string, string> { ["port"] = "abc" };
+
+        // Act
+        var result = await _subject
+            .ValidateAsync(schema, settings, new object(), default)
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.IsValid, Is.False);
+            Assert.That(result.Issues, Has.Count.EqualTo(1));
+            Assert.That(result.Issues[0].Key, Is.EqualTo("port"));
+            Assert.That(result.Issues[0].Message, Is.EqualTo("Port must be a number."));
+        }
+    }
+
+    [Test]
+    public async Task ValidateAsync_BooleanWithBadValue_ReportsTypeIssue()
+    {
+        // Arrange
+        var schema = new List<SettingSchemaDefinition> {
+            new() { Key = "useSsl", Type = DataType.Boolean, DisplayName = "Use SSL" }
+        };
+        var settings = new Dictionary<string, string> { ["useSsl"] = "yes" };
+
+        // Act
+        var result = await _subject
+            .ValidateAsync(schema, settings, new object(), default)
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.IsValid, Is.False);
+            Assert.That(result.Issues[0].Message, Is.EqualTo("Use SSL must be true or false."));
+        }
+    }
+
+    [TestCase("true")]
+    [TestCase("TRUE")]
+    [TestCase("false")]
+    [TestCase("False")]
+    [TestCase("0")]
+    [TestCase("1")]
+    public async Task ValidateAsync_BooleanWithAcceptableValues_PassesValidation(string value)
+    {
+        // Arrange
+        var schema = new List<SettingSchemaDefinition> {
+            new() { Key = "useSsl", Type = DataType.Boolean }
+        };
+        var settings = new Dictionary<string, string> { ["useSsl"] = value };
+
+        // Act
+        var result = await _subject
+            .ValidateAsync(schema, settings, new object(), default)
+            .ConfigureAwait(false);
+
+        // Assert
+        Assert.That(result.IsValid, Is.True);
+    }
+
+    [Test]
+    public async Task ValidateAsync_DateWithBadValue_ReportsTypeIssue()
+    {
+        // Arrange
+        var schema = new List<SettingSchemaDefinition> {
+            new() { Key = "since", Type = DataType.Date, DisplayName = "Since" }
+        };
+        var settings = new Dictionary<string, string> { ["since"] = "not-a-date" };
+
+        // Act
+        var result = await _subject
+            .ValidateAsync(schema, settings, new object(), default)
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.IsValid, Is.False);
+            Assert.That(result.Issues[0].Message, Is.EqualTo("Since must be a valid date."));
+        }
+    }
+
+    [Test]
+    public async Task ValidateAsync_OptionsMismatch_ReportsIssueWithJoinedOptions()
+    {
+        // Arrange
+        var schema = new List<SettingSchemaDefinition> {
+            new()
+            {
+                Key = "protocol",
+                Type = DataType.String,
+                DisplayName = "Protocol",
+                Options = ["http", "https"]
+            }
+        };
+        var settings = new Dictionary<string, string> { ["protocol"] = "ftp" };
+
+        // Act
+        var result = await _subject
+            .ValidateAsync(schema, settings, new object(), default)
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.IsValid, Is.False);
+            Assert.That(result.Issues[0].Message, Is.EqualTo("Protocol must be one of: http, https."));
+        }
+    }
+
+    [Test]
+    public async Task ValidateAsync_OptionsMatch_IsCaseInsensitive()
+    {
+        // Arrange
+        var schema = new List<SettingSchemaDefinition> {
+            new() { Key = "protocol", Type = DataType.String, Options = ["http", "https"] }
+        };
+        var settings = new Dictionary<string, string> { ["protocol"] = "HTTPS" };
+
+        // Act
+        var result = await _subject
+            .ValidateAsync(schema, settings, new object(), default)
+            .ConfigureAwait(false);
+
+        // Assert
+        Assert.That(result.IsValid, Is.True);
+    }
+
+    [Test]
+    public async Task ValidateAsync_KeysNotInSchema_AreSilentlyAllowed()
+    {
+        // Arrange
+        var schema = new List<SettingSchemaDefinition> {
+            new() { Key = "host", Type = DataType.String }
+        };
+        var settings = new Dictionary<string, string>
+        {
+            ["host"] = "localhost",
+            ["undeclared"] = "value"
+        };
+
+        // Act
+        var result = await _subject
+            .ValidateAsync(schema, settings, new object(), default)
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.IsValid, Is.True);
+            Assert.That(result.Issues, Is.Empty);
+        }
+    }
+
+    [Test]
+    public async Task ValidateAsync_OptionalEmptyValue_SkipsTypeAndOptionsChecks()
+    {
+        // Arrange
+        var schema = new List<SettingSchemaDefinition> {
+            new() { Key = "port", Type = DataType.Number },
+            new() { Key = "protocol", Type = DataType.String, Options = ["http", "https"] }
+        };
+        var settings = new Dictionary<string, string>
+        {
+            ["port"] = "",
+            ["protocol"] = ""
+        };
+
+        // Act
+        var result = await _subject
+            .ValidateAsync(schema, settings, new object(), default)
+            .ConfigureAwait(false);
+
+        // Assert
+        Assert.That(result.IsValid, Is.True);
+    }
+
+    [Test]
+    public async Task ValidateAsync_KeyMatching_IsCaseInsensitive()
+    {
+        // Arrange
+        var schema = new List<SettingSchemaDefinition> {
+            new() { Key = "apiKey", Type = DataType.String, Required = true }
+        };
+        var settings = new Dictionary<string, string> { ["ApiKey"] = "x" };
+
+        // Act
+        var result = await _subject
+            .ValidateAsync(schema, settings, new object(), default)
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.IsValid, Is.True);
+            Assert.That(result.Issues, Is.Empty);
+        }
+    }
+
+    [Test]
+    public async Task ValidateAsync_KeyMatching_TypeChecksRespectCaseInsensitivity()
+    {
+        // Arrange
+        var schema = new List<SettingSchemaDefinition> {
+            new() { Key = "port", Type = DataType.Number, DisplayName = "Port" }
+        };
+        var settings = new Dictionary<string, string> { ["PORT"] = "abc" };
+
+        // Act
+        var result = await _subject
+            .ValidateAsync(schema, settings, new object(), default)
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.IsValid, Is.False);
+            Assert.That(result.Issues, Has.Count.EqualTo(1));
+            Assert.That(result.Issues[0].Key, Is.EqualTo("port"));
+        }
+    }
+
+    [Test]
+    public async Task ValidateAsync_MultipleIssues_AreAllCollected()
+    {
+        // Arrange
+        var schema = new List<SettingSchemaDefinition> {
+            new() { Key = "host", Type = DataType.String, Required = true, DisplayName = "Host" },
+            new() { Key = "port", Type = DataType.Number, DisplayName = "Port" }
+        };
+        var settings = new Dictionary<string, string> { ["port"] = "abc" };
+
+        // Act
+        var result = await _subject
+            .ValidateAsync(schema, settings, new object(), default)
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.IsValid, Is.False);
+            Assert.That(result.Issues, Has.Count.EqualTo(2));
+            Assert.That(
+                result.Issues,
+                Has.Some.With.Property(nameof(IntegrationSettingsValidationIssue.Key)).EqualTo("host"));
+            Assert.That(
+                result.Issues,
+                Has.Some.With.Property(nameof(IntegrationSettingsValidationIssue.Key)).EqualTo("port"));
+        }
+    }
+
+    [Test]
+    public async Task ValidateAsync_MappingsListEmptyArray_PassesAsTyped()
+    {
+        // Arrange
+        var schema = new List<SettingSchemaDefinition> {
+            new() { Key = "mappings", Type = DataType.MappingsList, DisplayName = "Mappings" }
+        };
+        var settings = new Dictionary<string, string> { ["mappings"] = "[]" };
+
+        // Act
+        var result = await _subject
+            .ValidateAsync(schema, settings, new object(), default)
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.IsValid, Is.True);
+            Assert.That(result.Issues, Is.Empty);
+        }
+    }
+
+    [Test]
+    public async Task ValidateAsync_MappingsListNotJsonArray_ReportsTypeMismatch()
+    {
+        // Arrange
+        var schema = new List<SettingSchemaDefinition> {
+            new() { Key = "mappings", Type = DataType.MappingsList, DisplayName = "Mappings" }
+        };
+        var settings = new Dictionary<string, string> { ["mappings"] = "not-json" };
+
+        // Act
+        var result = await _subject
+            .ValidateAsync(schema, settings, new object(), default)
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.IsValid, Is.False);
+            Assert.That(result.Issues, Has.Count.EqualTo(1));
+            Assert.That(result.Issues[0].Key, Is.EqualTo("mappings"));
+            Assert.That(result.Issues[0].Message, Is.EqualTo("Mappings must be a JSON array of mapping rows."));
+        }
+    }
+
+    [Test]
+    public async Task ValidateAsync_MappingsListRowMissingRequiredColumn_ReportsRowScopedIssue()
+    {
+        // Arrange
+        var schema = new List<SettingSchemaDefinition> {
+            new()
+            {
+                Key = "mappings",
+                Type = DataType.MappingsList,
+                DisplayName = "Mappings",
+                RowSchema =
+                [
+                    new() { Key = "rootFolderPath", Type = DataType.String, DisplayName = "Root", Required = true },
+                    new() { Key = "contentType", Type = DataType.String, DisplayName = "Type", Required = true },
+                    new() { Key = "serverLibraryId", Type = DataType.String, DisplayName = "Library", Required = true }
+                ]
+            }
+        };
+        var settings = new Dictionary<string, string>
+        {
+            ["mappings"] =
+                "[{\"rootFolderPath\":\"/type-a\",\"contentType\":\"type-a\",\"serverLibraryId\":\"\"}]"
+        };
+
+        // Act
+        var result = await _subject
+            .ValidateAsync(schema, settings, new object(), default)
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.IsValid, Is.False);
+            Assert.That(result.Issues, Has.Count.EqualTo(1));
+            Assert.That(result.Issues[0].Key, Is.EqualTo("mappings[0].serverLibraryId"));
+            Assert.That(result.Issues[0].Message, Is.EqualTo("Mappings row 1: Library is required."));
+        }
+    }
+
+    [Test]
+    public async Task ValidateAsync_MappingsListAllRequiredColumnsPresent_Passes()
+    {
+        // Arrange
+        var schema = new List<SettingSchemaDefinition> {
+            new()
+            {
+                Key = "mappings",
+                Type = DataType.MappingsList,
+                RowSchema =
+                [
+                    new() { Key = "rootFolderPath", Type = DataType.String, Required = true },
+                    new() { Key = "contentType", Type = DataType.String, Required = true },
+                    new() { Key = "serverLibraryId", Type = DataType.String, Required = true }
+                ]
+            }
+        };
+        var settings = new Dictionary<string, string>
+        {
+            ["mappings"] = "[{\"rootFolderPath\":\"/m\",\"contentType\":\"type-a\",\"serverLibraryId\":\"abc\"}]"
+        };
+
+        // Act
+        var result = await _subject
+            .ValidateAsync(schema, settings, new object(), default)
+            .ConfigureAwait(false);
+
+        // Assert
+        Assert.That(result.IsValid, Is.True);
+    }
+
+    [Test]
+    public async Task ValidateAsync_CombinesBaselineAndExtensionIssues_WhenIntegrationValidatorReturnsIssue()
+    {
+        // Arrange
+        var schema = new List<SettingSchemaDefinition> {
+            new() { Key = "host", Type = DataType.String, DisplayName = "Host", Required = true }
+        };
+        var settings = new Dictionary<string, string>();
+        var extensionResult = new IntegrationSettingsValidationResult
+        {
+            IsValid = false,
+            Issues = [new("apiKey", "apiKey is rejected.")]
+        };
+        var integration = new Mock<IValidatesIntegrationSettings>(MockBehavior.Strict);
+        integration.Setup(i => i.ValidateSettingsAsync(settings, default))
+            .ReturnsAsync(extensionResult);
+
+        // Act
+        var result = await _subject
+            .ValidateAsync(schema, settings, integration.Object, default)
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.IsValid, Is.False);
+            Assert.That(result.Issues, Has.Count.EqualTo(2));
+            Assert.That(
+                result.Issues,
+                Has.Some.With.Property(nameof(IntegrationSettingsValidationIssue.Key)).EqualTo("host"));
+            Assert.That(
+                result.Issues,
+                Has.Some.With.Property(nameof(IntegrationSettingsValidationIssue.Key)).EqualTo("apiKey"));
+        }
+    }
+
+    [Test]
+    public async Task ListGroupsAsync_UsesLoadedExtensionId_WhenLookingUpSettings()
+    {
+        // Arrange
+        var definitionId = Guid.NewGuid();
+        var loadedId = Guid.NewGuid();
+        var groupName = "provider";
+        var provider = new Mock<IExtensionSettingsSchemaProvider>();
+        provider.Setup(value => value.GetSettingsGroups())
+            .Returns(
+            [
+                new ExtensionSettingsGroupDefinition
+                {
+                    ExtensionId = definitionId,
+                    Name = groupName,
+                    SettingsSchema = [new SettingSchemaDefinition { Key = "apiKey", Type = DataType.String }]
+                }
+            ]);
+        var settingsRepository = new Mock<ISettingsRepository>();
+        settingsRepository.Setup(value => value.ListAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+        settingsRepository.Setup(value => value.GetByIdAsync(
+            It.Is<SettingsGroupLookupKey>(key => key.ExtensionId == loadedId && key.Name == groupName),
+            It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() =>
+            {
+                var storedGroup = new SettingsGroup
+                {
+                    Id = Guid.NewGuid(),
+                    ExtensionId = loadedId,
+                    Name = groupName
+                };
+                storedGroup.Settings.Add(new Setting { Key = "apiKey", Value = "secret" });
+                return storedGroup;
+            });
+        var extensionRepository = new Mock<IExtensionRepository>();
+        extensionRepository.Setup(value => value.ListAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+            [
+                new Extension
+                {
+                    Id = loadedId,
+                    Version = "1.0.0",
+                    Name = "Provider",
+                    FilePath = "provider.dll",
+                    AssemblyName = provider.Object.GetType().Assembly.GetName().Name!
+                }
+            ]);
+        var subject = new SettingsService(
+            settingsRepository.Object,
+            [provider.Object],
+            [],
+            NullLogger<SettingsService>.Instance,
+            extensionRepository.Object);
+
+        // Act
+        var result = await subject.ListGroupsAsync().ConfigureAwait(false);
+        var detail = result.Single(value => value.Group.Name == groupName);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(detail.Group.ExtensionId, Is.EqualTo(loadedId));
+            Assert.That(detail.Group.Settings.Single().Value, Is.EqualTo("secret"));
+        }
+
+        settingsRepository.Verify(
+            value => value.GetByIdAsync(
+                new SettingsGroupLookupKey(definitionId, groupName),
+                It.IsAny<CancellationToken>()),
+            Times.Never());
+    }
+
+    [Test]
+    public async Task GetExtensionGroupAsync_UsesLoadedExtensionId_WhenLookingUpSettings()
+    {
+        // Arrange
+        var definitionId = Guid.NewGuid();
+        var loadedId = Guid.NewGuid();
+        var groupName = "provider";
+        var provider = new Mock<IExtensionSettingsSchemaProvider>();
+        provider.Setup(value => value.GetSettingsGroups())
+            .Returns(
+            [
+                new ExtensionSettingsGroupDefinition
+                {
+                    ExtensionId = definitionId,
+                    Name = groupName,
+                    SettingsSchema = [new SettingSchemaDefinition { Key = "apiKey", Type = DataType.String }]
+                }
+            ]);
+        var settingsRepository = new Mock<ISettingsRepository>();
+        settingsRepository.Setup(value => value.GetByIdAsync(
+            It.Is<SettingsGroupLookupKey>(key => key.ExtensionId == loadedId && key.Name == groupName),
+            It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() =>
+            {
+                var storedGroup = new SettingsGroup
+                {
+                    Id = Guid.NewGuid(),
+                    ExtensionId = loadedId,
+                    Name = groupName
+                };
+                storedGroup.Settings.Add(new Setting { Key = "apiKey", Value = "secret" });
+                return storedGroup;
+            });
+        var extensionRepository = new Mock<IExtensionRepository>();
+        extensionRepository.Setup(value => value.ListAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+            [
+                new Extension
+                {
+                    Id = loadedId,
+                    Version = "1.0.0",
+                    Name = "Provider",
+                    FilePath = "provider.dll",
+                    AssemblyName = provider.Object.GetType().Assembly.GetName().Name!
+                }
+            ]);
+        var subject = new SettingsService(
+            settingsRepository.Object,
+            [provider.Object],
+            [],
+            NullLogger<SettingsService>.Instance,
+            extensionRepository.Object);
+
+        // Act
+        var result = await subject.GetExtensionGroupAsync(loadedId, groupName).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Is.Not.Null);
+            Assert.That(result!.Group.ExtensionId, Is.EqualTo(loadedId));
+            Assert.That(result.Group.Settings.Single().Value, Is.EqualTo("secret"));
+        }
+
+        settingsRepository.Verify(
+            value => value.GetByIdAsync(
+                new SettingsGroupLookupKey(definitionId, groupName),
+                It.IsAny<CancellationToken>()),
+            Times.Never());
+    }
+
+    [Test]
+    public async Task PatchExtensionGroupAsync_UsesLoadedExtensionId_WhenWritingSettings()
+    {
+        // Arrange
+        var definitionId = Guid.NewGuid();
+        var loadedId = Guid.NewGuid();
+        var groupName = "provider";
+        var provider = new Mock<IExtensionSettingsSchemaProvider>();
+        provider.Setup(value => value.GetSettingsGroups())
+            .Returns(
+            [
+                new ExtensionSettingsGroupDefinition
+                {
+                    ExtensionId = definitionId,
+                    Name = groupName,
+                    SettingsSchema = [new SettingSchemaDefinition { Key = "apiKey", Type = DataType.String }]
+                }
+            ]);
+        var settingsRepository = new Mock<ISettingsRepository>();
+        settingsRepository
+            .Setup(value => value.GetByIdAsync(
+                It.Is<SettingsGroupLookupKey>(key => key.ExtensionId == loadedId && key.Name == groupName),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new SettingsGroup { Id = Guid.NewGuid(), ExtensionId = loadedId, Name = groupName });
+        settingsRepository.Setup(value => value.PatchAsync(
+            It.IsAny<SettingsGroupPatch>(),
+            It.IsAny<Guid>(),
+            It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        var extensionRepository = new Mock<IExtensionRepository>();
+        extensionRepository.Setup(value => value.ListAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+            [
+                new Extension
+                {
+                    Id = loadedId,
+                    Version = "1.0.0",
+                    Name = "Provider",
+                    FilePath = "provider.dll",
+                    AssemblyName = provider.Object.GetType().Assembly.GetName().Name!
+                }
+            ]);
+        var subject = new SettingsService(
+            settingsRepository.Object,
+            [provider.Object],
+            [],
+            NullLogger<SettingsService>.Instance,
+            extensionRepository.Object);
+
+        // Act
+        var result = await subject.PatchExtensionGroupAsync(
+            loadedId,
+            groupName,
+            new SettingsGroupPatch
+            {
+                Settings = new DictionaryPatch<string, string, string>
+                {
+                    Add = new Dictionary<string, string> { ["apiKey"] = "secret" }
+                }
+            },
+            Guid.NewGuid()).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(result, Is.True);
+        settingsRepository.Verify(
+            value => value.PatchAsync(
+                It.Is<SettingsGroupPatch>(patch => patch.ExtensionId == loadedId && patch.Name == groupName),
+                It.IsAny<Guid>(),
+                It.IsAny<CancellationToken>()),
+            Times.Once());
+        settingsRepository.Verify(
+            value => value.GetByIdAsync(
+                new SettingsGroupLookupKey(definitionId, groupName),
+                It.IsAny<CancellationToken>()),
+            Times.Never());
+    }
+
+    [Test]
+    public async Task TestGroupAsync_UsesDefinitionExtensionId_WhenSelectingConfigurationTester()
+    {
+        // Arrange
+        var definitionId = Guid.NewGuid();
+        var loadedId = Guid.NewGuid();
+        var groupName = "provider";
+        var provider = new Mock<IExtensionSettingsSchemaProvider>();
+        provider.Setup(value => value.GetSettingsGroups())
+            .Returns(
+            [
+                new ExtensionSettingsGroupDefinition
+                {
+                    ExtensionId = definitionId,
+                    Name = groupName,
+                    SettingsSchema = [new SettingSchemaDefinition { Key = "apiKey", Type = DataType.String }]
+                }
+            ]);
+        var tester = new Mock<IExtensionConfigurationTester>();
+        tester.SetupGet(value => value.ExtensionId).Returns(definitionId);
+        tester.SetupGet(value => value.SettingsGroupName).Returns(groupName);
+        tester.Setup(value => value.TestConfigurationAsync(
+            It.IsAny<IReadOnlyDictionary<string, string>>(),
+            It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ConfigurationTestResult { Success = true, Message = "ok" });
+        var extensionRepository = new Mock<IExtensionRepository>();
+        extensionRepository.Setup(value => value.ListAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+            [
+                new Extension
+                {
+                    Id = loadedId,
+                    Version = "1.0.0",
+                    Name = "Provider",
+                    FilePath = "provider.dll",
+                    AssemblyName = provider.Object.GetType().Assembly.GetName().Name!
+                }
+            ]);
+        var subject = new SettingsService(
+            new Mock<ISettingsRepository>().Object,
+            [provider.Object],
+            [tester.Object],
+            NullLogger<SettingsService>.Instance,
+            extensionRepository.Object);
+
+        // Act
+        var result = await subject.TestGroupAsync(
+            loadedId,
+            groupName,
+            new Dictionary<string, string> { ["apiKey"] = "secret" }).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(result!.Success, Is.True);
+        tester.Verify(
+            value => value.TestConfigurationAsync(
+                It.IsAny<IReadOnlyDictionary<string, string>>(),
+                It.IsAny<CancellationToken>()),
+            Times.Once());
+    }
+
+    [TestCase(true)]
+    [TestCase(false)]
+    public async Task ListGroupsAsync_SetsCanTest_FromConfigurationTesterRegistration(bool hasTester)
+    {
+        // Arrange
+        var definitionId = Guid.NewGuid();
+        var loadedId = Guid.NewGuid();
+        var groupName = "provider";
+        var provider = new Mock<IExtensionSettingsSchemaProvider>();
+        provider.Setup(value => value.GetSettingsGroups())
+            .Returns(
+            [
+                new ExtensionSettingsGroupDefinition
+                {
+                    ExtensionId = definitionId,
+                    Name = groupName,
+                    SettingsSchema = [new SettingSchemaDefinition { Key = "apiKey", Type = DataType.String }]
+                }
+            ]);
+        var settingsRepository = new Mock<ISettingsRepository>();
+        settingsRepository.Setup(value => value.ListAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+        settingsRepository.Setup(value => value.GetByIdAsync(
+            It.IsAny<SettingsGroupLookupKey>(),
+            It.IsAny<CancellationToken>()))
+            .ReturnsAsync((SettingsGroup?)null);
+        var extensionRepository = new Mock<IExtensionRepository>();
+        extensionRepository.Setup(value => value.ListAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+            [
+                new Extension
+                {
+                    Id = loadedId,
+                    Version = "1.0.0",
+                    Name = "Provider",
+                    FilePath = "provider.dll",
+                    AssemblyName = provider.Object.GetType().Assembly.GetName().Name!
+                }
+            ]);
+        IExtensionConfigurationTester[] testers = [];
+        if (hasTester)
+        {
+            var tester = new Mock<IExtensionConfigurationTester>();
+            tester.SetupGet(value => value.ExtensionId).Returns(definitionId);
+            tester.SetupGet(value => value.SettingsGroupName).Returns(groupName);
+            testers = [tester.Object];
+        }
+
+        var subject = new SettingsService(
+            settingsRepository.Object,
+            [provider.Object],
+            testers,
+            NullLogger<SettingsService>.Instance,
+            extensionRepository.Object);
+
+        // Act
+        var result = await subject.ListGroupsAsync().ConfigureAwait(false);
+        var detail = result.Single(value => value.Group.Name == groupName);
+
+        // Assert
+        Assert.That(detail.CanTest, Is.EqualTo(hasTester));
+    }
+
+    [TestCase(true)]
+    [TestCase(false)]
+    public async Task GetExtensionGroupAsync_SetsCanTest_FromConfigurationTesterRegistration(bool hasTester)
+    {
+        // Arrange
+        var definitionId = Guid.NewGuid();
+        var loadedId = Guid.NewGuid();
+        var groupName = "provider";
+        var provider = new Mock<IExtensionSettingsSchemaProvider>();
+        provider.Setup(value => value.GetSettingsGroups())
+            .Returns(
+            [
+                new ExtensionSettingsGroupDefinition
+                {
+                    ExtensionId = definitionId,
+                    Name = groupName,
+                    SettingsSchema = [new SettingSchemaDefinition { Key = "apiKey", Type = DataType.String }]
+                }
+            ]);
+        var settingsRepository = new Mock<ISettingsRepository>();
+        settingsRepository.Setup(value => value.GetByIdAsync(
+            It.IsAny<SettingsGroupLookupKey>(),
+            It.IsAny<CancellationToken>()))
+            .ReturnsAsync((SettingsGroup?)null);
+        var extensionRepository = new Mock<IExtensionRepository>();
+        extensionRepository.Setup(value => value.ListAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+            [
+                new Extension
+                {
+                    Id = loadedId,
+                    Version = "1.0.0",
+                    Name = "Provider",
+                    FilePath = "provider.dll",
+                    AssemblyName = provider.Object.GetType().Assembly.GetName().Name!
+                }
+            ]);
+        IExtensionConfigurationTester[] testers = [];
+        if (hasTester)
+        {
+            var tester = new Mock<IExtensionConfigurationTester>();
+            tester.SetupGet(value => value.ExtensionId).Returns(definitionId);
+            tester.SetupGet(value => value.SettingsGroupName).Returns(groupName);
+            testers = [tester.Object];
+        }
+
+        var subject = new SettingsService(
+            settingsRepository.Object,
+            [provider.Object],
+            testers,
+            NullLogger<SettingsService>.Instance,
+            extensionRepository.Object);
+
+        // Act
+        var detail = await subject.GetExtensionGroupAsync(loadedId, groupName).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(detail, Is.Not.Null);
+        Assert.That(detail!.CanTest, Is.EqualTo(hasTester));
+    }
+}

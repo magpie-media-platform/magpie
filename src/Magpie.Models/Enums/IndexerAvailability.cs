@@ -6,7 +6,7 @@ namespace Magpie.Models.Enums;
 public enum IndexerAvailability
 {
     /// <summary>
-    /// The availability is unknown.
+    /// The availability is not known.
     /// </summary>
     Unknown = 0,
 
@@ -16,12 +16,12 @@ public enum IndexerAvailability
     Public,
 
     /// <summary>
-    /// The indexer requires registration or an invite.
+    /// The indexer needs a registration or an invite.
     /// </summary>
     Private,
 
     /// <summary>
-    /// The indexer is partially open, with some restrictions.
+    /// The indexer is partly open, with some restrictions.
     /// </summary>
     SemiPrivate
 }

@@ -1,6 +1,6 @@
-import { useCallback, useState, type FormEvent, type ReactNode } from 'react';
-import { Navigate, useLocation, useNavigate, type Location } from 'react-router-dom';
-import { SignIn } from '@phosphor-icons/react';
+import { useCallback, useState, type SubmitEvent, type ReactNode } from 'react';
+import { Navigate, useLocation, useNavigate } from 'react-router-dom';
+import { SignInIcon } from '@phosphor-icons/react';
 
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
@@ -13,8 +13,16 @@ import { RouteLoadingState } from '@/router/RouteLoadingState';
 
 import './LoginPage.css';
 
+interface LoginFromLocation {
+    pathname?: string;
+
+    search?: string;
+
+    hash?: string;
+}
+
 interface LoginLocationState {
-    from?: Location;
+    from?: LoginFromLocation;
 }
 
 function getErrorMessage(error: unknown): string {
@@ -32,6 +40,11 @@ function getErrorMessage(error: unknown): string {
     return 'Sign in failed. Please try again.';
 }
 
+function getRedirectTarget(from?: LoginFromLocation): string {
+    const pathname = from?.pathname || '/';
+    return `${pathname}${from?.search ?? ''}${from?.hash ?? ''}`;
+}
+
 export function LoginPage(): ReactNode {
     useDocumentTitle('Sign In');
 
@@ -40,7 +53,7 @@ export function LoginPage(): ReactNode {
     const location = useLocation();
 
     const state = (location.state as LoginLocationState | null) ?? null;
-    const fromPath = state?.from?.pathname ?? '/';
+    const fromPath = getRedirectTarget(state?.from);
 
     const [username, setUsername] = useState('');
     const [password, setPassword] = useState('');
@@ -48,7 +61,7 @@ export function LoginPage(): ReactNode {
     const [isSubmitting, setIsSubmitting] = useState(false);
 
     const handleSubmit = useCallback(
-        async (event: FormEvent<HTMLFormElement>) => {
+        async (event: SubmitEvent<HTMLFormElement>) => {
             event.preventDefault();
 
             if (!username.trim() || !password) {
@@ -60,7 +73,7 @@ export function LoginPage(): ReactNode {
             setIsSubmitting(true);
             try {
                 await login(username, password);
-                navigate(fromPath, { replace: true });
+                void navigate(fromPath, { replace: true });
             } catch (err) {
                 setError(getErrorMessage(err));
                 setIsSubmitting(false);
@@ -137,8 +150,9 @@ export function LoginPage(): ReactNode {
                         loading={isSubmitting}
                         className="login-page__submit"
                         data-action="sign-in"
+                        aria-label="Sign in"
                     >
-                        <SignIn weight="bold" aria-hidden="true" />
+                        <SignInIcon weight="bold" aria-hidden="true" />
                         Sign in
                     </Button>
                 </form>

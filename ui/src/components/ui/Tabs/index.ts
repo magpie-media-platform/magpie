@@ -8,3 +8,7 @@ export {
     type TabsTriggerProps,
     type TabsContentProps,
 } from './Tabs';
+
+export { DetailTabTrigger, type DetailTabTriggerProps } from './DetailTabTrigger';
+
+export { DetailTabsList, type DetailTabsListProps } from './DetailTabsList';

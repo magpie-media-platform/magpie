@@ -1,0 +1,20 @@
+@layer components {
+    .delete-confirm-dialog__toggle {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: var(--space-md);
+        margin: var(--space-md) var(--space-lg) 0;
+        padding: var(--space-sm) var(--space-md);
+        background-color: var(--bg-primary);
+        border: 1px solid var(--border-default);
+        border-radius: var(--radius-md);
+    }
+
+    .delete-confirm-dialog__toggle-label {
+        font-size: var(--text-sm);
+        color: var(--text-secondary);
+        line-height: var(--leading-normal);
+        cursor: pointer;
+    }
+}

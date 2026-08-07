@@ -1,28 +1,27 @@
 using System;
 
-using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Models.Patch;
 
 namespace Magpie.Models.Arguments;
 
 /// <summary>
-/// Patch for a user account.
+/// The partial-update arguments for a user.
 /// </summary>
-public record UserPatch
+public sealed record UserPatch
 {
     /// <summary>
-    /// The <see cref="User.Id"/> of the item to patch.
+    /// The id of the user to patch.
     /// </summary>
     public Guid Id { get; init; }
 
     /// <summary>
-    /// The <see cref="User.Enabled"/> to patch.
+    /// The patch for whether the user is enabled.
     /// </summary>
     public ScalarPatch<bool>? Enabled { get; init; }
 
     /// <summary>
-    /// The <see cref="User.Role"/> to patch.
+    /// The patch for the role of the user.
     /// </summary>
     public ScalarPatch<Role>? Role { get; init; }
 }

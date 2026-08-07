@@ -121,11 +121,27 @@
     }
 
     @media (max-width: 639px) {
+        [data-page]:has(.quick-actions-button)
+            .page-header__actions
+            :is(
+                [data-action='create-backup'],
+                [data-action='add-client'],
+                [data-action='add-server'],
+                [data-action='add-filter'],
+                [data-action='add-tier-list'],
+                [data-action='add-wishlist'],
+                [data-action='add-folder'],
+                [data-action='add-rule'],
+                [data-action='add-mapping']
+            ) {
+            display: none;
+        }
+
         .quick-actions-button__fab {
             bottom: calc(var(--space-lg) + var(--bottom-nav-height) + env(safe-area-inset-bottom, 0px));
         }
 
-        :has(> .quick-actions-button) .pull-to-refresh__content::after {
+        :has(.quick-actions-button) .pull-to-refresh__content::after {
             content: '';
             display: block;
             height: calc(56px + var(--space-lg) * 2);

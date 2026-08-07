@@ -1,4 +1,5 @@
 import { buildQueryKeys, useCrudResource } from './useCrudResource';
+import { useInvalidateQueriesOnEvents } from './useInvalidateQueriesOnEvents';
 import { healthStatusLabels, healthStatusVariants } from '@/types/healthStatus';
 import type { HealthStatusValue } from '@/types/healthStatus';
 
@@ -22,7 +23,11 @@ export interface ApiDownloadClient {
 
     lastChecked?: string | null;
 
-    settings: Record<string, string>;
+    cleanupDeleteFiles: boolean;
+
+    keepFailedOnClient: boolean;
+
+    settings?: Record<string, string>;
 
     createdAt: string;
 
@@ -33,9 +38,11 @@ export interface ApiDownloadClient {
     modifiedByUserId?: string | null;
 }
 
-export interface DownloadClientPatch {
+interface DownloadClientPatch {
     name?: { value: string };
     enabled?: { value: boolean };
+    cleanupDeleteFiles?: { value: boolean };
+    keepFailedOnClient?: { value: boolean };
     settings?: {
         add?: Record<string, string>;
         remove?: string[];
@@ -47,12 +54,16 @@ export interface DownloadClientPatch {
     };
 }
 
-export interface DownloadClientCreate {
+interface DownloadClientCreate {
     providerType: string;
 
     name: string;
 
     enabled?: boolean;
+
+    cleanupDeleteFiles?: boolean;
+
+    keepFailedOnClient?: boolean;
 
     settings?: Record<string, string>;
 }
@@ -60,8 +71,22 @@ export interface DownloadClientCreate {
 export const downloadClientQueryKeys = buildQueryKeys('download-clients');
 
 export function useDownloadClients() {
+    useInvalidateQueriesOnEvents(
+        ['integration.health.changed'],
+        [[...downloadClientQueryKeys.list(), '/download-clients']],
+        {
+            context: { 'integration.type': 'downloadClient' },
+            debounceMs: 150,
+            exact: true,
+            maxWaitMs: 600,
+            owner: 'download-client-settings',
+        },
+    );
     const resource = useCrudResource<ApiDownloadClient, DownloadClientCreate, DownloadClientPatch>(
-        { basePath: '/download-clients' },
+        {
+            basePath: '/download-clients',
+            eventNames: ['downloadClient.created', 'downloadClient.updated', 'downloadClient.deleted'],
+        },
         downloadClientQueryKeys,
     );
 

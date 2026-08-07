@@ -1,125 +1,113 @@
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 
-using Magpie.Abstractions.Api;
-using Magpie.Abstractions.Repositories;
-using Magpie.Abstractions.Security;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
+using Magpie.Sdk.Api;
+using Magpie.Sdk.Services;
 
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
 
 namespace Magpie.Api.EndpointGroups;
 
-internal sealed class QualityTiersEndpointGroup(
-    IQualityTierRepository qualityTierRepository) : IApiEndpointGroup
+[MagpieCommandGroup("quality-tiers", "quality-tiers", "Manage quality tiers")]
+internal sealed class QualityTiersEndpointGroup : IApiEndpointGroup
 {
     public string Name => "quality-tiers";
 
     public void MapEndpoints(IEndpointRouteBuilder builder)
     {
-        builder.MapGet("", GetAllQualityTiers)
-            .WithName(nameof(GetAllQualityTiers))
-            .Produces<QualityTier[]>()
+        builder.MapGet("", GetQualityTiersAsync)
+            .WithName(nameof(GetQualityTiersAsync))
+            .Produces<IReadOnlyList<QualityTier>>()
             .RequireViewer();
 
-        builder.MapGet("{id:guid}", GetQualityTierById)
-            .WithName(nameof(GetQualityTierById))
+        builder.MapPost("", CreateQualityTierAsync)
+            .WithName(nameof(CreateQualityTierAsync))
+            .Produces<QualityTier>(StatusCodes.Status201Created)
+            .ProducesProblem(StatusCodes.Status400BadRequest)
+            .RequireAdmin();
+
+        builder.MapGet("{id:guid}", GetQualityTierAsync)
+            .WithName(nameof(GetQualityTierAsync))
             .Produces<QualityTier>()
             .ProducesProblem(StatusCodes.Status404NotFound)
             .RequireViewer();
 
-        builder.MapPost("", CreateQualityTier)
-            .WithName(nameof(CreateQualityTier))
-            .Produces<QualityTier>(StatusCodes.Status201Created)
-            .ProducesProblem(StatusCodes.Status400BadRequest)
-            .RequireManager();
-
-        builder.MapPatch("{id:guid}", PatchQualityTier)
-            .WithName(nameof(PatchQualityTier))
+        builder.MapPatch("{id:guid}", PatchQualityTierAsync)
+            .WithName(nameof(PatchQualityTierAsync))
             .Produces(StatusCodes.Status204NoContent)
             .ProducesProblem(StatusCodes.Status404NotFound)
-            .ProducesProblem(StatusCodes.Status400BadRequest)
-            .RequireManager();
+            .RequireAdmin();
 
-        builder.MapDelete("{id:guid}", DeleteQualityTier)
-            .WithName(nameof(DeleteQualityTier))
+        builder.MapDelete("{id:guid}", DeleteQualityTierAsync)
+            .WithName(nameof(DeleteQualityTierAsync))
             .Produces(StatusCodes.Status204NoContent)
             .ProducesProblem(StatusCodes.Status404NotFound)
-            .RequireManager();
+            .RequireAdmin();
     }
 
-    private async Task<IResult> GetAllQualityTiers(CancellationToken cancellationToken)
-    {
-        var qualityTiers = await qualityTierRepository.ListAllAsync(cancellationToken)
-            .ConfigureAwait(false);
-        return Results.Ok(qualityTiers);
-    }
-
-    private async Task<IResult> GetQualityTierById(Guid id, CancellationToken cancellationToken)
-    {
-        var qualityTier = await qualityTierRepository.GetByIdAsync(id, cancellationToken)
-            .ConfigureAwait(false);
-
-        return qualityTier is null
-            ? Results.NotFound()
-            : Results.Ok(qualityTier);
-    }
-
-    private async Task<IResult> CreateQualityTier(
-        HttpContext httpContext,
-        QualityTier request,
+    [MagpieCommand("list", "GET", "", "List quality tiers")]
+    internal async Task<IResult> GetQualityTiersAsync(
+        [FromServices] IQualityService qualityService,
         CancellationToken cancellationToken)
     {
-        var currentUserId = httpContext.User.GetUserId();
+        var tiers = await qualityService.ListTiersAsync(cancellationToken).ConfigureAwait(false);
 
-        var qualityTier = request with
-        {
-            Id = Guid.NewGuid(),
-            CreatedAt = DateTime.UtcNow,
-            CreatedByUserId = currentUserId,
-            ModifiedAt = null,
-            ModifiedByUserId = null
-        };
+        return Results.Ok(tiers);
+    }
 
-        var created = await qualityTierRepository.CreateAsync(qualityTier, currentUserId, cancellationToken)
-            .ConfigureAwait(false);
+    [MagpieCommand("create", "POST", "", "Create a quality tier")]
+    internal async Task<IResult> CreateQualityTierAsync(
+        [FromServices] IQualityService qualityService,
+        AuthenticatedUser user,
+        [FromBody] QualityTier request,
+        CancellationToken cancellationToken)
+    {
+        var created = await qualityService.CreateTierAsync(request, user.Id, cancellationToken).ConfigureAwait(false);
 
         return Results.Created($"api/{Name}/{created.Id}", created);
     }
 
-    private async Task<IResult> PatchQualityTier(
-        HttpContext httpContext,
+    [MagpieCommand("get", "GET", "{id:guid}", "Show a quality tier")]
+    internal async Task<IResult> GetQualityTierAsync(
+        [FromServices] IQualityService qualityService,
         Guid id,
-        QualityTierPatch request,
         CancellationToken cancellationToken)
     {
-        var currentUserId = httpContext.User.GetUserId();
-        var patch = request with { Id = id };
+        var tier = await qualityService.GetTierAsync(id, cancellationToken).ConfigureAwait(false);
 
-        var updated = await qualityTierRepository.PatchAsync(patch, currentUserId, cancellationToken)
-            .ConfigureAwait(false);
-
-        return updated
-            ? Results.NoContent()
-            : Results.NotFound();
+        return tier is null ? Results.NotFound() : Results.Ok(tier);
     }
 
-    private async Task<IResult> DeleteQualityTier(
-        HttpContext httpContext,
+    [MagpieCommand("patch", "PATCH", "{id:guid}", "Update fields on a quality tier")]
+    internal async Task<IResult> PatchQualityTierAsync(
+        [FromServices] IQualityService qualityService,
+        AuthenticatedUser user,
+        Guid id,
+        [FromBody] QualityTierPatch patch,
+        CancellationToken cancellationToken)
+    {
+        var updated = await qualityService.PatchTierAsync(id, patch, user.Id, cancellationToken)
+            .ConfigureAwait(false);
+
+        return updated ? Results.NoContent() : Results.NotFound();
+    }
+
+    [MagpieCommand("delete", "DELETE", "{id:guid}", "Delete a quality tier")]
+    internal async Task<IResult> DeleteQualityTierAsync(
+        [FromServices] IQualityService qualityService,
+        AuthenticatedUser user,
         Guid id,
         CancellationToken cancellationToken)
     {
-        var currentUserId = httpContext.User.GetUserId();
+        var deleted = await qualityService.DeleteTierAsync(id, user.Id, cancellationToken).ConfigureAwait(false);
 
-        var deleted = await qualityTierRepository.DeleteAsync(id, currentUserId, cancellationToken)
-            .ConfigureAwait(false);
-
-        return deleted
-            ? Results.NoContent()
-            : Results.NotFound();
+        return deleted ? Results.NoContent() : Results.NotFound();
     }
 }

@@ -1,7 +1,8 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 
-import { apiGet, apiPost, apiPatch, apiDelete } from '@/lib/api';
+import { apiGet, apiPost, apiPatch, apiDelete, buildUrl } from '@/lib/api';
 import { POLLING_INTERVALS } from '@/lib/queryClient';
+import { useInvalidateQueriesOnEvents } from './useInvalidateQueriesOnEvents';
 import { queryErrorOrNull } from '@/lib/utils';
 
 export interface StringPropertyCriterion {
@@ -10,7 +11,25 @@ export interface StringPropertyCriterion {
     values?: string[];
 }
 
-export type CriteriaValueOperator = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15;
+export type CriteriaValueOperator =
+    | 'Equals'
+    | 'NotEquals'
+    | 'IsNull'
+    | 'IsNotNull'
+    | 'GreaterThan'
+    | 'GreaterThanOrEqual'
+    | 'LessThan'
+    | 'LessThanOrEqual'
+    | 'In'
+    | 'NotIn'
+    | 'ContainsString'
+    | 'NotContainsString'
+    | 'StartsWithString'
+    | 'NotStartsWithString'
+    | 'EndsWithString'
+    | 'NotEndsWithString'
+    | 'ContainsWord'
+    | 'Regex';
 
 export interface DictionaryCriteria {
     items?: Record<string, StringPropertyCriterion>;
@@ -20,12 +39,26 @@ export interface QualityTierCriteria {
     and?: DictionaryCriteria[];
 }
 
-export interface ApiQualityTier {
+type RuleKind = 'Accept' | 'Exclude';
+
+export interface ApiQualityTierRule {
+    id: string;
+
+    name?: string | null;
+
+    kind: RuleKind;
+
+    criteria: QualityTierCriteria;
+}
+
+interface ApiQualityTier {
     id: string;
 
     name: string;
 
     criteria: QualityTierCriteria;
+
+    rules?: ApiQualityTierRule[];
 
     createdAt: string;
 
@@ -61,6 +94,8 @@ export interface ApiQualityTierList {
 
     name: string;
 
+    mimeTypes: string[];
+
     upgradeAllowed: boolean;
 
     createdAt: string;
@@ -72,9 +107,11 @@ export interface ApiQualityTierList {
     modifiedByUserId?: string | null;
 
     qualityTierRanks: ApiQualityTierListRank[];
+
+    rules?: ApiQualityTierRule[];
 }
 
-export interface QualityTierListRankCreate {
+interface QualityTierListRankCreate {
     qualityTierId: string;
 
     ordinal: number;
@@ -90,8 +127,10 @@ export interface QualityTierListRankPatch {
     isCutoff?: { value: boolean };
 }
 
-export interface QualityTierListCreate {
+interface QualityTierListCreate {
     name: string;
+
+    mimeTypes?: string[];
 
     upgradeAllowed?: boolean;
 
@@ -100,39 +139,62 @@ export interface QualityTierListCreate {
 
 export interface QualityTierListPatch {
     name?: { value: string };
+    mimeTypes?: { value: string[] };
     upgradeAllowed?: { value: boolean };
     qualityTierRanks?: {
         add?: QualityTierListRankCreate[];
         remove?: string[];
         update?: QualityTierListRankPatch[];
     };
+    rules?: { value: ApiQualityTierRule[] };
     tags?: {
         add?: string[];
         remove?: string[];
     };
 }
 
-export interface QualityTierCreate {
+interface QualityTierCreate {
     name: string;
 
     criteria: QualityTierCriteria;
+
+    rules?: ApiQualityTierRule[];
 }
 
-export interface QualityTierPatch {
+interface QualityTierPatch {
     name?: { value: string };
     criteria?: { value: QualityTierCriteria };
+    rules?: { value: ApiQualityTierRule[] };
 }
 
-export const qualityTierListQueryKeys = {
+const qualityTierListQueryKeys = {
     all: ['quality-tier-lists'] as const,
-    list: (tag?: string) =>
-        tag ? (['quality-tier-lists', 'list', { tag }] as const) : (['quality-tier-lists', 'list'] as const),
+    list: (options?: QualityTierListQueryOptions) =>
+        options?.tag || options?.contentType || options?.level
+            ? ([
+                  'quality-tier-lists',
+                  'list',
+                  { tag: options.tag, contentType: options.contentType, level: options.level },
+              ] as const)
+            : (['quality-tier-lists', 'list'] as const),
     detail: (id: string) => ['quality-tier-lists', 'detail', id] as const,
 };
 
-async function fetchQualityTierLists(tag?: string): Promise<ApiQualityTierList[]> {
-    const path = tag ? `/quality-tier-lists?tag=${encodeURIComponent(tag)}` : '/quality-tier-lists';
-    return apiGet<ApiQualityTierList[]>(path);
+interface QualityTierListQueryOptions {
+    tag?: string;
+    contentType?: string;
+    level?: string;
+    enabled?: boolean;
+}
+
+async function fetchQualityTierLists(options?: QualityTierListQueryOptions): Promise<ApiQualityTierList[]> {
+    return apiGet<ApiQualityTierList[]>(
+        buildUrl('/quality-tier-lists', {
+            tag: options?.tag,
+            contentType: options?.contentType,
+            level: options?.level,
+        }),
+    );
 }
 
 async function fetchQualityTierListById(id: string): Promise<ApiQualityTierList> {
@@ -163,35 +225,38 @@ async function deleteQualityTier(id: string): Promise<void> {
     return apiDelete(`/quality-tiers/${id}`);
 }
 
-export function useQualityTierLists(options?: { tag?: string }) {
+export function useQualityTierLists(options?: QualityTierListQueryOptions) {
+    useInvalidateQueriesOnEvents(
+        ['qualityTierList.created', 'qualityTierList.updated', 'qualityTierList.deleted'],
+        [qualityTierListQueryKeys.list(options)],
+        { exact: true, owner: 'quality-tier-lists' },
+    );
     const queryClient = useQueryClient();
-    const tag = options?.tag;
-
     const tierListsQuery = useQuery({
-        queryKey: qualityTierListQueryKeys.list(tag),
-        queryFn: () => fetchQualityTierLists(tag),
-        refetchInterval: POLLING_INTERVALS.normal,
+        queryKey: qualityTierListQueryKeys.list(options),
+        queryFn: () => fetchQualityTierLists(options),
+        enabled: options?.enabled ?? true,
         staleTime: POLLING_INTERVALS.normal / 2,
     });
 
     const createMutation = useMutation({
         mutationFn: createQualityTierList,
         onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: qualityTierListQueryKeys.all });
+            void queryClient.invalidateQueries({ queryKey: qualityTierListQueryKeys.all });
         },
     });
 
     const patchMutation = useMutation({
         mutationFn: ({ id, patch }: { id: string; patch: QualityTierListPatch }) => patchQualityTierList(id, patch),
         onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: qualityTierListQueryKeys.all });
+            void queryClient.invalidateQueries({ queryKey: qualityTierListQueryKeys.all });
         },
     });
 
     const deleteMutation = useMutation({
         mutationFn: deleteQualityTierList,
         onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: qualityTierListQueryKeys.all });
+            void queryClient.invalidateQueries({ queryKey: qualityTierListQueryKeys.all });
         },
     });
 
@@ -220,6 +285,11 @@ export function useQualityTierLists(options?: { tag?: string }) {
 }
 
 export function useQualityTierList(id: string | undefined) {
+    useInvalidateQueriesOnEvents(
+        ['qualityTierList.created', 'qualityTierList.updated', 'qualityTierList.deleted'],
+        [qualityTierListQueryKeys.detail(id ?? '')],
+        { entityIds: id ? [id] : [], exact: true, owner: 'quality-tier-list-detail' },
+    );
     return useQuery({
         queryKey: qualityTierListQueryKeys.detail(id ?? ''),
         queryFn: () => fetchQualityTierListById(id!),
@@ -232,7 +302,7 @@ export function useQualityTiers() {
     const queryClient = useQueryClient();
 
     const invalidateAll = () => {
-        queryClient.invalidateQueries({ queryKey: qualityTierListQueryKeys.all });
+        void queryClient.invalidateQueries({ queryKey: qualityTierListQueryKeys.all });
     };
 
     const createMutation = useMutation({

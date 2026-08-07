@@ -1,0 +1,125 @@
+@layer components {
+    .nuget-feeds {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-md);
+    }
+
+    .nuget-feeds__header {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: var(--space-md);
+    }
+
+    .nuget-feeds__heading {
+        min-width: 0;
+    }
+
+    .nuget-feeds__title {
+        margin: 0;
+        font-size: var(--text-base);
+        font-weight: var(--weight-semibold);
+        color: var(--text-primary);
+    }
+
+    .nuget-feeds__description {
+        margin: var(--space-2xs) 0 0;
+        font-size: var(--text-xs);
+        line-height: var(--leading-relaxed);
+        color: var(--text-muted);
+    }
+
+    .nuget-feeds__loading {
+        display: flex;
+        align-items: center;
+        gap: var(--space-sm);
+        padding: var(--space-lg);
+        color: var(--text-muted);
+        font-size: var(--text-sm);
+    }
+
+    .nuget-feeds__spinner {
+        animation: spin var(--duration-spinner) linear infinite;
+    }
+
+    .nuget-feeds__list {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-sm);
+    }
+
+    .nuget-feeds__card {
+        display: flex;
+        align-items: center;
+        gap: var(--space-md);
+        padding: var(--space-md);
+        background-color: var(--bg-secondary);
+        border: 1px solid var(--border-default);
+        border-radius: var(--radius-md);
+        transition: border-color var(--duration-fast) var(--easing-default);
+
+        &:hover {
+            border-color: var(--border-accent);
+        }
+    }
+
+    .nuget-feeds__card--disabled {
+        opacity: var(--opacity-muted);
+    }
+
+    .nuget-feeds__card-info {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-2xs);
+        flex: 1;
+        min-width: 0;
+    }
+
+    .nuget-feeds__card-title-row {
+        display: flex;
+        align-items: center;
+        gap: var(--space-sm);
+        min-width: 0;
+    }
+
+    .nuget-feeds__card-name {
+        font-size: var(--text-base);
+        font-weight: var(--weight-semibold);
+        color: var(--text-primary);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .nuget-feeds__card-url {
+        font-size: var(--text-xs);
+        font-family: var(--font-mono);
+        color: var(--text-muted);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .nuget-feeds__card-toggle {
+        flex-shrink: 0;
+    }
+
+    .nuget-feeds__card-actions {
+        flex-shrink: 0;
+    }
+
+    @media (max-width: 480px) {
+        .nuget-feeds__header {
+            flex-direction: column;
+
+            & .button {
+                width: 100%;
+            }
+        }
+
+        .nuget-feeds__card {
+            flex-wrap: wrap;
+        }
+    }
+}

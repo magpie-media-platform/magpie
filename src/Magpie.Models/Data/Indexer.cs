@@ -11,32 +11,32 @@ namespace Magpie.Models.Data;
 public record Indexer
 {
     /// <summary>
-    /// The indexer id.
+    /// The unique id of the indexer.
     /// </summary>
     public Guid Id { get; set; }
 
     /// <summary>
-    /// The feed the indexer was synchronized from, if applicable.
+    /// The id of the feed.
     /// </summary>
     public Guid? FeedId { get; set; }
 
     /// <summary>
-    /// The extension that defines the indexer provider.
+    /// The id of the extension that supplies the indexer.
     /// </summary>
     public Guid? ExtensionId { get; set; }
 
     /// <summary>
-    /// The indexer provider type.
+    /// The name of the provider type.
     /// </summary>
     public required string ProviderType { get; set; }
 
     /// <summary>
-    /// The display name.
+    /// The display name of the indexer.
     /// </summary>
     public required string Name { get; set; }
 
     /// <summary>
-    /// A description of the indexer.
+    /// The description of the indexer.
     /// </summary>
     public string? Description { get; set; }
 
@@ -46,45 +46,52 @@ public record Indexer
     public IndexerAvailability Availability { get; set; }
 
     /// <summary>
-    /// A list of categories the indexer supports.
+    /// The categories of the indexer.
     /// </summary>
-    /// <remarks>
-    /// The categories are stored as serialized JSON
-    /// </remarks>
     public List<string> Categories { get; set; } = [];
 
     /// <summary>
-    /// A list of languages the indexer supports.
+    /// The language codes of the indexer.
     /// </summary>
-    /// <remarks>
-    /// The languages are stored as serialized JSON
-    /// </remarks>
     public List<string> Languages { get; set; } = [];
 
     /// <summary>
-    /// When the record was created.
+    /// The content types that the indexer supports.
+    /// </summary>
+    public List<string> SupportedContentTypes { get; set; } = [];
+
+    /// <summary>
+    /// The type of the indexer definition.
+    /// </summary>
+    public string? DefinitionType { get; set; }
+
+    /// <summary>
+    /// The schema data of the indexer definition.
+    /// </summary>
+    public string? SchemaData { get; set; }
+
+    /// <summary>
+    /// The UTC time the record was created.
     /// </summary>
     public DateTime CreatedAt { get; set; }
 
     /// <summary>
-    /// The id of the user that created the record.
+    /// The id of the user who created the record.
     /// </summary>
     public Guid? CreatedByUserId { get; set; }
 
     /// <summary>
-    /// When the record was last modified.
+    /// The UTC time the record was last modified.
     /// </summary>
     public DateTime? ModifiedAt { get; set; }
 
     /// <summary>
-    /// The id of the user that last modified the record.
+    /// The id of the user who last modified the record.
     /// </summary>
     public Guid? ModifiedByUserId { get; set; }
 
     /// <summary>
-    /// Configured connections to the indexer.
+    /// The connections to the indexer.
     /// </summary>
     public ICollection<IndexerConnection> Connections { get; } = [];
-
 }
-

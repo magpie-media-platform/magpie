@@ -41,6 +41,7 @@
 
     .criteria-editor__row {
         display: flex;
+        flex-wrap: wrap;
         align-items: center;
         gap: var(--space-xs);
         padding: var(--space-sm);
@@ -69,20 +70,25 @@
         flex-shrink: 0;
     }
 
-    .criteria-editor__field-select.select-trigger {
+    .criteria-editor__field {
         width: 120px;
-        min-width: 0;
-        flex-shrink: 0;
+        min-width: 7rem;
+    }
+
+    .criteria-editor__field .input-container {
+        width: 100%;
     }
 
     .criteria-editor__operator-select.select-trigger {
-        width: 72px;
-        min-width: 0;
-        flex-shrink: 0;
+        width: 120px;
+        min-width: 7rem;
     }
 
-    .criteria-editor__operator-select .criteria-editor__operator-label {
-        display: none;
+    .criteria-editor__operator-value {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        min-width: 0;
     }
 
     .criteria-editor__operator-item {
@@ -108,51 +114,10 @@
         min-width: 80px;
     }
 
-    .criteria-editor__remove-btn {
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        width: 28px;
-        height: 28px;
-        padding: 0;
-        background: none;
-        border: 1px solid transparent;
-        border-radius: var(--radius-sm);
+    .criteria-editor__remove-btn:disabled:hover {
+        background-color: transparent;
+        border-color: transparent;
         color: var(--text-muted);
-        font-size: var(--text-sm);
-        cursor: pointer;
-        flex-shrink: 0;
-        transition:
-            background-color var(--duration-fast) var(--easing-default),
-            border-color var(--duration-fast) var(--easing-default),
-            color var(--duration-fast) var(--easing-default);
-
-        &:hover {
-            background-color: color-mix(in srgb, var(--status-unhealthy) 10%, transparent);
-            border-color: var(--status-unhealthy);
-            color: var(--status-unhealthy);
-        }
-
-        &:focus-visible {
-            outline: var(--focus-ring-width) solid var(--focus-ring-color);
-            outline-offset: var(--focus-ring-offset);
-        }
-
-        &:disabled {
-            opacity: var(--opacity-disabled);
-            cursor: not-allowed;
-
-            &:hover {
-                background-color: transparent;
-                border-color: transparent;
-                color: var(--text-muted);
-            }
-        }
-
-        @media (pointer: coarse) {
-            width: var(--touch-target-min);
-            height: var(--touch-target-min);
-        }
     }
 
     .criteria-editor__help {
@@ -164,8 +129,10 @@
 
     @media (max-width: 600px) {
         .criteria-editor__row {
+            position: relative;
             flex-wrap: wrap;
             gap: var(--space-sm);
+            padding-left: calc(var(--space-sm) + var(--icon-inline-md) + var(--space-sm));
         }
 
         .criteria-editor__row-number {
@@ -174,12 +141,7 @@
             left: var(--space-sm);
         }
 
-        .criteria-editor__row {
-            position: relative;
-            padding-left: calc(var(--space-sm) + var(--icon-inline-md) + var(--space-sm));
-        }
-
-        .criteria-editor__field-select {
+        .criteria-editor__field {
             width: calc(50% - var(--space-xs) / 2);
         }
 
@@ -200,7 +162,7 @@
     }
 
     @media (max-width: 400px) {
-        .criteria-editor__field-select,
+        .criteria-editor__field,
         .criteria-editor__operator-select {
             width: 100%;
         }

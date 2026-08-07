@@ -1,7 +1,10 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+
 import { act, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
-import { LiveAnnouncerProvider, useLiveAnnouncer } from './LiveAnnouncer';
+import { LiveAnnouncerProvider, useLiveAnnouncer } from './index';
 
 function TestAnnouncer() {
     const { announce } = useLiveAnnouncer();
@@ -184,6 +187,22 @@ describe('LiveAnnouncer', () => {
 
         const regions = document.querySelectorAll('.live-announcer');
         expect(regions.length).toBe(2);
+    });
+
+    it('anchors hidden regions to the viewport origin so they cannot extend the document', () => {
+        render(
+            <LiveAnnouncerProvider>
+                <div>Content</div>
+            </LiveAnnouncerProvider>,
+        );
+
+        const regions = document.querySelectorAll('.live-announcer');
+        expect(regions.length).toBe(2);
+
+        const css = readFileSync(resolve(process.cwd(), 'src/components/ui/LiveAnnouncer/LiveAnnouncer.css'), 'utf8');
+        expect(css).toContain('position: fixed;');
+        expect(css).toContain('inset: 0 auto auto 0;');
+        expect(css).toContain('overflow: hidden;');
     });
 });
 

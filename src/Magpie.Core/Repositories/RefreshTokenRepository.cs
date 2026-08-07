@@ -14,51 +14,54 @@ using Microsoft.Extensions.Logging;
 
 namespace Magpie.Core.Repositories;
 
-/// <summary>
-/// Repository for managing refresh tokens.
-/// </summary>
-public sealed class RefreshTokenRepository(
+internal sealed class RefreshTokenRepository(
     MagpieDbContext context,
     IAuditRecordRepository auditRecordRepository,
     ITransactionManager transactionManager,
-    ILogger<RefreshTokenRepository> logger) : IRefreshTokenRepository
+    ILogger<RefreshTokenRepository> logger,
+    TimeProvider? timeProvider = null) : IRefreshTokenRepository
 {
-    /// <inheritdoc />
+    private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
+
     public async Task<RefreshToken> CreateAsync(RefreshToken token, CancellationToken cancellationToken = default)
     {
         try
         {
-            return await transactionManager.ExecuteWithTransactionAsync(async _ =>
-            {
-                var now = DateTime.UtcNow;
-                token.CreatedAt = now;
-
-                context.RefreshTokens.Add(token);
-                await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
-
-                await auditRecordRepository.CreateAsync(new()
+            return await transactionManager.ExecuteWithTransactionAsync(
+                async _ =>
                 {
-                    Category = AuditCategories.Security,
-                    Operation = "Create",
-                    EntityId = token.Id.ToString(),
-                    ParentEntityId = token.UserId.ToString(),
-                    EntityType = nameof(RefreshToken),
-                    Detail = $"Created refresh token for user {token.UserId}",
-                    Timestamp = now,
-                    UserId = token.UserId
-                }, cancellationToken).ConfigureAwait(false);
+                    var now = _time.GetUtcNow().UtcDateTime;
+                    token.CreatedAt = now;
 
-                return token;
-            }, cancellationToken);
+                    context.RefreshTokens.Add(token);
+                    await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+
+                    await auditRecordRepository.CreateAsync(
+                        new()
+                        {
+                            Category = AuditCategories.Security,
+                            Operation = "Create",
+                            EntityId = token.Id.ToString(),
+                            ParentEntityId = token.UserId.ToString(),
+                            EntityType = nameof(RefreshToken),
+                            Detail = $"Created refresh token for user {token.UserId}",
+                            Timestamp = now,
+                            UserId = token.UserId
+                        },
+                        cancellationToken).ConfigureAwait(false);
+
+                    return token;
+                },
+                cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Error creating refresh token for user {UserId}", token.UserId);
+            logger.LogError(ex, "The refresh token repository failed to create a refresh token for user " +
+                "{UserId}.", token.UserId);
             throw;
         }
     }
 
-    /// <inheritdoc />
     public async Task<RefreshToken?> GetByHashAsync(string tokenHash, CancellationToken cancellationToken = default)
     {
         try
@@ -70,125 +73,114 @@ public sealed class RefreshTokenRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Error retrieving refresh token");
+            logger.LogError(ex, "The refresh token repository failed to read the refresh token.");
             throw;
         }
     }
 
-    /// <inheritdoc />
+    public async Task<RefreshToken?> ConsumeAsync(
+        string tokenHash,
+        DateTime now,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            return await transactionManager.ExecuteWithTransactionAsync(
+                async _ =>
+                {
+                    var token = await context.RefreshTokens
+                        .AsNoTracking()
+                        .FirstOrDefaultAsync(rt => rt.TokenHash == tokenHash && rt.ExpiresAt > now, cancellationToken)
+                        .ConfigureAwait(false);
+
+                    if (token is null)
+                    {
+                        return null;
+                    }
+
+                    var deleted = await context.RefreshTokens
+                        .Where(rt => rt.TokenHash == tokenHash)
+                        .ExecuteDeleteAsync(cancellationToken)
+                        .ConfigureAwait(false);
+
+                    if (deleted == 0)
+                    {
+                        return null;
+                    }
+
+                    await auditRecordRepository.CreateAsync(
+                        new()
+                        {
+                            Category = AuditCategories.Security,
+                            Operation = "Consume",
+                            EntityId = token.Id.ToString(),
+                            ParentEntityId = token.UserId.ToString(),
+                            EntityType = nameof(RefreshToken),
+                            Detail = $"Consumed refresh token for user {token.UserId}",
+                            Timestamp = _time.GetUtcNow().UtcDateTime,
+                            UserId = token.UserId
+                        },
+                        cancellationToken).ConfigureAwait(false);
+
+                    return token;
+                },
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "The refresh token repository failed to consume the refresh token.");
+            throw;
+        }
+    }
+
     public async Task<bool> DeleteAsync(string tokenHash, CancellationToken cancellationToken = default)
     {
         try
         {
-            return await transactionManager.ExecuteWithTransactionAsync(async _ =>
-            {
-                var token = await context.RefreshTokens
-                    .AsNoTracking()
-                    .Where(rt => rt.TokenHash == tokenHash)
-                    .Select(rt => new { rt.Id, rt.UserId })
-                    .FirstOrDefaultAsync(cancellationToken)
-                    .ConfigureAwait(false);
-
-                if (token is null)
+            return await transactionManager.ExecuteWithTransactionAsync(
+                async _ =>
                 {
-                    return false;
-                }
+                    var token = await (
+                        from rt in context.RefreshTokens.AsNoTracking()
+                        where rt.TokenHash == tokenHash
+                        select new { rt.Id, rt.UserId })
+                        .FirstOrDefaultAsync(cancellationToken)
+                        .ConfigureAwait(false);
 
-                var deleted = await context.RefreshTokens
-                    .Where(rt => rt.TokenHash == tokenHash)
-                    .ExecuteDeleteAsync(cancellationToken)
-                    .ConfigureAwait(false);
-
-                if (deleted > 0)
-                {
-                    await auditRecordRepository.CreateAsync(new()
+                    if (token is null)
                     {
-                        Category = AuditCategories.Security,
-                        Operation = "Delete",
-                        EntityId = token.Id.ToString(),
-                        ParentEntityId = token.UserId.ToString(),
-                        EntityType = nameof(RefreshToken),
-                        Detail = $"Deleted refresh token for user {token.UserId}",
-                        Timestamp = DateTime.UtcNow,
-                        UserId = token.UserId
-                    }, cancellationToken).ConfigureAwait(false);
-                }
+                        return false;
+                    }
 
-                return deleted > 0;
-            }, cancellationToken);
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "Error deleting refresh token");
-            throw;
-        }
-    }
+                    var deleted = await context.RefreshTokens
+                        .Where(rt => rt.TokenHash == tokenHash)
+                        .ExecuteDeleteAsync(cancellationToken)
+                        .ConfigureAwait(false);
 
-    /// <inheritdoc />
-    public async Task<int> DeleteByUserIdAsync(Guid userId, CancellationToken cancellationToken = default)
-    {
-        try
-        {
-            return await transactionManager.ExecuteWithTransactionAsync(async _ =>
-            {
-                var deleted = await context.RefreshTokens
-                    .Where(rt => rt.UserId == userId)
-                    .ExecuteDeleteAsync(cancellationToken)
-                    .ConfigureAwait(false);
-
-                if (deleted > 0)
-                {
-                    await auditRecordRepository.CreateAsync(new()
+                    if (deleted > 0)
                     {
-                        Category = AuditCategories.Security,
-                        Operation = "DeleteAll",
-                        EntityId = userId.ToString(),
-                        EntityType = nameof(RefreshToken),
-                        Detail = $"Deleted {deleted} refresh tokens for user {userId}",
-                        Timestamp = DateTime.UtcNow,
-                        UserId = userId
-                    }, cancellationToken).ConfigureAwait(false);
-                }
+                        await auditRecordRepository.CreateAsync(
+                            new()
+                            {
+                                Category = AuditCategories.Security,
+                                Operation = "Delete",
+                                EntityId = token.Id.ToString(),
+                                ParentEntityId = token.UserId.ToString(),
+                                EntityType = nameof(RefreshToken),
+                                Detail = $"Deleted refresh token for user {token.UserId}",
+                                Timestamp = _time.GetUtcNow().UtcDateTime,
+                                UserId = token.UserId
+                            },
+                            cancellationToken).ConfigureAwait(false);
+                    }
 
-                return deleted;
-            }, cancellationToken);
+                    return deleted > 0;
+                },
+                cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Error deleting refresh tokens for user {UserId}", userId);
-            throw;
-        }
-    }
-
-    /// <inheritdoc />
-    public async Task<int> DeleteExpiredAsync(CancellationToken cancellationToken = default)
-    {
-        try
-        {
-            var deleted = await context.RefreshTokens
-                .Where(rt => rt.ExpiresAt < DateTime.UtcNow)
-                .ExecuteDeleteAsync(cancellationToken)
-                .ConfigureAwait(false);
-
-            if (deleted > 0)
-            {
-                await auditRecordRepository.CreateAsync(new()
-                {
-                    Category = AuditCategories.Security,
-                    Operation = "DeleteExpired",
-                    EntityId = string.Empty,
-                    EntityType = nameof(RefreshToken),
-                    Detail = $"Deleted {deleted} expired refresh tokens",
-                    Timestamp = DateTime.UtcNow,
-                    UserId = null
-                }, cancellationToken).ConfigureAwait(false);
-            }
-
-            return deleted;
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "Error deleting expired refresh tokens");
+            logger.LogError(ex, "The refresh token repository failed to delete the refresh token.");
             throw;
         }
     }

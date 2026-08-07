@@ -1,6 +1,6 @@
 import { forwardRef, memo, type HTMLAttributes, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
-import { ArrowCounterClockwise, Timer, WarningCircle } from '@phosphor-icons/react';
+import { ArrowCounterClockwiseIcon, TimerIcon, WarningCircleIcon } from '@phosphor-icons/react';
 
 import { Alert } from '@/components/ui/Alert';
 import { Button } from '@/components/ui/Button';
@@ -42,13 +42,6 @@ export interface RecentJobsWidgetProps extends HTMLAttributes<HTMLDivElement> {
     headingLevel?: 2 | 3;
 }
 
-const statusVariantMap: Record<JobStatus, string> = {
-    running: 'running',
-    completed: 'completed',
-    failed: 'failed',
-    cancelled: 'cancelled',
-};
-
 const statusLabelMap: Record<JobStatus, string> = {
     running: 'Running',
     completed: 'Completed',
@@ -63,7 +56,7 @@ interface JobItemProps {
 
 const JobItem = ({ job, url }: JobItemProps) => {
     const isClickable = url !== undefined;
-    const variant = statusVariantMap[job.status];
+    const variant = job.status;
     const statusLabel = statusLabelMap[job.status];
 
     const content = (
@@ -177,10 +170,10 @@ const RecentJobsWidgetBase = forwardRef<HTMLDivElement, RecentJobsWidgetProps>(
                             <SkeletonItem />
                         </>
                     ) : error ? (
-                        <Alert variant="error" icon={<WarningCircle weight="duotone" />} title="Failed to load">
+                        <Alert variant="error" icon={<WarningCircleIcon weight="duotone" />} title="Failed to load">
                             {onRetry && (
                                 <Button variant="ghost" size="sm" onClick={onRetry}>
-                                    <ArrowCounterClockwise weight="bold" aria-hidden="true" />
+                                    <ArrowCounterClockwiseIcon weight="bold" aria-hidden="true" />
                                     Try again
                                 </Button>
                             )}
@@ -189,7 +182,7 @@ const RecentJobsWidgetBase = forwardRef<HTMLDivElement, RecentJobsWidgetProps>(
                         displayedJobs.map((job) => <JobItem key={job.id} job={job} url={getJobUrl?.(job)} />)
                     ) : (
                         <EmptyState
-                            icon={<Timer weight="duotone" />}
+                            icon={<TimerIcon weight="duotone" />}
                             title="No recent jobs"
                             description="Job executions will appear here"
                             size="sm"

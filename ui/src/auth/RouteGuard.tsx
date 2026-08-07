@@ -1,9 +1,9 @@
-import { Navigate, useLocation, type RouteObject } from 'react-router-dom';
+import { Navigate, useLocation } from 'react-router-dom';
 
 import { RouteLoadingState } from '@/router/RouteLoadingState';
 
 import { useAuth } from './useAuth';
-import { Role, RoleName, type Permission } from './types';
+import { Role, RoleName } from './types';
 
 export interface RequireAuthProps {
     children: React.ReactNode;
@@ -40,7 +40,6 @@ export function RoleGuard({ children, minRole, forbiddenPath = '/forbidden' }: R
     const { hasRole, isLoading } = useAuth();
     const location = useLocation();
 
-    // Even nested under RequireAuth, a fresh-mount RoleGuard can briefly observe user=null while the AuthProvider initializes; without this gate, real admins flash to /forbidden.
     if (isLoading) {
         return <RouteLoadingState />;
     }
@@ -62,41 +61,3 @@ export function RoleGuard({ children, minRole, forbiddenPath = '/forbidden' }: R
 }
 
 RoleGuard.displayName = 'RoleGuard';
-
-export interface PermissionGuardProps {
-    children: React.ReactNode;
-
-    permission: Permission;
-
-    forbiddenPath?: string;
-}
-
-export function PermissionGuard({ children, permission, forbiddenPath = '/forbidden' }: PermissionGuardProps) {
-    const { hasPermission } = useAuth();
-    const location = useLocation();
-
-    if (!hasPermission(permission)) {
-        return (
-            <Navigate
-                to={forbiddenPath}
-                state={{
-                    from: location,
-                    requiredPermission: permission,
-                }}
-                replace
-            />
-        );
-    }
-
-    return <>{children}</>;
-}
-
-PermissionGuard.displayName = 'PermissionGuard';
-
-export interface ProtectedRouteConfig extends Omit<RouteObject, 'children'> {
-    minRole?: Role;
-
-    permission?: Permission;
-
-    children?: ProtectedRouteConfig[];
-}

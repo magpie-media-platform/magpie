@@ -14,6 +14,30 @@
         display: flex;
         flex-direction: column;
         gap: var(--space-md);
+        padding: var(--space-lg);
+    }
+
+    .save-filter-dialog__footer {
+        flex-wrap: wrap;
+        padding: 0;
+    }
+
+    .save-filter-dialog__footer .button {
+        min-width: 0;
+        max-width: 100%;
+    }
+
+    .save-filter-dialog__footer .button__content {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    @media (max-width: 480px) {
+        .save-filter-dialog__form {
+            padding: var(--space-md);
+        }
     }
 
     .save-filter-dialog__field {
@@ -41,13 +65,6 @@
     .save-filter-dialog__query-text {
         font-family: var(--font-mono);
         color: var(--accent-secondary);
-        word-break: break-word;
-    }
-
-    @media (max-width: 480px) {
-        .save-filter-dialog {
-            max-width: none;
-            width: calc(100% - var(--space-lg) * 2);
-        }
+        overflow-wrap: break-word;
     }
 }

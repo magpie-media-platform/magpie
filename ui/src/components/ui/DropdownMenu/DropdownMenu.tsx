@@ -1,6 +1,6 @@
-import { forwardRef, type ComponentPropsWithoutRef, type ElementRef } from 'react';
+import { forwardRef, type ComponentPropsWithoutRef, type ComponentRef } from 'react';
 import * as DropdownMenuPrimitive from '@radix-ui/react-dropdown-menu';
-import { Check, CaretRight, Circle } from '@phosphor-icons/react';
+import { CheckIcon, CaretRightIcon, CircleIcon } from '@phosphor-icons/react';
 
 import './DropdownMenu.css';
 
@@ -52,7 +52,7 @@ const DropdownMenuRadioGroup = DropdownMenuPrimitive.RadioGroup;
 
 const DropdownMenuSub = DropdownMenuPrimitive.Sub;
 
-const DropdownMenuContent = forwardRef<ElementRef<typeof DropdownMenuPrimitive.Content>, DropdownMenuContentProps>(
+const DropdownMenuContent = forwardRef<ComponentRef<typeof DropdownMenuPrimitive.Content>, DropdownMenuContentProps>(
     ({ className, sideOffset = 4, ...props }, ref) => {
         const classes = ['dropdown-menu-content', className].filter(Boolean).join(' ');
 
@@ -72,7 +72,7 @@ const DropdownMenuContent = forwardRef<ElementRef<typeof DropdownMenuPrimitive.C
 
 DropdownMenuContent.displayName = 'DropdownMenuContent';
 
-const DropdownMenuItem = forwardRef<ElementRef<typeof DropdownMenuPrimitive.Item>, DropdownMenuItemProps>(
+const DropdownMenuItem = forwardRef<ComponentRef<typeof DropdownMenuPrimitive.Item>, DropdownMenuItemProps>(
     ({ className, inset, ...props }, ref) => {
         const classes = ['dropdown-menu-item', inset && 'dropdown-menu-item--inset', className]
             .filter(Boolean)
@@ -85,7 +85,7 @@ const DropdownMenuItem = forwardRef<ElementRef<typeof DropdownMenuPrimitive.Item
 DropdownMenuItem.displayName = 'DropdownMenuItem';
 
 const DropdownMenuCheckboxItem = forwardRef<
-    ElementRef<typeof DropdownMenuPrimitive.CheckboxItem>,
+    ComponentRef<typeof DropdownMenuPrimitive.CheckboxItem>,
     DropdownMenuCheckboxItemProps
 >(({ className, children, checked, ...props }, ref) => {
     const classes = ['dropdown-menu-checkbox-item', className].filter(Boolean).join(' ');
@@ -94,7 +94,7 @@ const DropdownMenuCheckboxItem = forwardRef<
         <DropdownMenuPrimitive.CheckboxItem ref={ref} className={classes} checked={checked} {...props}>
             <span className="dropdown-menu-item__indicator">
                 <DropdownMenuPrimitive.ItemIndicator>
-                    <Check size={14} weight="bold" aria-hidden="true" />
+                    <CheckIcon size={14} weight="bold" aria-hidden="true" />
                 </DropdownMenuPrimitive.ItemIndicator>
             </span>
             {children}
@@ -105,7 +105,7 @@ const DropdownMenuCheckboxItem = forwardRef<
 DropdownMenuCheckboxItem.displayName = 'DropdownMenuCheckboxItem';
 
 const DropdownMenuRadioItem = forwardRef<
-    ElementRef<typeof DropdownMenuPrimitive.RadioItem>,
+    ComponentRef<typeof DropdownMenuPrimitive.RadioItem>,
     DropdownMenuRadioItemProps
 >(({ className, children, ...props }, ref) => {
     const classes = ['dropdown-menu-radio-item', className].filter(Boolean).join(' ');
@@ -114,7 +114,7 @@ const DropdownMenuRadioItem = forwardRef<
         <DropdownMenuPrimitive.RadioItem ref={ref} className={classes} {...props}>
             <span className="dropdown-menu-item__indicator">
                 <DropdownMenuPrimitive.ItemIndicator>
-                    <Circle size={8} weight="fill" aria-hidden="true" />
+                    <CircleIcon size={8} weight="fill" aria-hidden="true" />
                 </DropdownMenuPrimitive.ItemIndicator>
             </span>
             {children}
@@ -124,7 +124,7 @@ const DropdownMenuRadioItem = forwardRef<
 
 DropdownMenuRadioItem.displayName = 'DropdownMenuRadioItem';
 
-const DropdownMenuLabel = forwardRef<ElementRef<typeof DropdownMenuPrimitive.Label>, DropdownMenuLabelProps>(
+const DropdownMenuLabel = forwardRef<ComponentRef<typeof DropdownMenuPrimitive.Label>, DropdownMenuLabelProps>(
     ({ className, inset, ...props }, ref) => {
         const classes = ['dropdown-menu-label', inset && 'dropdown-menu-label--inset', className]
             .filter(Boolean)
@@ -137,7 +137,7 @@ const DropdownMenuLabel = forwardRef<ElementRef<typeof DropdownMenuPrimitive.Lab
 DropdownMenuLabel.displayName = 'DropdownMenuLabel';
 
 const DropdownMenuSeparator = forwardRef<
-    ElementRef<typeof DropdownMenuPrimitive.Separator>,
+    ComponentRef<typeof DropdownMenuPrimitive.Separator>,
     DropdownMenuSeparatorProps
 >(({ className, ...props }, ref) => {
     const classes = ['dropdown-menu-separator', className].filter(Boolean).join(' ');
@@ -148,7 +148,7 @@ const DropdownMenuSeparator = forwardRef<
 DropdownMenuSeparator.displayName = 'DropdownMenuSeparator';
 
 const DropdownMenuSubTrigger = forwardRef<
-    ElementRef<typeof DropdownMenuPrimitive.SubTrigger>,
+    ComponentRef<typeof DropdownMenuPrimitive.SubTrigger>,
     DropdownMenuSubTriggerProps
 >(({ className, inset, children, ...props }, ref) => {
     const classes = ['dropdown-menu-sub-trigger', inset && 'dropdown-menu-sub-trigger--inset', className]
@@ -158,7 +158,7 @@ const DropdownMenuSubTrigger = forwardRef<
     return (
         <DropdownMenuPrimitive.SubTrigger ref={ref} className={classes} data-inset={inset || undefined} {...props}>
             {children}
-            <CaretRight size={14} weight="bold" className="dropdown-menu-sub-trigger__icon" aria-hidden="true" />
+            <CaretRightIcon size={14} weight="bold" className="dropdown-menu-sub-trigger__icon" aria-hidden="true" />
         </DropdownMenuPrimitive.SubTrigger>
     );
 });
@@ -166,7 +166,7 @@ const DropdownMenuSubTrigger = forwardRef<
 DropdownMenuSubTrigger.displayName = 'DropdownMenuSubTrigger';
 
 const DropdownMenuSubContent = forwardRef<
-    ElementRef<typeof DropdownMenuPrimitive.SubContent>,
+    ComponentRef<typeof DropdownMenuPrimitive.SubContent>,
     DropdownMenuSubContentProps
 >(({ className, ...props }, ref) => {
     const classes = ['dropdown-menu-sub-content', className].filter(Boolean).join(' ');

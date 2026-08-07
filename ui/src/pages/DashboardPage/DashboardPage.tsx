@@ -1,16 +1,24 @@
 import { useCallback, useMemo } from 'react';
-import { CalendarBlank, CloudArrowDown, Database, FilmStrip, HardDrives, House, Timer } from '@phosphor-icons/react';
+import {
+    CalendarBlankIcon,
+    CloudArrowDownIcon,
+    FilmStripIcon,
+    HardDrivesIcon,
+    HouseIcon,
+    TimerIcon,
+} from '@phosphor-icons/react';
 
 import { useAuth, Role } from '@/auth';
+import { PageHeader } from '@/components/ui/PageHeader';
 import { PullToRefresh } from '@/components/ui/PullToRefresh';
 import { ServiceHealthBar, type ServiceHealthEntry } from '@/components/ui/ServiceHealthBar';
 import { DownloadQueueWidget } from '@/components/ui/DownloadQueueWidget';
 import { RecentJobsWidget } from '@/components/ui/RecentJobsWidget';
 import { ContentStatsWidget } from '@/components/ui/ContentStatsWidget';
-import { UpcomingContentWidget } from '@/components/ui/UpcomingContentWidget';
+import { UpcomingContentWidget } from '@/components/dashboard/UpcomingContentWidget';
 import { DashboardMainSlot, DashboardWidgetsSlot } from '@/components/ui/Slot/DashboardSlots';
+import { OnboardingChecklist } from '@/components/dashboard/OnboardingChecklist';
 import {
-    useIndexerHealth,
     useDownloadClientHealth,
     useMediaServerHealth,
     useActiveDownloads,
@@ -21,21 +29,25 @@ import {
     type HealthCounts,
 } from '@/hooks/useDashboard';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
+import { useOnboardingStatus } from '@/hooks/useOnboardingStatus';
+import { usePersistentState } from '@/hooks/usePersistentState';
+import { getDownloadStateUrl } from '@/lib/downloadDeepLink';
 import { queryErrorOrNull } from '@/lib/utils';
+import { type FulfillmentStatus } from '@/types';
 import type { HealthStatus } from '@/components/ui/HealthCard';
 
 import './DashboardPage.css';
 
-const EMPTY_HEALTH: HealthCounts = { healthy: 0, unhealthy: 0, unknown: 0, stale: 0 };
-const EMPTY_DOWNLOAD_COUNTS = { downloading: 0, queued: 0, stalled: 0 };
-const EMPTY_CONTENT_COUNTS = { total: 0, missing: 0, upgradable: 0, fulfilled: 0, fulfilledExternally: 0 };
+const EMPTY_HEALTH: HealthCounts = { healthy: 0, unhealthy: 0, degraded: 0, stabilizing: 0, unknown: 0, stale: 0 };
+const EMPTY_DOWNLOAD_COUNTS = { downloading: 0, queued: 0, paused: 0, stalled: 0 };
+const EMPTY_CONTENT_COUNTS = { total: 0, missing: 0, upgradable: 0, fulfilled: 0, fulfilledExternally: 0, partial: 0 };
 
 export function DashboardPage() {
     useDocumentTitle('Dashboard');
     const { hasRole } = useAuth();
+    const canManageIntegrations = hasRole(Role.Admin);
     const jobsBasePath = hasRole(Role.Admin) ? '/admin/jobs' : '/my-jobs';
 
-    const indexerHealthQuery = useIndexerHealth();
     const clientHealthQuery = useDownloadClientHealth();
     const serverHealthQuery = useMediaServerHealth();
     const activeDownloadsQuery = useActiveDownloads(5);
@@ -44,29 +56,33 @@ export function DashboardPage() {
     const recentContentQuery = useRecentContent(3);
     const upcomingContentQuery = useUpcomingContent();
 
-    const getIndexerStatusUrl = useCallback((status: HealthStatus) => `/admin/indexers?status=${status}`, []);
+    const onboarding = useOnboardingStatus();
+    const [onboardingDismissed, setOnboardingDismissed] = usePersistentState('magpie.onboarding.dismissed', false);
+    const dismissOnboarding = useCallback(() => setOnboardingDismissed(true), [setOnboardingDismissed]);
+    const completedSteps = onboarding.steps.filter((step) => step.done).length;
+    const showOnboarding =
+        canManageIntegrations &&
+        !onboardingDismissed &&
+        !onboarding.isLoading &&
+        !onboarding.error &&
+        !onboarding.isComplete;
 
     const getClientStatusUrl = useCallback((status: HealthStatus) => `/admin/download-clients?status=${status}`, []);
 
     const getServerStatusUrl = useCallback((status: HealthStatus) => `/admin/media-servers?status=${status}`, []);
 
-    const getDownloadStateUrl = useCallback((state: string) => `/downloads?state=${state}`, []);
-
-    const getDownloadUrl = useCallback((download: { id: string }) => `/downloads/${download.id}`, []);
-
     const getJobUrl = useCallback((job: { id: string }) => `${jobsBasePath}?job=${job.id}`, [jobsBasePath]);
 
-    const getContentStatusUrl = useCallback((status: string) => `/library?fulfillment=${status}`, []);
+    const getContentStatusUrl = useCallback((status: FulfillmentStatus) => `/library/all?fulfillment=${status}`, []);
 
     const getContentItemUrl = useCallback((item: { id: string }) => `/library/${item.id}`, []);
 
     const getUpcomingItemUrl = useCallback((item: { contentId: string }) => `/library/${item.contentId}`, []);
 
     const retryHealth = useCallback(() => {
-        void indexerHealthQuery.refetch();
         void clientHealthQuery.refetch();
         void serverHealthQuery.refetch();
-    }, [indexerHealthQuery, clientHealthQuery, serverHealthQuery]);
+    }, [clientHealthQuery, serverHealthQuery]);
     const retryActiveDownloads = useCallback(() => {
         void activeDownloadsQuery.refetch();
     }, [activeDownloadsQuery]);
@@ -84,7 +100,6 @@ export function DashboardPage() {
 
     const handleRefresh = useCallback(async () => {
         await Promise.all([
-            indexerHealthQuery.refetch(),
             clientHealthQuery.refetch(),
             serverHealthQuery.refetch(),
             activeDownloadsQuery.refetch(),
@@ -94,7 +109,6 @@ export function DashboardPage() {
             upcomingContentQuery.refetch(),
         ]);
     }, [
-        indexerHealthQuery,
         clientHealthQuery,
         serverHealthQuery,
         activeDownloadsQuery,
@@ -104,42 +118,31 @@ export function DashboardPage() {
         upcomingContentQuery,
     ]);
 
-    const indexerHealth = indexerHealthQuery.data ?? EMPTY_HEALTH;
     const clientHealth = clientHealthQuery.data ?? EMPTY_HEALTH;
     const serverHealth = serverHealthQuery.data ?? EMPTY_HEALTH;
 
     const healthServices: ServiceHealthEntry[] = useMemo(
         () => [
             {
-                name: 'Indexers',
-                icon: <Database weight="duotone" />,
-                counts: indexerHealth,
-                getStatusUrl: getIndexerStatusUrl,
-                addUrl: '/admin/indexers',
-            },
-            {
                 name: 'Download Clients',
-                icon: <CloudArrowDown weight="duotone" />,
+                icon: <CloudArrowDownIcon weight="duotone" />,
                 counts: clientHealth,
-                getStatusUrl: getClientStatusUrl,
-                addUrl: '/admin/download-clients',
+                getStatusUrl: canManageIntegrations ? getClientStatusUrl : undefined,
+                addUrl: canManageIntegrations ? '/admin/download-clients' : undefined,
             },
             {
                 name: 'Media Servers',
-                icon: <HardDrives weight="duotone" />,
+                icon: <HardDrivesIcon weight="duotone" />,
                 counts: serverHealth,
-                getStatusUrl: getServerStatusUrl,
-                addUrl: '/admin/media-servers',
+                getStatusUrl: canManageIntegrations ? getServerStatusUrl : undefined,
+                addUrl: canManageIntegrations ? '/admin/media-servers' : undefined,
             },
         ],
-        [indexerHealth, clientHealth, serverHealth, getIndexerStatusUrl, getClientStatusUrl, getServerStatusUrl],
+        [clientHealth, serverHealth, canManageIntegrations, getClientStatusUrl, getServerStatusUrl],
     );
 
-    const healthLoading = indexerHealthQuery.isLoading || clientHealthQuery.isLoading || serverHealthQuery.isLoading;
-    const healthError =
-        queryErrorOrNull(indexerHealthQuery) ??
-        queryErrorOrNull(clientHealthQuery) ??
-        queryErrorOrNull(serverHealthQuery);
+    const healthLoading = clientHealthQuery.isLoading || serverHealthQuery.isLoading;
+    const healthError = queryErrorOrNull(clientHealthQuery) ?? queryErrorOrNull(serverHealthQuery);
 
     const contentLoading =
         contentCountsQuery.isLoading || recentContentQuery.isLoading || upcomingContentQuery.isLoading;
@@ -152,17 +155,21 @@ export function DashboardPage() {
         <div className="dashboard-page" data-page="dashboard">
             <PullToRefresh onRefresh={handleRefresh} className="dashboard-page__pull-to-refresh">
                 <DashboardMainSlot>
-                    <header className="dashboard-page__header">
-                        <House
-                            weight="duotone"
-                            className="dashboard-page__icon"
-                            aria-hidden="true"
-                            data-testid="dashboard-page__icon"
-                        />
-                        <h1 className="dashboard-page__title">Dashboard</h1>
-                    </header>
+                    <PageHeader
+                        className="dashboard-page__header"
+                        title="Dashboard"
+                        icon={<HouseIcon weight="duotone" aria-hidden="true" data-testid="dashboard-page__icon" />}
+                    />
 
                     <div className="dashboard-page__content">
+                        {showOnboarding && (
+                            <OnboardingChecklist
+                                steps={onboarding.steps}
+                                completedCount={completedSteps}
+                                onDismiss={dismissOnboarding}
+                            />
+                        )}
+
                         <ServiceHealthBar
                             services={healthServices}
                             loading={healthLoading}
@@ -173,7 +180,7 @@ export function DashboardPage() {
                         <section className="dashboard-page__widgets" aria-label="Dashboard widgets">
                             <DownloadQueueWidget
                                 heading="Downloads"
-                                icon={<CloudArrowDown weight="duotone" />}
+                                icon={<CloudArrowDownIcon weight="duotone" />}
                                 counts={activeDownloadsQuery.data?.counts ?? EMPTY_DOWNLOAD_COUNTS}
                                 activeDownloads={activeDownloadsQuery.data?.items ?? []}
                                 maxItems={3}
@@ -182,11 +189,10 @@ export function DashboardPage() {
                                 onRetry={retryActiveDownloads}
                                 getStateUrl={getDownloadStateUrl}
                                 viewAllUrl="/downloads"
-                                getDownloadUrl={getDownloadUrl}
                             />
                             <RecentJobsWidget
                                 heading="Recent Jobs"
-                                icon={<Timer weight="duotone" />}
+                                icon={<TimerIcon weight="duotone" />}
                                 jobs={recentJobsQuery.data ?? []}
                                 maxItems={5}
                                 loading={recentJobsQuery.isLoading}
@@ -200,7 +206,7 @@ export function DashboardPage() {
                         <section className="dashboard-page__content-section" aria-label="Content overview">
                             <ContentStatsWidget
                                 heading="Content"
-                                icon={<FilmStrip weight="duotone" />}
+                                icon={<FilmStripIcon weight="duotone" />}
                                 counts={contentCountsQuery.data ?? EMPTY_CONTENT_COUNTS}
                                 recentItems={recentContentQuery.data ?? []}
                                 maxItems={3}
@@ -213,7 +219,7 @@ export function DashboardPage() {
                             />
                             <UpcomingContentWidget
                                 heading="Upcoming"
-                                icon={<CalendarBlank weight="duotone" />}
+                                icon={<CalendarBlankIcon weight="duotone" />}
                                 items={upcomingContentQuery.data ?? []}
                                 maxItems={5}
                                 loading={upcomingContentQuery.isLoading}

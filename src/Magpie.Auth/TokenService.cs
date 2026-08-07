@@ -1,5 +1,7 @@
 using System;
+using System.Globalization;
 using System.IdentityModel.Tokens.Jwt;
+using System.IO;
 using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
@@ -8,75 +10,110 @@ using System.Threading.Tasks;
 
 using Magpie.Abstractions.Auth;
 using Magpie.Abstractions.Repositories;
-using Magpie.Abstractions.Security;
-using Magpie.Core.Security;
 using Magpie.Models.Data;
+using Magpie.Models.Security;
+using Magpie.Sdk.Security;
 
 using Microsoft.IdentityModel.Tokens;
 
-using static Magpie.Abstractions.Auth.ITokenService;
+using RefreshToken = Magpie.Models.Data.RefreshToken;
 
 namespace Magpie.Auth;
 
 internal sealed class TokenService(
     TokenServiceOptions options,
     IRefreshTokenRepository refreshTokenRepository,
-    IKeyStore keyStore) : ITokenService
+    IKeyStore keyStore,
+    CryptoProviderFactory cryptoProviderFactory,
+    TimeProvider timeProvider) : ITokenService
 {
-    private const string JwtSigningKeyName = "jwt-signing";
+    private const string JwtHmacKeyName = "jwt-hmac";
 
     private readonly JwtSecurityTokenHandler _tokenHandler = new();
-    private readonly Lazy<Task<SymmetricSecurityKey>> _signingKeyTask = new(() => InitializeKeyAsync(keyStore));
+    private readonly Lazy<Task<KeyStoreHmacSecurityKey>> _signingKeyTask = new(() => InitializeKeyAsync(keyStore));
 
-    public async Task<AccessToken> GenerateAccessTokenAsync(
+    private static async Task<KeyStoreHmacSecurityKey> InitializeKeyAsync(IKeyStore keyStore)
+    {
+        var exists = await keyStore.KeyExistsAsync(JwtHmacKeyName).ConfigureAwait(false);
+        if (!exists)
+        {
+            try
+            {
+                await keyStore.CreateHmacKeyAsync(JwtHmacKeyName).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or IOException)
+            {
+                if (!await keyStore.KeyExistsAsync(JwtHmacKeyName).ConfigureAwait(false))
+                {
+                    throw;
+                }
+            }
+        }
+
+        return new KeyStoreHmacSecurityKey(keyStore, JwtHmacKeyName);
+    }
+
+    private static string ComputeHash(string token)
+    {
+        return Convert.ToBase64String(SHA256.HashData(Encoding.UTF8.GetBytes(token)));
+    }
+
+    public async Task<IssuedToken> GenerateAccessTokenAsync(
         User user,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(user);
 
         var signingKey = await _signingKeyTask.Value.ConfigureAwait(false);
-        var issuedAt = DateTime.UtcNow;
+        var issuedAt = timeProvider.GetUtcNow().UtcDateTime;
         var expiresAt = issuedAt.Add(options.AccessTokenLifetime);
+        var issuedAtSeconds = new DateTimeOffset(issuedAt).ToUnixTimeSeconds().ToString(CultureInfo.InvariantCulture);
         var principal = user.ToPrincipal(
         [
             new(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString()),
-            new(JwtRegisteredClaimNames.Iat,
-                new DateTimeOffset(issuedAt).ToUnixTimeSeconds().ToString(),
-                ClaimValueTypes.Integer64)
+            new(JwtRegisteredClaimNames.Iat, issuedAtSeconds, ClaimValueTypes.Integer64)
         ]);
 
+        var signingCredentials = new SigningCredentials(signingKey, SecurityAlgorithms.HmacSha256Signature)
+        {
+            CryptoProviderFactory = cryptoProviderFactory
+        };
         var tokenDescriptor = new SecurityTokenDescriptor
         {
             Subject = principal.Identity as ClaimsIdentity,
             Expires = expiresAt,
             Issuer = options.Issuer,
             Audience = options.Audience,
-            SigningCredentials = new(signingKey, SecurityAlgorithms.HmacSha256Signature)
+            SigningCredentials = signingCredentials
         };
 
         var token = _tokenHandler.CreateToken(tokenDescriptor);
-        return new AccessToken(_tokenHandler.WriteToken(token), expiresAt);
+        return new IssuedToken(_tokenHandler.WriteToken(token), expiresAt);
     }
 
-    public async Task<string> GenerateRefreshTokenAsync(Guid userId, CancellationToken cancellationToken)
+    public async Task<IssuedToken> GenerateRefreshTokenAsync(
+        Guid userId,
+        CancellationToken cancellationToken)
     {
         var tokenBytes = RandomNumberGenerator.GetBytes(64);
         var token = Convert.ToBase64String(tokenBytes);
         var tokenHash = ComputeHash(token);
-        var now = DateTime.UtcNow;
+        var now = timeProvider.GetUtcNow().UtcDateTime;
+        var expiresAt = now + options.RefreshTokenLifetime;
 
-        await refreshTokenRepository.CreateAsync(new()
-        {
-            UserId = userId,
-            TokenHash = tokenHash,
-            ExpiresAt = now + options.RefreshTokenLifetime,
-            CreatedAt = now
-        }, cancellationToken).ConfigureAwait(false);
+        await refreshTokenRepository.CreateAsync(
+            new RefreshToken
+            {
+                UserId = userId,
+                TokenHash = tokenHash,
+                ExpiresAt = expiresAt,
+                CreatedAt = now
+            },
+            cancellationToken).ConfigureAwait(false);
 
-        return token;
+        return new IssuedToken(token, expiresAt);
     }
 
-    /// <inheritdoc />
     public async Task<Guid?> TryValidateRefreshTokenAsync(string refreshToken, CancellationToken cancellationToken)
     {
         var tokenHash = ComputeHash(refreshToken);
@@ -88,12 +125,22 @@ internal sealed class TokenService(
             return null;
         }
 
-        if (storedToken.ExpiresAt <= DateTime.UtcNow)
+        if (storedToken.ExpiresAt <= timeProvider.GetUtcNow().UtcDateTime)
         {
             return null;
         }
 
         return storedToken.UserId;
+    }
+
+    public async Task<Guid?> TryConsumeRefreshTokenAsync(string refreshToken, CancellationToken cancellationToken)
+    {
+        var tokenHash = ComputeHash(refreshToken);
+        var storedToken = await refreshTokenRepository
+            .ConsumeAsync(tokenHash, timeProvider.GetUtcNow().UtcDateTime, cancellationToken)
+            .ConfigureAwait(false);
+
+        return storedToken?.UserId;
     }
 
     public Task RevokeRefreshTokenAsync(string refreshToken, CancellationToken cancellationToken)
@@ -108,38 +155,27 @@ internal sealed class TokenService(
         var signingKey = await _signingKeyTask.Value.ConfigureAwait(false);
         try
         {
-            return _tokenHandler.ValidateToken(accessToken, new()
-            {
-                ValidateIssuer = true,
-                ValidIssuer = options.Issuer,
-                ValidateAudience = true,
-                ValidAudience = options.Audience,
-                ValidateIssuerSigningKey = true,
-                IssuerSigningKey = signingKey,
-                ValidateLifetime = true,
-                ClockSkew = TimeSpan.Zero
-            }, out _);
+            var validationResult = await _tokenHandler.ValidateTokenAsync(
+                accessToken,
+                new()
+                {
+                    ValidateIssuer = true,
+                    ValidIssuer = options.Issuer,
+                    ValidateAudience = true,
+                    ValidAudience = options.Audience,
+                    ValidateIssuerSigningKey = true,
+                    IssuerSigningKey = signingKey,
+                    CryptoProviderFactory = cryptoProviderFactory,
+                    ValidateLifetime = true,
+                    ClockSkew = TimeSpan.Zero
+                }).ConfigureAwait(false);
+            return validationResult.IsValid
+                ? new ClaimsPrincipal(validationResult.ClaimsIdentity)
+                : null;
         }
         catch (Exception ex) when (ex is SecurityTokenException or ArgumentException)
         {
             return null;
         }
-    }
-
-    private static async Task<SymmetricSecurityKey> InitializeKeyAsync(IKeyStore keyStore)
-    {
-        var exists = await keyStore.KeyExistsAsync(JwtSigningKeyName).ConfigureAwait(false);
-        if (!exists)
-        {
-            await keyStore.CreateSigningKeyAsync(JwtSigningKeyName).ConfigureAwait(false);
-        }
-        var keyBytes = await keyStore.GetPublicKeyAsync(JwtSigningKeyName).ConfigureAwait(false);
-
-        return new SymmetricSecurityKey(keyBytes);
-    }
-
-    private static string ComputeHash(string token)
-    {
-        return Convert.ToBase64String(SHA256.HashData(Encoding.UTF8.GetBytes(token)));
     }
 }

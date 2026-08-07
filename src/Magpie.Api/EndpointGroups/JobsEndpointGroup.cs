@@ -1,76 +1,127 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
-using Magpie.Abstractions.Api;
-using Magpie.Abstractions.Jobs;
-using Magpie.Abstractions.Security;
+using Magpie.Models;
 using Magpie.Models.Api;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
+using Magpie.Models.Jobs;
 using Magpie.Models.Paging;
+using Magpie.Sdk.Api;
+using Magpie.Sdk.Services;
 
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
 
 namespace Magpie.Api.EndpointGroups;
 
-internal sealed class JobsEndpointGroup(IJobManager jobManager) : IApiEndpointGroup
+[MagpieCommandGroup("jobs", "jobs", "Manage and run jobs")]
+internal sealed class JobsEndpointGroup : IApiEndpointGroup
 {
     public string Name => "jobs";
 
     public void MapEndpoints(IEndpointRouteBuilder builder)
     {
-        builder.MapGet("", QueryJobExecutions)
-            .WithName(nameof(QueryJobExecutions))
+        builder.MapGet("", QueryJobExecutionsAsync)
+            .WithName(nameof(QueryJobExecutionsAsync))
             .Produces<PagedList<JobExecution>>()
             .RequireViewer();
 
-        builder.MapGet("{id:guid}", GetJobExecutionById)
-            .WithName(nameof(GetJobExecutionById))
+        builder.MapGet("specs", GetJobSpecs)
+            .WithName(nameof(GetJobSpecs))
+            .Produces<IReadOnlyList<JobSpec>>()
+            .RequireViewer();
+
+        builder.MapGet("{id:guid}", GetJobExecutionByIdAsync)
+            .WithName(nameof(GetJobExecutionByIdAsync))
             .Produces<JobExecution>()
             .ProducesProblem(StatusCodes.Status404NotFound)
             .RequireViewer();
 
-        builder.MapPost("", RunJob)
-            .WithName(nameof(RunJob))
+        builder.MapGet("{id:guid}/execution-tree", GetJobExecutionTreeAsync)
+            .WithName(nameof(GetJobExecutionTreeAsync))
+            .Produces<JobExecutionTree>()
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .RequireViewer();
+
+        builder.MapPost("enqueue", EnqueueJobAsync)
+            .WithName(nameof(EnqueueJobAsync))
             .Produces<Guid>(StatusCodes.Status202Accepted)
             .ProducesProblem(StatusCodes.Status400BadRequest)
-            .RequireManager();
+            .RequireRequester();
 
-        builder.MapPost("{id:guid}/cancel", RequestJobCancellation)
-            .WithName(nameof(RequestJobCancellation))
+        builder.MapPost("execute-immediate", ExecuteImmediateJobAsync)
+            .WithName(nameof(ExecuteImmediateJobAsync))
+            .Produces<RunJobResponse>()
+            .ProducesProblem(StatusCodes.Status400BadRequest)
+            .RequireRequester();
+
+        builder.MapPost("{id:guid}/cancel", RequestJobCancellationAsync)
+            .WithName(nameof(RequestJobCancellationAsync))
             .Produces(StatusCodes.Status204NoContent)
             .ProducesProblem(StatusCodes.Status404NotFound)
             .RequireManager();
     }
 
-    private async Task<IResult> QueryJobExecutions(
+    [MagpieCommand("list", "GET", "", "List job executions")]
+    internal async Task<IResult> QueryJobExecutionsAsync(
+        [FromServices] IJobManager jobManager,
+        AuthenticatedUser user,
         string? jobType,
         Guid? extensionId,
         Guid? scheduleTriggerId,
         Guid? eventTriggerId,
-        JobExecutionStatus? status,
+        string[]? status,
+        bool? mine,
+        bool? rootsOnly,
         int? pageNumber,
         int? pageSize,
         string? sortBy,
         SortDirection? sortDirection,
         CancellationToken cancellationToken)
     {
+        var parsedStatuses = new List<JobExecutionStatus>();
+        var pending = false;
+        if (status is { Length: > 0 })
+        {
+            foreach (var value in status)
+            {
+                if (string.Equals(value, "Pending", StringComparison.OrdinalIgnoreCase))
+                {
+                    pending = true;
+                }
+                else if (Enum.TryParse<JobExecutionStatus>(value, ignoreCase: true, out var parsed))
+                {
+                    parsedStatuses.Add(parsed);
+                }
+            }
+        }
+
+        var statuses = parsedStatuses.Distinct().ToArray();
+
         var query = new JobExecutionQuery
         {
             JobType = jobType,
             ExtensionId = extensionId,
             ScheduleTriggerId = scheduleTriggerId,
             EventTriggerId = eventTriggerId,
-            Status = status
+            Statuses = statuses is { Length: > 0 } ? statuses : null,
+            Pending = pending ? true : null,
+            CreatedByUserId = mine == true ? user.Id : null,
+            RootsOnly = rootsOnly ?? (mine == true),
         };
 
-        var paging = pageNumber is not null && pageSize is not null
-            ? new PagingParameter { PageNumber = pageNumber.Value, PageSize = pageSize.Value }
-            : null;
+        var paging = new PagingParameter
+        {
+            PageNumber = pageNumber ?? 1,
+            PageSize = pageSize ?? 25,
+        };
 
         var sort = !string.IsNullOrEmpty(sortBy)
             ? new SortParameter { PropertyName = sortBy, Direction = sortDirection ?? SortDirection.Descending }
@@ -82,39 +133,101 @@ internal sealed class JobsEndpointGroup(IJobManager jobManager) : IApiEndpointGr
         return Results.Ok(result);
     }
 
-    private async Task<IResult> GetJobExecutionById(Guid id, CancellationToken cancellationToken)
+    [MagpieCommand("specs", "GET", "specs", "List registered job specs")]
+    internal IResult GetJobSpecs([FromServices] IJobManager jobManager, JobTriggerMode? userTriggerMode)
+    {
+        return Results.Ok(jobManager.GetSpecs(userTriggerMode));
+    }
+
+    [MagpieCommand("get", "GET", "{id:guid}", "Show a job execution")]
+    internal async Task<IResult> GetJobExecutionByIdAsync(
+        [FromServices] IJobManager jobManager,
+        Guid id,
+        CancellationToken cancellationToken)
     {
         var execution = await jobManager.GetExecutionAsync(id, cancellationToken).ConfigureAwait(false);
 
-        return execution is null
-            ? Results.NotFound()
-            : Results.Ok(execution);
+        return execution is null ? Results.NotFound() : Results.Ok(execution);
     }
 
-    private async Task<IResult> RunJob(
-        HttpContext httpContext,
-        RunJobRequest request,
+    [MagpieCommand(
+        "execution-tree",
+        "GET",
+        "{id:guid}/execution-tree",
+        "Show a job execution's tree of related executions")]
+    internal async Task<IResult> GetJobExecutionTreeAsync(
+        [FromServices] IJobManager jobManager,
+        Guid id,
+        [FromQuery(Name = "include-siblings")] bool? includeSiblings,
         CancellationToken cancellationToken)
     {
-        var userId = httpContext.User.GetUserId();
+        var tree = await jobManager.GetExecutionTreeAsync(id, includeSiblings ?? false, cancellationToken)
+            .ConfigureAwait(false);
 
-        var executionId = await jobManager.ExecuteAsync(
-            request.JobType,
-            request.ExtensionId,
-            request.Parameters,
-            request.Mode,
-            userId,
-            cancellationToken).ConfigureAwait(false);
+        return tree is null ? Results.NotFound() : Results.Ok(tree);
+    }
+
+    [MagpieCommand("enqueue", "POST", "enqueue", "Enqueue a job to run in the background")]
+    internal async Task<IResult> EnqueueJobAsync(
+        [FromServices] IJobManager jobManager,
+        AuthenticatedUser user,
+        [FromBody] RunJobRequest request,
+        CancellationToken cancellationToken)
+    {
+        var executionId = await jobManager.EnqueueAsync(
+            new JobEnqueueRequest
+            {
+                JobType = request.JobType,
+                ExtensionId = request.ExtensionId,
+                Parameters = request.Parameters,
+                Mode = request.Mode,
+                UserId = user.Id,
+            },
+            user.Id,
+            user.Role,
+            cancellationToken)
+            .ConfigureAwait(false);
 
         return Results.Accepted($"api/{Name}/{executionId}", executionId);
     }
 
-    private async Task<IResult> RequestJobCancellation(Guid id, CancellationToken cancellationToken)
+    [MagpieCommand("run", "POST", "execute-immediate", "Run a job immediately")]
+    internal async Task<IResult> ExecuteImmediateJobAsync(
+        [FromServices] IJobManager jobManager,
+        AuthenticatedUser user,
+        [FromBody] RunJobRequest request,
+        CancellationToken cancellationToken)
+    {
+        var execution = await jobManager.ExecuteImmediateAsync(
+            new JobEnqueueRequest
+            {
+                JobType = request.JobType,
+                ExtensionId = request.ExtensionId,
+                Parameters = request.Parameters,
+                Mode = JobExecutionMode.Immediate,
+                UserId = user.Id,
+            },
+            user.Id,
+            user.Role,
+            cancellationToken)
+            .ConfigureAwait(false);
+
+        return Results.Ok(new RunJobResponse
+        {
+            ExecutionId = execution.Id,
+            Status = execution.Status,
+            StatusMessage = execution.StatusMessage,
+        });
+    }
+
+    [MagpieCommand("cancel", "POST", "{id:guid}/cancel", "Cancel a job execution")]
+    internal async Task<IResult> RequestJobCancellationAsync(
+        [FromServices] IJobManager jobManager,
+        Guid id,
+        CancellationToken cancellationToken)
     {
         var cancelled = await jobManager.RequestCancellationAsync(id, cancellationToken).ConfigureAwait(false);
 
-        return cancelled
-            ? Results.NoContent()
-            : Results.NotFound();
+        return cancelled ? Results.NoContent() : Results.NotFound();
     }
 }

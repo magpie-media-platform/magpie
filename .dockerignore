@@ -1,0 +1,30 @@
+# Source control / IDE state
+.git/
+.github/
+.vscode/
+.idea/
+.vs/
+
+# Local data / runtime state
+data/
+publish/
+
+# Node + npm + pnpm caches at every depth
+node_modules/
+**/node_modules/
+.npm/
+**/.npm/
+**/.pnpm-store/
+
+# Integration files mounted into the test container
+tests/integration/*/
+!tests/integration/fixtures/
+
+# .NET build output
+bin/
+obj/
+**/bin/
+**/obj/
+*.user
+*.suo
+*.userprefs

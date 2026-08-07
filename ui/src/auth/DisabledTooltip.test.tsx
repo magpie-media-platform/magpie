@@ -2,7 +2,7 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 
-import { AuthProvider } from './AuthContext';
+import { AuthTestProvider as AuthProvider } from '@/test/AuthTestProvider';
 import { DisabledTooltip, useDisabledState } from './DisabledTooltip';
 import { Role } from './types';
 
@@ -17,6 +17,37 @@ function HookConsumer({ options }: { options: { action: string } | { minRole: nu
 }
 
 describe('DisabledTooltip', () => {
+    describe('with direct disabled state', () => {
+        it('shows the supplied reason and exposes it as the control description', async () => {
+            const user = userEvent.setup();
+
+            render(
+                <DisabledTooltip disabled message="Configure a root folder before adding">
+                    <button disabled>Add</button>
+                </DisabledTooltip>,
+            );
+
+            const button = screen.getByRole('button', { name: 'Add' });
+            const descriptionId = button.getAttribute('aria-describedby');
+            expect(descriptionId).toBeTruthy();
+            expect(document.getElementById(descriptionId!)).toHaveTextContent('Configure a root folder before adding');
+
+            await user.hover(button);
+            expect(await screen.findByRole('tooltip')).toHaveTextContent('Configure a root folder before adding');
+        });
+
+        it('renders the control without a tooltip when the supplied state is enabled', () => {
+            render(
+                <DisabledTooltip disabled={false} message="Unavailable">
+                    <button>Add</button>
+                </DisabledTooltip>,
+            );
+
+            expect(screen.getByRole('button', { name: 'Add' })).not.toHaveAttribute('aria-describedby');
+            expect(screen.queryByRole('tooltip')).not.toBeInTheDocument();
+        });
+    });
+
     describe('with permission prop', () => {
         it('renders tooltip when user lacks permission', async () => {
             const user = userEvent.setup();
@@ -33,7 +64,7 @@ describe('DisabledTooltip', () => {
             const button = screen.getByRole('button', { name: 'Edit' });
             await user.hover(button);
 
-            expect(await screen.findByRole('tooltip')).toHaveTextContent('Requires Requester role');
+            expect(await screen.findByRole('tooltip')).toHaveTextContent('Requires Manager role');
         });
 
         it('does not wrap with tooltip when user has permission', () => {

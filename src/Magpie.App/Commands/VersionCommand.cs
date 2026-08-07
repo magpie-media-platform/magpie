@@ -4,9 +4,6 @@ using System.Reflection;
 
 namespace Magpie.App.Commands;
 
-/// <summary>
-/// Command to display version information.
-/// </summary>
 internal sealed class VersionCommand : Command
 {
     public VersionCommand() : base("version", "Show version information")
@@ -19,9 +16,12 @@ internal sealed class VersionCommand : Command
         var assembly = Assembly.GetExecutingAssembly();
         var version = assembly.GetName().Version?.ToString() ?? "0.0.0";
         var informationalVersion = assembly
-            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? version;
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ??
+            version;
 
+#pragma warning disable RS0030 // the version command writes its contract to standard output.
         Console.WriteLine($"Magpie {informationalVersion}");
+#pragma warning restore RS0030
 
         return 0;
     }

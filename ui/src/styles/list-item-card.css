@@ -1,0 +1,13 @@
+@layer components {
+    .list-item-card {
+        background-color: var(--bg-secondary);
+        border: 1px solid var(--border-default);
+        border-radius: var(--radius-md);
+        padding: var(--space-md);
+        transition: border-color var(--duration-fast) var(--easing-default);
+
+        &:hover {
+            border-color: var(--border-accent);
+        }
+    }
+}

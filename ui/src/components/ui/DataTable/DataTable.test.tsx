@@ -1,3 +1,4 @@
+import { useMemo, useState } from 'react';
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
@@ -51,6 +52,14 @@ describe('DataTable', () => {
         expect(screen.getByText('Status')).toBeInTheDocument();
     });
 
+    it('hides columns marked not visible via columnVisibility', () => {
+        render(<DataTable columns={testColumns} data={testData} columnVisibility={{ status: false }} />);
+
+        expect(screen.getByText('Name')).toBeInTheDocument();
+        expect(screen.queryByText('Status')).not.toBeInTheDocument();
+        expect(document.querySelector('[data-column="status"]')).not.toBeInTheDocument();
+    });
+
     it('applies size classes', () => {
         const { rerender, container } = render(<DataTable columns={testColumns} data={testData} size="sm" />);
         expect(container.querySelector('.data-table')).toHaveAttribute('data-size', 'sm');
@@ -90,6 +99,50 @@ describe('DataTable', () => {
     it('renders custom empty state', () => {
         render(<DataTable columns={testColumns} data={[]} emptyState={<div>Custom empty message</div>} />);
         expect(screen.getByText('Custom empty message')).toBeInTheDocument();
+    });
+
+    it('hides the column header row on a cold-start empty', () => {
+        render(<DataTable columns={testColumns} data={[]} emptyState={<div>Custom empty message</div>} />);
+
+        expect(screen.queryByText('ID')).not.toBeInTheDocument();
+        expect(screen.queryByText('Name')).not.toBeInTheDocument();
+        expect(screen.queryByText('Status')).not.toBeInTheDocument();
+        expect(screen.getByText('Custom empty message')).toBeInTheDocument();
+    });
+
+    it('keeps the column header row when keepHeaderWhenEmpty is set and there is no data', () => {
+        render(
+            <DataTable
+                columns={testColumns}
+                data={[]}
+                keepHeaderWhenEmpty
+                emptyState={<div>Custom empty message</div>}
+            />,
+        );
+
+        expect(screen.getByText('ID')).toBeInTheDocument();
+        expect(screen.getByText('Name')).toBeInTheDocument();
+        expect(screen.getByText('Status')).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: /sort by name/i })).toBeInTheDocument();
+        expect(screen.getByText('Custom empty message')).toBeInTheDocument();
+    });
+
+    it('renders filter actions in a filter bar above the table', () => {
+        const { container } = render(
+            <DataTable columns={testColumns} data={testData} filterActions={<button type="button">Clear</button>} />,
+        );
+
+        const filterBar = container.querySelector('[data-component="data-table-filter-bar"]') as HTMLElement;
+        expect(within(filterBar).getByRole('button', { name: 'Clear' })).toBeInTheDocument();
+        expect(filterBar.nextElementSibling).toHaveClass('data-table__wrapper');
+        expect(container.querySelector('.data-table')).toHaveClass('data-table--with-filter-bar');
+    });
+
+    it('renders no filter bar when filterActions is omitted', () => {
+        const { container } = render(<DataTable columns={testColumns} data={testData} />);
+
+        expect(container.querySelector('[data-component="data-table-filter-bar"]')).not.toBeInTheDocument();
+        expect(container.querySelector('.data-table')).not.toHaveClass('data-table--with-filter-bar');
     });
 
     it('shows loading state', () => {
@@ -207,7 +260,7 @@ describe('DataTable', () => {
 
         it('shows pagination when enabled', () => {
             render(<DataTable columns={testColumns} data={testData} enablePagination pageSize={2} />);
-            expect(screen.getByText(/1-2 of 5/)).toBeInTheDocument();
+            expect(screen.getByText('Page 1 of 3')).toBeInTheDocument();
         });
 
         it('navigates to next page', async () => {
@@ -296,7 +349,7 @@ describe('DataTable', () => {
                 />,
             );
 
-            expect(screen.getByText(/1-2 of 100/)).toBeInTheDocument();
+            expect(screen.getByText('Page 1 of 50')).toBeInTheDocument();
         });
     });
 
@@ -450,5 +503,91 @@ describe('DataTable', () => {
             expect(cells[0]).not.toHaveAttribute('data-label');
             expect(cells[1]).toHaveAttribute('data-label', 'Name');
         });
+
+        it('derives the card-collapse data-label from meta.headerLabel for function headers', () => {
+            const columnsWithMeta: ColumnDef<TestData, unknown>[] = [
+                {
+                    accessorKey: 'status',
+                    header: () => <button type="button">filter</button>,
+                    meta: { headerLabel: 'Status' },
+                    enableSorting: false,
+                },
+                {
+                    accessorKey: 'name',
+                    header: 'Name',
+                },
+            ];
+
+            render(<DataTable columns={columnsWithMeta} data={testData} />);
+
+            const firstRow = screen.getAllByRole('row')[1];
+            const cells = within(firstRow).getAllByRole('cell');
+
+            expect(cells[0]).toHaveAttribute('data-label', 'Status');
+            expect(cells[0]).not.toHaveClass('data-table__cell--unlabeled');
+        });
+
+        it('marks label-less cells with the unlabeled modifier for compact card layout', () => {
+            const columnsWithUnlabeled: ColumnDef<TestData, unknown>[] = [
+                {
+                    id: 'actions',
+                    header: '',
+                    cell: () => <button type="button">act</button>,
+                    enableSorting: false,
+                },
+                {
+                    accessorKey: 'name',
+                    header: 'Name',
+                },
+            ];
+
+            render(<DataTable columns={columnsWithUnlabeled} data={testData} />);
+
+            const firstRow = screen.getAllByRole('row')[1];
+            const cells = within(firstRow).getAllByRole('cell');
+
+            expect(cells[0]).toHaveClass('data-table__cell--unlabeled');
+            expect(cells[1]).not.toHaveClass('data-table__cell--unlabeled');
+        });
+    });
+});
+
+describe('DataTable header reconciliation', () => {
+    it('preserves a function header subtree when the column defs are rebuilt', async () => {
+        const user = userEvent.setup();
+
+        function StatefulHeader() {
+            const [open, setOpen] = useState(false);
+            return (
+                <button type="button" data-testid="hdr" onClick={() => setOpen((o) => !o)}>
+                    {open ? 'open' : 'closed'}
+                </button>
+            );
+        }
+
+        function Harness() {
+            const [bump, setBump] = useState(0);
+            const columns = useMemo<ColumnDef<TestData, unknown>[]>(
+                () => [{ accessorKey: 'name', header: () => <StatefulHeader />, enableSorting: false }],
+                // eslint-disable-next-line react-hooks/exhaustive-deps
+                [bump],
+            );
+            return (
+                <div>
+                    <button type="button" data-testid="bump" onClick={() => setBump((b) => b + 1)}>
+                        bump
+                    </button>
+                    <DataTable columns={columns} data={testData} />
+                </div>
+            );
+        }
+
+        render(<Harness />);
+
+        await user.click(screen.getByTestId('hdr'));
+        expect(screen.getByTestId('hdr')).toHaveTextContent('open');
+
+        await user.click(screen.getByTestId('bump'));
+        expect(screen.getByTestId('hdr')).toHaveTextContent('open');
     });
 });

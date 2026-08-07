@@ -1,0 +1,330 @@
+using System;
+using System.Linq;
+using System.Threading.Tasks;
+
+using Magpie.Abstractions.Repositories;
+using Magpie.Core.Repositories;
+using Magpie.Data;
+using Magpie.Models.Arguments;
+using Magpie.Models.Data;
+using Magpie.Models.Enums;
+using Magpie.Models.Paging;
+
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
+
+using NUnit.Framework;
+
+namespace Magpie.Test.Core.Repositories;
+
+[TestFixture]
+public class WishlistDiscoveredRepositoryTests
+{
+    private MagpieDbContext _context = null!;
+    private ILoggerFactory _loggerFactory = null!;
+    private IWishlistDiscoveredRepository _subject = null!;
+    private Guid _wishlistId;
+
+    [SetUp]
+    public async Task SetUp()
+    {
+        _context = new MagpieDbContext(new DbContextOptionsBuilder<MagpieDbContext>()
+            .UseSqlite("Data Source=:memory:")
+            .Options);
+        await _context.Database.OpenConnectionAsync().ConfigureAwait(false);
+        await _context.Database.EnsureCreatedAsync().ConfigureAwait(false);
+
+        _loggerFactory = NullLoggerFactory.Instance;
+        _subject = new WishlistDiscoveredRepository(
+            _context,
+            TimeProvider.System,
+            _loggerFactory.CreateLogger<WishlistDiscoveredRepository>());
+
+        var contentFilter = new ContentFilter
+        {
+            Name = $"Filter-{Guid.NewGuid():N}",
+            Criteria = new(),
+            CreatedAt = DateTime.UtcNow,
+        };
+        _context.ContentFilters.Add(contentFilter);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        var wishlist = new Wishlist
+        {
+            Name = $"Wishlist-{Guid.NewGuid():N}",
+            ContentFilterId = contentFilter.Id,
+            Enabled = true,
+            CreatedAt = DateTime.UtcNow,
+        };
+        _context.Wishlists.Add(wishlist);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
+        _wishlistId = wishlist.Id;
+    }
+
+    [TearDown]
+    public void TearDown()
+    {
+        _context.Database.CloseConnection();
+        _context.Dispose();
+        _loggerFactory.Dispose();
+    }
+
+    [Test]
+    public async Task RecordDiscoveredAsync_IsIdempotent_OnTheUniqueKey()
+    {
+        // Arrange
+
+        // Act
+        await _subject.RecordDiscoveredAsync(
+            _wishlistId,
+            [new WishlistDiscovered
+            {
+                ExternalIdSource = "provider-a.type-a",
+                ExternalId = "550",
+                Title = "Fight Club"
+            }])
+            .ConfigureAwait(false);
+        await _subject.RecordDiscoveredAsync(
+            _wishlistId,
+            [new WishlistDiscovered
+            {
+                ExternalIdSource = "provider-a.type-a",
+                ExternalId = "550",
+                Title = "Fight Club (again)"
+            }])
+            .ConfigureAwait(false);
+
+        // Assert
+        var rows = await _context.WishlistDiscovered.AsNoTracking()
+            .Where(s => s.WishlistId == _wishlistId)
+            .ToListAsync()
+            .ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(rows, Has.Count.EqualTo(1));
+            Assert.That(rows[0].Title, Is.EqualTo("Fight Club"));
+        }
+    }
+
+    [Test]
+    public async Task RecordDiscoveredAsync_DeduplicatesCandidates_WhenBatchContainsDuplicates()
+    {
+        // Arrange
+
+        // Act
+        await _subject.RecordDiscoveredAsync(
+            _wishlistId,
+            [
+                    new WishlistDiscovered { ExternalIdSource = "provider-a.type-a", ExternalId = "1", Title = "One" },
+                    new WishlistDiscovered
+                    {
+                        ExternalIdSource = "provider-a.type-a",
+                        ExternalId = "1",
+                        Title = "One duplicate"
+                    },
+                    new WishlistDiscovered { ExternalIdSource = "provider-a.type-a", ExternalId = "2", Title = "Two" },
+            ]).ConfigureAwait(false);
+
+        // Assert
+        var count = await _context.WishlistDiscovered.AsNoTracking()
+            .CountAsync(s => s.WishlistId == _wishlistId)
+            .ConfigureAwait(false);
+        Assert.That(count, Is.EqualTo(2));
+    }
+
+    [Test]
+    public async Task ListAsync_ReturnsRecordedCandidates_WhenCandidatesExist()
+    {
+        // Arrange
+        await _subject.RecordDiscoveredAsync(
+            _wishlistId,
+            [
+                    new WishlistDiscovered { ExternalIdSource = "provider-a.type-a", ExternalId = "1", Title = "One" },
+                    new WishlistDiscovered { ExternalIdSource = "provider-a.type-a", ExternalId = "2", Title = "Two" },
+            ]).ConfigureAwait(false);
+
+        // Act
+        var candidates = await _subject.ListAsync(_wishlistId).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(
+            candidates.Select(candidate => (candidate.ExternalIdSource, candidate.ExternalId)),
+            Is.EquivalentTo([("provider-a.type-a", "1"), ("provider-a.type-a", "2")]));
+    }
+
+    [Test]
+    public async Task ListEnrichedAsync_SortsByTitleWithNullsLast_WhenDirectionChanges()
+    {
+        // Arrange
+        var baseTime = DateTime.UtcNow;
+        _context.WishlistDiscovered.AddRange(
+            new WishlistDiscovered
+            {
+                Id = Guid.NewGuid(),
+                WishlistId = _wishlistId,
+                ExternalIdSource = "provider-a.type-a",
+                ExternalId = "1",
+                Title = "Banana",
+                DiscoveredAt = baseTime,
+            },
+            new WishlistDiscovered
+            {
+                Id = Guid.NewGuid(),
+                WishlistId = _wishlistId,
+                ExternalIdSource = "provider-a.type-a",
+                ExternalId = "2",
+                Title = "Apple",
+                DiscoveredAt = baseTime.AddMinutes(1),
+            },
+            new WishlistDiscovered
+            {
+                Id = Guid.NewGuid(),
+                WishlistId = _wishlistId,
+                ExternalIdSource = "provider-a.type-a",
+                ExternalId = "3",
+                Title = "Cherry",
+                DiscoveredAt = baseTime.AddMinutes(2),
+            },
+            new WishlistDiscovered
+            {
+                Id = Guid.NewGuid(),
+                WishlistId = _wishlistId,
+                ExternalIdSource = "provider-a.type-a",
+                ExternalId = "4",
+                Title = null,
+                DiscoveredAt = baseTime.AddMinutes(3),
+            });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
+
+        // Act
+        var ascendingQuery = new WishlistDiscoveredQuery
+        {
+            Paging = new PagingParameter { PageNumber = 1, PageSize = 50 },
+            Sort = WishlistDiscoveredSort.Title,
+            SortDescending = false,
+        };
+        var asc = await _subject
+            .ListEnrichedAsync(_wishlistId, ascendingQuery)
+            .ConfigureAwait(false);
+        var descendingQuery = new WishlistDiscoveredQuery
+        {
+            Paging = new PagingParameter { PageNumber = 1, PageSize = 50 },
+            Sort = WishlistDiscoveredSort.Title,
+            SortDescending = true,
+        };
+        var desc = await _subject
+            .ListEnrichedAsync(_wishlistId, descendingQuery)
+            .ConfigureAwait(false);
+
+        // Assert
+        var ascIds = asc.Items.Select(r => r.ExternalId).ToList();
+        var descIds = desc.Items.Select(r => r.ExternalId).ToList();
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(ascIds, Is.EqualTo(["2", "1", "3", "4"]));
+            Assert.That(descIds, Is.EqualTo(["3", "1", "2", "4"]));
+        }
+    }
+
+    [Test]
+    public async Task ListEnrichedAsync_SortsByDiscoveryTimeWithStableTies_WhenDirectionChanges()
+    {
+        // Arrange
+        var shared = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var tieLow = new Guid("e622fea6-36da-47e7-96e8-026bb65771a9");
+        var tieHigh = new Guid("1f2d2977-cd70-4e74-8105-ff12e3bb5957");
+        _context.WishlistDiscovered.AddRange(
+            new WishlistDiscovered
+            {
+                Id = tieLow,
+                WishlistId = _wishlistId,
+                ExternalIdSource = "provider-a.type-a",
+                ExternalId = "a",
+                Title = "A",
+                DiscoveredAt = shared,
+            },
+            new WishlistDiscovered
+            {
+                Id = tieHigh,
+                WishlistId = _wishlistId,
+                ExternalIdSource = "provider-a.type-a",
+                ExternalId = "b",
+                Title = "B",
+                DiscoveredAt = shared,
+            },
+            new WishlistDiscovered
+            {
+                Id = Guid.NewGuid(),
+                WishlistId = _wishlistId,
+                ExternalIdSource = "provider-a.type-a",
+                ExternalId = "c",
+                Title = "C",
+                DiscoveredAt = shared.AddMinutes(5),
+            });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
+
+        // Act
+        var ascendingQuery = new WishlistDiscoveredQuery
+        {
+            Paging = new PagingParameter { PageNumber = 1, PageSize = 50 },
+            Sort = WishlistDiscoveredSort.Discovered,
+            SortDescending = false,
+        };
+        var asc = await _subject
+            .ListEnrichedAsync(_wishlistId, ascendingQuery)
+            .ConfigureAwait(false);
+        var descendingQuery = new WishlistDiscoveredQuery
+        {
+            Paging = new PagingParameter { PageNumber = 1, PageSize = 50 },
+            Sort = WishlistDiscoveredSort.Discovered,
+            SortDescending = true,
+        };
+        var desc = await _subject
+            .ListEnrichedAsync(_wishlistId, descendingQuery)
+            .ConfigureAwait(false);
+
+        // Assert
+        var ascItems = asc.Items.ToList();
+        var descItems = desc.Items.ToList();
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(ascItems.Select(r => r.ExternalId), Is.EqualTo(["b", "a", "c"]));
+            Assert.That(ascItems[0].DiscoveredId, Is.EqualTo(tieHigh));
+            Assert.That(ascItems[1].DiscoveredId, Is.EqualTo(tieLow));
+            Assert.That(descItems.Select(r => r.ExternalId), Is.EqualTo(["c", "b", "a"]));
+            Assert.That(descItems[1].DiscoveredId, Is.EqualTo(tieHigh));
+            Assert.That(descItems[2].DiscoveredId, Is.EqualTo(tieLow));
+        }
+    }
+
+    [Test]
+    public async Task ExecuteDeleteAsync_DeletesDiscoveredRows_WhenWishlistIsDeleted()
+    {
+        // Arrange
+        await _subject.RecordDiscoveredAsync(
+            _wishlistId,
+            [new WishlistDiscovered
+            {
+                ExternalIdSource = "provider-a.type-a",
+                ExternalId = "550",
+                Title = "Fight Club"
+            }])
+            .ConfigureAwait(false);
+
+        // Act
+        await _context.Wishlists
+            .Where(w => w.Id == _wishlistId)
+            .ExecuteDeleteAsync()
+            .ConfigureAwait(false);
+
+        // Assert
+        var remaining = await _context.WishlistDiscovered
+            .CountAsync(s => s.WishlistId == _wishlistId)
+            .ConfigureAwait(false);
+        Assert.That(remaining, Is.EqualTo(0));
+    }
+}

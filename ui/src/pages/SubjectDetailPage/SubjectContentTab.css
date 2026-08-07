@@ -1,0 +1,35 @@
+@layer components {
+    .subject-content-tab__loading {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-md);
+    }
+
+    .subject-content-tab__skeleton {
+        height: 4rem;
+        border-radius: var(--radius-md);
+    }
+
+    .subject-content-tab__mobile {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-sm);
+    }
+
+    .subject-content-tab__mobile-list {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-sm);
+    }
+
+    .subject-content-tab__mobile-pager {
+        margin-top: var(--space-xs);
+        justify-content: flex-end;
+    }
+
+    .subject-content-tab__mobile-published {
+        font-size: var(--text-xs);
+        color: var(--text-secondary);
+        white-space: nowrap;
+    }
+}

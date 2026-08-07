@@ -5,13 +5,13 @@ using Magpie.Models.Enums;
 
 namespace Magpie.QueryLanguage;
 
-internal abstract class ScalarFieldInfo(string queryName, Type valueType)
+internal abstract class ScalarFieldInfo<TContext>(Type valueType)
 {
-    public string QueryName { get; } = queryName;
     public Type ValueType { get; } = valueType;
 
     public abstract void AddCriterion(
-        ContentTransformContext context, CriteriaValueOperator op,
+        TContext context,
+        CriteriaValueOperator op,
         object? value,
         IEnumerable<object>? values);
 }

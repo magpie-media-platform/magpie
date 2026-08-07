@@ -1,6 +1,6 @@
 import { forwardRef, type ComponentPropsWithoutRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { SignOut, CaretDown } from '@phosphor-icons/react';
+import { SignOutIcon, CaretDownIcon } from '@phosphor-icons/react';
 
 import { useAuth } from '@/auth';
 import { Avatar } from '../Avatar';
@@ -38,7 +38,7 @@ const UserMenu = forwardRef<HTMLDivElement, UserMenuProps>(({ showUsername = tru
 
     const handleLogout = async () => {
         await signOut();
-        navigate('/login');
+        void navigate('/login');
     };
 
     return (
@@ -53,14 +53,14 @@ const UserMenu = forwardRef<HTMLDivElement, UserMenuProps>(({ showUsername = tru
                     >
                         <Avatar size="sm" fallback={initials} alt={user.username} />
                         {showUsername && <span className="user-menu__username">{user.username}</span>}
-                        <CaretDown size={16} weight="bold" className="user-menu__caret" aria-hidden="true" />
+                        <CaretDownIcon size={16} weight="bold" className="user-menu__caret" aria-hidden="true" />
                     </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" sideOffset={8}>
                     <DropdownMenuLabel>{user.username}</DropdownMenuLabel>
                     <DropdownMenuSeparator />
                     <DropdownMenuItem onSelect={handleLogout} data-action="logout">
-                        <SignOut size={16} weight="duotone" aria-hidden="true" />
+                        <SignOutIcon size={16} weight="duotone" aria-hidden="true" />
                         Log out
                     </DropdownMenuItem>
                 </DropdownMenuContent>

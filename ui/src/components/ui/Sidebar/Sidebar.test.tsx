@@ -2,7 +2,7 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
-import { House, Gear, Users, Folder } from '@phosphor-icons/react';
+import { HouseIcon, GearIcon, UsersIcon, FolderIcon } from '@phosphor-icons/react';
 
 import {
     Sidebar,
@@ -64,7 +64,7 @@ describe('Sidebar', () => {
         renderWithRouter(
             <Sidebar defaultCollapsed>
                 <SidebarContent>
-                    <SidebarItem to="/" icon={<House />}>
+                    <SidebarItem to="/" icon={<HouseIcon />}>
                         Home
                     </SidebarItem>
                 </SidebarContent>
@@ -82,7 +82,7 @@ describe('Sidebar', () => {
         const { rerender } = renderWithRouter(
             <Sidebar collapsed={false}>
                 <SidebarContent>
-                    <SidebarItem to="/" icon={<House />}>
+                    <SidebarItem to="/" icon={<HouseIcon />}>
                         Home
                     </SidebarItem>
                 </SidebarContent>
@@ -96,7 +96,7 @@ describe('Sidebar', () => {
             <MemoryRouter>
                 <Sidebar collapsed={true}>
                     <SidebarContent>
-                        <SidebarItem to="/" icon={<House />}>
+                        <SidebarItem to="/" icon={<HouseIcon />}>
                             Home
                         </SidebarItem>
                     </SidebarContent>
@@ -284,7 +284,7 @@ describe('SidebarGroup', () => {
             <Sidebar collapsed>
                 <SidebarContent>
                     <SidebarGroup label="Navigation">
-                        <SidebarItem to="/" icon={<House />}>
+                        <SidebarItem to="/" icon={<HouseIcon />}>
                             Home
                         </SidebarItem>
                     </SidebarGroup>
@@ -315,7 +315,7 @@ describe('SidebarItem', () => {
         renderWithRouter(
             <Sidebar>
                 <SidebarContent>
-                    <SidebarItem to="/" icon={<House data-testid="icon" />}>
+                    <SidebarItem to="/" icon={<HouseIcon data-testid="icon" />}>
                         Home
                     </SidebarItem>
                 </SidebarContent>
@@ -346,7 +346,7 @@ describe('SidebarItem', () => {
         renderWithRouter(
             <Sidebar collapsed>
                 <SidebarContent>
-                    <SidebarItem to="/" icon={<House data-testid="icon" />}>
+                    <SidebarItem to="/" icon={<HouseIcon data-testid="icon" />}>
                         Home
                     </SidebarItem>
                 </SidebarContent>
@@ -380,7 +380,7 @@ describe('SidebarSubMenu', () => {
         renderWithRouter(
             <Sidebar>
                 <SidebarContent>
-                    <SidebarSubMenu label="Settings" icon={<Gear />}>
+                    <SidebarSubMenu label="Settings" icon={<GearIcon />}>
                         <SidebarItem to="/settings/general">General</SidebarItem>
                         <SidebarItem to="/settings/users">Users</SidebarItem>
                     </SidebarSubMenu>
@@ -397,7 +397,7 @@ describe('SidebarSubMenu', () => {
         renderWithRouter(
             <Sidebar>
                 <SidebarContent>
-                    <SidebarSubMenu label="Settings" icon={<Gear />}>
+                    <SidebarSubMenu label="Settings" icon={<GearIcon />}>
                         <SidebarItem to="/settings/general">General</SidebarItem>
                     </SidebarSubMenu>
                 </SidebarContent>
@@ -419,7 +419,7 @@ describe('SidebarSubMenu', () => {
         renderWithRouter(
             <Sidebar>
                 <SidebarContent>
-                    <SidebarSubMenu label="Settings" icon={<Gear />} defaultOpen>
+                    <SidebarSubMenu label="Settings" icon={<GearIcon />} defaultOpen>
                         <SidebarItem to="/settings/general">General</SidebarItem>
                     </SidebarSubMenu>
                 </SidebarContent>
@@ -439,7 +439,7 @@ describe('SidebarSubMenu', () => {
         renderWithRouter(
             <Sidebar>
                 <SidebarContent>
-                    <SidebarSubMenu label="Settings" icon={<Gear />} active>
+                    <SidebarSubMenu label="Settings" icon={<GearIcon />} active>
                         <SidebarItem to="/settings/general">General</SidebarItem>
                     </SidebarSubMenu>
                 </SidebarContent>
@@ -455,7 +455,7 @@ describe('SidebarSubMenu', () => {
         renderWithRouter(
             <Sidebar collapsed>
                 <SidebarContent>
-                    <SidebarSubMenu label="Settings" icon={<Gear data-testid="gear-icon" />}>
+                    <SidebarSubMenu label="Settings" icon={<GearIcon data-testid="gear-icon" />}>
                         <SidebarItem to="/settings/general">General</SidebarItem>
                     </SidebarSubMenu>
                 </SidebarContent>
@@ -466,6 +466,26 @@ describe('SidebarSubMenu', () => {
         expect(screen.getByTestId('gear-icon')).toBeInTheDocument();
         const trigger = document.querySelector('.sidebar-submenu-trigger--collapsed');
         expect(trigger).toHaveAttribute('aria-label', 'Settings');
+    });
+
+    it('renders collapsed submenu as a link when collapsedTo is provided', () => {
+        renderWithRouter(
+            <Sidebar collapsed>
+                <SidebarContent>
+                    <SidebarSubMenu
+                        label="Library"
+                        icon={<FolderIcon data-testid="folder-icon" />}
+                        collapsedTo="/library"
+                    >
+                        <SidebarItem to="/library/all">All</SidebarItem>
+                    </SidebarSubMenu>
+                </SidebarContent>
+            </Sidebar>,
+        );
+
+        const trigger = screen.getByRole('link', { name: 'Library' });
+        expect(trigger).toHaveAttribute('href', '/library');
+        expect(screen.getByTestId('folder-icon')).toBeInTheDocument();
     });
 });
 
@@ -505,18 +525,18 @@ describe('Sidebar Integration', () => {
             <Sidebar>
                 <SidebarContent>
                     <SidebarGroup label="Main">
-                        <SidebarItem to="/" icon={<House />} active>
+                        <SidebarItem to="/" icon={<HouseIcon />} active>
                             Dashboard
                         </SidebarItem>
-                        <SidebarItem to="/library" icon={<Folder />}>
+                        <SidebarItem to="/library" icon={<FolderIcon />}>
                             Library
                         </SidebarItem>
                     </SidebarGroup>
                     <SidebarSeparator />
                     <SidebarGroup label="Admin">
-                        <SidebarSubMenu label="Settings" icon={<Gear />}>
+                        <SidebarSubMenu label="Settings" icon={<GearIcon />}>
                             <SidebarItem to="/settings/general">General</SidebarItem>
-                            <SidebarItem to="/settings/users" icon={<Users />}>
+                            <SidebarItem to="/settings/users" icon={<UsersIcon />}>
                                 Users
                             </SidebarItem>
                         </SidebarSubMenu>

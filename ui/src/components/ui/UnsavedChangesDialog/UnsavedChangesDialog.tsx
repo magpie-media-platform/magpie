@@ -1,4 +1,4 @@
-import { Warning } from '@phosphor-icons/react';
+import { WarningIcon } from '@phosphor-icons/react';
 
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '../Dialog';
 import { Button } from '../Button';
@@ -22,12 +22,10 @@ export function UnsavedChangesDialog({ open, onDiscard, onCancel }: UnsavedChang
             <DialogContent data-component="unsaved-changes-dialog">
                 <DialogHeader>
                     <DialogTitle>
-                        <Warning weight="duotone" aria-hidden="true" />
+                        <WarningIcon weight="duotone" aria-hidden="true" />
                         Unsaved Changes
                     </DialogTitle>
-                    <DialogDescription>
-                        You have unsaved changes. Are you sure you want to close without saving?
-                    </DialogDescription>
+                    <DialogDescription>Close without saving your changes?</DialogDescription>
                 </DialogHeader>
                 <DialogFooter>
                     <Button variant="ghost" onClick={onCancel} data-action="cancel">

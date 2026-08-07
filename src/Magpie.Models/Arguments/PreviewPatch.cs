@@ -1,57 +1,56 @@
 using System;
 
-using Magpie.Models.Data;
 using Magpie.Models.Patch;
 
 namespace Magpie.Models.Arguments;
 
 /// <summary>
-/// Patch for <see cref="Preview"/>.
+/// The partial-update arguments for a preview.
 /// </summary>
 public sealed record PreviewPatch
 {
     /// <summary>
-    /// The <see cref="Preview.Id"/> of the item to patch.
+    /// The id of the preview to patch.
     /// </summary>
     public Guid Id { get; init; }
 
     /// <summary>
-    /// The <see cref="Preview.Ordinal"/> to patch.
+    /// The patch for the position in the display order.
     /// </summary>
     public ScalarPatch<int>? Ordinal { get; init; }
 
     /// <summary>
-    /// The <see cref="Preview.Kind"/> to patch.
+    /// The patch for the kind of preview.
     /// </summary>
     public ScalarPatch<string>? Kind { get; init; }
 
     /// <summary>
-    /// The <see cref="Preview.MimeType"/> to patch.
+    /// The patch for the MIME type.
     /// </summary>
     public ScalarPatch<string?>? MimeType { get; init; }
 
     /// <summary>
-    /// The <see cref="Preview.Url"/> to patch.
+    /// The patch for the preview URL.
     /// </summary>
-    public ScalarPatch<string>? Url { get; init; }
+    public ScalarPatch<Uri>? Url { get; init; }
 
     /// <summary>
-    /// The <see cref="Preview.Source"/> to patch.
+    /// The patch for the name of the source.
     /// </summary>
     public ScalarPatch<string?>? Source { get; init; }
 
     /// <summary>
-    /// The <see cref="Preview.Title"/> to patch.
+    /// The patch for the title of the preview.
     /// </summary>
     public ScalarPatch<string?>? Title { get; init; }
 
     /// <summary>
-    /// The <see cref="Preview.ReleaseDate"/> to patch.
+    /// The patch for the release date.
     /// </summary>
     public ScalarPatch<DateTime?>? ReleaseDate { get; init; }
 
     /// <summary>
-    /// The <see cref="Preview.Language"/> to patch.
+    /// The patch for the language code.
     /// </summary>
     public ScalarPatch<string?>? Language { get; init; }
 }

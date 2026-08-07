@@ -1,0 +1,13 @@
+@layer components {
+    .download-details-dialog__body {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-lg);
+    }
+
+    .download-details-dialog__loading {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-sm);
+    }
+}

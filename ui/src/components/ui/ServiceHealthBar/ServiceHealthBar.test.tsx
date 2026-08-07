@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it } from 'vitest';
 
@@ -11,17 +11,17 @@ const renderWithRouter = (ui: React.ReactElement) => {
 const defaultServices: ServiceHealthEntry[] = [
     {
         name: 'Indexers',
-        counts: { healthy: 3, unhealthy: 1, unknown: 0, stale: 0 },
+        counts: { healthy: 3, unhealthy: 1, degraded: 0, stabilizing: 0, unknown: 0, stale: 0 },
         getStatusUrl: (status) => `/indexers?status=${status}`,
     },
     {
         name: 'Download Clients',
-        counts: { healthy: 2, unhealthy: 0, unknown: 1, stale: 0 },
+        counts: { healthy: 2, unhealthy: 0, degraded: 0, stabilizing: 0, unknown: 1, stale: 0 },
         getStatusUrl: (status) => `/download-clients?status=${status}`,
     },
     {
         name: 'Media Servers',
-        counts: { healthy: 1, unhealthy: 0, unknown: 0, stale: 0 },
+        counts: { healthy: 1, unhealthy: 0, degraded: 0, stabilizing: 0, unknown: 0, stale: 0 },
         getStatusUrl: (status) => `/media-servers?status=${status}`,
     },
 ];
@@ -61,6 +61,24 @@ describe('ServiceHealthBar', () => {
         expect(screen.getByText('1 OK')).toBeInTheDocument();
     });
 
+    it('links degraded service to filtered page', () => {
+        renderWithRouter(
+            <ServiceHealthBar
+                services={[
+                    {
+                        name: 'Indexers',
+                        counts: { healthy: 1, unhealthy: 0, degraded: 2, stabilizing: 1, unknown: 0, stale: 0 },
+                        getStatusUrl: (status) => `/indexers?status=${status}`,
+                    },
+                ]}
+            />,
+        );
+
+        const link = screen.getByLabelText(/indexers: 2 degraded/i);
+        expect(link.tagName).toBe('A');
+        expect(link).toHaveAttribute('href', '/indexers?status=degraded');
+    });
+
     it('renders data-component attribute', () => {
         renderWithRouter(<ServiceHealthBar services={defaultServices} />);
 
@@ -72,12 +90,12 @@ describe('ServiceHealthBar zero-count state', () => {
     const zeroServices: ServiceHealthEntry[] = [
         {
             name: 'Indexers',
-            counts: { healthy: 0, unhealthy: 0, unknown: 0, stale: 0 },
+            counts: { healthy: 0, unhealthy: 0, degraded: 0, stabilizing: 0, unknown: 0, stale: 0 },
             addUrl: '/admin/indexers',
         },
         {
             name: 'Download Clients',
-            counts: { healthy: 0, unhealthy: 0, unknown: 0, stale: 0 },
+            counts: { healthy: 0, unhealthy: 0, degraded: 0, stabilizing: 0, unknown: 0, stale: 0 },
         },
     ];
 
@@ -97,11 +115,38 @@ describe('ServiceHealthBar zero-count state', () => {
         expect(indexerSegment).toHaveAttribute('href', '/admin/indexers');
     });
 
-    it('shows "0 OK" when count is zero and no addUrl is set', () => {
+    it('shows "None configured" when count is zero and no addUrl is set', () => {
         renderWithRouter(<ServiceHealthBar services={zeroServices} />);
 
-        const clientSegment = screen.getByLabelText(/download clients: 0 ok/i);
+        const clientSegment = screen.getByLabelText(/download clients: none configured/i);
         expect(clientSegment).toBeInTheDocument();
+    });
+
+    it('uses neutral and healthy indicator states with distinct text', () => {
+        renderWithRouter(
+            <ServiceHealthBar
+                services={[
+                    {
+                        name: 'Download Clients',
+                        counts: { healthy: 1, unhealthy: 0, degraded: 0, stabilizing: 0, unknown: 0, stale: 0 },
+                        getStatusUrl: (status) => `/download-clients?status=${status}`,
+                    },
+                    {
+                        name: 'Media Servers',
+                        counts: { healthy: 0, unhealthy: 0, degraded: 0, stabilizing: 0, unknown: 0, stale: 0 },
+                        addUrl: '/admin/media-servers',
+                    },
+                ]}
+            />,
+        );
+
+        const emptySegment = screen.getByLabelText('Media Servers: Add first');
+        const healthySegment = screen.getByLabelText('Download Clients: 1 OK');
+
+        expect(emptySegment).toHaveAttribute('data-status', 'unknown');
+        expect(healthySegment).toHaveAttribute('data-status', 'healthy');
+        expect(within(emptySegment).getByText('Add first')).toBeVisible();
+        expect(within(healthySegment).getByText('1 OK')).toBeVisible();
     });
 });
 

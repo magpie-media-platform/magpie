@@ -1,7 +1,7 @@
 import { useMemo, useCallback } from 'react';
 import { useParams, useNavigate, useLocation, useSearchParams } from 'react-router-dom';
 
-export interface ContentDetailParams {
+interface ContentDetailParams {
     contentId: string | undefined;
     childId: string | undefined;
     grandchildId: string | undefined;
@@ -9,12 +9,15 @@ export interface ContentDetailParams {
     parentId: string | undefined;
     rootId: string | undefined;
     activeTab: string;
+    hasExplicitTab: boolean;
     setActiveTab: (tab: string) => void;
     navigate: ReturnType<typeof useNavigate>;
     childrenBasePath: string;
 }
 
-export function useContentDetailParams(): ContentDetailParams {
+const FALLBACK_DEFAULT_TAB = 'related';
+
+export function useContentDetailParams(defaultTab: string = FALLBACK_DEFAULT_TAB): ContentDetailParams {
     const { contentId, childId, grandchildId } = useParams<{
         contentId: string;
         childId?: string;
@@ -24,13 +27,15 @@ export function useContentDetailParams(): ContentDetailParams {
     const location = useLocation();
     const [searchParams, setSearchParams] = useSearchParams();
 
-    const activeTab = searchParams.get('tab') || 'overview';
+    const explicitTab = searchParams.get('tab');
+    const hasExplicitTab = explicitTab !== null && explicitTab.length > 0;
+    const activeTab = explicitTab || defaultTab;
     const setActiveTab = useCallback(
         (tab: string) => {
             setSearchParams(
                 (prev) => {
                     const next = new URLSearchParams(prev);
-                    if (tab === 'overview') {
+                    if (tab === defaultTab) {
                         next.delete('tab');
                     } else {
                         next.set('tab', tab);
@@ -40,7 +45,7 @@ export function useContentDetailParams(): ContentDetailParams {
                 { replace: true },
             );
         },
-        [setSearchParams],
+        [setSearchParams, defaultTab],
     );
 
     const activeContentId = grandchildId || childId || contentId;
@@ -73,6 +78,7 @@ export function useContentDetailParams(): ContentDetailParams {
         parentId,
         rootId,
         activeTab,
+        hasExplicitTab,
         setActiveTab,
         navigate,
         childrenBasePath,

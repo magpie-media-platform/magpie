@@ -1,20 +1,28 @@
 using System;
+using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.Linq;
+using System.Security.Cryptography;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions;
 using Magpie.Abstractions.Repositories;
+using Magpie.Core.Events;
 using Magpie.Data;
 using Magpie.Models;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Models.Paging;
+using Magpie.Sdk.Services;
 
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.ChangeTracking;
 using Microsoft.Extensions.Logging;
+
+using ContentEventImpact = Magpie.Sdk.Events.ContentEventImpact;
 
 namespace Magpie.Core.Repositories;
 
@@ -22,8 +30,115 @@ internal sealed class JobExecutionRepository(
     MagpieDbContext context,
     IAuditRecordRepository auditRecordRepository,
     ITransactionManager transactionManager,
-    ILogger<JobExecutionRepository> logger) : IJobExecutionRepository
+    IEventBus eventBus,
+    ILogger<JobExecutionRepository> logger,
+    TimeProvider? timeProvider = null) : IJobExecutionRepository
 {
+    private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
+
+    private const string DedupInsertSavepoint = "job_execution_dedup_insert";
+
+    private const string CoalescingLockEntityName = "JobEnqueueCoalescingLock";
+
+    private const string CoalescingLockKeyProperty = "Key";
+
+    private static ContentEventImpact? ParameterImpact(JobExecution execution)
+    {
+        var hierarchyItemId = ParameterId(execution, "contentHierarchyItemId");
+        var contentItemId = ParameterId(execution, "contentItemId");
+        return hierarchyItemId is null && contentItemId is null
+            ? null
+            : new() { HierarchyItemId = hierarchyItemId, ItemId = contentItemId };
+    }
+
+    private static Guid? ParameterId(JobExecution execution, string parameterName)
+    {
+        return execution.Parameters.TryGetValue(parameterName, out var raw) && Guid.TryParse(raw, out var id)
+            ? id
+            : null;
+    }
+
+    private static DateTime? ReconcileNotBeforeAt(
+        DateTime? existing,
+        DateTime? incoming,
+        bool clearDeferralOnCoalesce,
+        DateTime now)
+    {
+        if (clearDeferralOnCoalesce)
+        {
+            return existing is null || incoming is null
+                ? null
+                : (incoming.Value < existing.Value ? incoming : existing);
+        }
+
+        if (existing is { } existingDeferral &&
+            existingDeferral > now &&
+            incoming is { } incomingDeferral &&
+            incomingDeferral > now &&
+            incomingDeferral < existingDeferral)
+        {
+            return incomingDeferral;
+        }
+
+        return existing;
+    }
+
+    private static string BuildCoalescingLockKey(string jobType, string lockPartition)
+    {
+        var jobTypeBytes = Encoding.UTF8.GetBytes(jobType);
+        var lockPartitionBytes = Encoding.UTF8.GetBytes(lockPartition);
+        var partitionLengthOffset = sizeof(int) + jobTypeBytes.Length;
+        var identity = new byte[partitionLengthOffset + sizeof(int) + lockPartitionBytes.Length];
+
+        BinaryPrimitives.WriteInt32BigEndian(identity, jobTypeBytes.Length);
+        jobTypeBytes.CopyTo(identity.AsSpan(sizeof(int)));
+        BinaryPrimitives.WriteInt32BigEndian(identity.AsSpan(partitionLengthOffset), lockPartitionBytes.Length);
+        lockPartitionBytes.CopyTo(identity.AsSpan(partitionLengthOffset + sizeof(int)));
+
+        return Convert.ToHexString(SHA256.HashData(identity));
+    }
+
+    private async Task<EntityEntry<Dictionary<string, object>>> AcquireCoalescingLockAsync(
+        string jobType,
+        string lockPartition,
+        CancellationToken cancellationToken)
+    {
+        var key = BuildCoalescingLockKey(jobType, lockPartition);
+        var lockRows = context.Set<Dictionary<string, object>>(CoalescingLockEntityName);
+        var lockRow = new Dictionary<string, object> { [CoalescingLockKeyProperty] = key };
+
+        var lockEntry = lockRows.Add(lockRow);
+        await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+
+        return lockEntry;
+    }
+
+    private async Task ReleaseCoalescingLockAsync(EntityEntry<Dictionary<string, object>> lockEntry)
+    {
+        var lockRow = lockEntry.Entity;
+        var key = (string)lockRow[CoalescingLockKeyProperty];
+        var lockRows = context.Set<Dictionary<string, object>>(CoalescingLockEntityName);
+        int deleted;
+
+        try
+        {
+            deleted = await lockRows
+                .Where(row => EF.Property<string>(row, CoalescingLockKeyProperty) == key)
+                .ExecuteDeleteAsync(CancellationToken.None)
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            lockEntry.State = EntityState.Detached;
+        }
+
+        if (deleted != 1)
+        {
+            throw new InvalidOperationException(
+                $"Expected one job execution coalescing lock row for key {key}, but deleted {deleted}.");
+        }
+    }
+
     public async Task<IEnumerable<JobExecution>> ListAllAsync(CancellationToken cancellationToken)
     {
         try
@@ -35,7 +150,7 @@ internal sealed class JobExecutionRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Error listing job executions");
+            logger.LogError(ex, "The job execution repository failed to list job executions.");
             throw;
         }
     }
@@ -51,262 +166,1283 @@ internal sealed class JobExecutionRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Error getting job execution {ExecutionId}", id);
+            logger.LogError(ex, "The job execution repository failed to read job execution {ExecutionId}.", id);
             throw;
         }
     }
 
     public async Task<PagedList<JobExecution>> QueryAsync(
         JobExecutionQuery query,
-        PagingParameter? page,
+        PagingParameter page,
         SortParameter? sort,
         CancellationToken cancellationToken)
     {
         try
         {
-            var jobExecutions = context.JobExecutions.AsNoTracking().AsQueryable();
-
-            if (query.ScheduleTriggerId is not null)
-            {
-                jobExecutions = jobExecutions.Where(e => e.ScheduleTriggerId == query.ScheduleTriggerId);
-            }
-            if (query.EventTriggerId is not null)
-            {
-                jobExecutions = jobExecutions.Where(e => e.EventTriggerId == query.EventTriggerId);
-            }
-            if (query.Status is not null)
-            {
-                jobExecutions = jobExecutions.Where(e => e.Status == query.Status);
-            }
-            if (query.Timestamp?.Min is not null)
-            {
-                jobExecutions = jobExecutions.Where(e => e.CreatedAt >= query.Timestamp.Min);
-            }
-            if (query.Timestamp?.Max is not null)
-            {
-                jobExecutions = jobExecutions.Where(e => e.CreatedAt <= query.Timestamp.Max);
-            }
+            var now = _time.GetUtcNow().UtcDateTime;
+            var jobExecutions = BuildFilteredQuery(query, now);
 
             var totalCount = await jobExecutions.CountAsync(cancellationToken).ConfigureAwait(false);
 
-            if (sort is not null)
+            var sortProperty = typeof(JobExecution).GetProperties()
+                .Select(property => property.Name)
+                .FirstOrDefault(name => string.Equals(name, sort?.PropertyName, StringComparison.OrdinalIgnoreCase));
+            if (sort is not null && sortProperty is not null)
             {
                 jobExecutions = sort.Direction == SortDirection.Ascending
-                    ? jobExecutions.OrderBy(e => EF.Property<JobExecution>(e, sort.PropertyName))
-                    : jobExecutions.OrderByDescending(e => EF.Property<JobExecution>(e, sort.PropertyName));
+                    ? jobExecutions.OrderBy(e => EF.Property<JobExecution>(e, sortProperty)).ThenBy(e => e.Id)
+                    : jobExecutions.OrderByDescending(e => EF.Property<JobExecution>(e, sortProperty))
+                        .ThenBy(e => e.Id);
             }
             else
             {
-                jobExecutions = jobExecutions.OrderByDescending(e => e.CreatedAt);
+                jobExecutions = jobExecutions.OrderByDescending(e => e.CreatedAt).ThenBy(e => e.Id);
             }
 
-            if (page is not null)
-            {
-                jobExecutions = jobExecutions.Skip((page.PageNumber - 1) * page.PageSize).Take(page.PageSize);
-            }
+            jobExecutions = jobExecutions.Skip((page.PageNumber - 1) * page.PageSize).Take(page.PageSize);
 
             var items = await jobExecutions.ToListAsync(cancellationToken).ConfigureAwait(false);
 
             return new()
             {
                 Items = items,
-                PageNumber = page?.PageNumber,
-                PageSize = page?.PageSize,
+                PageNumber = page.PageNumber,
+                PageSize = page.PageSize,
                 TotalItems = totalCount
             };
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Error querying job executions");
+            logger.LogError(ex, "The job execution repository failed to query job executions.");
             throw;
         }
+    }
+
+    public async Task<int> DeleteWhereAsync(JobExecutionQuery query, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var now = _time.GetUtcNow().UtcDateTime;
+            return await BuildFilteredQuery(query, now)
+                .ExecuteDeleteAsync(cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "The job execution repository failed to delete job executions by query.");
+            throw;
+        }
+    }
+
+    private IQueryable<JobExecution> BuildFilteredQuery(JobExecutionQuery query, DateTime now)
+    {
+        var jobExecutions = query.ParameterValueReferences is { Count: > 0 } references
+            ? BuildParameterValueReferenceQuery(references)
+            : context.JobExecutions.AsNoTracking();
+
+        if (!string.IsNullOrWhiteSpace(query.JobType))
+        {
+            jobExecutions = jobExecutions.Where(e => e.JobType == query.JobType);
+        }
+
+        if (query.JobTypes is { Count: > 0 } jobTypes)
+        {
+            var types = jobTypes as string[] ?? [.. jobTypes];
+            jobExecutions = jobExecutions.Where(e => types.Contains(e.JobType));
+        }
+
+        if (query.ExtensionId is not null)
+        {
+            jobExecutions = jobExecutions.Where(e => e.ExtensionId == query.ExtensionId);
+        }
+
+        if (query.ScheduleTriggerId is not null)
+        {
+            jobExecutions = jobExecutions.Where(e => e.ScheduleTriggerId == query.ScheduleTriggerId);
+        }
+
+        if (query.EventTriggerId is not null)
+        {
+            jobExecutions = jobExecutions.Where(e => e.EventTriggerId == query.EventTriggerId);
+        }
+
+        if (query.NodeId is { } nodeId)
+        {
+            jobExecutions = jobExecutions.Where(e => e.NodeId == nodeId);
+        }
+
+        var statusFilter = query.Statuses is { Count: > 0 }
+            ? query.Statuses as JobExecutionStatus[] ?? [.. query.Statuses]
+            : query.Status is { } singleStatus ? [singleStatus] : [];
+        if (statusFilter.Length > 0)
+        {
+            jobExecutions = jobExecutions.Where(e => statusFilter.Contains(e.Status));
+        }
+
+        if (query.Pending is { } pending)
+        {
+            jobExecutions = pending
+                ? jobExecutions.Where(e => e.Status == JobExecutionStatus.Queued &&
+                    e.NotBeforeAt != null &&
+                    e.NotBeforeAt > now)
+                : jobExecutions.Where(e => !(e.Status == JobExecutionStatus.Queued &&
+                    e.NotBeforeAt != null &&
+                    e.NotBeforeAt > now));
+        }
+
+        if (query.CorrelationId is not null)
+        {
+            jobExecutions = jobExecutions.Where(e => e.CorrelationId == query.CorrelationId);
+        }
+
+        if (query.RootsOnly)
+        {
+            jobExecutions = jobExecutions.Where(e => e.ParentExecutionId == null);
+        }
+
+        if (query.CreatedByUserId is not null)
+        {
+            jobExecutions = jobExecutions.Where(e => e.CreatedByUserId == query.CreatedByUserId);
+        }
+
+        if (query.Timestamp?.Min is not null)
+        {
+            jobExecutions = jobExecutions.Where(e => e.CreatedAt >= query.Timestamp.Min);
+        }
+
+        if (query.Timestamp?.Max is not null)
+        {
+            jobExecutions = jobExecutions.Where(e => e.CreatedAt <= query.Timestamp.Max);
+        }
+
+        if (query.CompletedAt?.Min is { } completedAtMin)
+        {
+            jobExecutions = jobExecutions.Where(e => e.CompletedAt.HasValue && e.CompletedAt.Value >= completedAtMin);
+        }
+
+        if (query.CompletedAt?.Max is { } completedAtMax)
+        {
+            jobExecutions = jobExecutions.Where(e => e.CompletedAt.HasValue && e.CompletedAt.Value <= completedAtMax);
+        }
+
+        if (query.ExecutionTimestamp?.Min is { } executionTimestampMin)
+        {
+            jobExecutions = jobExecutions.Where(e =>
+                (e.CompletedAt ?? e.StartedAt ?? e.CreatedAt) >= executionTimestampMin);
+        }
+
+        if (query.ExecutionTimestamp?.Max is { } executionTimestampMax)
+        {
+            jobExecutions = jobExecutions.Where(e =>
+                (e.CompletedAt ?? e.StartedAt ?? e.CreatedAt) <= executionTimestampMax);
+        }
+
+        if (query.LastHeartbeat?.Min is { } lastHeartbeatMin)
+        {
+            jobExecutions = jobExecutions.Where(e =>
+                e.LastHeartbeat.HasValue && e.LastHeartbeat.Value >= lastHeartbeatMin);
+        }
+
+        if (query.LastHeartbeat?.Max is { } lastHeartbeatMax)
+        {
+            jobExecutions = jobExecutions.Where(e =>
+                e.LastHeartbeat.HasValue && e.LastHeartbeat.Value <= lastHeartbeatMax);
+        }
+
+        if (query.TimeoutAt?.Min is { } timeoutAtMin)
+        {
+            jobExecutions = jobExecutions.Where(e => e.TimeoutAt.HasValue && e.TimeoutAt.Value >= timeoutAtMin);
+        }
+
+        if (query.TimeoutAt?.Max is { } timeoutAtMax)
+        {
+            jobExecutions = jobExecutions.Where(e => e.TimeoutAt.HasValue && e.TimeoutAt.Value <= timeoutAtMax);
+        }
+
+        return jobExecutions;
+    }
+
+    private IQueryable<JobExecution> BuildParameterValueReferenceQuery(IReadOnlyCollection<string> references)
+    {
+        var tableName = context.Model.FindEntityType(typeof(JobExecution))?.GetTableName()
+            ?? throw new InvalidOperationException("JobExecution entity is not mapped to a table.");
+        var distinct = references.Distinct(StringComparer.Ordinal).ToArray();
+        var clauses = string.Join(
+            " OR ",
+            distinct.Select((_, i) => $"(\"Parameters\" LIKE {{{i}}} OR \"TriggerContext\" LIKE {{{i}}})"));
+        var patterns = distinct.Select(v => (object)("%" + v + "%")).ToArray();
+        var sql = $"SELECT * FROM \"{tableName}\" WHERE {clauses}";
+
+        return context.JobExecutions
+            .FromSqlRaw(sql, patterns)
+            .AsNoTracking();
+    }
+
+    public Task<JobExecution> CreateAsync(
+        JobExecution model,
+        Guid? createdByUserId,
+        CancellationToken cancellationToken)
+    {
+        return CreateAsync(model, createdByUserId, clearDeferralOnCoalesce: false, cancellationToken);
     }
 
     public async Task<JobExecution> CreateAsync(
         JobExecution model,
         Guid? createdByUserId,
+        bool clearDeferralOnCoalesce,
         CancellationToken cancellationToken)
     {
         try
         {
-            return await transactionManager.ExecuteWithTransactionAsync(async _ =>
-            {
-                var now = DateTime.UtcNow;
-                model.CreatedAt = now;
-                model.CreatedByUserId = createdByUserId;
-
-                context.JobExecutions.Add(model);
-                await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
-
-                await auditRecordRepository.CreateAsync(new()
+            var inserted = false;
+            var created = await transactionManager.ExecuteWithTransactionAsync(
+                async _ =>
                 {
-                    Category = AuditCategories.Jobs,
-                    Operation = "Create",
-                    EntityId = model.Id.ToString(),
-                    EntityType = nameof(JobExecution),
-                    Detail = $"Created job execution for {model.JobType}",
-                    Timestamp = now,
-                    UserId = createdByUserId
-                }, cancellationToken).ConfigureAwait(false);
+                    EntityEntry<Dictionary<string, object>>? coalescingLock = null;
+                    if (model.LockPartition is { } lockPartition)
+                    {
+                        coalescingLock = await AcquireCoalescingLockAsync(
+                            model.JobType, lockPartition, cancellationToken)
+                            .ConfigureAwait(false);
+                    }
 
-                return model;
-            }, cancellationToken);
+                    try
+                    {
+                        var now = _time.GetUtcNow().UtcDateTime;
+                        model.CreatedAt = now;
+                        model.CreatedByUserId = createdByUserId;
+
+                        if (!string.IsNullOrEmpty(model.DedupKey))
+                        {
+                            var existingByKey = await context.JobExecutions
+                                .AsNoTracking()
+                                .FirstOrDefaultAsync(e => e.DedupKey == model.DedupKey, cancellationToken)
+                                .ConfigureAwait(false);
+                            if (existingByKey is not null)
+                            {
+                                return existingByKey;
+                            }
+                        }
+
+                        if (model.LockPartition is { } partition)
+                        {
+                            var coalesced = await TryCoalesceAsync(
+                                model, partition, createdByUserId, clearDeferralOnCoalesce, cancellationToken)
+                                .ConfigureAwait(false);
+                            if (coalesced is not null)
+                            {
+                                return coalesced;
+                            }
+                        }
+
+                        var transaction = context.Database.CurrentTransaction;
+                        var savepointTaken = transaction is { SupportsSavepoints: true };
+                        if (savepointTaken)
+                        {
+                            await transaction!.CreateSavepointAsync(DedupInsertSavepoint, cancellationToken)
+                                .ConfigureAwait(false);
+                        }
+
+                        try
+                        {
+                            context.JobExecutions.Add(model);
+                            await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+                        }
+                        catch (DbUpdateException ex)
+                            when (model.LockPartition is not null || !string.IsNullOrEmpty(model.DedupKey))
+                        {
+                            context.Entry(model).State = EntityState.Detached;
+
+                            if (savepointTaken)
+                            {
+                                await transaction!.RollbackToSavepointAsync(DedupInsertSavepoint, cancellationToken)
+                                    .ConfigureAwait(false);
+                            }
+
+                            if (!string.IsNullOrEmpty(model.DedupKey))
+                            {
+                                var existingByKey = await context.JobExecutions
+                                    .AsNoTracking()
+                                    .FirstOrDefaultAsync(e => e.DedupKey == model.DedupKey, cancellationToken)
+                                    .ConfigureAwait(false);
+                                if (existingByKey is not null)
+                                {
+                                    logger.LogDebug(
+                                        ex,
+                                        "The {JobType} event enqueue lost the {DedupKey} race " +
+                                        "and will use {ExecutionId}",
+                                        model.JobType,
+                                        model.DedupKey,
+                                        existingByKey.Id);
+                                    return existingByKey;
+                                }
+                            }
+
+                            if (model.LockPartition is { } conflictPartition)
+                            {
+                                var coalesced = await TryCoalesceAsync(
+                                    model,
+                                    conflictPartition,
+                                    createdByUserId,
+                                    clearDeferralOnCoalesce,
+                                    cancellationToken)
+                                    .ConfigureAwait(false);
+                                if (coalesced is not null)
+                                {
+                                    logger.LogDebug(
+                                        ex,
+                                        "The {JobType} enqueue lost the {LockPartition} race " +
+                                        "and will use {ExecutionId}",
+                                        model.JobType,
+                                        conflictPartition,
+                                        coalesced.Id);
+                                    return coalesced;
+                                }
+                            }
+
+                            throw;
+                        }
+
+                        await auditRecordRepository.CreateAsync(
+                            new()
+                            {
+                                Category = AuditCategories.Jobs,
+                                Operation = "Create",
+                                EntityId = model.Id.ToString(),
+                                EntityType = nameof(JobExecution),
+                                Detail = $"Created job run for {model.JobType}.",
+                                Timestamp = now,
+                                UserId = createdByUserId,
+                                CorrelationId = model.CorrelationId
+                            },
+                            cancellationToken).ConfigureAwait(false);
+
+                        inserted = true;
+                        return model;
+                    }
+                    finally
+                    {
+                        if (coalescingLock is not null)
+                        {
+                            await ReleaseCoalescingLockAsync(coalescingLock).ConfigureAwait(false);
+                        }
+                    }
+                },
+                cancellationToken).ConfigureAwait(false);
+
+            if (inserted)
+            {
+                await transactionManager.OnCommittedAsync(
+                    async token =>
+                    {
+                        var impact = ParameterImpact(created);
+                        await eventBus.PublishAsync(
+                            JobEventBuilder.BuildJobExecutionCreatedEvent(created.Id, impact, created.JobType),
+                            token).ConfigureAwait(false);
+                        if (created.Status is JobExecutionStatus.Queued)
+                        {
+                            await eventBus.PublishAsync(
+                                JobEventBuilder.BuildJobExecutionQueuedEvent(created.Id, impact, created.JobType),
+                                token).ConfigureAwait(false);
+                        }
+                    },
+                    cancellationToken).ConfigureAwait(false);
+            }
+
+            return created;
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Error creating job execution for {JobType}", model.JobType);
+            logger.LogError(ex, "The job execution repository failed to create a job execution for " +
+                "{JobType}.", model.JobType);
             throw;
         }
+    }
+
+    private async Task<JobExecution?> TryCoalesceAsync(
+        JobExecution incoming,
+        string partition,
+        Guid? createdByUserId,
+        bool clearDeferralOnCoalesce,
+        CancellationToken cancellationToken)
+    {
+        var now = _time.GetUtcNow().UtcDateTime;
+        var matching = context.JobExecutions
+            .Where(e => e.JobType == incoming.JobType && e.LockPartition == partition);
+
+        JobExecution? existing;
+        if (incoming.NotBeforeAt is { } incomingDeferral && incomingDeferral > now)
+        {
+            existing = await matching
+                .Where(e => e.Status == JobExecutionStatus.Queued && e.NotBeforeAt != null && e.NotBeforeAt > now)
+                .OrderBy(e => e.NotBeforeAt)
+                .ThenBy(e => e.CreatedAt)
+                .FirstOrDefaultAsync(cancellationToken)
+                .ConfigureAwait(false);
+        }
+        else
+        {
+            existing = await matching
+                .Where(e => e.Status == JobExecutionStatus.Running ||
+                    (e.Status == JobExecutionStatus.Queued &&
+                        (e.NotBeforeAt == null || e.NotBeforeAt <= now)))
+                .OrderBy(e => e.CreatedAt)
+                .FirstOrDefaultAsync(cancellationToken)
+                .ConfigureAwait(false);
+
+            if (existing is null && clearDeferralOnCoalesce)
+            {
+                existing = await matching
+                    .Where(e => e.Status == JobExecutionStatus.Queued && e.NotBeforeAt != null && e.NotBeforeAt > now)
+                    .OrderBy(e => e.NotBeforeAt)
+                    .ThenBy(e => e.CreatedAt)
+                    .FirstOrDefaultAsync(cancellationToken)
+                    .ConfigureAwait(false);
+            }
+        }
+
+        if (existing is null)
+        {
+            return null;
+        }
+
+        var reconciled = ReconcileNotBeforeAt(existing.NotBeforeAt, incoming.NotBeforeAt, clearDeferralOnCoalesce, now);
+
+        if (reconciled != existing.NotBeforeAt)
+        {
+            existing.NotBeforeAt = reconciled;
+            existing.ModifiedAt = _time.GetUtcNow().UtcDateTime;
+            await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+
+            await auditRecordRepository.CreateAsync(
+                new()
+                {
+                    Category = AuditCategories.Jobs,
+                    Operation = "Coalesce",
+                    EntityId = existing.Id.ToString(),
+                    EntityType = nameof(JobExecution),
+                    Detail = $"Coalesced enqueue for {incoming.JobType} onto {existing.Id}; " +
+                        "advanced NotBeforeAt to the earlier eligibility",
+                    Timestamp = existing.ModifiedAt!.Value,
+                    UserId = createdByUserId,
+                    CorrelationId = existing.CorrelationId
+                },
+                cancellationToken).ConfigureAwait(false);
+        }
+
+        logger.LogDebug(
+            "The {JobType} enqueue will use existing execution {ExecutionId} that holds partition {LockPartition}",
+            incoming.JobType,
+            existing.Id,
+            partition);
+
+        return existing;
     }
 
     public async Task<bool> UpdateAsync(JobExecution model, Guid? modifiedByUserId, CancellationToken cancellationToken)
     {
         try
         {
-            return await transactionManager.ExecuteWithTransactionAsync(async _ =>
-            {
-                var now = DateTime.UtcNow;
-
-                var updated = await context.JobExecutions
-                    .Where(e => e.Id == model.Id)
-                    .ExecuteUpdateAsync(
-                        s => s
-                            .SetProperty(e => e.ScheduleTriggerId, model.ScheduleTriggerId)
-                            .SetProperty(e => e.EventTriggerId, model.EventTriggerId)
-                            .SetProperty(e => e.ExtensionId, model.ExtensionId)
-                            .SetProperty(e => e.JobType, model.JobType)
-                            .SetProperty(e => e.Scope, model.Scope)
-                            .SetProperty(e => e.TriggerContext, model.TriggerContext)
-                            .SetProperty(e => e.Parameters, model.Parameters)
-                            .SetProperty(e => e.Progress, model.Progress)
-                            .SetProperty(e => e.Status, model.Status)
-                            .SetProperty(e => e.StatusMessage, model.StatusMessage)
-                            .SetProperty(e => e.NodeId, model.NodeId)
-                            .SetProperty(e => e.LastHeartbeat, model.LastHeartbeat)
-                            .SetProperty(e => e.TimeoutAt, model.TimeoutAt)
-                            .SetProperty(e => e.StartedAt, model.StartedAt)
-                            .SetProperty(e => e.CompletedAt, model.CompletedAt)
-                            .SetProperty(e => e.ModifiedAt, now),
-                        cancellationToken)
-                    .ConfigureAwait(false);
-
-                if (updated > 0)
+            return await transactionManager.ExecuteWithTransactionAsync(
+                async _ =>
                 {
-                    await auditRecordRepository.CreateAsync(new()
-                    {
-                        Category = AuditCategories.Jobs,
-                        Operation = "Update",
-                        EntityId = model.Id.ToString(),
-                        EntityType = nameof(JobExecution),
-                        Detail = $"Updated job execution {model.Id}",
-                        Timestamp = now,
-                        UserId = modifiedByUserId
-                    }, cancellationToken).ConfigureAwait(false);
-                }
+                    var now = _time.GetUtcNow().UtcDateTime;
 
-                return updated > 0;
-            }, cancellationToken);
+                    var updated = await context.JobExecutions
+                        .Where(e => e.Id == model.Id)
+                        .ExecuteUpdateAsync(
+                            s => s
+                                .SetProperty(e => e.ScheduleTriggerId, model.ScheduleTriggerId)
+                                .SetProperty(e => e.EventTriggerId, model.EventTriggerId)
+                                .SetProperty(e => e.ExtensionId, model.ExtensionId)
+                                .SetProperty(e => e.JobType, model.JobType)
+                                .SetProperty(e => e.Scope, model.Scope)
+                                .SetProperty(e => e.TriggerContext, model.TriggerContext)
+                                .SetProperty(e => e.Parameters, model.Parameters)
+                                .SetProperty(e => e.ExecutionMode, model.ExecutionMode)
+                                .SetProperty(e => e.Progress, model.Progress)
+                                .SetProperty(e => e.Status, model.Status)
+                                .SetProperty(e => e.StatusMessage, model.StatusMessage)
+                                .SetProperty(e => e.NodeId, model.NodeId)
+                                .SetProperty(e => e.LastHeartbeat, model.LastHeartbeat)
+                                .SetProperty(e => e.TimeoutAt, model.TimeoutAt)
+                                .SetProperty(e => e.NotBeforeAt, model.NotBeforeAt)
+                                .SetProperty(e => e.Attempt, model.Attempt)
+                                .SetProperty(e => e.OriginalExecutionId, model.OriginalExecutionId)
+                                .SetProperty(e => e.ParentExecutionId, model.ParentExecutionId)
+                                .SetProperty(e => e.CorrelationId, model.CorrelationId)
+                                .SetProperty(e => e.StartedAt, model.StartedAt)
+                                .SetProperty(e => e.CompletedAt, model.CompletedAt)
+                                .SetProperty(e => e.CancellationRequestedAt, model.CancellationRequestedAt)
+                                .SetProperty(e => e.ModifiedAt, now),
+                            cancellationToken)
+                        .ConfigureAwait(false);
+
+                    if (updated > 0)
+                    {
+                        await auditRecordRepository.CreateAsync(
+                            new()
+                            {
+                                Category = AuditCategories.Jobs,
+                                Operation = "Update",
+                                EntityId = model.Id.ToString(),
+                                EntityType = nameof(JobExecution),
+                                Detail = $"Updated job run {model.Id}.",
+                                Timestamp = now,
+                                UserId = modifiedByUserId,
+                                CorrelationId = model.CorrelationId
+                            },
+                            cancellationToken).ConfigureAwait(false);
+                    }
+
+                    return updated > 0;
+                },
+                cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Error updating job execution {ExecutionId}", model.Id);
+            logger.LogError(ex, "The job execution repository failed to update job execution {ExecutionId}.", model.Id);
             throw;
         }
     }
 
-    public async Task<bool> DeleteAsync(
-        Guid id,
-        Guid? deletedByUserId,
+    public async Task<bool> DeleteAsync(Guid id, Guid? deletedByUserId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await transactionManager.ExecuteWithTransactionAsync(
+                async _ =>
+                {
+                    var now = _time.GetUtcNow().UtcDateTime;
+
+                    var deleted = await context.JobExecutions
+                        .Where(e => e.Id == id)
+                        .ExecuteDeleteAsync(cancellationToken)
+                        .ConfigureAwait(false);
+
+                    if (deleted > 0)
+                    {
+                        await auditRecordRepository.CreateAsync(
+                            new()
+                            {
+                                Category = AuditCategories.Jobs,
+                                Operation = "Delete",
+                                EntityId = id.ToString(),
+                                EntityType = nameof(JobExecution),
+                                Detail = $"Deleted job run {id}.",
+                                Timestamp = now,
+                                UserId = deletedByUserId
+                            },
+                            cancellationToken).ConfigureAwait(false);
+                    }
+
+                    return deleted > 0;
+                },
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "The job execution repository failed to delete job execution {ExecutionId}.", id);
+            throw;
+        }
+    }
+
+    public async Task<IReadOnlyList<JobClaimCandidate>> GetClaimableCandidatesAsync(
+        PagingParameter paging,
         CancellationToken cancellationToken)
     {
         try
         {
-            return await transactionManager.ExecuteWithTransactionAsync(async _ =>
-            {
-                var now = DateTime.UtcNow;
-
-                var deleted = await context.JobExecutions
-                    .Where(e => e.Id == id)
-                    .ExecuteDeleteAsync(cancellationToken)
-                    .ConfigureAwait(false);
-
-                if (deleted > 0)
-                {
-                    await auditRecordRepository.CreateAsync(new()
-                    {
-                        Category = AuditCategories.Jobs,
-                        Operation = "Delete",
-                        EntityId = id.ToString(),
-                        EntityType = nameof(JobExecution),
-                        Detail = $"Deleted job execution {id}",
-                        Timestamp = now,
-                        UserId = deletedByUserId
-                    }, cancellationToken).ConfigureAwait(false);
-                }
-
-                return deleted > 0;
-            }, cancellationToken);
+            var now = _time.GetUtcNow().UtcDateTime;
+            var claimable = context.JobExecutions
+                .Where(e => e.Status == JobExecutionStatus.Queued &&
+                    e.NodeId == null &&
+                    (e.NotBeforeAt == null || e.NotBeforeAt <= now) &&
+                    (e.LockPartition == null ||
+                        !context.JobExecutions.Any(x =>
+                            (x.Status == JobExecutionStatus.Running ||
+                                x.Status == JobExecutionStatus.CancellationRequested) &&
+                            x.LockPartition != null &&
+                            x.LockPartition == e.LockPartition)));
+            return await claimable
+                .OrderBy(e => e.CreatedAt)
+                .ThenBy(e => e.Id)
+                .Select(e => new JobClaimCandidate(e.Id, e.JobType, e.LockPartition))
+                .Skip((paging.PageNumber - 1) * paging.PageSize)
+                .Take(paging.PageSize)
+                .ToListAsync(cancellationToken)
+                .ConfigureAwait(false);
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Error deleting job execution {ExecutionId}", id);
+            logger.LogError(ex, "The job execution repository failed to query claimable job matches.");
             throw;
         }
     }
 
-    public async Task<JobExecution?> TryDequeueAsync(string nodeId, CancellationToken cancellationToken)
+    public async Task<JobExecution?> TryClaimAsync(Guid executionId, string nodeId, CancellationToken cancellationToken)
     {
         try
         {
-            return await transactionManager.ExecuteWithTransactionAsync(async _ =>
+            var claimed = await transactionManager.ExecuteWithTransactionAsync(
+                async _ =>
+                {
+                    var now = _time.GetUtcNow().UtcDateTime;
+
+                    var partition = await (
+                        from e in context.JobExecutions.AsNoTracking()
+                        where e.Id == executionId
+                        select e.LockPartition)
+                        .FirstOrDefaultAsync(cancellationToken)
+                        .ConfigureAwait(false);
+                    int updated;
+                    try
+                    {
+                        updated = await context.JobExecutions
+                            .Where(e => e.Id == executionId &&
+                                e.Status == JobExecutionStatus.Queued &&
+                                e.NodeId == null &&
+                                (partition == null ||
+                                    !context.JobExecutions.Any(x =>
+                                        (x.Status == JobExecutionStatus.Running ||
+                                            x.Status == JobExecutionStatus.CancellationRequested) &&
+                                        x.LockPartition == partition)))
+                            .ExecuteUpdateAsync(
+                                s => s
+                                    .SetProperty(e => e.Status, JobExecutionStatus.Running)
+                                    .SetProperty(e => e.NodeId, nodeId)
+                                    .SetProperty(e => e.StartedAt, now)
+                                    .SetProperty(e => e.LastHeartbeat, now)
+                                    .SetProperty(e => e.ModifiedAt, now),
+                                cancellationToken)
+                            .ConfigureAwait(false);
+                    }
+                    catch (DbUpdateException ex)
+                    {
+                        logger.LogDebug(
+                            ex,
+                            "The claim on partition {LockPartition} for candidate {ExecutionId} lost the race",
+                            partition,
+                            executionId);
+                        return null;
+                    }
+
+                    if (updated == 0)
+                    {
+                        return null;
+                    }
+
+                    await auditRecordRepository.CreateAsync(
+                        new()
+                        {
+                            Category = AuditCategories.Jobs,
+                            Operation = "Dequeue",
+                            EntityId = executionId.ToString(),
+                            EntityType = nameof(JobExecution),
+                            Detail = $"Job run {executionId} was assigned to Magpie instance {nodeId}.",
+                            Timestamp = now
+                        },
+                        cancellationToken).ConfigureAwait(false);
+
+                    return await context.JobExecutions
+                        .AsNoTracking()
+                        .FirstOrDefaultAsync(e => e.Id == executionId, cancellationToken)
+                        .ConfigureAwait(false);
+                },
+                cancellationToken).ConfigureAwait(false);
+
+            if (claimed is not null)
             {
-                var now = DateTime.UtcNow;
+                await transactionManager.OnCommittedAsync(
+                    token => eventBus.PublishAsync(
+                        JobEventBuilder.BuildJobExecutionStartedEvent(
+                            executionId,
+                            ParameterImpact(claimed),
+                            claimed.JobType),
+                        token),
+                    cancellationToken).ConfigureAwait(false);
+            }
 
-                var candidateId = await (
-                    from e in context.JobExecutions
-                    where e.Status == JobExecutionStatus.Queued && e.NodeId == null
-                    orderby e.CreatedAt
-                    select e.Id).FirstOrDefaultAsync(cancellationToken).ConfigureAwait(false);
-
-                if (candidateId == Guid.Empty)
-                {
-                    return null;
-                }
-
-                var updated = await context.JobExecutions
-                    .Where(e => e.Id == candidateId && e.NodeId == null)
-                    .ExecuteUpdateAsync(
-                        s => s
-                            .SetProperty(e => e.NodeId, nodeId)
-                            .SetProperty(e => e.LastHeartbeat, now)
-                            .SetProperty(e => e.ModifiedAt, now),
-                        cancellationToken)
-                    .ConfigureAwait(false);
-
-                if (updated == 0)
-                {
-                    return null;
-                }
-
-                await auditRecordRepository.CreateAsync(new()
-                {
-                    Category = AuditCategories.Jobs,
-                    Operation = "Dequeue",
-                    EntityId = candidateId.ToString(),
-                    EntityType = nameof(JobExecution),
-                    Detail = $"Job execution {candidateId} claimed by node {nodeId}",
-                    Timestamp = now
-                }, cancellationToken).ConfigureAwait(false);
-
-                return await context.JobExecutions
-                    .AsNoTracking()
-                    .FirstOrDefaultAsync(e => e.Id == candidateId, cancellationToken)
-                    .ConfigureAwait(false);
-            }, cancellationToken);
+            return claimed;
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Error dequeuing job execution for node {NodeId}", nodeId);
+            logger.LogError(ex, "The job execution repository failed to claim job execution {ExecutionId} " +
+                "for node {NodeId}.", executionId, nodeId);
+            throw;
+        }
+    }
+
+    public async Task<bool> TryStartAsync(Guid executionId, string nodeId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var started = await transactionManager.ExecuteWithTransactionAsync(
+                async _ =>
+                {
+                    var now = _time.GetUtcNow().UtcDateTime;
+                    var partition = await (
+                        from e in context.JobExecutions.AsNoTracking()
+                        where e.Id == executionId
+                        select e.LockPartition)
+                        .FirstOrDefaultAsync(cancellationToken)
+                        .ConfigureAwait(false);
+                    int updated;
+                    try
+                    {
+                        updated = await context.JobExecutions
+                            .Where(e => e.Id == executionId &&
+                                e.Status == JobExecutionStatus.Queued &&
+                                (e.NodeId == null || e.NodeId == nodeId) &&
+                                (partition == null ||
+                                    !context.JobExecutions.Any(x =>
+                                        (x.Status == JobExecutionStatus.Running ||
+                                            x.Status == JobExecutionStatus.CancellationRequested) &&
+                                        x.LockPartition == partition)))
+                            .ExecuteUpdateAsync(
+                                s => s
+                                    .SetProperty(e => e.Status, JobExecutionStatus.Running)
+                                    .SetProperty(e => e.NodeId, nodeId)
+                                    .SetProperty(e => e.StartedAt, now)
+                                    .SetProperty(e => e.LastHeartbeat, now)
+                                    .SetProperty(e => e.ModifiedAt, now),
+                                cancellationToken)
+                            .ConfigureAwait(false);
+                    }
+                    catch (DbUpdateException ex)
+                    {
+                        logger.LogDebug(
+                            ex,
+                            "The start on partition {LockPartition} for execution {ExecutionId} lost the race",
+                            partition,
+                            executionId);
+                        return false;
+                    }
+
+                    return updated > 0;
+                },
+                cancellationToken).ConfigureAwait(false);
+
+            if (started)
+            {
+                await transactionManager.OnCommittedAsync(
+                    token => eventBus.PublishAsync(JobEventBuilder.BuildJobExecutionStartedEvent(executionId), token),
+                    cancellationToken).ConfigureAwait(false);
+            }
+
+            return started;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "The job execution repository failed to start job execution " +
+                "{ExecutionId}.", executionId);
+            throw;
+        }
+    }
+
+    public async Task<bool> TryMarkRunningCompletedAsync(Guid executionId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var now = _time.GetUtcNow().UtcDateTime;
+            var updated = await context.JobExecutions
+                .Where(e => e.Id == executionId && e.Status == JobExecutionStatus.Running)
+                .ExecuteUpdateAsync(
+                    s => s
+                        .SetProperty(e => e.Status, JobExecutionStatus.Completed)
+                        .SetProperty(e => e.CompletedAt, now)
+                        .SetProperty(e => e.LastHeartbeat, now)
+                        .SetProperty(e => e.Progress, 100.0)
+                        .SetProperty(e => e.ModifiedAt, now),
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            if (updated > 0)
+            {
+                await transactionManager.OnCommittedAsync(
+                    token => eventBus.PublishAsync(JobEventBuilder.BuildJobExecutionCompletedEvent(executionId), token),
+                    cancellationToken).ConfigureAwait(false);
+            }
+
+            return updated > 0;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "The job execution repository failed to mark job execution {ExecutionId} " +
+                "complete.", executionId);
+            throw;
+        }
+    }
+
+    public async Task<bool> TryMarkRunningFailedAsync(
+        Guid executionId,
+        string errorMessage,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var now = _time.GetUtcNow().UtcDateTime;
+            var updated = await context.JobExecutions
+                .Where(e => e.Id == executionId && e.Status == JobExecutionStatus.Running)
+                .ExecuteUpdateAsync(
+                    s => s
+                        .SetProperty(e => e.Status, JobExecutionStatus.Failed)
+                        .SetProperty(e => e.CompletedAt, now)
+                        .SetProperty(e => e.LastHeartbeat, now)
+                        .SetProperty(e => e.StatusMessage, errorMessage)
+                        .SetProperty(e => e.ModifiedAt, now),
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            return updated > 0;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "The job execution repository failed to reclaim running job execution " +
+                "{ExecutionId}.", executionId);
+            throw;
+        }
+    }
+
+    public async Task<bool> TryMarkQueuedFailedAsync(
+        Guid executionId,
+        string errorMessage,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var now = _time.GetUtcNow().UtcDateTime;
+            var updated = await context.JobExecutions
+                .Where(e => e.Id == executionId && e.Status == JobExecutionStatus.Queued)
+                .ExecuteUpdateAsync(
+                    s => s
+                        .SetProperty(e => e.Status, JobExecutionStatus.Failed)
+                        .SetProperty(e => e.CompletedAt, now)
+                        .SetProperty(e => e.LastHeartbeat, now)
+                        .SetProperty(e => e.StatusMessage, errorMessage)
+                        .SetProperty(e => e.ModifiedAt, now),
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            return updated > 0;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "The job execution repository failed to fail queued job execution " +
+                "{ExecutionId}.", executionId);
+            throw;
+        }
+    }
+
+    public async Task<bool> TryMarkCancellationRequestedCancelledAsync(
+        Guid executionId,
+        string? reason,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await transactionManager.ExecuteWithTransactionAsync(
+                async transactionToken =>
+                {
+                    var execution = await context.JobExecutions
+                        .AsNoTracking()
+                        .Where(e => e.Id == executionId && e.Status == JobExecutionStatus.CancellationRequested)
+                        .Select(e => new
+                        {
+                            e.CreatedByUserId,
+                            e.CorrelationId
+                        })
+                        .FirstOrDefaultAsync(transactionToken)
+                        .ConfigureAwait(false);
+                    if (execution is null)
+                    {
+                        return false;
+                    }
+
+                    var now = _time.GetUtcNow().UtcDateTime;
+                    var updated = reason is null
+                        ? await context.JobExecutions
+                            .Where(e => e.Id == executionId && e.Status == JobExecutionStatus.CancellationRequested)
+                            .ExecuteUpdateAsync(
+                                s => s
+                                    .SetProperty(e => e.Status, JobExecutionStatus.Cancelled)
+                                    .SetProperty(e => e.CompletedAt, now)
+                                    .SetProperty(e => e.LastHeartbeat, now)
+                                    .SetProperty(e => e.ModifiedAt, now),
+                                transactionToken)
+                            .ConfigureAwait(false)
+                        : await context.JobExecutions
+                            .Where(e => e.Id == executionId && e.Status == JobExecutionStatus.CancellationRequested)
+                            .ExecuteUpdateAsync(
+                                s => s
+                                    .SetProperty(e => e.Status, JobExecutionStatus.Cancelled)
+                                    .SetProperty(e => e.CompletedAt, now)
+                                    .SetProperty(e => e.LastHeartbeat, now)
+                                    .SetProperty(e => e.StatusMessage, reason)
+                                    .SetProperty(e => e.ModifiedAt, now),
+                                transactionToken)
+                            .ConfigureAwait(false);
+                    if (updated == 0)
+                    {
+                        return false;
+                    }
+
+                    await auditRecordRepository.CreateAsync(
+                        new()
+                        {
+                            Category = AuditCategories.Jobs,
+                            Operation = "JobCancelled",
+                            EntityId = executionId.ToString(),
+                            EntityType = nameof(JobExecution),
+                            Detail = $"Canceled job run {executionId}.",
+                            Timestamp = now,
+                            UserId = execution.CreatedByUserId,
+                            CorrelationId = execution.CorrelationId
+                        },
+                        transactionToken).ConfigureAwait(false);
+                    await transactionManager.OnCommittedAsync(
+                        token => eventBus.PublishAsync(
+                            JobEventBuilder.BuildJobExecutionCancelledEvent(executionId),
+                            token),
+                        transactionToken).ConfigureAwait(false);
+
+                    return true;
+                },
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "The job execution repository failed to mark job execution {ExecutionId} " +
+                "cancelled.", executionId);
+            throw;
+        }
+    }
+
+    public async Task<JobCancellationRequestResult?> RequestCancellationAsync(
+        Guid executionId,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var result = await transactionManager.ExecuteWithTransactionAsync(
+                async _ =>
+                {
+                    var existing = await (
+                        from e in context.JobExecutions.AsNoTracking()
+                        where e.Id == executionId
+                        select new { e.NodeId, e.Status })
+                        .FirstOrDefaultAsync(cancellationToken)
+                        .ConfigureAwait(false);
+
+                    if (existing is null)
+                    {
+                        return null;
+                    }
+
+                    var now = _time.GetUtcNow().UtcDateTime;
+                    if (existing.Status is JobExecutionStatus.Queued)
+                    {
+                        var cancelled = await context.JobExecutions
+                            .Where(e => e.Id == executionId && e.Status == JobExecutionStatus.Queued)
+                            .ExecuteUpdateAsync(
+                                s => s
+                                    .SetProperty(e => e.Status, JobExecutionStatus.Cancelled)
+                                    .SetProperty(e => e.CompletedAt, now)
+                                    .SetProperty(e => e.CancellationRequestedAt, now)
+                                    .SetProperty(e => e.LastHeartbeat, now)
+                                    .SetProperty(e => e.ModifiedAt, now),
+                                cancellationToken)
+                            .ConfigureAwait(false);
+
+                        if (cancelled == 0)
+                        {
+                            return null;
+                        }
+
+                        await auditRecordRepository.CreateAsync(
+                            new()
+                            {
+                                Category = AuditCategories.Jobs,
+                                Operation = "Cancel",
+                                EntityId = executionId.ToString(),
+                                EntityType = nameof(JobExecution),
+                                Detail = $"Cancelled queued job {executionId}.",
+                                Timestamp = now
+                            },
+                            cancellationToken).ConfigureAwait(false);
+
+                        return new JobCancellationRequestResult(null, CancelledBeforeStart: true);
+                    }
+
+                    if (existing.Status is not JobExecutionStatus.Running)
+                    {
+                        return null;
+                    }
+
+                    var requested = await context.JobExecutions
+                        .Where(e => e.Id == executionId && e.Status == JobExecutionStatus.Running)
+                        .ExecuteUpdateAsync(
+                            s => s
+                                .SetProperty(e => e.Status, JobExecutionStatus.CancellationRequested)
+                                .SetProperty(e => e.CancellationRequestedAt, now)
+                                .SetProperty(e => e.ModifiedAt, now),
+                            cancellationToken)
+                        .ConfigureAwait(false);
+
+                    if (requested == 0)
+                    {
+                        return null;
+                    }
+
+                    await auditRecordRepository.CreateAsync(
+                        new()
+                        {
+                            Category = AuditCategories.Jobs,
+                            Operation = "RequestCancellation",
+                            EntityId = executionId.ToString(),
+                            EntityType = nameof(JobExecution),
+                            Detail = $"Requested cancellation of job {executionId}.",
+                            Timestamp = now
+                        },
+                        cancellationToken).ConfigureAwait(false);
+
+                    return new JobCancellationRequestResult(existing.NodeId, CancelledBeforeStart: false);
+                },
+                cancellationToken).ConfigureAwait(false);
+
+            if (result is not null)
+            {
+                var magpieEvent = result.CancelledBeforeStart
+                    ? JobEventBuilder.BuildJobExecutionCancelledEvent(executionId)
+                    : JobEventBuilder.BuildJobExecutionCancellationRequestedEvent(executionId);
+                await transactionManager.OnCommittedAsync(
+                    token => eventBus.PublishAsync(magpieEvent, token),
+                    cancellationToken).ConfigureAwait(false);
+            }
+
+            return result;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "The job execution repository failed to request cancellation of execution " +
+                "{ExecutionId}.", executionId);
+            throw;
+        }
+    }
+
+    public async Task TouchHeartbeatAsync(Guid executionId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var now = _time.GetUtcNow().UtcDateTime;
+            await context.JobExecutions
+                .Where(e => e.Id == executionId &&
+                    (e.Status == JobExecutionStatus.Running ||
+                        e.Status == JobExecutionStatus.CancellationRequested))
+                .ExecuteUpdateAsync(s => s.SetProperty(e => e.LastHeartbeat, now), cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "The job execution repository failed to update the heartbeat of execution " +
+                "{ExecutionId}.", executionId);
+            throw;
+        }
+    }
+
+    public async Task<bool> TrySetRunningTimeoutAsync(
+        Guid executionId,
+        string nodeId,
+        DateTime timeoutAt,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var now = _time.GetUtcNow().UtcDateTime;
+            var updated = await context.JobExecutions
+                .Where(e => e.Id == executionId && e.NodeId == nodeId && e.Status == JobExecutionStatus.Running)
+                .ExecuteUpdateAsync(
+                    s => s
+                        .SetProperty(e => e.TimeoutAt, timeoutAt)
+                        .SetProperty(e => e.ModifiedAt, now),
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            return updated > 0;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "The job execution repository failed to set the timeout of execution " +
+                "{ExecutionId}.", executionId);
+            throw;
+        }
+    }
+
+    public async Task<bool> UpdateProgressAsync(
+        Guid executionId,
+        double? progress,
+        string? statusMessage,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var now = _time.GetUtcNow().UtcDateTime;
+            var updated = await context.JobExecutions
+                .Where(e => e.Id == executionId && e.Status == JobExecutionStatus.Running)
+                .ExecuteUpdateAsync(
+                    s => s
+                        .SetProperty(e => e.Progress, progress)
+                        .SetProperty(e => e.StatusMessage, statusMessage)
+                        .SetProperty(e => e.LastHeartbeat, now)
+                        .SetProperty(e => e.ModifiedAt, now),
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            if (updated > 0)
+            {
+                await transactionManager.OnCommittedAsync(
+                    token => eventBus.PublishAsync(
+                        JobEventBuilder.BuildJobExecutionProgressChangedEvent(executionId),
+                        token),
+                    cancellationToken).ConfigureAwait(false);
+            }
+
+            return updated > 0;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "The job execution repository failed to update the progress of execution " +
+                "{ExecutionId}.", executionId);
+            throw;
+        }
+    }
+
+    public async Task<IReadOnlyList<JobExecution>> GetLineageAsync(
+        Guid executionId,
+        int pageSize,
+        CancellationToken cancellationToken)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(pageSize, 1);
+
+        try
+        {
+            var execution = await context.JobExecutions
+                .AsNoTracking()
+                .FirstOrDefaultAsync(e => e.Id == executionId, cancellationToken)
+                .ConfigureAwait(false);
+            if (execution is null)
+            {
+                return [];
+            }
+
+            var root = execution;
+            var ancestors = new HashSet<Guid> { root.Id };
+            while (root.ParentExecutionId is { } parentId)
+            {
+                if (!ancestors.Add(parentId))
+                {
+                    break;
+                }
+
+                var parent = await context.JobExecutions
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync(e => e.Id == parentId, cancellationToken)
+                    .ConfigureAwait(false);
+                if (parent is null)
+                {
+                    break;
+                }
+
+                root = parent;
+            }
+
+            var collected = new Dictionary<Guid, JobExecution> { [root.Id] = root };
+            IReadOnlyList<Guid> frontier = [root.Id];
+
+            while (frontier.Count > 0)
+            {
+                var nextFrontier = new List<Guid>();
+                for (var parentOffset = 0; parentOffset < frontier.Count; parentOffset += pageSize)
+                {
+                    var parentIds = frontier.Skip(parentOffset).Take(pageSize).ToList();
+                    var pageNumber = 1;
+                    while (true)
+                    {
+                        var children = await context.JobExecutions
+                            .AsNoTracking()
+                            .Where(e => e.ParentExecutionId != null && parentIds.Contains(e.ParentExecutionId.Value))
+                            .OrderBy(e => e.CreatedAt)
+                            .ThenBy(e => e.Id)
+                            .Skip((pageNumber - 1) * pageSize)
+                            .Take(pageSize)
+                            .ToListAsync(cancellationToken)
+                            .ConfigureAwait(false);
+
+                        foreach (var child in children)
+                        {
+                            if (collected.TryAdd(child.Id, child))
+                            {
+                                nextFrontier.Add(child.Id);
+                            }
+                        }
+
+                        if (children.Count < pageSize)
+                        {
+                            break;
+                        }
+
+                        pageNumber++;
+                    }
+                }
+
+                frontier = nextFrontier;
+            }
+
+            return [.. collected.Values];
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "The job execution repository failed to read the lineage of execution " +
+                "{ExecutionId}.", executionId);
+            throw;
+        }
+    }
+
+    public async Task<IReadOnlyDictionary<string, DateTime>> GetLastAttemptTimesByLockPartitionAsync(
+        string jobType,
+        IReadOnlyCollection<string> lockPartitions,
+        CancellationToken cancellationToken)
+    {
+        if (lockPartitions.Count == 0)
+        {
+            return new Dictionary<string, DateTime>();
+        }
+
+        try
+        {
+            var partitions = lockPartitions.Distinct(StringComparer.Ordinal).ToArray();
+            var rows = await (
+                from e in context.JobExecutions.AsNoTracking()
+                where e.JobType == jobType && e.LockPartition != null && partitions.Contains(e.LockPartition)
+                group e by e.LockPartition! into g
+                select new
+                {
+                    LockPartition = g.Key,
+                    LastAttempt = g.Max(e => e.CompletedAt ?? e.CreatedAt)
+                })
+                .ToListAsync(cancellationToken)
+                .ConfigureAwait(false);
+
+            return rows.ToDictionary(r => r.LockPartition, r => r.LastAttempt, StringComparer.Ordinal);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(
+                ex,
+                "The job execution repository failed to query last attempt times for {JobType} across " +
+                "{PartitionCount} lock partitions.",
+                jobType,
+                lockPartitions.Count);
             throw;
         }
     }

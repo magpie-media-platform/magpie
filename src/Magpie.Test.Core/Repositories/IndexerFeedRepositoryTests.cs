@@ -1,17 +1,25 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 
+using Magpie.Abstractions;
 using Magpie.Abstractions.Repositories;
+using Magpie.Abstractions.Security;
 using Magpie.Core;
 using Magpie.Core.Repositories;
 using Magpie.Data;
+using Magpie.Models;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
-using Magpie.Test.Shared;
+using Magpie.Sdk.Services;
 
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
+
+using Moq;
 
 using NUnit.Framework;
 
@@ -22,6 +30,8 @@ public class IndexerFeedRepositoryTests
 {
     private MagpieDbContext _context = null!;
     private IIndexerFeedRepository _subject = null!;
+    private ITransactionManager _transactionManager = null!;
+    private Mock<IEventBus> _eventBus = null!;
     private Guid _userId;
 
     [SetUp]
@@ -48,19 +58,30 @@ public class IndexerFeedRepositoryTests
 
         _userId = user.Id;
 
-        var loggerFactory = LoggerFactory.Create(builder => builder.AddTestLogger());
-
         var auditRecordRepository = new AuditRecordRepository(
             _context,
-            loggerFactory.CreateLogger<AuditRecordRepository>());
+            Mock.Of<IEventBus>(),
+            NullLoggerFactory.Instance.CreateLogger<AuditRecordRepository>(),
+            new TransactionManager(_context, NullLogger<TransactionManager>.Instance));
 
-        var transactionManager = new TransactionManager(_context);
+        _transactionManager = new TransactionManager(_context, NullLogger<TransactionManager>.Instance);
+        _eventBus = new Mock<IEventBus>();
+
+        var protector = new Mock<IDataProtectionService>();
+        protector
+            .Setup(p => p.Protect(It.IsAny<IReadOnlyDictionary<string, string>>()))
+            .Returns((IReadOnlyDictionary<string, string> settings) => new Dictionary<string, string>(settings));
+        protector
+            .Setup(p => p.Unprotect(It.IsAny<IReadOnlyDictionary<string, string>>()))
+            .Returns((IReadOnlyDictionary<string, string> stored) => new Dictionary<string, string>(stored));
 
         _subject = new IndexerFeedRepository(
             _context,
             auditRecordRepository,
-            transactionManager,
-            loggerFactory.CreateLogger<IndexerFeedRepository>());
+            _transactionManager,
+            _eventBus.Object,
+            NullLoggerFactory.Instance.CreateLogger<IndexerFeedRepository>(),
+            protector.Object);
     }
 
     [TearDown]
@@ -83,10 +104,10 @@ public class IndexerFeedRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.IndexerFeeds.Add(indexerFeed);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        var result = await _subject.GetByIdAsync(indexerFeed.Id);
+        var result = await _subject.GetByIdAsync(indexerFeed.Id).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -102,14 +123,14 @@ public class IndexerFeedRepositoryTests
     public async Task GetByIdAsync_ReturnsNull_WhenNotExists()
     {
         // Act
-        var result = await _subject.GetByIdAsync(Guid.NewGuid());
+        var result = await _subject.GetByIdAsync(Guid.NewGuid()).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.Null);
     }
 
     [Test]
-    public async Task ListAllAsync_ReturnsAllIndexerFeeds()
+    public async Task ListAllAsync_ReturnsAllIndexerFeeds_WhenFeedsExist()
     {
         // Arrange
         var feed1 = new IndexerFeed
@@ -127,10 +148,10 @@ public class IndexerFeedRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.IndexerFeeds.AddRange(feed1, feed2);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        var result = await _subject.ListAllAsync(default);
+        var result = await _subject.ListAllAsync(default).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Has.Exactly(2).Items);
@@ -140,14 +161,14 @@ public class IndexerFeedRepositoryTests
     public async Task ListAllAsync_ReturnsEmptyList_WhenNoIndexerFeeds()
     {
         // Act
-        var result = await _subject.ListAllAsync(default);
+        var result = await _subject.ListAllAsync(default).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.Empty);
     }
 
     [Test]
-    public async Task CreateAsync_CreatesIndexerFeed()
+    public async Task CreateAsync_CreatesIndexerFeed_WhenRequestIsValid()
     {
         // Arrange
         var indexerFeed = new IndexerFeed
@@ -159,7 +180,7 @@ public class IndexerFeedRepositoryTests
         };
 
         // Act
-        var result = await _subject.CreateAsync(indexerFeed, _userId);
+        var result = await _subject.CreateAsync(indexerFeed, _userId).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -174,7 +195,7 @@ public class IndexerFeedRepositoryTests
     }
 
     [Test]
-    public async Task CreateAsync_CreatesAuditRecord()
+    public async Task CreateAsync_CreatesAuditRecord_WhenFeedIsCreated()
     {
         // Arrange
         var indexerFeed = new IndexerFeed
@@ -185,10 +206,10 @@ public class IndexerFeedRepositoryTests
         };
 
         // Act
-        await _subject.CreateAsync(indexerFeed, _userId);
+        await _subject.CreateAsync(indexerFeed, _userId).ConfigureAwait(false);
 
         // Assert
-        var auditRecords = await _context.AuditRecords.ToListAsync();
+        var auditRecords = await _context.AuditRecords.ToListAsync().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(auditRecords, Has.Count.EqualTo(1));
@@ -211,17 +232,18 @@ public class IndexerFeedRepositoryTests
         };
 
         // Act
-        var result = await _subject.CreateAsync(indexerFeed, _userId);
+        var result = await _subject.CreateAsync(indexerFeed, _userId).ConfigureAwait(false);
 
         // Assert
-        var retrieved = await _subject.GetByIdAsync(result.Id);
+        var retrieved = await _subject.GetByIdAsync(result.Id).ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(retrieved, Has.Property(nameof(retrieved.Settings)).With.Count.EqualTo(2));
-            Assert.That(retrieved, Has.Property(nameof(retrieved.Settings))
-                .ContainKey("url").WithValue("https://example.com/feed"));
-            Assert.That(retrieved, Has.Property(nameof(retrieved.Settings))
-                .ContainKey("interval").WithValue("60"));
+            Assert.That(
+                retrieved,
+                Has.Property(nameof(retrieved.Settings))
+                    .ContainKey("url").WithValue("https://example.com/feed"));
+            Assert.That(retrieved, Has.Property(nameof(retrieved.Settings)).ContainKey("interval").WithValue("60"));
         }
     }
 
@@ -238,19 +260,19 @@ public class IndexerFeedRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.IndexerFeeds.Add(indexerFeed);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         indexerFeed.Name = "UpdatedFeed";
         indexerFeed.Description = "Updated description";
         indexerFeed.Enabled = false;
 
         // Act
-        var result = await _subject.UpdateAsync(indexerFeed, _userId);
+        var result = await _subject.UpdateAsync(indexerFeed, _userId).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.True);
 
-        var updated = await _subject.GetByIdAsync(indexerFeed.Id);
+        var updated = await _subject.GetByIdAsync(indexerFeed.Id).ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(updated, Has.Property(nameof(updated.Name)).EqualTo("UpdatedFeed"));
@@ -274,14 +296,14 @@ public class IndexerFeedRepositoryTests
         };
 
         // Act
-        var result = await _subject.UpdateAsync(indexerFeed, _userId);
+        var result = await _subject.UpdateAsync(indexerFeed, _userId).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.False);
     }
 
     [Test]
-    public async Task UpdateAsync_CreatesAuditRecord()
+    public async Task UpdateAsync_CreatesAuditRecord_WhenFeedIsUpdated()
     {
         // Arrange
         var indexerFeed = new IndexerFeed
@@ -292,15 +314,15 @@ public class IndexerFeedRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.IndexerFeeds.Add(indexerFeed);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         indexerFeed.Name = "Updated";
 
         // Act
-        await _subject.UpdateAsync(indexerFeed, _userId);
+        await _subject.UpdateAsync(indexerFeed, _userId).ConfigureAwait(false);
 
         // Assert
-        var auditRecords = await _context.AuditRecords.ToListAsync();
+        var auditRecords = await _context.AuditRecords.ToListAsync().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(auditRecords, Has.Count.EqualTo(1));
@@ -310,7 +332,7 @@ public class IndexerFeedRepositoryTests
     }
 
     [Test]
-    public async Task UpdateAsync_UpdatesLastSync()
+    public async Task UpdateAsync_UpdatesLastSync_WhenTimestampIsProvided()
     {
         // Arrange
         var indexerFeed = new IndexerFeed
@@ -321,16 +343,16 @@ public class IndexerFeedRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.IndexerFeeds.Add(indexerFeed);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         var syncTime = DateTime.UtcNow;
         indexerFeed.LastSync = syncTime;
 
         // Act
-        await _subject.UpdateAsync(indexerFeed, _userId);
+        await _subject.UpdateAsync(indexerFeed, _userId).ConfigureAwait(false);
 
         // Assert
-        var updated = await _subject.GetByIdAsync(indexerFeed.Id);
+        var updated = await _subject.GetByIdAsync(indexerFeed.Id).ConfigureAwait(false);
         Assert.That(updated, Has.Property(nameof(updated.LastSync)).EqualTo(syncTime));
     }
 
@@ -346,15 +368,15 @@ public class IndexerFeedRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.IndexerFeeds.Add(indexerFeed);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        var result = await _subject.DeleteAsync(indexerFeed.Id, _userId);
+        var result = await _subject.DeleteAsync(indexerFeed.Id, _userId).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.True);
 
-        var deleted = await _subject.GetByIdAsync(indexerFeed.Id);
+        var deleted = await _subject.GetByIdAsync(indexerFeed.Id).ConfigureAwait(false);
         Assert.That(deleted, Is.Null);
     }
 
@@ -362,14 +384,14 @@ public class IndexerFeedRepositoryTests
     public async Task DeleteAsync_ReturnsFalse_WhenNotExists()
     {
         // Act
-        var result = await _subject.DeleteAsync(Guid.NewGuid(), _userId);
+        var result = await _subject.DeleteAsync(Guid.NewGuid(), _userId).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.False);
     }
 
     [Test]
-    public async Task DeleteAsync_CreatesAuditRecord()
+    public async Task DeleteAsync_CreatesAuditRecord_WhenFeedIsDeleted()
     {
         // Arrange
         var indexerFeed = new IndexerFeed
@@ -380,13 +402,13 @@ public class IndexerFeedRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.IndexerFeeds.Add(indexerFeed);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        await _subject.DeleteAsync(indexerFeed.Id, _userId);
+        await _subject.DeleteAsync(indexerFeed.Id, _userId).ConfigureAwait(false);
 
         // Assert
-        var auditRecords = await _context.AuditRecords.ToListAsync();
+        var auditRecords = await _context.AuditRecords.ToListAsync().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(auditRecords, Has.Count.EqualTo(1));
@@ -400,10 +422,78 @@ public class IndexerFeedRepositoryTests
     public async Task DeleteAsync_DoesNotCreateAuditRecord_WhenNotExists()
     {
         // Act
-        await _subject.DeleteAsync(Guid.NewGuid(), _userId);
+        await _subject.DeleteAsync(Guid.NewGuid(), _userId).ConfigureAwait(false);
 
         // Assert
-        var auditRecords = await _context.AuditRecords.ToListAsync();
+        var auditRecords = await _context.AuditRecords.ToListAsync().ConfigureAwait(false);
         Assert.That(auditRecords, Is.Empty);
+    }
+
+    [Test]
+    public async Task DeleteAsync_PublishesDeletedEvent_WhenTheDeleteCommits()
+    {
+        // Arrange
+        var indexerFeed = new IndexerFeed
+        {
+            ProviderType = "rss",
+            Name = "PublishedDelete",
+            Enabled = true,
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.IndexerFeeds.Add(indexerFeed);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        await _transactionManager.ExecuteWithTransactionAsync(async token =>
+        {
+            await _subject.DeleteAsync(indexerFeed.Id, _userId, token).ConfigureAwait(false);
+        }).ConfigureAwait(false);
+
+        // Assert
+        var deleted = await _subject.GetByIdAsync(indexerFeed.Id).ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(deleted, Is.Null);
+            _eventBus.Verify(
+                bus => bus.PublishAsync(
+                    It.Is<MagpieEvent>(published => published.Name == "indexerFeed.deleted"),
+                    It.IsAny<CancellationToken>()),
+                Times.Once);
+        }
+    }
+
+    [Test]
+    public async Task DeleteAsync_DoesNotPublishDeletedEvent_WhenTheOuterTransactionRollsBack()
+    {
+        // Arrange
+        var indexerFeed = new IndexerFeed
+        {
+            ProviderType = "rss",
+            Name = "RolledBackDelete",
+            Enabled = true,
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.IndexerFeeds.Add(indexerFeed);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        Assert.ThrowsAsync<InvalidOperationException>(() => _transactionManager.ExecuteWithTransactionAsync(
+            async token =>
+            {
+                await _subject.DeleteAsync(indexerFeed.Id, _userId, token).ConfigureAwait(false);
+                throw new InvalidOperationException("The later step failed.");
+            }));
+
+        // Assert
+        var survivor = await _subject.GetByIdAsync(indexerFeed.Id).ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(survivor, Is.Not.Null);
+            _eventBus.Verify(
+                bus => bus.PublishAsync(
+                    It.Is<MagpieEvent>(published => published.Name == "indexerFeed.deleted"),
+                    It.IsAny<CancellationToken>()),
+                Times.Never);
+        }
     }
 }

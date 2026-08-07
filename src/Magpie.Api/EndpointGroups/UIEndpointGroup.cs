@@ -4,9 +4,9 @@ using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 
-using Magpie.Abstractions.Api;
-using Magpie.Abstractions.UI;
 using Magpie.Models.UI;
+using Magpie.Sdk.Api;
+using Magpie.Sdk.UI;
 
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -15,27 +15,6 @@ using Microsoft.Extensions.Logging;
 
 namespace Magpie.Api.EndpointGroups;
 
-/// <summary>
-/// Endpoints that expose extension-provided UI metadata and static assets to the SPA.
-/// </summary>
-/// <remarks>
-/// <para>
-/// The SPA fetches <c>GET /api/ui/manifest</c> at boot to discover slot contributions and
-/// asset URLs, then loads each asset via <c>GET /api/ui/assets/{extensionId}/{relativePath}</c>.
-/// </para>
-/// <para>
-/// Asset serving delegates to the extension that registered itself as an
-/// <see cref="IAssetProvider"/>. The provider maps a <c>relativePath</c> to a stream;
-/// this endpoint validates the path (rejecting path traversal) and forwards the stream
-/// with a content-type guess derived from the extension.
-/// </para>
-/// <para>
-/// To avoid an N x M scan on every asset request, the endpoint maintains a lazily-built
-/// extensionId -> provider index. Because extensions are loaded once at host startup
-/// and providers are not added/removed at runtime, the index is built on first asset
-/// request and reused for the lifetime of the host.
-/// </para>
-/// </remarks>
 internal sealed class UIEndpointGroup(
     IEnumerable<IUIExtensionProvider> uiExtensionProviders,
     IEnumerable<IAssetProvider> assetProviders,
@@ -46,6 +25,61 @@ internal sealed class UIEndpointGroup(
 
     public string Name => "ui";
 
+    private static bool IsSafeRelativePath(string relativePath)
+    {
+        if (string.IsNullOrWhiteSpace(relativePath))
+        {
+            return false;
+        }
+
+        if (Path.IsPathRooted(relativePath))
+        {
+            return false;
+        }
+
+        var normalized = relativePath.Replace('\\', '/');
+
+        foreach (var segment in normalized.Split('/'))
+        {
+            if (segment == "..")
+            {
+                return false;
+            }
+        }
+
+        if (normalized.Contains(':', StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    private static string GuessContentType(string relativePath)
+    {
+        var ext = Path.GetExtension(relativePath).ToLowerInvariant();
+        return ext switch
+        {
+            ".js" or ".mjs" => "application/javascript",
+            ".css" => "text/css",
+            ".json" => "application/json",
+            ".html" or ".htm" => "text/html",
+            ".svg" => "image/svg+xml",
+            ".png" => "image/png",
+            ".jpg" or ".jpeg" => "image/jpeg",
+            ".gif" => "image/gif",
+            ".webp" => "image/webp",
+            ".ico" => "image/x-icon",
+            ".woff" => "font/woff",
+            ".woff2" => "font/woff2",
+            ".ttf" => "font/ttf",
+            ".otf" => "font/otf",
+            ".map" => "application/json",
+            ".txt" => "text/plain",
+            _ => "application/octet-stream"
+        };
+    }
+
     public void MapEndpoints(IEndpointRouteBuilder builder)
     {
         builder.MapGet("manifest", GetManifest)
@@ -53,15 +87,15 @@ internal sealed class UIEndpointGroup(
             .Produces<UIManifest>()
             .RequireViewer();
 
-        builder.MapGet("assets/{extensionId:guid}/{*relativePath}", GetAsset)
-            .WithName(nameof(GetAsset))
+        builder.MapGet("assets/{extensionId:guid}/{*relativePath}", GetAssetAsync)
+            .WithName(nameof(GetAssetAsync))
             .Produces(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status400BadRequest)
             .ProducesProblem(StatusCodes.Status404NotFound)
             .RequireViewer();
     }
 
-    private IResult GetManifest()
+    internal IResult GetManifest()
     {
         var extensions = new List<UIExtension>();
         foreach (var provider in uiExtensionProviders)
@@ -74,7 +108,8 @@ internal sealed class UIEndpointGroup(
             {
                 logger.LogWarning(
                     ex,
-                    "UI extension provider '{Provider}' threw while listing extensions; skipping.",
+                    "The UI extension provider {Provider} threw an exception during the extension list. " +
+                    "The endpoint skipped this provider",
                     provider.GetType().FullName);
             }
         }
@@ -90,7 +125,8 @@ internal sealed class UIEndpointGroup(
             {
                 logger.LogWarning(
                     ex,
-                    "Asset provider '{Provider}' threw while listing assets; skipping.",
+                    "The asset provider {Provider} threw an exception during the asset list. " +
+                    "The endpoint skipped this provider",
                     provider.GetType().FullName);
             }
         }
@@ -102,29 +138,29 @@ internal sealed class UIEndpointGroup(
         });
     }
 
-    private async Task<IResult> GetAsset(
+    internal async Task<IResult> GetAssetAsync(
         Guid extensionId,
         string relativePath,
         CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(relativePath))
         {
-            return Results.BadRequest(new { error = "relativePath is required." });
+            return Results.Problem(
+                detail: "The relative path is required.",
+                statusCode: StatusCodes.Status400BadRequest);
         }
 
         if (!IsSafeRelativePath(relativePath))
         {
             logger.LogWarning(
-                "Rejected asset request with unsafe relative path '{RelativePath}' for extension {ExtensionId}.",
+                "The endpoint rejected the asset request with unsafe path {RelativePath} for extension {ExtensionId}",
                 relativePath,
                 extensionId);
-            return Results.BadRequest(new { error = "Path traversal is not allowed." });
+            return Results.Problem(
+                detail: "Path traversal is not allowed.",
+                statusCode: StatusCodes.Status400BadRequest);
         }
 
-        // Look up the owning provider via a cached extensionId -> provider index that is
-        // built once at first call. Providers may serve nested files they do not advertise
-        // in ListAssets, so when no provider owns the extension we fall back to probing
-        // every provider.
         var owningProvider = GetExtensionIndex().GetValueOrDefault(extensionId);
 
         var providersToProbe = owningProvider is not null
@@ -143,7 +179,8 @@ internal sealed class UIEndpointGroup(
             {
                 logger.LogWarning(
                     ex,
-                    "Asset provider '{Provider}' threw while resolving '{RelativePath}'.",
+                    "The asset provider {Provider} failed to resolve {RelativePath} and threw an exception. " +
+                    "The endpoint skipped this provider",
                     provider.GetType().FullName,
                     relativePath);
                 continue;
@@ -161,13 +198,6 @@ internal sealed class UIEndpointGroup(
         return Results.NotFound();
     }
 
-    /// <summary>
-    /// Returns the cached extensionId -> provider map, building it on first access.
-    /// </summary>
-    /// <remarks>
-    /// Asset providers are loaded once at host startup; if a provider's asset list
-    /// changes after the first request, those changes are not reflected here.
-    /// </remarks>
     private Dictionary<Guid, IAssetProvider> GetExtensionIndex()
     {
         if (_extensionIndex is { } cached)
@@ -194,15 +224,14 @@ internal sealed class UIEndpointGroup(
                 {
                     logger.LogWarning(
                         ex,
-                        "Asset provider '{Provider}' threw while listing assets; skipping.",
+                        "The asset provider {Provider} threw an exception during the asset list. " +
+                        "The endpoint skipped this provider",
                         provider.GetType().FullName);
                     continue;
                 }
 
                 foreach (var asset in assets)
                 {
-                    // First provider wins; if multiple advertise the same extension we keep
-                    // the first one and rely on the per-request fallback to probe others.
                     index.TryAdd(asset.ExtensionId, provider);
                 }
             }
@@ -210,69 +239,5 @@ internal sealed class UIEndpointGroup(
             _extensionIndex = index;
             return index;
         }
-    }
-
-    /// <summary>
-    /// Rejects relative paths that contain traversal segments, absolute roots, or other
-    /// patterns that could escape the extension directory.
-    /// </summary>
-    internal static bool IsSafeRelativePath(string relativePath)
-    {
-        if (string.IsNullOrWhiteSpace(relativePath))
-        {
-            return false;
-        }
-
-        if (Path.IsPathRooted(relativePath))
-        {
-            return false;
-        }
-
-        // Disallow any segment equal to "..", any drive prefix, and any backslash escape.
-        var normalized = relativePath.Replace('\\', '/');
-
-        foreach (var segment in normalized.Split('/'))
-        {
-            if (segment == "..")
-            {
-                return false;
-            }
-        }
-
-        // Reject Windows drive prefixes that might slip through (e.g. "C:foo").
-        if (normalized.Contains(':'))
-        {
-            return false;
-        }
-
-        return true;
-    }
-
-    /// <summary>
-    /// Maps a file extension to a reasonable content type.
-    /// </summary>
-    internal static string GuessContentType(string relativePath)
-    {
-        var ext = Path.GetExtension(relativePath).ToLowerInvariant();
-        return ext switch
-        {
-            ".js" or ".mjs" => "application/javascript",
-            ".css" => "text/css",
-            ".json" => "application/json",
-            ".html" or ".htm" => "text/html",
-            ".svg" => "image/svg+xml",
-            ".png" => "image/png",
-            ".jpg" or ".jpeg" => "image/jpeg",
-            ".gif" => "image/gif",
-            ".webp" => "image/webp",
-            ".ico" => "image/x-icon",
-            ".woff" => "font/woff",
-            ".woff2" => "font/woff2",
-            ".ttf" => "font/ttf",
-            ".otf" => "font/otf",
-            ".map" => "application/json",
-            ".txt" => "text/plain",
-            _ => "application/octet-stream"
-        };
     }
 }

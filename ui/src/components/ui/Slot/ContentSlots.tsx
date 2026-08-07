@@ -6,11 +6,15 @@ export interface ContentSlotProps {
     children?: ReactNode;
 
     className?: string;
+
+    entityId?: string;
+
+    entityType?: string;
 }
 
-export function ContentListSlot({ children, className }: ContentSlotProps) {
+export function ContentListSlot({ children, className, entityId, entityType }: ContentSlotProps) {
     return (
-        <Slot slot="content.list" className={className}>
+        <Slot slot="content.list" className={className} entityId={entityId} entityType={entityType}>
             {children}
         </Slot>
     );
@@ -18,9 +22,9 @@ export function ContentListSlot({ children, className }: ContentSlotProps) {
 
 ContentListSlot.displayName = 'ContentListSlot';
 
-export function ContentListColumnsSlot({ children, className }: ContentSlotProps) {
+export function ContentListColumnsSlot({ children, className, entityId, entityType }: ContentSlotProps) {
     return (
-        <Slot slot="content.list.columns" className={className}>
+        <Slot slot="content.list.columns" className={className} entityId={entityId} entityType={entityType}>
             {children}
         </Slot>
     );
@@ -28,9 +32,9 @@ export function ContentListColumnsSlot({ children, className }: ContentSlotProps
 
 ContentListColumnsSlot.displayName = 'ContentListColumnsSlot';
 
-export function ContentListActionsSlot({ children, className }: ContentSlotProps) {
+export function ContentListActionsSlot({ children, className, entityId, entityType }: ContentSlotProps) {
     return (
-        <Slot slot="content.list.actions" className={className}>
+        <Slot slot="content.list.actions" className={className} entityId={entityId} entityType={entityType}>
             {children}
         </Slot>
     );
@@ -38,9 +42,9 @@ export function ContentListActionsSlot({ children, className }: ContentSlotProps
 
 ContentListActionsSlot.displayName = 'ContentListActionsSlot';
 
-export function ContentDetailsHeaderSlot({ children, className }: ContentSlotProps) {
+export function ContentDetailsHeaderSlot({ children, className, entityId, entityType }: ContentSlotProps) {
     return (
-        <Slot slot="content.details.header" className={className}>
+        <Slot slot="content.details.header" className={className} entityId={entityId} entityType={entityType}>
             {children}
         </Slot>
     );
@@ -48,9 +52,9 @@ export function ContentDetailsHeaderSlot({ children, className }: ContentSlotPro
 
 ContentDetailsHeaderSlot.displayName = 'ContentDetailsHeaderSlot';
 
-export function ContentDetailsActionsSlot({ children, className }: ContentSlotProps) {
+export function ContentDetailsActionsSlot({ children, className, entityId, entityType }: ContentSlotProps) {
     return (
-        <Slot slot="content.details.actions" className={className}>
+        <Slot slot="content.details.actions" className={className} entityId={entityId} entityType={entityType}>
             {children}
         </Slot>
     );
@@ -58,9 +62,9 @@ export function ContentDetailsActionsSlot({ children, className }: ContentSlotPr
 
 ContentDetailsActionsSlot.displayName = 'ContentDetailsActionsSlot';
 
-export function ContentDetailsMetadataSlot({ children, className }: ContentSlotProps) {
+export function ContentDetailsMetadataSlot({ children, className, entityId, entityType }: ContentSlotProps) {
     return (
-        <Slot slot="content.details.metadata" className={className}>
+        <Slot slot="content.details.metadata" className={className} entityId={entityId} entityType={entityType}>
             {children}
         </Slot>
     );
@@ -68,9 +72,9 @@ export function ContentDetailsMetadataSlot({ children, className }: ContentSlotP
 
 ContentDetailsMetadataSlot.displayName = 'ContentDetailsMetadataSlot';
 
-export function ContentDetailsTabsSlot({ children, className }: ContentSlotProps) {
+export function ContentDetailsTabsSlot({ children, className, entityId, entityType }: ContentSlotProps) {
     return (
-        <Slot slot="content.details.tabs" className={className}>
+        <Slot slot="content.details.tabs" className={className} entityId={entityId} entityType={entityType}>
             {children}
         </Slot>
     );
@@ -78,9 +82,9 @@ export function ContentDetailsTabsSlot({ children, className }: ContentSlotProps
 
 ContentDetailsTabsSlot.displayName = 'ContentDetailsTabsSlot';
 
-export function ContentDetailsOverviewSlot({ children, className }: ContentSlotProps) {
+export function ContentDetailsOverviewSlot({ children, className, entityId, entityType }: ContentSlotProps) {
     return (
-        <Slot slot="content.details.overview" className={className}>
+        <Slot slot="content.details.overview" className={className} entityId={entityId} entityType={entityType}>
             {children}
         </Slot>
     );
@@ -88,9 +92,9 @@ export function ContentDetailsOverviewSlot({ children, className }: ContentSlotP
 
 ContentDetailsOverviewSlot.displayName = 'ContentDetailsOverviewSlot';
 
-export function ContentDetailsFilesSlot({ children, className }: ContentSlotProps) {
+export function ContentDetailsFilesSlot({ children, className, entityId, entityType }: ContentSlotProps) {
     return (
-        <Slot slot="content.details.files" className={className}>
+        <Slot slot="content.details.files" className={className} entityId={entityId} entityType={entityType}>
             {children}
         </Slot>
     );
@@ -98,9 +102,9 @@ export function ContentDetailsFilesSlot({ children, className }: ContentSlotProp
 
 ContentDetailsFilesSlot.displayName = 'ContentDetailsFilesSlot';
 
-export function ContentDetailsHistorySlot({ children, className }: ContentSlotProps) {
+export function ContentDetailsHistorySlot({ children, className, entityId, entityType }: ContentSlotProps) {
     return (
-        <Slot slot="content.details.history" className={className}>
+        <Slot slot="content.details.history" className={className} entityId={entityId} entityType={entityType}>
             {children}
         </Slot>
     );

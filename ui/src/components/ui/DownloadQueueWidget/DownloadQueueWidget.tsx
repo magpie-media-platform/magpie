@@ -1,9 +1,11 @@
 import { forwardRef, memo, type HTMLAttributes, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
-import { ArrowCounterClockwise, WarningCircle } from '@phosphor-icons/react';
+import { ArrowCounterClockwiseIcon, TrayIcon, WarningCircleIcon } from '@phosphor-icons/react';
 
 import { Alert } from '@/components/ui/Alert';
 import { Button } from '@/components/ui/Button';
+import { ContentLineageTitle } from '@/components/content/ContentLineageTitle';
+import { EmptyState } from '@/components/ui/EmptyState';
 import type { DownloadState, DownloadStateCounts, ActiveDownloadItem } from '@/types/system';
 
 import './DownloadQueueWidget.css';
@@ -36,15 +38,10 @@ export interface DownloadQueueWidgetProps extends HTMLAttributes<HTMLDivElement>
     headingLevel?: 2 | 3;
 }
 
-const stateVariantMap: Record<keyof DownloadStateCounts, string> = {
-    downloading: 'downloading',
-    queued: 'queued',
-    stalled: 'stalled',
-};
-
 const stateLabelMap: Record<keyof DownloadStateCounts, string> = {
     downloading: 'Downloading',
     queued: 'Queued',
+    paused: 'Paused',
     stalled: 'Stalled',
 };
 
@@ -55,7 +52,7 @@ interface StatusRowProps {
 }
 
 const StatusRow = ({ state, count, url }: StatusRowProps) => {
-    const variant = stateVariantMap[state];
+    const variant = state;
     const label = stateLabelMap[state];
     const isClickable = url !== undefined && count > 0;
 
@@ -97,13 +94,32 @@ interface DownloadItemProps {
 const DownloadItem = ({ download, url }: DownloadItemProps) => {
     const isClickable = url !== undefined;
     const progressPercent = Math.min(100, Math.max(0, download.progress));
+    const displayPercent = Number.isInteger(progressPercent) ? progressPercent : Math.round(progressPercent);
     const stateVariant =
-        download.state === 'downloading' ? 'downloading' : download.state === 'stalled' ? 'stalled' : 'queued';
+        download.state === 'downloading'
+            ? 'downloading'
+            : download.state === 'paused'
+              ? 'paused'
+              : download.state === 'stalled'
+                ? 'stalled'
+                : 'queued';
 
     const content = (
         <>
             <div className="download-queue-widget__item-header">
-                <span className="download-queue-widget__item-title">{download.title}</span>
+                <span className="download-queue-widget__item-title">
+                    {download.contentId ? (
+                        <ContentLineageTitle
+                            qualifiedName={{
+                                id: download.contentId,
+                                parentId: download.parentId,
+                                title: download.title,
+                            }}
+                        />
+                    ) : (
+                        download.title
+                    )}
+                </span>
                 <span className="download-queue-widget__item-meta">
                     {download.eta && <span className="download-queue-widget__item-eta">{download.eta}</span>}
                     {download.size && <span className="download-queue-widget__item-size">{download.size}</span>}
@@ -112,13 +128,13 @@ const DownloadItem = ({ download, url }: DownloadItemProps) => {
             <div
                 className="download-queue-widget__progress-bar"
                 role="progressbar"
-                aria-valuenow={progressPercent}
+                aria-valuenow={displayPercent}
                 aria-valuemin={0}
                 aria-valuemax={100}
             >
                 <div className="download-queue-widget__progress-fill" style={{ width: `${progressPercent}%` }} />
             </div>
-            <span className="download-queue-widget__item-percent">{progressPercent}%</span>
+            <span className="download-queue-widget__item-percent">{displayPercent}%</span>
         </>
     );
 
@@ -127,7 +143,6 @@ const DownloadItem = ({ download, url }: DownloadItemProps) => {
             <Link
                 to={url}
                 className={`download-queue-widget__item download-queue-widget__item--${stateVariant} download-queue-widget__item--clickable`}
-                aria-label={`View ${download.title}`}
                 data-download-id={download.id}
                 data-status={download.state}
                 data-progress={progressPercent}
@@ -194,9 +209,10 @@ const DownloadQueueWidgetBase = forwardRef<HTMLDivElement, DownloadQueueWidgetPr
         ref,
     ) => {
         const classes = ['download-queue-widget', className].filter(Boolean).join(' ');
-        const total = counts.downloading + counts.queued + counts.stalled;
+        const total = counts.downloading + counts.queued + counts.paused + counts.stalled;
         const displayedDownloads = activeDownloads.slice(0, maxItems);
         const HeadingTag = `h${headingLevel}` as const;
+        const showEmptyState = total === 0 && displayedDownloads.length === 0 && !loading && !error;
 
         return (
             <div ref={ref} className={classes} data-component="download-queue-widget" {...props}>
@@ -216,17 +232,18 @@ const DownloadQueueWidgetBase = forwardRef<HTMLDivElement, DownloadQueueWidgetPr
                             <SkeletonRow />
                             <SkeletonRow />
                             <SkeletonRow />
+                            <SkeletonRow />
                         </>
                     ) : error ? (
-                        <Alert variant="error" icon={<WarningCircle weight="duotone" />} title="Failed to load">
+                        <Alert variant="error" icon={<WarningCircleIcon weight="duotone" />} title="Failed to load">
                             {onRetry && (
                                 <Button variant="ghost" size="sm" onClick={onRetry}>
-                                    <ArrowCounterClockwise weight="bold" aria-hidden="true" />
+                                    <ArrowCounterClockwiseIcon weight="bold" aria-hidden="true" />
                                     Try again
                                 </Button>
                             )}
                         </Alert>
-                    ) : (
+                    ) : showEmptyState ? null : (
                         <>
                             <StatusRow
                                 state="downloading"
@@ -234,10 +251,17 @@ const DownloadQueueWidgetBase = forwardRef<HTMLDivElement, DownloadQueueWidgetPr
                                 url={getStateUrl?.('downloading')}
                             />
                             <StatusRow state="queued" count={counts.queued} url={getStateUrl?.('queued')} />
+                            <StatusRow state="paused" count={counts.paused} url={getStateUrl?.('paused')} />
                             <StatusRow state="stalled" count={counts.stalled} url={getStateUrl?.('stalled')} />
                         </>
                     )}
                 </div>
+
+                {showEmptyState && (
+                    <div className="download-queue-widget__empty">
+                        <EmptyState icon={<TrayIcon weight="duotone" />} title="No active downloads" size="sm" />
+                    </div>
+                )}
 
                 {(displayedDownloads.length > 0 || loading) && !error && (
                     <div className="download-queue-widget__items">

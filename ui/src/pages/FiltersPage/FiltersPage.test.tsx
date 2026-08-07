@@ -8,6 +8,7 @@ import type { ReactNode } from 'react';
 import { ToastList, ToastProvider, ToastStateProvider, ToastViewport } from '@/components/ui/Toast';
 import { TooltipProvider } from '@/components/ui/Tooltip';
 import { AuthProvider, Role } from '@/auth';
+import { testEffectivePermissions } from '@/test/permissions';
 
 import { FiltersPage } from './FiltersPage';
 
@@ -22,9 +23,9 @@ vi.mock('@/lib/api', async (importOriginal) => {
     };
 });
 
-vi.mock('@/lib/filterQuery', () => ({
-    formatFilterCriteria: vi.fn(),
-    parseFilterQuery: vi.fn(),
+vi.mock('@/lib/magpieQl', () => ({
+    formatMagpieQlCriteria: vi.fn(),
+    parseMagpieQl: vi.fn(),
 }));
 
 vi.mock('@/hooks/useUsers', () => ({
@@ -49,7 +50,7 @@ vi.mock('react-router-dom', async () => {
 });
 
 import { apiGet, apiPost, apiPatch, apiDelete } from '@/lib/api';
-import { formatFilterCriteria } from '@/lib/filterQuery';
+import { formatMagpieQlCriteria, parseMagpieQl } from '@/lib/magpieQl';
 
 const mockSharedFilters = [
     {
@@ -161,14 +162,16 @@ function setupApiMocks() {
     vi.mocked(apiPatch).mockResolvedValue(undefined);
     vi.mocked(apiDelete).mockResolvedValue(undefined);
 
-    vi.mocked(formatFilterCriteria).mockImplementation(async (criteria: unknown) => {
+    vi.mocked(parseMagpieQl).mockResolvedValue({ criteria: { contentHierarchyItem: { and: [{}] } } });
+
+    vi.mocked(formatMagpieQlCriteria).mockImplementation(async (criteria: unknown) => {
         const c = criteria as { contentHierarchyItem?: { and?: unknown[] } };
         const count = c?.contentHierarchyItem?.and?.length ?? 0;
         if (count === 0) {
             return { query: '' };
         }
         if (count === 1) {
-            return { query: 'monitoring = Active' };
+            return { query: 'monitoring = true' };
         }
         if (count === 2) {
             return { query: 'genre = Action and year >= 2020' };
@@ -190,28 +193,34 @@ afterEach(() => {
     vi.restoreAllMocks();
 });
 
+function createTestQueryClient() {
+    return new QueryClient({
+        defaultOptions: {
+            queries: { retry: false, gcTime: 0 },
+        },
+    });
+}
+
 function TestWrapper({
     children,
     role = Role.Admin,
     userId = '1',
     initialEntries,
+    queryClient,
 }: {
     children: ReactNode;
     role?: Role;
     userId?: string;
     initialEntries?: string[];
+    queryClient?: QueryClient;
 }) {
     const mockUser = { id: userId, username: 'test', role };
-    const queryClient = new QueryClient({
-        defaultOptions: {
-            queries: { retry: false, gcTime: 0 },
-        },
-    });
+    const client = queryClient ?? createTestQueryClient();
 
     return (
-        <QueryClientProvider client={queryClient}>
+        <QueryClientProvider client={client}>
             <MemoryRouter initialEntries={initialEntries}>
-                <AuthProvider initialUser={mockUser}>
+                <AuthProvider initialUser={mockUser} initialPermissions={testEffectivePermissions()}>
                     <TooltipProvider>
                         <ToastProvider>
                             <ToastStateProvider>
@@ -259,20 +268,6 @@ describe('FiltersPage', () => {
         expect(screen.getByRole('heading', { name: 'Filters', level: 1 })).toBeInTheDocument();
     });
 
-    it('renders the filter count', async () => {
-        render(
-            <TestWrapper>
-                <FiltersPage />
-            </TestWrapper>,
-        );
-
-        await waitFor(() => {
-            const count = screen.getByTestId('filters-page__count');
-            expect(count).toBeInTheDocument();
-            expect(count).toHaveTextContent('8');
-        });
-    });
-
     it('renders the page icon as decorative', () => {
         render(
             <TestWrapper>
@@ -282,49 +277,6 @@ describe('FiltersPage', () => {
 
         const icon = screen.getByTestId('filters-page__icon');
         expect(icon).toHaveAttribute('aria-hidden', 'true');
-    });
-});
-
-describe('FiltersPage summary badges', () => {
-    it('renders type badges after data loads', async () => {
-        render(
-            <TestWrapper>
-                <FiltersPage />
-            </TestWrapper>,
-        );
-
-        await waitFor(() => {
-            const summary = document.querySelector('[aria-label="Filter summary"]');
-            expect(summary?.querySelector('.badge[data-status="info"]')).toBeInTheDocument();
-            expect(summary?.querySelector('.badge[data-status="stabilizing"]')).toBeInTheDocument();
-        });
-    });
-
-    it('summary section has accessible label', () => {
-        render(
-            <TestWrapper>
-                <FiltersPage />
-            </TestWrapper>,
-        );
-
-        const summary = document.querySelector('[aria-label="Filter summary"]');
-        expect(summary).toBeInTheDocument();
-    });
-
-    it('shows correct count for shared filters', async () => {
-        render(
-            <TestWrapper>
-                <FiltersPage />
-            </TestWrapper>,
-        );
-
-        await waitFor(() => {
-            const summary = document.querySelector('[aria-label="Filter summary"]');
-            const sharedBadge = summary?.querySelector('.badge[data-status="info"]');
-            const count = sharedBadge?.querySelector('.badge__count');
-
-            expect(count).toHaveTextContent('4');
-        });
     });
 });
 
@@ -436,24 +388,29 @@ describe('FiltersPage filters', () => {
             </TestWrapper>,
         );
 
-        expect(document.querySelector('[data-component="filter-filters"]')).toBeInTheDocument();
+        const filterBar = document.querySelector('[data-component="filter-filters"]');
+        expect(filterBar).toBeInTheDocument();
+        expect(filterBar).toHaveClass('filters-page__ownership');
+        expect(filterBar?.querySelector('[data-component="ownership-toggle"]')).toBeInTheDocument();
     });
 
-    it('renders owner filter', () => {
+    it('renders the ownership toggle', () => {
         render(
             <TestWrapper>
                 <FiltersPage />
             </TestWrapper>,
         );
 
-        expect(screen.getByRole('combobox', { name: /filter by owner/i })).toBeInTheDocument();
+        expect(screen.getByRole('radiogroup', { name: /filter by ownership/i })).toBeInTheDocument();
+        expect(screen.getByRole('radio', { name: 'All' })).toBeInTheDocument();
+        expect(screen.getByRole('radio', { name: 'Mine' })).toBeInTheDocument();
     });
 
-    it('filters content filters by owner', async () => {
+    it('filters content filters to the current user when Mine is selected', async () => {
         const user = userEvent.setup();
 
         render(
-            <TestWrapper>
+            <TestWrapper userId="user-1">
                 <FiltersPage />
             </TestWrapper>,
         );
@@ -462,23 +419,19 @@ describe('FiltersPage filters', () => {
             expect(screen.getByText('Action Movies')).toBeInTheDocument();
         });
 
-        const ownerTrigger = screen.getByRole('combobox', { name: /filter by owner/i });
-        await user.click(ownerTrigger);
-
-        const sharedOption = screen.getByRole('option', { name: 'Shared' });
-        await user.click(sharedOption);
+        await user.click(screen.getByRole('radio', { name: 'Mine' }));
 
         const list = screen.getByRole('list', { name: /content filters/i });
         const items = within(list).getAllByRole('listitem');
 
-        expect(items.length).toBe(4);
+        expect(items.length).toBe(2);
     });
 
-    it('shows clear filters button when filters are active', async () => {
+    it('marks the Mine scope active once selected', async () => {
         const user = userEvent.setup();
 
         render(
-            <TestWrapper>
+            <TestWrapper userId="user-1">
                 <FiltersPage />
             </TestWrapper>,
         );
@@ -487,22 +440,19 @@ describe('FiltersPage filters', () => {
             expect(screen.getByText('Action Movies')).toBeInTheDocument();
         });
 
-        expect(document.querySelector('[data-action="clear-filters"]')).not.toBeInTheDocument();
+        expect(screen.getByRole('radio', { name: 'All' })).toHaveAttribute('aria-checked', 'true');
 
-        const ownerTrigger = screen.getByRole('combobox', { name: /filter by owner/i });
-        await user.click(ownerTrigger);
+        await user.click(screen.getByRole('radio', { name: 'Mine' }));
 
-        const sharedOption = screen.getByRole('option', { name: 'Shared' });
-        await user.click(sharedOption);
-
-        expect(document.querySelector('[data-action="clear-filters"]')).toBeInTheDocument();
+        expect(screen.getByRole('radio', { name: 'Mine' })).toHaveAttribute('aria-checked', 'true');
+        expect(screen.getByRole('radio', { name: 'All' })).toHaveAttribute('aria-checked', 'false');
     });
 
-    it('clears filters when clear button is clicked', async () => {
+    it('restores all filters when All is selected after Mine', async () => {
         const user = userEvent.setup();
 
         render(
-            <TestWrapper>
+            <TestWrapper userId="user-1">
                 <FiltersPage />
             </TestWrapper>,
         );
@@ -511,14 +461,8 @@ describe('FiltersPage filters', () => {
             expect(screen.getByText('Action Movies')).toBeInTheDocument();
         });
 
-        const ownerTrigger = screen.getByRole('combobox', { name: /filter by owner/i });
-        await user.click(ownerTrigger);
-
-        const sharedOption = screen.getByRole('option', { name: 'Shared' });
-        await user.click(sharedOption);
-
-        const clearButton = document.querySelector('[data-action="clear-filters"]');
-        await user.click(clearButton!);
+        await user.click(screen.getByRole('radio', { name: 'Mine' }));
+        await user.click(screen.getByRole('radio', { name: 'All' }));
 
         const list = screen.getByRole('list', { name: /content filters/i });
         const items = within(list).getAllByRole('listitem');
@@ -544,8 +488,13 @@ describe('FiltersPage filters', () => {
 
         await waitFor(() => {
             expect(screen.getByText('No filters found')).toBeInTheDocument();
-            expect(screen.getByText('Create a filter to start matching content')).toBeInTheDocument();
+            expect(
+                screen.getByText('Reusable filters can be applied in the library and wishlists.'),
+            ).toBeInTheDocument();
         });
+
+        expect(document.querySelector('[data-action="add-filter"]')).toBeInTheDocument();
+        expect(document.querySelector('[data-action="add-filter-empty"]')).not.toBeInTheDocument();
     });
 });
 
@@ -633,6 +582,43 @@ describe('FiltersPage Add Filter button', () => {
 
         const icon = cancelButton?.querySelector('[aria-hidden="true"]');
         expect(icon).toBeInTheDocument();
+    });
+
+    it('prompts before closing a dirty Add Filter draft with title criteria', async () => {
+        const user = userEvent.setup();
+
+        render(
+            <TestWrapper role={Role.Manager}>
+                <FiltersPage />
+            </TestWrapper>,
+        );
+
+        await waitFor(() => {
+            expect(screen.getByText('Action Movies')).toBeInTheDocument();
+        });
+
+        const addButton = document.querySelector('[data-action="add-filter"]') as HTMLButtonElement;
+        await user.click(addButton);
+
+        await waitFor(() => {
+            expect(screen.getByRole('heading', { name: 'Create Filter' })).toBeInTheDocument();
+        });
+
+        const nameInput = screen.getByLabelText(/name/i);
+        const titleInput = screen.getByLabelText('Title');
+        await user.type(nameInput, 'Draft Filter');
+        await user.type(titleInput, 'Inception');
+
+        await user.click(screen.getByRole('button', { name: 'Cancel' }));
+
+        await waitFor(() => {
+            expect(screen.getByText('Unsaved Changes')).toBeInTheDocument();
+        });
+
+        expect(document.querySelector('[data-component="filter-form"]')).toHaveAttribute('data-state', 'open');
+        expect(nameInput).toHaveValue('Draft Filter');
+        expect(titleInput).toHaveValue('Inception');
+        expect(apiPost).not.toHaveBeenCalled();
     });
 });
 
@@ -728,25 +714,6 @@ describe('FiltersPage overflow menu actions', () => {
         const filter1 = document.querySelector('[data-filter-id="filter-1"]');
         const trigger = filter1?.querySelector('[data-action="more-actions"]');
         expect(trigger).toHaveAttribute('aria-label', 'More actions for Action Movies');
-    });
-
-    it('overflow menu contains Duplicate option', async () => {
-        const user = userEvent.setup();
-
-        render(
-            <TestWrapper>
-                <FiltersPage />
-            </TestWrapper>,
-        );
-
-        await waitFor(() => {
-            expect(screen.getByText('Action Movies')).toBeInTheDocument();
-        });
-
-        await openOverflowMenu(user, 'filter-1');
-
-        const duplicateItem = document.querySelector('[data-action="duplicate"]');
-        expect(duplicateItem).toBeInTheDocument();
     });
 
     it('Manager sees Delete option in overflow menu', async () => {
@@ -923,7 +890,7 @@ describe('FiltersPage delete confirmation', () => {
 });
 
 describe('FiltersPage duplicate action', () => {
-    it('duplicate option has correct data attributes', async () => {
+    it('shows a labelled duplicate item in the overflow menu', async () => {
         const user = userEvent.setup();
 
         render(
@@ -938,9 +905,156 @@ describe('FiltersPage duplicate action', () => {
 
         await openOverflowMenu(user, 'filter-1');
 
-        const duplicateItem = document.querySelector('[data-action="duplicate"]');
-        expect(duplicateItem).toBeInTheDocument();
-        expect(duplicateItem).toHaveAttribute('data-target', 'filter-1');
+        const button = document.querySelector('[data-action="duplicate"]');
+        expect(button).toBeInTheDocument();
+        expect(button).toHaveAttribute('data-target', 'filter-1');
+        expect(button).toHaveTextContent('Duplicate');
+    });
+
+    it('shows the duplicate item to a requester who cannot edit a shared filter', async () => {
+        const user = userEvent.setup();
+
+        render(
+            <TestWrapper role={Role.Requester}>
+                <FiltersPage />
+            </TestWrapper>,
+        );
+
+        await waitFor(() => {
+            expect(screen.getByText('Action Movies')).toBeInTheDocument();
+        });
+
+        const filter1 = document.querySelector('[data-filter-id="filter-1"]');
+        expect(filter1?.querySelector('[data-action="edit"]')).not.toBeInTheDocument();
+
+        await openOverflowMenu(user, 'filter-1');
+        expect(document.querySelector('[data-action="duplicate"]')).toBeInTheDocument();
+    });
+
+    it('hides the duplicate item from a viewer who cannot create filters', async () => {
+        const user = userEvent.setup();
+
+        render(
+            <TestWrapper role={Role.Viewer}>
+                <FiltersPage />
+            </TestWrapper>,
+        );
+
+        await waitFor(() => {
+            expect(screen.getByText('Action Movies')).toBeInTheDocument();
+        });
+
+        await openOverflowMenu(user, 'filter-1');
+        expect(document.querySelector('[data-action="duplicate"]')).not.toBeInTheDocument();
+    });
+
+    it('opens the create form pre-filled with a copied name', async () => {
+        const user = userEvent.setup();
+
+        render(
+            <TestWrapper>
+                <FiltersPage />
+            </TestWrapper>,
+        );
+
+        await waitFor(() => {
+            expect(screen.getByText('Action Movies')).toBeInTheDocument();
+        });
+
+        await openOverflowMenu(user, 'filter-1');
+        const duplicateButton = document.querySelector('[data-action="duplicate"]') as HTMLButtonElement;
+        await user.click(duplicateButton);
+
+        await waitFor(() => {
+            expect(screen.getByRole('dialog')).toBeInTheDocument();
+        });
+
+        const nameInput = screen.getByLabelText(/name/i);
+        expect(nameInput).toHaveValue('Action Movies (Copy)');
+    });
+
+    it('creates a brand-new filter when a duplicate is saved', async () => {
+        const user = userEvent.setup();
+        const mockApiPost = vi.mocked(apiPost);
+
+        render(
+            <TestWrapper>
+                <FiltersPage />
+            </TestWrapper>,
+        );
+
+        await waitFor(() => {
+            expect(screen.getByText('Action Movies')).toBeInTheDocument();
+        });
+
+        await openOverflowMenu(user, 'filter-1');
+        const duplicateButton = document.querySelector('[data-action="duplicate"]') as HTMLButtonElement;
+        await user.click(duplicateButton);
+
+        await waitFor(() => {
+            expect(screen.getByRole('dialog')).toBeInTheDocument();
+        });
+
+        const saveButton = document.querySelector('[data-action="save-filter"]') as HTMLButtonElement;
+        await user.click(saveButton);
+
+        await waitFor(() => {
+            expect(mockApiPost).toHaveBeenCalled();
+        });
+    });
+});
+
+describe('FiltersPage stale edit guard', () => {
+    it('does not create a duplicate when editing a filter that no longer exists', async () => {
+        const user = userEvent.setup();
+        const mockApiGet = vi.mocked(apiGet);
+        const mockApiPost = vi.mocked(apiPost);
+        const mockApiPatch = vi.mocked(apiPatch);
+        const queryClient = createTestQueryClient();
+
+        render(
+            <TestWrapper role={Role.Manager} queryClient={queryClient}>
+                <FiltersPage />
+            </TestWrapper>,
+        );
+
+        await waitFor(() => {
+            expect(screen.getByText('Action Movies')).toBeInTheDocument();
+        });
+
+        const filter1 = document.querySelector('[data-filter-id="filter-1"]');
+        const editButton = filter1?.querySelector('[data-action="edit"]') as HTMLButtonElement;
+        await user.click(editButton);
+
+        await waitFor(() => {
+            expect(screen.getByRole('dialog')).toBeInTheDocument();
+        });
+
+        mockApiGet.mockImplementation((url: string) => {
+            if (url === '/content-filters') {
+                return Promise.resolve(mockSharedFilters.filter((f) => f.id !== 'filter-1'));
+            }
+            if (url === '/content-filters/my') {
+                return Promise.resolve(mockMyFilters);
+            }
+            return Promise.resolve([]);
+        });
+
+        await queryClient.invalidateQueries({ queryKey: ['content-filters'] });
+
+        await waitFor(() => {
+            expect(document.querySelector('[data-filter-id="filter-1"]')).not.toBeInTheDocument();
+        });
+
+        const saveButton = document.querySelector('[data-action="save-filter"]') as HTMLButtonElement;
+        await user.click(saveButton);
+
+        await waitFor(() => {
+            expect(screen.getByTestId('toast-title')).toHaveTextContent('Filter Unavailable');
+        });
+
+        expect(mockApiPost).not.toHaveBeenCalled();
+        expect(mockApiPatch).not.toHaveBeenCalled();
     });
 });
 
@@ -1175,11 +1289,7 @@ describe('FiltersPage empty state', () => {
             expect(screen.getByText('My Personal Filter')).toBeInTheDocument();
         });
 
-        const ownerTrigger = screen.getByRole('combobox', { name: /filter by owner/i });
-        await user.click(ownerTrigger);
-
-        const sharedOption = screen.getByRole('option', { name: 'Shared' });
-        await user.click(sharedOption);
+        await user.click(screen.getByRole('radio', { name: 'Mine' }));
 
         expect(screen.getByText('No filters found')).toBeInTheDocument();
         expect(screen.getByText('Try adjusting your filters')).toBeInTheDocument();
@@ -1255,115 +1365,53 @@ describe('FiltersPage query preview', () => {
             expect(screen.getAllByTestId('filters-page__item-query').length).toBeGreaterThan(0);
         });
     });
-});
 
-describe('FiltersPage convert to wishlist action', () => {
-    it('shows Create Wishlist option in overflow menu for Requester role', async () => {
-        const user = userEvent.setup();
+    it('keeps a long unbroken query and wishlist badge contained with the full query available', async () => {
+        const longQuery = `genre = ${'UnbrokenQuerySegment'.repeat(10)}`;
+        vi.mocked(apiGet).mockImplementation((url: string) => {
+            if (url === '/content-filters') {
+                return Promise.resolve([
+                    {
+                        id: 'filter-long',
+                        name: 'Overflowing Filter',
+                        ownerUserId: null,
+                        criteria: { contentHierarchyItem: { and: [{}] } },
+                        ownerLock: false,
+                        createdAt: '2024-01-01T00:00:00Z',
+                        modifiedAt: null,
+                        createdByUserId: null,
+                        modifiedByUserId: null,
+                    },
+                ]);
+            }
+            if (url === '/wishlists') {
+                return Promise.resolve([
+                    {
+                        id: 'wishlist-1',
+                        contentFilterId: 'filter-long',
+                        name: 'ReallyLongUnbrokenWishlistName'.repeat(3),
+                    },
+                ]);
+            }
+            return Promise.resolve([]);
+        });
+        vi.mocked(formatMagpieQlCriteria).mockResolvedValue({ query: longQuery });
 
         render(
-            <TestWrapper role={Role.Requester}>
+            <TestWrapper>
                 <FiltersPage />
             </TestWrapper>,
         );
 
-        await waitFor(() => {
-            expect(screen.getByText('Action Movies')).toBeInTheDocument();
-        });
+        const queryElement = await screen.findByTitle(longQuery);
 
-        await openOverflowMenu(user, 'filter-1');
+        expect(queryElement).toHaveClass('filters-page__item-query');
+        expect(queryElement).toHaveTextContent(longQuery);
+        expect(queryElement.closest('.filters-page__item-info')).not.toBeNull();
 
-        const wishlistItem = document.querySelector('[data-action="convert-to-wishlist"]');
-        expect(wishlistItem).toBeInTheDocument();
-    });
-
-    it('shows Create Wishlist option in overflow menu for Manager role', async () => {
-        const user = userEvent.setup();
-
-        render(
-            <TestWrapper role={Role.Manager}>
-                <FiltersPage />
-            </TestWrapper>,
-        );
-
-        await waitFor(() => {
-            expect(screen.getByText('Action Movies')).toBeInTheDocument();
-        });
-
-        await openOverflowMenu(user, 'filter-1');
-
-        const wishlistItem = document.querySelector('[data-action="convert-to-wishlist"]');
-        expect(wishlistItem).toBeInTheDocument();
-    });
-
-    it('hides Create Wishlist option for Viewer role', async () => {
-        const user = userEvent.setup();
-
-        render(
-            <TestWrapper role={Role.Viewer}>
-                <FiltersPage />
-            </TestWrapper>,
-        );
-
-        await waitFor(() => {
-            expect(screen.getByText('Action Movies')).toBeInTheDocument();
-        });
-
-        await openOverflowMenu(user, 'filter-1');
-
-        const wishlistItem = document.querySelector('[data-action="convert-to-wishlist"]');
-        expect(wishlistItem).not.toBeInTheDocument();
-    });
-
-    it('opens wishlist form when Create Wishlist is clicked', async () => {
-        const user = userEvent.setup();
-
-        render(
-            <TestWrapper role={Role.Manager}>
-                <FiltersPage />
-            </TestWrapper>,
-        );
-
-        await waitFor(() => {
-            expect(screen.getByText('Action Movies')).toBeInTheDocument();
-        });
-
-        await openOverflowMenu(user, 'filter-1');
-
-        const wishlistItem = document.querySelector('[data-action="convert-to-wishlist"]') as HTMLElement;
-        await user.click(wishlistItem);
-
-        await waitFor(() => {
-            expect(screen.getByRole('dialog')).toBeInTheDocument();
-        });
-
-        expect(screen.getByText('Add Wishlist')).toBeInTheDocument();
-    });
-
-    it('pre-populates wishlist name from filter name', async () => {
-        const user = userEvent.setup();
-
-        render(
-            <TestWrapper role={Role.Manager}>
-                <FiltersPage />
-            </TestWrapper>,
-        );
-
-        await waitFor(() => {
-            expect(screen.getByText('Action Movies')).toBeInTheDocument();
-        });
-
-        await openOverflowMenu(user, 'filter-1');
-
-        const wishlistItem = document.querySelector('[data-action="convert-to-wishlist"]') as HTMLElement;
-        await user.click(wishlistItem);
-
-        await waitFor(() => {
-            expect(screen.getByRole('dialog')).toBeInTheDocument();
-        });
-
-        const nameInput = screen.getByLabelText(/name/i);
-        expect(nameInput).toHaveValue('Action Movies Wishlist');
+        const wishlistBadge = document.querySelector('[data-action="open-wishlist"]');
+        expect(wishlistBadge?.querySelector('.filters-page__wishlist-badge-label')).not.toBeNull();
+        expect(wishlistBadge?.closest('.filters-page__item-info')).not.toBeNull();
     });
 });
 
@@ -1378,14 +1426,14 @@ describe('FiltersPage accessibility', () => {
         expect(screen.getByRole('list', { name: /content filters/i })).toBeInTheDocument();
     });
 
-    it('filter comboboxes have accessible labels', () => {
+    it('ownership toggle has an accessible group label', () => {
         render(
             <TestWrapper>
                 <FiltersPage />
             </TestWrapper>,
         );
 
-        expect(screen.getByRole('combobox', { name: /filter by owner/i })).toBeInTheDocument();
+        expect(screen.getByRole('radiogroup', { name: /filter by ownership/i })).toBeInTheDocument();
     });
 
     it('inline action buttons have aria-labels', async () => {
@@ -1404,8 +1452,8 @@ describe('FiltersPage accessibility', () => {
             expect(btn).toHaveAttribute('aria-label');
         });
 
-        const applyButtons = document.querySelectorAll('[data-action="apply-in-library"]');
-        applyButtons.forEach((btn) => {
+        const viewButtons = document.querySelectorAll('[data-action="view-in-library"]');
+        viewButtons.forEach((btn) => {
             expect(btn).toHaveAttribute('aria-label');
         });
 
@@ -1432,8 +1480,8 @@ describe('FiltersPage accessibility', () => {
     });
 });
 
-describe('FiltersPage apply in library action', () => {
-    it('shows apply in library button for all filters', async () => {
+describe('FiltersPage view in library action', () => {
+    it('shows view in library button for all filters', async () => {
         render(
             <TestWrapper>
                 <FiltersPage />
@@ -1444,11 +1492,11 @@ describe('FiltersPage apply in library action', () => {
             expect(screen.getByText('Action Movies')).toBeInTheDocument();
         });
 
-        const applyButtons = document.querySelectorAll('[data-action="apply-in-library"]');
-        expect(applyButtons.length).toBe(8);
+        const viewButtons = document.querySelectorAll('[data-action="view-in-library"]');
+        expect(viewButtons.length).toBe(8);
     });
 
-    it('shows apply in library button for Viewer role', async () => {
+    it('shows view in library button for Viewer role', async () => {
         render(
             <TestWrapper role={Role.Viewer}>
                 <FiltersPage />
@@ -1459,11 +1507,11 @@ describe('FiltersPage apply in library action', () => {
             expect(screen.getByText('Action Movies')).toBeInTheDocument();
         });
 
-        const applyButtons = document.querySelectorAll('[data-action="apply-in-library"]');
-        expect(applyButtons.length).toBe(8);
+        const viewButtons = document.querySelectorAll('[data-action="view-in-library"]');
+        expect(viewButtons.length).toBe(8);
     });
 
-    it('apply in library button has correct aria-label', async () => {
+    it('view in library button has correct aria-label', async () => {
         render(
             <TestWrapper>
                 <FiltersPage />
@@ -1475,11 +1523,11 @@ describe('FiltersPage apply in library action', () => {
         });
 
         const filter1 = document.querySelector('[data-filter-id="filter-1"]');
-        const applyButton = filter1?.querySelector('[data-action="apply-in-library"]');
-        expect(applyButton).toHaveAttribute('aria-label', 'Apply Action Movies in Library');
+        const viewButton = filter1?.querySelector('[data-action="view-in-library"]');
+        expect(viewButton).toHaveAttribute('aria-label', 'View Action Movies in Library');
     });
 
-    it('apply button shows labeled text', async () => {
+    it('view button shows labeled text', async () => {
         render(
             <TestWrapper>
                 <FiltersPage />
@@ -1491,11 +1539,11 @@ describe('FiltersPage apply in library action', () => {
         });
 
         const filter1 = document.querySelector('[data-filter-id="filter-1"]');
-        const applyButton = filter1?.querySelector('[data-action="apply-in-library"]');
-        expect(applyButton).toHaveTextContent('Apply');
+        const viewButton = filter1?.querySelector('[data-action="view-in-library"]');
+        expect(viewButton).toHaveTextContent('View');
     });
 
-    it('navigates to library with filter query when clicked', async () => {
+    it('navigates to library referencing the saved filter by id', async () => {
         const user = userEvent.setup();
 
         render(
@@ -1510,18 +1558,254 @@ describe('FiltersPage apply in library action', () => {
         });
 
         const filter1 = document.querySelector('[data-filter-id="filter-1"]');
-        const applyButton = filter1?.querySelector('[data-action="apply-in-library"]') as HTMLButtonElement;
+        const viewButton = filter1?.querySelector('[data-action="view-in-library"]') as HTMLButtonElement;
 
-        await user.click(applyButton);
+        await user.click(viewButton);
 
-        expect(mockNavigate).toHaveBeenCalledWith(expect.stringContaining('/library/all?filter='));
+        expect(mockNavigate).toHaveBeenCalledWith(expect.stringContaining('/library/all?savedFilter='));
+    });
+
+    it('references the saved filter by id alone, with no embedded expression', async () => {
+        const user = userEvent.setup();
+
+        render(
+            <TestWrapper>
+                <FiltersPage />
+            </TestWrapper>,
+        );
+
+        await waitFor(() => {
+            const queryElements = document.querySelectorAll('[data-query]');
+            expect(queryElements.length).toBe(8);
+        });
+
+        const filter1 = document.querySelector('[data-filter-id="filter-1"]');
+        const viewButton = filter1?.querySelector('[data-action="view-in-library"]') as HTMLButtonElement;
+
+        await user.click(viewButton);
+
+        const target = String(mockNavigate.mock.calls[0][0]);
+        const search = new URLSearchParams(target.split('?')[1]);
+        expect(search.get('savedFilter')).toBe('filter-1');
+        expect(search.get('filter')).toBeNull();
     });
 });
 
-describe('FiltersPage URL persistence', () => {
-    it('restores owner filter from URL on mount', async () => {
+describe('FiltersPage search providers action', () => {
+    it('navigates to the add page with the saved filter preloaded', async () => {
+        const user = userEvent.setup();
+
         render(
-            <TestWrapper initialEntries={['/?owner=__shared__']}>
+            <TestWrapper>
+                <FiltersPage />
+            </TestWrapper>,
+        );
+
+        await waitFor(() => {
+            const queryElements = document.querySelectorAll('[data-query]');
+            expect(queryElements.length).toBe(8);
+        });
+
+        await openOverflowMenu(user, 'filter-1');
+
+        const searchItem = document.querySelector('[data-action="search-providers"]') as HTMLElement;
+        expect(searchItem).toBeInTheDocument();
+        expect(searchItem).toHaveTextContent('Search providers');
+        await user.click(searchItem);
+
+        expect(mockNavigate).toHaveBeenCalledWith(
+            '/library/add',
+            expect.objectContaining({
+                state: expect.objectContaining({
+                    savedFilterId: 'filter-1',
+                    filterQuery: expect.any(String),
+                }),
+            }),
+        );
+    });
+});
+
+describe('FiltersPage convert to wishlist action', () => {
+    it('navigates to the wishlists page with the filter criteria seeded', async () => {
+        const user = userEvent.setup();
+
+        render(
+            <TestWrapper>
+                <FiltersPage />
+            </TestWrapper>,
+        );
+
+        await waitFor(() => {
+            const queryElements = document.querySelectorAll('[data-query]');
+            expect(queryElements.length).toBe(8);
+        });
+
+        await openOverflowMenu(user, 'filter-1');
+
+        const convertItem = document.querySelector('[data-action="convert-to-wishlist"]') as HTMLElement;
+        expect(convertItem).toBeInTheDocument();
+        expect(convertItem).toHaveTextContent('Convert to wishlist');
+        await user.click(convertItem);
+
+        expect(mockNavigate).toHaveBeenCalledWith(
+            '/wishlists',
+            expect.objectContaining({
+                state: expect.objectContaining({
+                    createCriteria: expect.any(Object),
+                    createName: 'Action Movies',
+                }),
+            }),
+        );
+    });
+});
+
+describe('FiltersPage wishlist-backed filters', () => {
+    const wishlistBackedFilter = {
+        id: 'filter-9',
+        name: 'Wishlist Backing',
+        ownerUserId: null,
+        criteria: { contentHierarchyItem: { and: [{}, {}] } },
+        ownerLock: false,
+        createdAt: '2024-01-09T00:00:00Z',
+        modifiedAt: null,
+        createdByUserId: null,
+        modifiedByUserId: null,
+    };
+
+    function setupWishlistBackedMocks() {
+        vi.mocked(apiGet).mockImplementation((url: string) => {
+            if (url === '/content-filters') {
+                return Promise.resolve([mockSharedFilters[0], wishlistBackedFilter]);
+            }
+            if (url === '/content-filters/my') {
+                return Promise.resolve([]);
+            }
+            if (url === '/wishlists') {
+                return Promise.resolve([
+                    {
+                        id: 'wishlist-1',
+                        contentFilterId: 'filter-9',
+                        name: 'My Wishlist',
+                    },
+                ]);
+            }
+            return Promise.resolve([]);
+        });
+    }
+
+    it('shows a "Part of {wishlist}" badge linking to the wishlist detail page', async () => {
+        setupWishlistBackedMocks();
+
+        render(
+            <TestWrapper role={Role.Admin}>
+                <FiltersPage />
+            </TestWrapper>,
+        );
+
+        await waitFor(() => {
+            expect(screen.getByText('Wishlist Backing')).toBeInTheDocument();
+        });
+
+        const row = document.querySelector('[data-filter-id="filter-9"]');
+        const badge = row?.querySelector('[data-action="open-wishlist"]');
+        expect(badge).toBeInTheDocument();
+        expect(badge).toHaveTextContent('Part of My Wishlist');
+        expect(badge).toHaveAttribute('href', '/wishlists/wishlist-1');
+    });
+
+    it('shows the edit pencil disabled with a wishlist tooltip, and no delete or lock', async () => {
+        const user = userEvent.setup();
+        setupWishlistBackedMocks();
+
+        render(
+            <TestWrapper role={Role.Admin}>
+                <FiltersPage />
+            </TestWrapper>,
+        );
+
+        await waitFor(() => {
+            expect(screen.getByText('Wishlist Backing')).toBeInTheDocument();
+        });
+
+        const row = document.querySelector('[data-filter-id="filter-9"]');
+        const editButton = row?.querySelector('[data-action="edit"]');
+        expect(editButton).toBeInTheDocument();
+        expect(editButton).toHaveAttribute('aria-disabled', 'true');
+        expect(editButton).toHaveAttribute('data-disabled-reason', 'wishlist-bound');
+
+        await openOverflowMenu(user, 'filter-9');
+        expect(document.querySelector('[data-action="delete"]')).not.toBeInTheDocument();
+        expect(document.querySelector('[data-action="lock"]')).not.toBeInTheDocument();
+        expect(document.querySelector('[data-action="unlock"]')).not.toBeInTheDocument();
+        expect(document.querySelector('[data-action="convert-to-wishlist"]')).not.toBeInTheDocument();
+    });
+
+    it('hides the wishlist-bound edit pencil for a role that cannot edit the filter', async () => {
+        setupWishlistBackedMocks();
+
+        render(
+            <TestWrapper role={Role.Viewer}>
+                <FiltersPage />
+            </TestWrapper>,
+        );
+
+        await waitFor(() => {
+            expect(screen.getByText('Wishlist Backing')).toBeInTheDocument();
+        });
+
+        const row = document.querySelector('[data-filter-id="filter-9"]');
+        expect(row?.querySelector('[data-action="edit"]')).not.toBeInTheDocument();
+        expect(row?.querySelector('[data-action="view-in-library"]')).toBeInTheDocument();
+    });
+
+    it('does not open the editor when the wishlist-bound pencil is clicked', async () => {
+        const user = userEvent.setup();
+        setupWishlistBackedMocks();
+
+        render(
+            <TestWrapper role={Role.Admin}>
+                <FiltersPage />
+            </TestWrapper>,
+        );
+
+        await waitFor(() => {
+            expect(screen.getByText('Wishlist Backing')).toBeInTheDocument();
+        });
+
+        const row = document.querySelector('[data-filter-id="filter-9"]');
+        const editButton = row?.querySelector('[data-action="edit"]') as HTMLButtonElement;
+        await user.click(editButton);
+
+        expect(screen.queryByText('Edit Filter')).not.toBeInTheDocument();
+    });
+
+    it('keeps View and Duplicate available on wishlist-backed rows', async () => {
+        const user = userEvent.setup();
+        setupWishlistBackedMocks();
+
+        render(
+            <TestWrapper role={Role.Admin}>
+                <FiltersPage />
+            </TestWrapper>,
+        );
+
+        await waitFor(() => {
+            expect(screen.getByText('Wishlist Backing')).toBeInTheDocument();
+        });
+
+        const row = document.querySelector('[data-filter-id="filter-9"]');
+        expect(row?.querySelector('[data-action="view-in-library"]')).toBeInTheDocument();
+
+        await openOverflowMenu(user, 'filter-9');
+        expect(document.querySelector('[data-action="duplicate"]')).toBeInTheDocument();
+    });
+
+    it('keeps edit and delete on a standalone filter', async () => {
+        const user = userEvent.setup();
+        setupWishlistBackedMocks();
+
+        render(
+            <TestWrapper role={Role.Admin}>
                 <FiltersPage />
             </TestWrapper>,
         );
@@ -1530,14 +1814,51 @@ describe('FiltersPage URL persistence', () => {
             expect(screen.getByText('Action Movies')).toBeInTheDocument();
         });
 
-        const list = screen.getByRole('list', { name: /content filters/i });
-        const items = within(list).getAllByRole('listitem');
-        expect(items.length).toBe(4);
+        const row = document.querySelector('[data-filter-id="filter-1"]');
+        expect(row?.querySelector('[data-action="edit"]')).toBeInTheDocument();
+        expect(row?.querySelector('[data-action="open-wishlist"]')).not.toBeInTheDocument();
+
+        await openOverflowMenu(user, 'filter-1');
+        expect(document.querySelector('[data-action="delete"]')).toBeInTheDocument();
+    });
+});
+
+describe('FiltersPage edit deep-link', () => {
+    it('opens the editor for the filter named in the ?edit= param', async () => {
+        render(
+            <TestWrapper role={Role.Manager} initialEntries={['/?edit=filter-1']}>
+                <FiltersPage />
+            </TestWrapper>,
+        );
+
+        await waitFor(() => {
+            expect(screen.getByRole('dialog')).toBeInTheDocument();
+        });
+
+        expect(screen.getByText('Edit Filter')).toBeInTheDocument();
+        const nameInput = screen.getByLabelText(/name/i);
+        expect(nameInput).toHaveValue('Action Movies');
     });
 
-    it('restores specific user owner filter from URL on mount', async () => {
+    it('ignores an unknown ?edit= id without opening a dialog', async () => {
         render(
-            <TestWrapper initialEntries={['/?owner=user-2']}>
+            <TestWrapper role={Role.Manager} initialEntries={['/?edit=does-not-exist']}>
+                <FiltersPage />
+            </TestWrapper>,
+        );
+
+        await waitFor(() => {
+            expect(screen.getByText('Action Movies')).toBeInTheDocument();
+        });
+
+        expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+});
+
+describe('FiltersPage URL persistence', () => {
+    it('restores the Mine scope from URL on mount', async () => {
+        render(
+            <TestWrapper userId="user-1" initialEntries={['/?scope=mine']}>
                 <FiltersPage />
             </TestWrapper>,
         );
@@ -1545,14 +1866,15 @@ describe('FiltersPage URL persistence', () => {
         await waitFor(() => {
             const list = screen.getByRole('list', { name: /content filters/i });
             const items = within(list).getAllByRole('listitem');
-
-            expect(items.length).toBe(1);
+            expect(items.length).toBe(2);
         });
+
+        expect(screen.getByRole('radio', { name: 'Mine' })).toHaveAttribute('aria-checked', 'true');
     });
 
-    it('shows clear button when owner param is in URL', async () => {
+    it('shows all filters when no scope param is present', async () => {
         render(
-            <TestWrapper initialEntries={['/?owner=__shared__']}>
+            <TestWrapper userId="user-1">
                 <FiltersPage />
             </TestWrapper>,
         );
@@ -1560,30 +1882,31 @@ describe('FiltersPage URL persistence', () => {
         await waitFor(() => {
             expect(screen.getByText('Action Movies')).toBeInTheDocument();
         });
-
-        expect(document.querySelector('[data-action="clear-filters"]')).toBeInTheDocument();
-    });
-
-    it('clears owner param from URL when clear is clicked', async () => {
-        const user = userEvent.setup();
-
-        render(
-            <TestWrapper initialEntries={['/?owner=__shared__']}>
-                <FiltersPage />
-            </TestWrapper>,
-        );
-
-        await waitFor(() => {
-            expect(screen.getByText('Action Movies')).toBeInTheDocument();
-        });
-
-        const clearButton = document.querySelector('[data-action="clear-filters"]');
-        await user.click(clearButton!);
 
         const list = screen.getByRole('list', { name: /content filters/i });
         const items = within(list).getAllByRole('listitem');
         expect(items.length).toBe(8);
+        expect(screen.getByRole('radio', { name: 'All' })).toHaveAttribute('aria-checked', 'true');
+    });
 
-        expect(document.querySelector('[data-action="clear-filters"]')).not.toBeInTheDocument();
+    it('drops the scope param from URL when All is selected', async () => {
+        const user = userEvent.setup();
+
+        render(
+            <TestWrapper userId="user-1" initialEntries={['/?scope=mine']}>
+                <FiltersPage />
+            </TestWrapper>,
+        );
+
+        await waitFor(() => {
+            expect(screen.getByRole('radio', { name: 'Mine' })).toHaveAttribute('aria-checked', 'true');
+        });
+
+        await user.click(screen.getByRole('radio', { name: 'All' }));
+
+        const list = screen.getByRole('list', { name: /content filters/i });
+        const items = within(list).getAllByRole('listitem');
+        expect(items.length).toBe(8);
+        expect(screen.getByRole('radio', { name: 'All' })).toHaveAttribute('aria-checked', 'true');
     });
 });

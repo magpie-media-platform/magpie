@@ -1,7 +1,16 @@
-/* eslint-disable react-refresh/only-export-components */
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 
-import { hasPermission, meetsRoleRequirement, Role, type AuthState, type Permission, type User } from './types';
+import {
+    meetsRoleRequirement,
+    permissionCatalogFromEffective,
+    Role,
+    type AuthState,
+    type EffectivePermissions,
+    type Permission,
+    type PermissionCatalog,
+    type User,
+} from './types';
 import {
     login as apiLogin,
     logout as apiLogout,
@@ -11,12 +20,16 @@ import {
     isTokenExpired,
     clearAuthStorage,
     tokenExpirationStorage,
+    fetchEffectivePermissions,
 } from '@/lib/authApi';
-import { AUTH_FAILURE_EVENT } from '@/lib/api';
+import { AUTH_FAILURE_EVENT, isApiError } from '@/lib/api';
 import { ToastContext } from '@/components/ui/Toast';
+import { useEventStream } from '@/hooks/useEventStream';
 
 export interface AuthContextValue extends AuthState {
     hasPermission: (permission: Permission) => boolean;
+
+    getRequiredRole: (permission: Permission) => Role | undefined;
 
     hasRole: (minRole: Role) => boolean;
 
@@ -32,6 +45,7 @@ const defaultContextValue: AuthContextValue = {
     isAuthenticated: false,
     user: null,
     hasPermission: () => false,
+    getRequiredRole: () => undefined,
     hasRole: () => false,
     signIn: () => {},
     signOut: async () => {},
@@ -49,27 +63,73 @@ export interface AuthProviderProps {
     initialLoading?: boolean;
 
     skipSessionInit?: boolean;
+
+    initialPermissions?: EffectivePermissions;
 }
 
 const TOKEN_REFRESH_BUFFER_MS = 60_000;
+
+function isAuthenticationFailure(error: unknown): boolean {
+    return isApiError(error) && (error.status === 401 || error.status === 403);
+}
 
 export function AuthProvider({
     children,
     initialUser = null,
     initialLoading,
     skipSessionInit = false,
+    initialPermissions,
 }: AuthProviderProps) {
     const defaultLoading = initialLoading ?? (!skipSessionInit && hasStoredSession());
     const [isLoading, setIsLoading] = useState(defaultLoading);
     const [user, setUser] = useState<User | null>(initialUser);
     const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const isRefreshingRef = useRef(false);
+    const sessionGenerationRef = useRef(0);
+    const queryClient = useQueryClient();
 
     const rawToastCtx = useContext(ToastContext);
     const toastFnRef = useRef(rawToastCtx?.toast);
     toastFnRef.current = rawToastCtx?.toast;
 
     const isAuthenticated = user !== null;
+
+    const permissionsQuery = useQuery({
+        queryKey: ['auth', 'permissions', user?.id],
+        queryFn: fetchEffectivePermissions,
+        enabled: isAuthenticated && initialPermissions === undefined,
+        initialData: initialPermissions,
+        staleTime: Infinity,
+        gcTime: Infinity,
+    });
+
+    useEventStream(
+        () => {
+            void permissionsQuery.refetch();
+        },
+        {
+            eventName: ['user.updated', 'user.deleted', 'user.lockedOut', 'user.unlocked'],
+            entityId: user?.id,
+            enabled: isAuthenticated,
+            owner: 'auth-permissions',
+        },
+    );
+
+    const effectiveUser = useMemo<User | null>(
+        () =>
+            user
+                ? {
+                      ...user,
+                      role: initialPermissions === undefined ? (permissionsQuery.data?.role ?? user.role) : user.role,
+                  }
+                : null,
+        [initialPermissions, permissionsQuery.data?.role, user],
+    );
+
+    const permissionCatalog = useMemo<PermissionCatalog | null>(
+        () => (permissionsQuery.data ? permissionCatalogFromEffective(permissionsQuery.data) : null),
+        [permissionsQuery.data],
+    );
 
     const performRefresh = useCallback(async () => {
         if (isRefreshingRef.current) {
@@ -78,8 +138,6 @@ export function AuthProvider({
 
         isRefreshingRef.current = true;
         try {
-            // Don't reuse the existing token if it's within the refresh buffer of expiring -- otherwise
-            // the next request races expiry and only refreshes after a 401. isTokenExpired takes seconds.
             if (!isTokenExpired(TOKEN_REFRESH_BUFFER_MS / 1000)) {
                 const existing = getCurrentUserFromToken();
                 if (existing) {
@@ -101,9 +159,10 @@ export function AuthProvider({
         } catch {
             toastFnRef.current?.({
                 title: 'Session expired',
-                description: 'Your session could not be refreshed. Please sign in again.',
+                description: 'The session expired. Sign in again.',
                 variant: 'error',
             });
+            sessionGenerationRef.current += 1;
             setUser(null);
         } finally {
             isRefreshingRef.current = false;
@@ -129,7 +188,7 @@ export function AuthProvider({
         const msUntilRefresh = expiresAt.getTime() - now.getTime() - TOKEN_REFRESH_BUFFER_MS;
 
         if (msUntilRefresh <= 0) {
-            performRefresh();
+            void performRefresh();
         } else {
             refreshTimerRef.current = setTimeout(performRefresh, msUntilRefresh);
         }
@@ -150,9 +209,13 @@ export function AuthProvider({
                     return;
                 }
 
+                const sessionGeneration = sessionGenerationRef.current;
                 if (isTokenExpired()) {
                     try {
                         const jwtUser = await refreshAccessToken();
+                        if (sessionGeneration !== sessionGenerationRef.current || !hasStoredSession()) {
+                            return;
+                        }
                         setUser({
                             id: jwtUser.id,
                             username: jwtUser.username,
@@ -164,11 +227,23 @@ export function AuthProvider({
                 } else {
                     const jwtUser = getCurrentUserFromToken();
                     if (jwtUser) {
-                        setUser({
-                            id: jwtUser.id,
-                            username: jwtUser.username,
-                            role: jwtUser.role,
-                        });
+                        try {
+                            await fetchEffectivePermissions();
+                        } catch (error) {
+                            if (isAuthenticationFailure(error)) {
+                                clearAuthStorage();
+                                return;
+                            }
+                        }
+                        if (sessionGeneration === sessionGenerationRef.current && hasStoredSession()) {
+                            setUser({
+                                id: jwtUser.id,
+                                username: jwtUser.username,
+                                role: jwtUser.role,
+                            });
+                        }
+                    } else {
+                        clearAuthStorage();
                     }
                 }
             } finally {
@@ -176,7 +251,7 @@ export function AuthProvider({
             }
         }
 
-        initSession();
+        void initSession();
     }, [skipSessionInit, initialUser, initialLoading]);
 
     useEffect(() => {
@@ -194,16 +269,16 @@ export function AuthProvider({
 
     useEffect(() => {
         function handleStorageChange(e: StorageEvent) {
-            if (e.key !== 'magpie_token_expires') {
+            if (!tokenExpirationStorage.isStorageKey(e.key)) {
                 return;
             }
 
+            sessionGenerationRef.current += 1;
             if (!e.newValue) {
                 setUser(null);
                 return;
             }
 
-            // Token couldn't be decoded into a usable user; treat as cross-tab logout to keep state in sync.
             const updated = getCurrentUserFromToken();
             if (updated) {
                 setUser({
@@ -217,6 +292,7 @@ export function AuthProvider({
         }
 
         function handleAuthFailure() {
+            sessionGenerationRef.current += 1;
             setUser(null);
         }
 
@@ -230,57 +306,86 @@ export function AuthProvider({
 
     const checkPermission = useCallback(
         (permission: Permission): boolean => {
-            if (!user) return false;
-            return hasPermission(user.role, permission);
+            if (!effectiveUser || !permissionCatalog) return false;
+            const requiredRole = permissionCatalog[permission];
+            return requiredRole !== undefined && effectiveUser.role >= requiredRole;
         },
-        [user],
+        [effectiveUser, permissionCatalog],
+    );
+
+    const getRequiredRole = useCallback(
+        (permission: Permission): Role | undefined => permissionCatalog?.[permission],
+        [permissionCatalog],
     );
 
     const checkRole = useCallback(
         (minRole: Role): boolean => {
-            if (!user) return false;
-            return meetsRoleRequirement(user.role, minRole);
+            if (!effectiveUser) return false;
+            return meetsRoleRequirement(effectiveUser.role, minRole);
         },
-        [user],
+        [effectiveUser],
     );
 
-    const signIn = useCallback((newUser: User) => {
-        setUser(newUser);
-        setIsLoading(false);
-    }, []);
+    const signIn = useCallback(
+        (newUser: User) => {
+            sessionGenerationRef.current += 1;
+            queryClient.clear();
+            setUser(newUser);
+            setIsLoading(false);
+        },
+        [queryClient],
+    );
 
     const signOut = useCallback(async () => {
+        sessionGenerationRef.current += 1;
         if (refreshTimerRef.current) {
             clearTimeout(refreshTimerRef.current);
             refreshTimerRef.current = null;
         }
 
         await apiLogout();
+        queryClient.clear();
         setUser(null);
-    }, []);
+    }, [queryClient]);
 
-    const login = useCallback(async (username: string, password: string) => {
-        const jwtUser = await apiLogin(username, password);
-        setUser({
-            id: jwtUser.id,
-            username: jwtUser.username,
-            role: jwtUser.role,
-        });
-        setIsLoading(false);
-    }, []);
+    const login = useCallback(
+        async (username: string, password: string) => {
+            sessionGenerationRef.current += 1;
+            const jwtUser = await apiLogin(username, password);
+            queryClient.clear();
+            setUser({
+                id: jwtUser.id,
+                username: jwtUser.username,
+                role: jwtUser.role,
+            });
+            setIsLoading(false);
+        },
+        [queryClient],
+    );
 
     const contextValue = useMemo<AuthContextValue>(
         () => ({
             isLoading,
             isAuthenticated,
-            user,
+            user: effectiveUser,
             hasPermission: checkPermission,
+            getRequiredRole,
             hasRole: checkRole,
             signIn,
             signOut,
             login,
         }),
-        [isLoading, isAuthenticated, user, checkPermission, checkRole, signIn, signOut, login],
+        [
+            isLoading,
+            isAuthenticated,
+            effectiveUser,
+            checkPermission,
+            getRequiredRole,
+            checkRole,
+            signIn,
+            signOut,
+            login,
+        ],
     );
 
     return <AuthContext.Provider value={contextValue}>{children}</AuthContext.Provider>;

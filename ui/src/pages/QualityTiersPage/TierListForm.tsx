@@ -1,27 +1,32 @@
-import { useState, useCallback, useEffect, useMemo, useRef, type ReactNode } from 'react';
-import { FloppyDisk, X, Info, ListNumbers } from '@phosphor-icons/react';
+import { useState, useCallback, useEffect, type ReactNode } from 'react';
+import { FloppyDiskIcon, XIcon, InfoIcon, ListNumbersIcon } from '@phosphor-icons/react';
 
 import { useUnsavedChangesGuard } from '@/hooks/useUnsavedChangesGuard';
+import { useFormDirty } from '@/hooks/useFormDirty';
 
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Label } from '@/components/ui/Label';
 import { Switch } from '@/components/ui/Switch';
+import { TagInput } from '@/components/ui/TagInput';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription, SheetFooter } from '@/components/ui/Sheet';
 import { Tooltip } from '@/components/ui/Tooltip';
 import { UnsavedChangesDialog } from '@/components/ui/UnsavedChangesDialog';
 import type { ApiTag } from '@/hooks/useTags';
+import { normalizeMimePatterns } from './MimeTypesEditor';
 
 import './TierListForm.css';
+import './TierForms.css';
 
 export interface TierListFormValues {
     id?: string;
     name: string;
+    mimeTypes: string[];
     upgradeAllowed: boolean;
     tags: string[];
 }
 
-export interface TierListFormProps {
+interface TierListFormProps {
     open: boolean;
 
     onOpenChange: (open: boolean) => void;
@@ -37,9 +42,19 @@ export interface TierListFormProps {
 
 const emptyValues: TierListFormValues = {
     name: '',
+    mimeTypes: [],
     upgradeAllowed: true,
     tags: [],
 };
+
+function normalizeTierList(values: TierListFormValues): unknown {
+    return {
+        name: values.name,
+        mimeTypes: [...values.mimeTypes].sort(),
+        upgradeAllowed: values.upgradeAllowed,
+        tags: [...values.tags].sort(),
+    };
+}
 
 export function TierListForm({
     open,
@@ -54,39 +69,32 @@ export function TierListForm({
     const [values, setValues] = useState<TierListFormValues>(initialValues ?? emptyValues);
     const [errors, setErrors] = useState<Record<string, string>>({});
 
-    const cleanValuesRef = useRef<TierListFormValues>(initialValues ?? emptyValues);
+    const [cleanValues, setCleanValues] = useState<TierListFormValues>(initialValues ?? emptyValues);
     const [showUnsavedDialog, setShowUnsavedDialog] = useState(false);
 
     useEffect(() => {
         if (open) {
             const clean = initialValues ?? emptyValues;
             setValues(clean);
-            cleanValuesRef.current = clean;
+            setCleanValues(clean);
             setErrors({});
             setShowUnsavedDialog(false);
         }
     }, [open, initialValues]);
 
-    const isDirty = useMemo(
-        () =>
-            values.name !== cleanValuesRef.current.name ||
-            values.upgradeAllowed !== cleanValuesRef.current.upgradeAllowed ||
-            values.tags.length !== cleanValuesRef.current.tags.length ||
-            values.tags.some((tag, i) => tag !== cleanValuesRef.current.tags[i]),
-        [values],
-    );
+    const isDirty = useFormDirty(values, cleanValues, normalizeTierList);
 
-    useUnsavedChangesGuard(open && isDirty);
+    useUnsavedChangesGuard(open && isDirty && !isSubmitting);
 
     const handleOpenChange = useCallback(
         (nextOpen: boolean) => {
-            if (!nextOpen && isDirty) {
+            if (!nextOpen && isDirty && !isSubmitting) {
                 setShowUnsavedDialog(true);
                 return;
             }
             onOpenChange(nextOpen);
         },
-        [isDirty, onOpenChange],
+        [isDirty, isSubmitting, onOpenChange],
     );
 
     const handleDiscard = useCallback(() => {
@@ -118,25 +126,33 @@ export function TierListForm({
         }));
     }, []);
 
-    const validate = useCallback((): boolean => {
+    const validate = useCallback((): TierListFormValues | null => {
         const newErrors: Record<string, string> = {};
 
         if (!values.name.trim()) {
             newErrors.name = 'Name is required';
         }
 
+        const normalizedMimeTypes = normalizeMimePatterns(values.mimeTypes);
+        if (normalizedMimeTypes.error) {
+            newErrors.mimeTypes = normalizedMimeTypes.error;
+        }
+
         setErrors(newErrors);
-        return Object.keys(newErrors).length === 0;
+        return Object.keys(newErrors).length === 0
+            ? { ...values, name: values.name.trim(), mimeTypes: normalizedMimeTypes.patterns }
+            : null;
     }, [values]);
 
     const handleSubmit = useCallback(
-        (e: React.FormEvent) => {
+        (e: React.SubmitEvent) => {
             e.preventDefault();
-            if (validate()) {
-                onSubmit(values);
+            const normalized = validate();
+            if (normalized) {
+                onSubmit(normalized);
             }
         },
-        [values, validate, onSubmit],
+        [validate, onSubmit],
     );
 
     return (
@@ -147,7 +163,7 @@ export function TierListForm({
                     <SheetDescription>
                         {isEditing
                             ? 'Update the tier list configuration.'
-                            : 'Configure a new quality tier list for content searches.'}
+                            : 'Configure a new tier list for content searches.'}
                     </SheetDescription>
                 </SheetHeader>
 
@@ -167,6 +183,32 @@ export function TierListForm({
                                 disabled={isSubmitting}
                                 data-field="name"
                             />
+                        </div>
+
+                        <div className="tier-list-form__field" data-field="mimeTypes">
+                            <Label htmlFor="tier-list-mime-types" error={!!errors.mimeTypes}>
+                                MIME Types
+                            </Label>
+                            <TagInput
+                                id="tier-list-mime-types"
+                                value={values.mimeTypes}
+                                onChange={(mimeTypes) => {
+                                    setValues((previous) => ({ ...previous, mimeTypes }));
+                                    setErrors((previous) => ({ ...previous, mimeTypes: '' }));
+                                }}
+                                allowCreate
+                                placeholder="audio/*"
+                                disabled={isSubmitting}
+                                aria-invalid={!!errors.mimeTypes}
+                                aria-describedby={errors.mimeTypes ? 'tier-list-mime-types-error' : undefined}
+                            />
+                            {errors.mimeTypes ? (
+                                <p id="tier-list-mime-types-error" className="tier-list-form__help" role="alert">
+                                    {errors.mimeTypes}
+                                </p>
+                            ) : (
+                                <p className="tier-list-form__help">Leave empty to allow any MIME type.</p>
+                            )}
                         </div>
 
                         <div className="tier-list-form__field tier-list-form__field--toggle">
@@ -194,7 +236,7 @@ export function TierListForm({
                                             className="tier-list-form__info-button"
                                             aria-label="Upgrade allowed help"
                                         >
-                                            <Info weight="fill" aria-hidden="true" />
+                                            <InfoIcon weight="fill" aria-hidden="true" />
                                         </button>
                                     </Tooltip>
                                 </div>
@@ -229,7 +271,7 @@ export function TierListForm({
 
                         {!isEditing && (
                             <div className="tier-list-form__hint" data-hint="tiers">
-                                <ListNumbers
+                                <ListNumbersIcon
                                     weight="duotone"
                                     className="tier-list-form__hint-icon"
                                     aria-hidden="true"
@@ -249,11 +291,11 @@ export function TierListForm({
                             onClick={handleCancel}
                             data-action="cancel"
                         >
-                            <X weight="bold" aria-hidden="true" />
+                            <XIcon weight="bold" aria-hidden="true" />
                             Cancel
                         </Button>
                         <Button type="submit" variant="primary" loading={isSubmitting} data-action="save">
-                            <FloppyDisk weight="bold" aria-hidden="true" />
+                            <FloppyDiskIcon weight="bold" aria-hidden="true" />
                             Save
                         </Button>
                     </SheetFooter>

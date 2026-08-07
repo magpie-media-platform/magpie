@@ -1,0 +1,18 @@
+@layer components {
+    .button.clear-filters-button {
+        color: var(--bg-primary);
+        background-color: var(--filter-active);
+        border-color: var(--filter-active);
+
+        &:hover:not(:disabled, [aria-disabled='true']) {
+            background-color: color-mix(in srgb, var(--filter-active) 85%, white);
+            border-color: color-mix(in srgb, var(--filter-active) 85%, white);
+            box-shadow: 0 0 16px color-mix(in srgb, var(--filter-active) 35%, transparent);
+        }
+
+        &:active:not(:disabled, [aria-disabled='true']) {
+            background-color: color-mix(in srgb, var(--filter-active) 90%, black);
+            border-color: color-mix(in srgb, var(--filter-active) 90%, black);
+        }
+    }
+}

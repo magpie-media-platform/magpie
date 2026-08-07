@@ -1,12 +1,5 @@
 export { Slot, type SlotProps } from './Slot';
-export {
-    HeaderSlot,
-    HeaderLeftSlot,
-    HeaderRightSlot,
-    OverlaySlot,
-    NavMainSlot,
-    type GlobalSlotProps,
-} from './GlobalSlots';
+export { HeaderSlot, HeaderLeftSlot, HeaderRightSlot, OverlaySlot, type GlobalSlotProps } from './GlobalSlots';
 export { DashboardMainSlot, DashboardWidgetsSlot, type DashboardSlotProps } from './DashboardSlots';
 export {
     ContentListSlot,
@@ -32,7 +25,6 @@ export {
     AdminUsersSlot,
     AdminProvidersSlot,
     AdminExtensionsSlot,
-    AdminExtensionSettingsSlot,
     AdminBackupsSlot,
     type AdminSlotProps,
 } from './AdminSlots';
@@ -45,3 +37,8 @@ export {
     useTabSlotExtensions,
     type ExtensionTabsProps,
 } from './ExtensionTabs';
+export {
+    ExtensionAdminNavigation,
+    ExtensionMainNavigation,
+    type ExtensionNavigationProps,
+} from './ExtensionNavigation';

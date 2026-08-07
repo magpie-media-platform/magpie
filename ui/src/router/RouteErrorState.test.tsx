@@ -21,7 +21,7 @@ describe('RouteErrorState', () => {
                 <RouteErrorState />
             </MemoryRouter>,
         );
-        expect(screen.getByText('Something went wrong while loading this page.')).toBeInTheDocument();
+        expect(screen.getByText('Try again or go to the dashboard.')).toBeInTheDocument();
     });
 
     it('renders custom message', () => {

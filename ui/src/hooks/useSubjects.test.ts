@@ -7,6 +7,7 @@ vi.mock('@/lib/api', () => ({
     apiGet: vi.fn(),
     apiPatch: vi.fn(),
     apiDelete: vi.fn(),
+    apiPost: vi.fn(),
     buildUrl: vi.fn((path: string, params?: Record<string, string | undefined>) => {
         if (!params) return path;
         const searchParams = new URLSearchParams();
@@ -23,9 +24,26 @@ vi.mock('@/lib/api', () => ({
     }),
 }));
 
-import { apiGet, apiPatch, apiDelete, buildUrl } from '@/lib/api';
+vi.mock('./useEventStream', () => ({
+    useEventStream: vi.fn(),
+}));
+
+import { apiGet, apiPatch, apiDelete, apiPost, buildUrl } from '@/lib/api';
 import { extractImageUrl, extractTitle } from '@/lib/metadata';
-import { useSubjects, useSubject, subjectQueryKeys, type ApiSubject, type ApiMetadataContainer } from './useSubjects';
+import { useEventStream } from './useEventStream';
+import {
+    useSubjects,
+    useSubject,
+    useSetPrimaryImage,
+    subjectQueryKeys,
+    extractCustomValues,
+    extractBirthDate,
+    extractDeathDate,
+    type ApiSubject,
+    type ApiMetadataContainer,
+} from './useSubjects';
+
+const mockedUseEventStream = vi.mocked(useEventStream);
 
 const mockMetadataContainer: ApiMetadataContainer = {
     id: 'mc-1',
@@ -35,7 +53,7 @@ const mockMetadataContainer: ApiMetadataContainer = {
             id: 'contrib-1',
             ordinal: 0,
             locked: false,
-            providerType: 'tmdb',
+            providerType: 'provider-a',
             title: 'Bryan Cranston',
             overview: 'American actor and director',
             images: [{ type: 'profile', url: 'https://example.com/profile.jpg', width: 300, height: 450 }],
@@ -44,7 +62,7 @@ const mockMetadataContainer: ApiMetadataContainer = {
             id: 'contrib-2',
             ordinal: 1,
             locked: false,
-            providerType: 'imdb',
+            providerType: 'provider-h',
             title: 'Bryan Lee Cranston',
             images: [{ type: 'poster', url: 'https://example.com/poster.jpg' }],
         },
@@ -74,7 +92,7 @@ const mockApiSubjects: ApiSubject[] = [
                     id: 'contrib-3',
                     ordinal: 0,
                     locked: false,
-                    providerType: 'tmdb',
+                    providerType: 'provider-a',
                     title: 'Warner Bros.',
                     images: [{ type: 'logo', url: 'https://example.com/logo.png' }],
                 },
@@ -88,6 +106,10 @@ const mockApiSubjects: ApiSubject[] = [
         createdAt: '2024-01-03T00:00:00Z',
     },
 ];
+
+function pageOf(items: ApiSubject[], totalItems = items.length) {
+    return { items, pageNumber: 1, pageSize: 25, totalItems };
+}
 
 function createWrapper() {
     const queryClient = new QueryClient({
@@ -122,7 +144,7 @@ describe('useSubjects', () => {
 
     describe('fetching subjects', () => {
         it('should fetch subjects from the API', async () => {
-            mockApiGet.mockResolvedValue(mockApiSubjects);
+            mockApiGet.mockResolvedValue(pageOf(mockApiSubjects));
 
             const { result } = renderHook(() => useSubjects(), {
                 wrapper: createWrapper(),
@@ -138,7 +160,7 @@ describe('useSubjects', () => {
         });
 
         it('should return subjects from API', async () => {
-            mockApiGet.mockResolvedValue(mockApiSubjects);
+            mockApiGet.mockResolvedValue(pageOf(mockApiSubjects));
 
             const { result } = renderHook(() => useSubjects(), {
                 wrapper: createWrapper(),
@@ -155,8 +177,44 @@ describe('useSubjects', () => {
             expect(result.current.subjects[1].kind).toBe('studio');
         });
 
+        it('exposes the paged envelope total and current page', async () => {
+            mockApiGet.mockResolvedValue({
+                items: [mockApiSubjects[0]],
+                pageNumber: 2,
+                pageSize: 50,
+                totalItems: 137,
+            });
+
+            const { result } = renderHook(() => useSubjects({ pageNumber: 2, pageSize: 50 }), {
+                wrapper: createWrapper(),
+            });
+
+            await waitFor(() => {
+                expect(result.current.isLoading).toBe(false);
+            });
+
+            expect(result.current.subjects).toHaveLength(1);
+            expect(result.current.totalItems).toBe(137);
+            expect(result.current.pageNumber).toBe(2);
+            expect(result.current.pageSize).toBe(50);
+        });
+
+        it('requests the given page and size from the server', async () => {
+            mockApiGet.mockResolvedValue(pageOf(mockApiSubjects, 60));
+
+            const { result } = renderHook(() => useSubjects({ pageNumber: 3, pageSize: 25 }), {
+                wrapper: createWrapper(),
+            });
+
+            await waitFor(() => {
+                expect(result.current.isLoading).toBe(false);
+            });
+
+            expect(mockBuildUrl).toHaveBeenCalledWith('/subjects', { pageNumber: 3, pageSize: 25 });
+        });
+
         it('should filter by kind', async () => {
-            mockApiGet.mockResolvedValue([mockApiSubjects[0], mockApiSubjects[2]]);
+            mockApiGet.mockResolvedValue(pageOf([mockApiSubjects[0], mockApiSubjects[2]]));
 
             const { result } = renderHook(() => useSubjects({ kind: 'person' }), {
                 wrapper: createWrapper(),
@@ -170,7 +228,7 @@ describe('useSubjects', () => {
         });
 
         it('should filter by tag', async () => {
-            mockApiGet.mockResolvedValue([mockApiSubjects[0]]);
+            mockApiGet.mockResolvedValue(pageOf([mockApiSubjects[0]]));
 
             const { result } = renderHook(() => useSubjects({ tag: 'favorites' }), {
                 wrapper: createWrapper(),
@@ -181,6 +239,60 @@ describe('useSubjects', () => {
             });
 
             expect(mockBuildUrl).toHaveBeenCalledWith('/subjects', { tag: 'favorites' });
+        });
+
+        it('refetches a filtered list once when a newly created subject is not cached', async () => {
+            mockApiGet.mockResolvedValue(pageOf([mockApiSubjects[0]]));
+
+            const { result } = renderHook(() => useSubjects({ kind: 'person' }), {
+                wrapper: createWrapper(),
+            });
+
+            await waitFor(() => {
+                expect(result.current.isLoading).toBe(false);
+            });
+            mockApiGet.mockClear();
+
+            const subjectEventHandler = mockedUseEventStream.mock.calls.find(([, options]) =>
+                Array.isArray(options?.eventName) ? options.eventName.includes('subject.created') : false,
+            )?.[0];
+            act(() => {
+                subjectEventHandler?.({
+                    name: 'subject.created',
+                    context: { 'subject.id': 'subject-new' },
+                });
+            });
+
+            await waitFor(() => {
+                expect(mockApiGet).toHaveBeenCalledOnce();
+            });
+        });
+
+        it('does not refetch a filtered list for an unrelated event-family burst', async () => {
+            mockApiGet.mockResolvedValue(pageOf([mockApiSubjects[0]]));
+
+            const { result } = renderHook(() => useSubjects({ kind: 'person' }), {
+                wrapper: createWrapper(),
+            });
+
+            await waitFor(() => {
+                expect(result.current.isLoading).toBe(false);
+            });
+            mockApiGet.mockClear();
+
+            const subjectEventHandler = mockedUseEventStream.mock.calls.find(([, options]) =>
+                Array.isArray(options?.eventName) ? options.eventName.includes('subject.created') : false,
+            )?.[0];
+            act(() => {
+                for (let index = 0; index < 100; index += 1) {
+                    subjectEventHandler?.({
+                        name: 'download.updated',
+                        context: { 'download.id': `download-${index}` },
+                    });
+                }
+            });
+
+            expect(mockApiGet).not.toHaveBeenCalled();
         });
 
         it('should return empty array on error', async () => {
@@ -199,7 +311,7 @@ describe('useSubjects', () => {
         });
 
         it('should return empty array when API returns nothing', async () => {
-            mockApiGet.mockResolvedValue([]);
+            mockApiGet.mockResolvedValue(pageOf([]));
 
             const { result } = renderHook(() => useSubjects(), {
                 wrapper: createWrapper(),
@@ -216,7 +328,7 @@ describe('useSubjects', () => {
 
     describe('metadata extraction', () => {
         it('should extract title from metadata contributions', async () => {
-            mockApiGet.mockResolvedValue(mockApiSubjects);
+            mockApiGet.mockResolvedValue(pageOf(mockApiSubjects));
 
             const { result } = renderHook(() => useSubjects(), {
                 wrapper: createWrapper(),
@@ -231,7 +343,7 @@ describe('useSubjects', () => {
         });
 
         it('should extract image URL from metadata contributions', async () => {
-            mockApiGet.mockResolvedValue(mockApiSubjects);
+            mockApiGet.mockResolvedValue(pageOf(mockApiSubjects));
 
             const { result } = renderHook(() => useSubjects(), {
                 wrapper: createWrapper(),
@@ -246,7 +358,7 @@ describe('useSubjects', () => {
         });
 
         it('should return undefined for missing metadata', async () => {
-            mockApiGet.mockResolvedValue(mockApiSubjects);
+            mockApiGet.mockResolvedValue(pageOf(mockApiSubjects));
 
             const { result } = renderHook(() => useSubjects(), {
                 wrapper: createWrapper(),
@@ -264,7 +376,7 @@ describe('useSubjects', () => {
         });
 
         it('should fall back to any image if no primary type found', async () => {
-            mockApiGet.mockResolvedValue([mockApiSubjects[1]]);
+            mockApiGet.mockResolvedValue(pageOf([mockApiSubjects[1]]));
 
             const { result } = renderHook(() => useSubjects(), {
                 wrapper: createWrapper(),
@@ -281,7 +393,7 @@ describe('useSubjects', () => {
 
     describe('updating subject tags', () => {
         it('should update subject tags via PATCH /subjects/{id}', async () => {
-            mockApiGet.mockResolvedValue(mockApiSubjects);
+            mockApiGet.mockResolvedValue(pageOf(mockApiSubjects));
             mockApiPatch.mockResolvedValue(undefined);
 
             const { result } = renderHook(() => useSubjects(), {
@@ -304,7 +416,7 @@ describe('useSubjects', () => {
         });
 
         it('should set isUpdating while updating', async () => {
-            mockApiGet.mockResolvedValue(mockApiSubjects);
+            mockApiGet.mockResolvedValue(pageOf(mockApiSubjects));
 
             let resolvePatch: () => void;
             const patchPromise = new Promise<void>((resolve) => {
@@ -321,7 +433,7 @@ describe('useSubjects', () => {
             });
 
             act(() => {
-                result.current.updateSubjectTags('subject-1', { tags: { add: ['test'] } });
+                void result.current.updateSubjectTags('subject-1', { tags: { add: ['test'] } });
             });
 
             await waitFor(() => {
@@ -340,7 +452,7 @@ describe('useSubjects', () => {
 
     describe('deleting subjects', () => {
         it('should delete a subject via DELETE /subjects/{id}', async () => {
-            mockApiGet.mockResolvedValue(mockApiSubjects);
+            mockApiGet.mockResolvedValue(pageOf(mockApiSubjects));
             mockApiDelete.mockResolvedValue(undefined);
 
             const { result } = renderHook(() => useSubjects(), {
@@ -359,7 +471,7 @@ describe('useSubjects', () => {
         });
 
         it('should set isDeleting while deleting', async () => {
-            mockApiGet.mockResolvedValue(mockApiSubjects);
+            mockApiGet.mockResolvedValue(pageOf(mockApiSubjects));
 
             let resolveDelete: () => void;
             const deletePromise = new Promise<void>((resolve) => {
@@ -376,7 +488,7 @@ describe('useSubjects', () => {
             });
 
             act(() => {
-                result.current.deleteSubject('subject-1');
+                void result.current.deleteSubject('subject-1');
             });
 
             await waitFor(() => {
@@ -476,5 +588,139 @@ describe('useSubject', () => {
 
         expect(result.current.subject).toBeNull();
         expect(result.current.error).toBeInstanceOf(Error);
+    });
+});
+
+describe('extractCustomValues', () => {
+    it('returns deduped key/value pairs in priority then source order', () => {
+        const container: ApiMetadataContainer = {
+            id: 'mc',
+            createdAt: '2024-01-01T00:00:00Z',
+            contributions: [
+                {
+                    id: 'c1',
+                    ordinal: 0,
+                    locked: false,
+                    customMetadata: [
+                        { key: 'Ethnicity', value: 'Caucasian' },
+                        { key: 'Height', value: '170 cm' },
+                    ],
+                },
+                {
+                    id: 'c2',
+                    ordinal: 1,
+                    locked: false,
+                    customMetadata: [
+                        { key: 'Height', value: '168 cm' },
+                        { key: 'Eye colour', value: 'Brown' },
+                    ],
+                },
+            ],
+        };
+
+        expect(extractCustomValues(container)).toEqual([
+            { key: 'Ethnicity', value: 'Caucasian' },
+            { key: 'Height', value: '170 cm' },
+            { key: 'Eye colour', value: 'Brown' },
+        ]);
+    });
+
+    it('dedupes case-insensitively and keeps the highest-priority value', () => {
+        const container: ApiMetadataContainer = {
+            id: 'mc',
+            createdAt: '2024-01-01T00:00:00Z',
+            contributions: [
+                { id: 'c1', ordinal: 0, locked: false, customMetadata: [{ key: 'height', value: 'first' }] },
+                { id: 'c2', ordinal: 1, locked: false, customMetadata: [{ key: 'Height', value: 'second' }] },
+            ],
+        };
+
+        expect(extractCustomValues(container)).toEqual([{ key: 'height', value: 'first' }]);
+    });
+
+    it('skips entries without a non-empty key or value', () => {
+        const container: ApiMetadataContainer = {
+            id: 'mc',
+            createdAt: '2024-01-01T00:00:00Z',
+            contributions: [
+                {
+                    id: 'c1',
+                    ordinal: 0,
+                    locked: false,
+                    customMetadata: [
+                        { key: 'Nationality', value: '' },
+                        { key: '  ', value: 'orphan' },
+                        { key: 'Weight', value: null },
+                        { key: 'Hair colour', value: 'Black' },
+                    ],
+                },
+            ],
+        };
+
+        expect(extractCustomValues(container)).toEqual([{ key: 'Hair colour', value: 'Black' }]);
+    });
+
+    it('returns an empty array when no container or custom values are present', () => {
+        expect(extractCustomValues(undefined)).toEqual([]);
+        expect(extractCustomValues({ id: 'mc', createdAt: '', contributions: [] })).toEqual([]);
+    });
+});
+
+describe('built-in scalar extraction', () => {
+    it('resolves birth and death dates from the highest-priority contribution', () => {
+        const container: ApiMetadataContainer = {
+            id: 'mc',
+            createdAt: '2024-01-01T00:00:00Z',
+            contributions: [
+                { id: 'c1', ordinal: 0, locked: false, birthDate: '1956-03-07T00:00:00Z' },
+                {
+                    id: 'c2',
+                    ordinal: 1,
+                    locked: false,
+                    birthDate: '1956-01-01T00:00:00Z',
+                    deathDate: '2020-12-01T00:00:00Z',
+                },
+            ],
+        };
+
+        expect(extractBirthDate(container)).toBe('1956-03-07T00:00:00Z');
+        expect(extractDeathDate(container)).toBe('2020-12-01T00:00:00Z');
+    });
+
+    it('returns undefined when the scalar is absent', () => {
+        const container: ApiMetadataContainer = {
+            id: 'mc',
+            createdAt: '2024-01-01T00:00:00Z',
+            contributions: [{ id: 'c1', ordinal: 0, locked: false }],
+        };
+
+        expect(extractBirthDate(container)).toBeUndefined();
+        expect(extractDeathDate(container)).toBeUndefined();
+    });
+});
+
+describe('useSetPrimaryImage', () => {
+    const mockApiPost = vi.mocked(apiPost);
+
+    beforeEach(() => {
+        vi.clearAllMocks();
+    });
+
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    it('posts to the subject set-primary endpoint with the image id', async () => {
+        mockApiPost.mockResolvedValue(undefined);
+
+        const { result } = renderHook(() => useSetPrimaryImage('subject-1'), {
+            wrapper: createWrapper(),
+        });
+
+        await act(async () => {
+            await result.current.mutateAsync('image-9');
+        });
+
+        expect(mockApiPost).toHaveBeenCalledWith('/subjects/subject-1/images/image-9/primary');
     });
 });

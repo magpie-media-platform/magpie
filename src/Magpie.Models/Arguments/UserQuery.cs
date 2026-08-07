@@ -1,25 +1,34 @@
-using Magpie.Models.Data;
 using Magpie.Models.Enums;
 
 namespace Magpie.Models.Arguments;
 
 /// <summary>
-/// Query arguments for <see cref="User"/>.
+/// The query filters for users.
 /// </summary>
-public record UserQuery
+public sealed record UserQuery
 {
     /// <summary>
-    /// The criteria for <see cref="User.Enabled"/>.
+    /// The username to match.
+    /// </summary>
+    public string? Username { get; init; }
+
+    /// <summary>
+    /// The enabled state to match.
     /// </summary>
     public bool? Enabled { get; init; }
 
     /// <summary>
-    /// The criteria for <see cref="User.Role"/>.
+    /// The <see cref="Role"/> to match.
     /// </summary>
     public Role? Role { get; init; }
 
     /// <summary>
-    /// The criteria for <see cref="User.ProviderType"/>.
+    /// The authentication provider type to match.
     /// </summary>
     public string? ProviderType { get; init; }
+
+    /// <summary>
+    /// The external identity-provider id to match.
+    /// </summary>
+    public string? ExternalId { get; init; }
 }

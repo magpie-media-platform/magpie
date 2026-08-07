@@ -1,7 +1,10 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { ArrowClockwise, MagnifyingGlass } from '@phosphor-icons/react';
+import { ArrowClockwiseIcon, MagnifyingGlassIcon } from '@phosphor-icons/react';
 
 import { QuickActionsButton, type QuickAction } from './QuickActionsButton';
 
@@ -9,13 +12,13 @@ const mockActions: QuickAction[] = [
     {
         id: 'refresh',
         label: 'Refresh Metadata',
-        icon: <ArrowClockwise data-testid="icon-refresh" />,
+        icon: <ArrowClockwiseIcon data-testid="icon-refresh" />,
         onClick: vi.fn(),
     },
     {
         id: 'search',
         label: 'Search Now',
-        icon: <MagnifyingGlass data-testid="icon-search" />,
+        icon: <MagnifyingGlassIcon data-testid="icon-search" />,
         onClick: vi.fn(),
         variant: 'primary',
     },
@@ -55,16 +58,6 @@ describe('QuickActionsButton', () => {
         expect(screen.getByText('Search Now')).toBeInTheDocument();
     });
 
-    it('includes a visually-hidden sheet description for accessibility', async () => {
-        const user = userEvent.setup();
-        render(<QuickActionsButton actions={mockActions} title="Test Actions" />);
-
-        const fab = screen.getByRole('button', { name: 'Test Actions' });
-        await user.click(fab);
-
-        expect(screen.getByText('Select an action from the list below.')).toBeInTheDocument();
-    });
-
     it('renders all actions in the sheet', async () => {
         const user = userEvent.setup();
         render(<QuickActionsButton actions={mockActions} title="Test Actions" />);
@@ -83,7 +76,7 @@ describe('QuickActionsButton', () => {
             {
                 id: 'refresh',
                 label: 'Refresh',
-                icon: <ArrowClockwise />,
+                icon: <ArrowClockwiseIcon />,
                 onClick: onRefreshClick,
             },
         ];
@@ -120,7 +113,7 @@ describe('QuickActionsButton', () => {
             {
                 id: 'disabled-action',
                 label: 'Disabled Action',
-                icon: <ArrowClockwise />,
+                icon: <ArrowClockwiseIcon />,
                 onClick: onClickDisabled,
                 disabled: true,
             },
@@ -141,20 +134,20 @@ describe('QuickActionsButton', () => {
             {
                 id: 'default-action',
                 label: 'Default',
-                icon: <ArrowClockwise />,
+                icon: <ArrowClockwiseIcon />,
                 onClick: vi.fn(),
             },
             {
                 id: 'primary-action',
                 label: 'Primary',
-                icon: <MagnifyingGlass />,
+                icon: <MagnifyingGlassIcon />,
                 onClick: vi.fn(),
                 variant: 'primary',
             },
             {
                 id: 'destructive-action',
                 label: 'Delete',
-                icon: <MagnifyingGlass />,
+                icon: <MagnifyingGlassIcon />,
                 onClick: vi.fn(),
                 variant: 'destructive',
             },
@@ -202,5 +195,32 @@ describe('QuickActionsButton', () => {
 
         const wrapper = container.querySelector('.quick-actions-button');
         expect(wrapper).toHaveClass('custom-class');
+    });
+
+    it('hides only header actions mirrored by the mobile quick action', () => {
+        const css = readFileSync(
+            resolve(process.cwd(), 'src/components/ui/QuickActionsButton/QuickActionsButton.css'),
+            'utf8',
+        );
+        const mirroredActions = css
+            .match(
+                /\[data-page\]:has\(\.quick-actions-button\)\s+\.page-header__actions\s+:is\((?<actions>[\s\S]*?)\)\s*{/,
+            )
+            ?.groups?.actions.matchAll(/\[data-action='(?<action>[^']+)'\]/g);
+        const actionNames = [...(mirroredActions ?? [])].map((match) => match.groups?.action);
+
+        expect(actionNames).toEqual([
+            'create-backup',
+            'add-client',
+            'add-server',
+            'add-filter',
+            'add-tier-list',
+            'add-wishlist',
+            'add-folder',
+            'add-rule',
+            'add-mapping',
+        ]);
+        expect(css).not.toMatch(/\.page-header__actions\s+\[data-action\]\s*{/);
+        expect(actionNames).not.toContain('clear-filters');
     });
 });

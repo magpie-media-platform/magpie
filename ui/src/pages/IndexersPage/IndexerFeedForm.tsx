@@ -1,13 +1,20 @@
 import { useState, useCallback, useEffect, useRef, useMemo, type ReactNode } from 'react';
-import { FloppyDisk, Plus, Trash, X } from '@phosphor-icons/react';
+import { FloppyDiskIcon, XIcon } from '@phosphor-icons/react';
 
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Label } from '@/components/ui/Label';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/Select';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription, SheetFooter } from '@/components/ui/Sheet';
 import { Switch } from '@/components/ui/Switch';
 import { UnsavedChangesDialog } from '@/components/ui/UnsavedChangesDialog';
+import { IntegrationSettingsForm } from '@/components/integrations/IntegrationSettingsForm/IntegrationSettingsForm';
 import { useUnsavedChangesGuard } from '@/hooks/useUnsavedChangesGuard';
+import { useExternalChangeConflict } from '@/hooks/useExternalChangeConflict';
+import { useIndexerFeedProviderTypes } from '@/hooks/useProviderTypes';
+import { omitUnchangedSecretSettings, secretsConfiguredForEdit, useIndexerFeedSchema } from '@/hooks/useProviderSchema';
+import { foldDefaultsIntoBaseline } from '@/hooks/useFormDirty';
+import { ExternalChangeConflictWarning, StaleSaveConfirmationDialog } from '@/components/ui/ExternalChangeConflict';
 
 import './IndexerFeedForm.css';
 
@@ -20,22 +27,16 @@ export interface IndexerFeedFormValues {
     settings: Record<string, string>;
 }
 
-export interface IndexerFeedFormProps {
+interface IndexerFeedFormProps {
     open: boolean;
 
     onOpenChange: (open: boolean) => void;
 
     initialValues?: IndexerFeedFormValues | null;
 
-    onSubmit: (values: IndexerFeedFormValues) => void;
+    onSubmit: (values: IndexerFeedFormValues) => void | Promise<void>;
 
     isSubmitting?: boolean;
-}
-
-interface SettingsEntry {
-    id: string;
-    key: string;
-    value: string;
 }
 
 const emptyValues: IndexerFeedFormValues = {
@@ -45,64 +46,6 @@ const emptyValues: IndexerFeedFormValues = {
     enabled: true,
     settings: {},
 };
-
-function settingsToEntries(settings: Record<string, string>): SettingsEntry[] {
-    return Object.entries(settings).map(([key, value]) => ({ id: crypto.randomUUID(), key, value }));
-}
-
-function entriesToSettings(entries: SettingsEntry[]): Record<string, string> {
-    const result: Record<string, string> = {};
-    for (const entry of entries) {
-        const trimmed = entry.key.trim();
-        if (trimmed) {
-            result[trimmed] = entry.value;
-        }
-    }
-    return result;
-}
-
-interface SettingsRowProps {
-    entryKey: string;
-    value: string;
-    onKeyChange: (newKey: string) => void;
-    onValueChange: (newValue: string) => void;
-    onRemove: () => void;
-    disabled?: boolean;
-
-    keyError?: string;
-}
-
-function SettingsRow({ entryKey, value, onKeyChange, onValueChange, onRemove, disabled, keyError }: SettingsRowProps) {
-    return (
-        <div className="indexer-feed-form__settings-row">
-            <Input
-                value={entryKey}
-                onChange={(e) => onKeyChange(e.target.value)}
-                placeholder="Key"
-                disabled={disabled}
-                className="indexer-feed-form__settings-key"
-                error={!!keyError}
-                errorMessage={keyError}
-            />
-            <Input
-                value={value}
-                onChange={(e) => onValueChange(e.target.value)}
-                placeholder="Value"
-                disabled={disabled}
-                className="indexer-feed-form__settings-value"
-            />
-            <button
-                type="button"
-                className="indexer-feed-form__settings-remove"
-                onClick={onRemove}
-                disabled={disabled}
-                aria-label="Remove setting"
-            >
-                <Trash weight="bold" />
-            </button>
-        </div>
-    );
-}
 
 export function IndexerFeedForm({
     open,
@@ -114,48 +57,81 @@ export function IndexerFeedForm({
     const isEditing = !!initialValues?.id;
 
     const [values, setValues] = useState<IndexerFeedFormValues>(initialValues ?? emptyValues);
-    const [settingsEntries, setSettingsEntries] = useState<SettingsEntry[]>([]);
     const [errors, setErrors] = useState<Record<string, string>>({});
-    const [settingsErrors, setSettingsErrors] = useState<Record<string, string>>({});
     const [showUnsavedDialog, setShowUnsavedDialog] = useState(false);
+    const [showStaleSaveDialog, setShowStaleSaveDialog] = useState(false);
 
     const cleanValuesRef = useRef<IndexerFeedFormValues>(initialValues ?? emptyValues);
-    const cleanSettingsEntriesRef = useRef<SettingsEntry[]>([]);
 
-    useEffect(() => {
-        if (open) {
-            const vals = initialValues ?? emptyValues;
-            setValues(vals);
-            const entries = settingsToEntries(vals.settings);
-            setSettingsEntries(entries);
-            cleanValuesRef.current = vals;
-            cleanSettingsEntriesRef.current = entries;
-            setErrors({});
-            setSettingsErrors({});
-            setShowUnsavedDialog(false);
-        }
-    }, [open, initialValues]);
+    const { types: providerTypes, isLoading: isLoadingProviderTypes } = useIndexerFeedProviderTypes();
+    const schemaQuery = useIndexerFeedSchema(values.provider || null);
+    const schema = useMemo(() => schemaQuery.data ?? [], [schemaQuery.data]);
+    const secretsConfigured = useMemo(() => secretsConfiguredForEdit(schema, isEditing), [schema, isEditing]);
+    const seededProviderRef = useRef<string | null>(null);
+    const resetKeyRef = useRef<IndexerFeedFormValues | null | undefined>(undefined);
 
     const isDirty = useMemo(() => {
         const clean = cleanValuesRef.current;
-        if (
+        return (
             values.name !== clean.name ||
             values.description !== clean.description ||
             values.provider !== clean.provider ||
-            values.enabled !== clean.enabled
-        ) {
-            return true;
-        }
-        const cleanEntries = cleanSettingsEntriesRef.current;
-        if (settingsEntries.length !== cleanEntries.length) {
-            return true;
-        }
-        return settingsEntries.some(
-            (entry, i) => entry.key !== cleanEntries[i].key || entry.value !== cleanEntries[i].value,
+            values.enabled !== clean.enabled ||
+            JSON.stringify(values.settings) !== JSON.stringify(clean.settings)
         );
-    }, [values, settingsEntries]);
+    }, [values]);
 
-    useUnsavedChangesGuard(open && isDirty);
+    const {
+        state: conflictState,
+        beginOwnSave,
+        endOwnSave,
+        clearConflict,
+    } = useExternalChangeConflict({
+        dirty: isDirty,
+        entityId: initialValues?.id,
+        eventNames: ['indexerFeed.updated', 'indexerFeed.deleted'],
+        deletedEventNames: ['indexerFeed.deleted'],
+        contextKeys: ['indexerFeed.id'],
+        enabled: open,
+    });
+
+    useEffect(() => {
+        if (!open) {
+            resetKeyRef.current = undefined;
+            return;
+        }
+        if (resetKeyRef.current === initialValues) {
+            return;
+        }
+        resetKeyRef.current = initialValues;
+        if (isDirty && cleanValuesRef.current.id === initialValues?.id) {
+            return;
+        }
+        const vals = initialValues ?? emptyValues;
+        setValues(vals);
+        cleanValuesRef.current = vals;
+        setErrors({});
+        setShowUnsavedDialog(false);
+        setShowStaleSaveDialog(false);
+        seededProviderRef.current = null;
+        clearConflict();
+    }, [clearConflict, initialValues, isDirty, open]);
+
+    useEffect(() => {
+        if (!values.provider || schema.length === 0 || seededProviderRef.current === values.provider) {
+            return;
+        }
+        seededProviderRef.current = values.provider;
+        setValues((prev) => {
+            const visibleSettings = omitUnchangedSecretSettings(prev.settings, schema);
+            const baseline = omitUnchangedSecretSettings(cleanValuesRef.current.settings, schema);
+            const seeded = foldDefaultsIntoBaseline(visibleSettings, baseline, schema);
+            cleanValuesRef.current = { ...cleanValuesRef.current, settings: seeded.baseline };
+            return { ...prev, settings: seeded.next };
+        });
+    }, [values.provider, schema]);
+
+    useUnsavedChangesGuard(open && isDirty && !isSubmitting);
 
     const handleOpenChange = useCallback(
         (nextOpen: boolean) => {
@@ -190,40 +166,18 @@ export function IndexerFeedForm({
         setValues((prev) => ({ ...prev, description: e.target.value }));
     }, []);
 
-    const handleProviderChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-        setValues((prev) => ({ ...prev, provider: e.target.value }));
+    const handleProviderChange = useCallback((value: string) => {
+        seededProviderRef.current = null;
+        setValues((prev) => ({ ...prev, provider: value, settings: {} }));
         setErrors((prev) => ({ ...prev, provider: '' }));
+    }, []);
+
+    const handleSettingChange = useCallback((key: string, value: string) => {
+        setValues((prev) => ({ ...prev, settings: { ...prev.settings, [key]: value } }));
     }, []);
 
     const handleEnabledChange = useCallback((enabled: boolean) => {
         setValues((prev) => ({ ...prev, enabled }));
-    }, []);
-
-    const handleAddEntry = useCallback(() => {
-        setSettingsEntries((prev) => [...prev, { id: crypto.randomUUID(), key: '', value: '' }]);
-    }, []);
-
-    const handleEntryKeyChange = useCallback((index: number, newKey: string) => {
-        setSettingsEntries((prev) => {
-            const updated = prev.map((entry, i) => (i === index ? { ...entry, key: newKey } : entry));
-            const entryId = prev[index].id;
-            setSettingsErrors((prevErrors) => {
-                if (!prevErrors[entryId]) {
-                    return prevErrors;
-                }
-                const { [entryId]: _, ...rest } = prevErrors;
-                return rest;
-            });
-            return updated;
-        });
-    }, []);
-
-    const handleEntryValueChange = useCallback((index: number, newValue: string) => {
-        setSettingsEntries((prev) => prev.map((entry, i) => (i === index ? { ...entry, value: newValue } : entry)));
-    }, []);
-
-    const handleRemoveEntry = useCallback((index: number) => {
-        setSettingsEntries((prev) => prev.filter((_, i) => i !== index));
     }, []);
 
     const validate = useCallback((): boolean => {
@@ -234,41 +188,38 @@ export function IndexerFeedForm({
         }
 
         if (!values.provider.trim()) {
-            newErrors.provider = 'Provider is required';
-        }
-
-        const newSettingsErrors: Record<string, string> = {};
-        const seenKeys = new Map<string, string>();
-        for (const entry of settingsEntries) {
-            const trimmed = entry.key.trim();
-            if (!trimmed) {
-                continue;
-            }
-            const existing = seenKeys.get(trimmed);
-            if (existing) {
-                newSettingsErrors[entry.id] = 'Duplicate key';
-                newSettingsErrors[existing] = 'Duplicate key';
-            } else {
-                seenKeys.set(trimmed, entry.id);
-            }
+            newErrors.provider = 'Integration is required';
         }
 
         setErrors(newErrors);
-        setSettingsErrors(newSettingsErrors);
-        return Object.keys(newErrors).length === 0 && Object.keys(newSettingsErrors).length === 0;
-    }, [values, settingsEntries]);
+        return Object.keys(newErrors).length === 0;
+    }, [values]);
+
+    const save = useCallback(async () => {
+        beginOwnSave();
+        try {
+            const submittedSettings = omitUnchangedSecretSettings(values.settings, schema);
+            await Promise.resolve(onSubmit({ ...values, id: values.id, settings: submittedSettings }));
+            endOwnSave(true);
+            setShowStaleSaveDialog(false);
+        } catch {
+            endOwnSave(false);
+        }
+    }, [beginOwnSave, endOwnSave, onSubmit, schema, values]);
 
     const handleSubmit = useCallback(
-        (e: React.FormEvent) => {
+        (e: React.SubmitEvent) => {
             e.preventDefault();
-            if (validate()) {
-                onSubmit({
-                    ...values,
-                    settings: entriesToSettings(settingsEntries),
-                });
+            if (!validate()) {
+                return;
             }
+            if (conflictState === 'stale') {
+                setShowStaleSaveDialog(true);
+                return;
+            }
+            void save();
         },
-        [values, settingsEntries, validate, onSubmit],
+        [conflictState, save, validate],
     );
 
     return (
@@ -285,6 +236,13 @@ export function IndexerFeedForm({
 
                 <form onSubmit={handleSubmit} className="indexer-feed-form">
                     <div className="indexer-feed-form__body">
+                        {conflictState && (
+                            <ExternalChangeConflictWarning
+                                state={conflictState}
+                                entityLabel="Indexer feed"
+                                id="indexer-feed-external-change"
+                            />
+                        )}
                         <div className="indexer-feed-form__field">
                             <Label htmlFor="feed-name" error={!!errors.name} required>
                                 Name
@@ -315,19 +273,57 @@ export function IndexerFeedForm({
 
                         <div className="indexer-feed-form__field">
                             <Label htmlFor="feed-provider" error={!!errors.provider} required>
-                                Provider
+                                Integration
                             </Label>
-                            <Input
-                                id="feed-provider"
-                                value={values.provider}
-                                onChange={handleProviderChange}
-                                placeholder="prowlarr"
-                                error={!!errors.provider}
-                                errorMessage={errors.provider || undefined}
-                                disabled={isSubmitting}
-                                data-field="provider"
-                            />
-                            <p className="indexer-feed-form__help">The feed provider type (e.g., prowlarr, jackett).</p>
+                            {isEditing ? (
+                                <Input
+                                    id="feed-provider"
+                                    value={values.provider}
+                                    readOnly
+                                    disabled
+                                    data-field="provider"
+                                />
+                            ) : (
+                                <Select
+                                    value={values.provider || undefined}
+                                    onValueChange={handleProviderChange}
+                                    disabled={isSubmitting || (!isLoadingProviderTypes && providerTypes.length === 0)}
+                                >
+                                    <SelectTrigger
+                                        id="feed-provider"
+                                        error={!!errors.provider}
+                                        aria-label="Integration"
+                                        data-field="provider"
+                                    >
+                                        <SelectValue
+                                            placeholder={
+                                                isLoadingProviderTypes
+                                                    ? 'Loading...'
+                                                    : providerTypes.length === 0
+                                                      ? 'No feed integrations available'
+                                                      : 'Select a feed integration'
+                                            }
+                                        />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        {providerTypes.map((type) => (
+                                            <SelectItem key={type} value={type}>
+                                                {type}
+                                            </SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
+                            )}
+                            {errors.provider && (
+                                <p className="indexer-feed-form__help" role="alert">
+                                    {errors.provider}
+                                </p>
+                            )}
+                            <p className="indexer-feed-form__help">
+                                {!isLoadingProviderTypes && providerTypes.length === 0 && !isEditing
+                                    ? 'No feed integrations are available. An extension that provides one must be installed.'
+                                    : 'Choose the feed integration that supplies indexer definitions.'}
+                            </p>
                         </div>
 
                         <div className="indexer-feed-form__field indexer-feed-form__field--toggle">
@@ -344,33 +340,18 @@ export function IndexerFeedForm({
                             <p className="indexer-feed-form__help">Disabled feeds will not be synced.</p>
                         </div>
 
-                        <div className="indexer-feed-form__settings">
-                            <h3 className="indexer-feed-form__settings-title">Settings</h3>
-                            {settingsEntries.map((entry, index) => (
-                                <SettingsRow
-                                    key={entry.id}
-                                    entryKey={entry.key}
-                                    value={entry.value}
-                                    onKeyChange={(newKey) => handleEntryKeyChange(index, newKey)}
-                                    onValueChange={(newValue) => handleEntryValueChange(index, newValue)}
-                                    onRemove={() => handleRemoveEntry(index)}
+                        {schema.length > 0 && (
+                            <div className="indexer-feed-form__field">
+                                <IntegrationSettingsForm
+                                    schema={schema}
+                                    values={values.settings}
+                                    onChange={handleSettingChange}
+                                    secretsConfigured={secretsConfigured}
                                     disabled={isSubmitting}
-                                    keyError={settingsErrors[entry.id]}
+                                    idPrefix="indexer-feed-setting"
                                 />
-                            ))}
-                            <Button
-                                type="button"
-                                variant="ghost"
-                                size="sm"
-                                onClick={handleAddEntry}
-                                disabled={isSubmitting}
-                                className="indexer-feed-form__settings-add"
-                                data-action="add-setting"
-                            >
-                                <Plus weight="bold" aria-hidden="true" />
-                                Add Setting
-                            </Button>
-                        </div>
+                            </div>
+                        )}
                     </div>
 
                     <SheetFooter>
@@ -381,17 +362,31 @@ export function IndexerFeedForm({
                             onClick={handleCancel}
                             data-action="cancel"
                         >
-                            <X weight="bold" aria-hidden="true" />
+                            <XIcon weight="bold" aria-hidden="true" />
                             Cancel
                         </Button>
-                        <Button type="submit" variant="primary" loading={isSubmitting} data-action="save">
-                            <FloppyDisk weight="bold" aria-hidden="true" />
+                        <Button
+                            type="submit"
+                            variant="primary"
+                            loading={isSubmitting}
+                            disabled={conflictState === 'deleted'}
+                            data-action="save"
+                        >
+                            <FloppyDiskIcon weight="bold" aria-hidden="true" />
                             Save
                         </Button>
                     </SheetFooter>
                 </form>
             </SheetContent>
             <UnsavedChangesDialog open={showUnsavedDialog} onDiscard={handleDiscard} onCancel={handleKeepEditing} />
+            <StaleSaveConfirmationDialog
+                open={showStaleSaveDialog}
+                title="Save changes based on older data?"
+                description="This item changed elsewhere after editing began. Saving will overwrite those newer changes with the values in this form."
+                saving={isSubmitting}
+                onCancel={() => setShowStaleSaveDialog(false)}
+                onConfirm={() => void save()}
+            />
         </Sheet>
     );
 }

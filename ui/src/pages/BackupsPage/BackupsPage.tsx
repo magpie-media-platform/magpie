@@ -1,21 +1,22 @@
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, useRef } from 'react';
 import {
-    Database,
-    Trash,
-    CloudArrowUp,
-    ClockCounterClockwise,
-    CircleNotch,
-    Calendar,
-    HardDrives,
-    Gear,
-    FloppyDisk,
-    WarningCircle,
+    DatabaseIcon,
+    TrashIcon,
+    CloudArrowUpIcon,
+    ClockCounterClockwiseIcon,
+    CircleNotchIcon,
+    CalendarIcon,
+    HardDrivesIcon,
+    WarningCircleIcon,
+    WrenchIcon,
+    DownloadSimpleIcon,
 } from '@phosphor-icons/react';
 
 import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
 import { QuickActionsButton, type QuickAction } from '@/components/ui/QuickActionsButton';
 import '@/styles/card-actions.css';
+import '@/styles/list-item-card.css';
 import {
     Dialog,
     DialogContent,
@@ -24,51 +25,20 @@ import {
     DialogDescription,
     DialogFooter,
 } from '@/components/ui/Dialog';
+import { PageHeader } from '@/components/ui/PageHeader';
 import { PullToRefresh } from '@/components/ui/PullToRefresh';
 import { useToast } from '@/components/ui/Toast';
 import { Tooltip } from '@/components/ui/Tooltip';
-import { Switch } from '@/components/ui/Switch';
-import { Label } from '@/components/ui/Label';
-import { Input } from '@/components/ui/Input';
-import { Select, SelectTrigger, SelectContent, SelectItem } from '@/components/ui/Select';
 import { AdminBackupsSlot } from '@/components/ui/Slot';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
-import { useUnsavedChangesGuard } from '@/hooks/useUnsavedChangesGuard';
 import { useBackups, type BackupItem, type BackupType } from '@/hooks/useBackups';
-import { useBackupSettings, type BackupInterval, type BackupSettings } from '@/hooks/useBackupSettings';
+import { formatUtcDate, formatUtcDateTime } from '@/lib/dateFormatting';
 import { formatRelativeTime, isRelativeTimeString } from '@/lib/formatTime';
 import { getErrorMessage } from '@/lib/errors';
-import { formatSize } from './formatSize';
+import { formatBackupSize } from '@/lib/formatSize';
 
 import './BackupsPage.css';
-
-const intervalLabels: Record<BackupInterval, string> = {
-    daily: 'Daily',
-    weekly: 'Weekly',
-    biweekly: 'Every 2 weeks',
-    monthly: 'Monthly',
-};
-
-function formatDate(dateStr: string): string {
-    const date = new Date(dateStr);
-    return date.toLocaleDateString('en-US', {
-        year: 'numeric',
-        month: 'short',
-        day: 'numeric',
-    });
-}
-
-function formatDateTime(dateStr: string): string {
-    const date = new Date(dateStr);
-    return date.toLocaleString('en-US', {
-        year: 'numeric',
-        month: 'short',
-        day: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit',
-    });
-}
 
 const typeVariantMap: Record<BackupType, 'healthy' | 'unknown'> = {
     manual: 'healthy',
@@ -81,9 +51,12 @@ const typeLabels: Record<BackupType, string> = {
 };
 
 export function BackupsPage() {
-    useDocumentTitle('Backups');
+    useDocumentTitle('Database');
     const {
         backups: apiBackups,
+        capabilities,
+        backupRestoreSupported,
+        isCapabilityLoading,
         isLoading,
         error,
         createBackup,
@@ -92,6 +65,7 @@ export function BackupsPage() {
         isDeleting,
         restoreBackup,
         isRestoring,
+        downloadBackup,
         refetch,
     } = useBackups();
 
@@ -99,34 +73,30 @@ export function BackupsPage() {
     const [backupToRestore, setBackupToRestore] = useState<BackupItem | null>(null);
     const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
     const [backupToDelete, setBackupToDelete] = useState<BackupItem | null>(null);
-
-    const { settings, saveSettings, isSaving: isSavingSettings } = useBackupSettings();
-
-    const [localSettings, setLocalSettings] = useState<BackupSettings | null>(null);
-    const [settingsChanged, setSettingsChanged] = useState(false);
-
-    useUnsavedChangesGuard(settingsChanged);
-
-    const currentSettings = localSettings ?? settings;
+    const deleteSubmitPendingRef = useRef(false);
+    const [isDeleteSubmitPending, setIsDeleteSubmitPending] = useState(false);
 
     const { toast } = useToast();
 
-    const totalBackups = apiBackups.length;
     const totalSize = useMemo(() => apiBackups.reduce((sum, b) => sum + b.sizeBytes, 0), [apiBackups]);
+    const canManageBackups = !isCapabilityLoading && backupRestoreSupported;
+    const unsupportedReason = capabilities?.provider
+        ? `Database backup and restore are not supported for ${capabilities.provider}.`
+        : 'Database backup and restore are not supported for the configured provider.';
 
     const handleCreateBackup = useCallback(async () => {
         try {
             await createBackup({});
 
             toast({
-                title: 'Backup Created',
-                description: 'Successfully created backup',
+                title: 'Backup Queued',
+                description: 'The backup will appear here when its job completes.',
                 variant: 'success',
             });
         } catch (err) {
-            const message = err instanceof Error ? err.message : 'An unexpected error occurred';
+            const message = err instanceof Error ? err.message : 'Failed to queue the backup.';
             toast({
-                title: 'Backup Failed',
+                title: 'Unable to Queue Backup',
                 description: message,
                 variant: 'error',
             });
@@ -137,6 +107,21 @@ export function BackupsPage() {
         setBackupToRestore(backup);
         setRestoreDialogOpen(true);
     }, []);
+
+    const handleDownload = useCallback(
+        async (backup: BackupItem) => {
+            try {
+                await downloadBackup(backup.id);
+            } catch (err) {
+                toast({
+                    title: 'Download Failed',
+                    description: getErrorMessage(err),
+                    variant: 'error',
+                });
+            }
+        },
+        [downloadBackup, toast],
+    );
 
     const handleRestoreConfirm = useCallback(async () => {
         if (!backupToRestore) return;
@@ -150,7 +135,7 @@ export function BackupsPage() {
                 variant: 'success',
             });
         } catch (err) {
-            const message = err instanceof Error ? err.message : 'An unexpected error occurred';
+            const message = err instanceof Error ? err.message : 'Failed to restore the backup.';
             toast({
                 title: 'Restore Failed',
                 description: message,
@@ -168,93 +153,66 @@ export function BackupsPage() {
     }, []);
 
     const handleDeleteConfirm = useCallback(async () => {
-        if (!backupToDelete) return;
+        if (!backupToDelete || deleteSubmitPendingRef.current) return;
+
+        deleteSubmitPendingRef.current = true;
+        setIsDeleteSubmitPending(true);
+        const backup = backupToDelete;
 
         try {
-            await deleteBackup(backupToDelete.id);
+            await deleteBackup(backup.id);
 
             toast({
                 title: 'Backup Deleted',
-                description: `Successfully deleted "${backupToDelete.name}"`,
+                description: `Successfully deleted "${backup.name}"`,
                 variant: 'success',
             });
         } catch (err) {
-            const message = err instanceof Error ? err.message : 'An unexpected error occurred';
+            const message = err instanceof Error ? err.message : 'Failed to delete the backup.';
             toast({
                 title: 'Delete Failed',
                 description: message,
                 variant: 'error',
             });
         } finally {
+            deleteSubmitPendingRef.current = false;
+            setIsDeleteSubmitPending(false);
             setDeleteDialogOpen(false);
             setBackupToDelete(null);
         }
     }, [backupToDelete, deleteBackup, toast]);
-
-    const handleSettingsChange = useCallback(
-        <K extends keyof BackupSettings>(key: K, value: BackupSettings[K]) => {
-            setLocalSettings((prev) => ({ ...(prev ?? settings), [key]: value }));
-            setSettingsChanged(true);
-        },
-        [settings],
-    );
-
-    const handleSaveSettings = useCallback(async () => {
-        if (!localSettings) return;
-
-        try {
-            await saveSettings(localSettings);
-
-            setLocalSettings(null);
-            setSettingsChanged(false);
-
-            toast({
-                title: 'Settings Saved',
-                description: 'Backup settings have been updated successfully.',
-                variant: 'success',
-            });
-        } catch (err) {
-            const message = err instanceof Error ? err.message : 'An unexpected error occurred';
-            toast({
-                title: 'Save Failed',
-                description: message,
-                variant: 'error',
-            });
-        }
-    }, [localSettings, saveSettings, toast]);
 
     const createBackupActions: QuickAction[] = useMemo(
         () => [
             {
                 id: 'create-backup',
                 label: 'Create Backup',
-                icon: <CloudArrowUp weight="bold" />,
+                icon: <CloudArrowUpIcon weight="bold" />,
                 onClick: handleCreateBackup,
+                disabled: isCreating,
             },
         ],
-        [handleCreateBackup],
+        [handleCreateBackup, isCreating],
     );
 
     const handleRefresh = useCallback(async () => {
         await refetch();
     }, [refetch]);
 
+    const backupsDescription = 'Database backup and maintenance.';
+    const isDeletePending = isDeleting || isDeleteSubmitPending;
+
     if (error && apiBackups.length === 0) {
         return (
             <div className="backups-page" data-page="backups">
-                <header className="backups-page__header">
-                    <div className="backups-page__header-left">
-                        <Database
-                            weight="duotone"
-                            className="backups-page__icon"
-                            aria-hidden="true"
-                            data-testid="backups-page__icon"
-                        />
-                        <h1 className="backups-page__title">Backups</h1>
-                    </div>
-                </header>
+                <PageHeader
+                    className="backups-page__header"
+                    title="Database"
+                    description={backupsDescription}
+                    icon={<DatabaseIcon weight="duotone" aria-hidden="true" data-testid="backups-page__icon" />}
+                />
                 <EmptyState
-                    icon={<WarningCircle weight="duotone" />}
+                    icon={<WarningCircleIcon weight="duotone" />}
                     title="Failed to load backups"
                     description={getErrorMessage(error)}
                     action={
@@ -267,172 +225,95 @@ export function BackupsPage() {
         );
     }
 
+    if (!isCapabilityLoading && !backupRestoreSupported) {
+        return (
+            <div className="backups-page" data-page="backups">
+                <PageHeader
+                    className="backups-page__header"
+                    title="Database"
+                    description={backupsDescription}
+                    icon={<DatabaseIcon weight="duotone" aria-hidden="true" data-testid="backups-page__icon" />}
+                />
+                <EmptyState
+                    icon={<WarningCircleIcon weight="duotone" />}
+                    title="Database backups unavailable"
+                    description={unsupportedReason}
+                />
+            </div>
+        );
+    }
+
     return (
         <div className="backups-page" data-page="backups">
             <AdminBackupsSlot>
                 <PullToRefresh onRefresh={handleRefresh} className="backups-page__pull-to-refresh">
-                    <header className="backups-page__header">
-                        <div className="backups-page__header-left">
-                            <Database
-                                weight="duotone"
-                                className="backups-page__icon"
-                                aria-hidden="true"
-                                data-testid="backups-page__icon"
-                            />
-                            <h1 className="backups-page__title">Backups</h1>
-                            <span className="page-count backups-page__count" data-testid="backups-page__count">
-                                {totalBackups}
-                            </span>
-                        </div>
-                        <div className="backups-page__header-actions">
-                            <Button
-                                variant="primary"
-                                size="sm"
-                                data-action="create-backup"
-                                onClick={handleCreateBackup}
-                                disabled={isCreating}
-                            >
-                                {isCreating ? (
-                                    <CircleNotch weight="bold" className="backups-page__spinner" aria-hidden="true" />
-                                ) : (
-                                    <CloudArrowUp weight="bold" aria-hidden="true" />
-                                )}
-                                <span className="backups-page__create-label">
-                                    {isCreating ? 'Creating...' : 'Create Backup'}
-                                </span>
-                            </Button>
-                        </div>
-                    </header>
-
-                    <div className="backups-page__summary">
-                        <div className="backups-page__summary-item">
-                            <HardDrives weight="duotone" className="backups-page__summary-icon" aria-hidden="true" />
-                            <span className="backups-page__summary-label">Total Size</span>
-                            <span className="backups-page__summary-value" data-testid="backups-page__summary-value">
-                                {formatSize(totalSize)}
-                            </span>
-                        </div>
-                    </div>
-
-                    <section
-                        className="backups-page__settings"
-                        aria-labelledby="backup-settings-title"
-                        data-component="backup-settings"
-                    >
-                        <header className="backups-page__settings-header">
-                            <Gear weight="duotone" className="backups-page__settings-icon" aria-hidden="true" />
-                            <h2 id="backup-settings-title" className="backups-page__settings-title">
-                                Schedule Settings
-                            </h2>
-                        </header>
-
-                        <div className="backups-page__settings-content">
-                            <div className="backups-page__settings-row">
-                                <div className="backups-page__settings-field">
-                                    <Label htmlFor="backup-enabled">Automatic Backups</Label>
-                                    <p id="backup-enabled-hint" className="backups-page__settings-hint">
-                                        Enable automatic database backups on a schedule
-                                    </p>
-                                </div>
-                                <Switch
-                                    id="backup-enabled"
-                                    checked={currentSettings.enabled}
-                                    onCheckedChange={(checked) => handleSettingsChange('enabled', checked)}
-                                    aria-describedby="backup-enabled-hint"
-                                    data-setting="enabled"
-                                />
-                            </div>
-
-                            <div className="backups-page__settings-row">
-                                <div className="backups-page__settings-field">
-                                    <Label htmlFor="backup-interval">Backup Interval</Label>
-                                    <p className="backups-page__settings-hint">How often to create automatic backups</p>
-                                </div>
-                                <Select
-                                    value={currentSettings.interval}
-                                    onValueChange={(value) => handleSettingsChange('interval', value as BackupInterval)}
-                                    disabled={!currentSettings.enabled}
-                                >
-                                    <SelectTrigger
-                                        id="backup-interval"
-                                        className="backups-page__settings-select"
-                                        aria-label="Select backup interval"
-                                        data-setting="interval"
+                    <PageHeader
+                        className="backups-page__header"
+                        title="Database"
+                        description={backupsDescription}
+                        icon={<DatabaseIcon weight="duotone" aria-hidden="true" data-testid="backups-page__icon" />}
+                        actions={
+                            canManageBackups ? (
+                                <>
+                                    {capabilities?.optimizeSupported && (
+                                        <Tooltip content="Manual optimization is unavailable. Database maintenance runs on its configured schedule.">
+                                            <span>
+                                                <Button variant="secondary" size="sm" disabled>
+                                                    <WrenchIcon weight="bold" aria-hidden="true" />
+                                                    Scheduled maintenance
+                                                </Button>
+                                            </span>
+                                        </Tooltip>
+                                    )}
+                                    <Button
+                                        variant="primary"
+                                        size="sm"
+                                        data-action="create-backup"
+                                        onClick={handleCreateBackup}
+                                        disabled={isCreating}
+                                        aria-label={isCreating ? 'Queueing...' : 'Create Backup'}
                                     >
-                                        {intervalLabels[currentSettings.interval]}
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                        <SelectItem value="daily">Daily</SelectItem>
-                                        <SelectItem value="weekly">Weekly</SelectItem>
-                                        <SelectItem value="biweekly">Every 2 weeks</SelectItem>
-                                        <SelectItem value="monthly">Monthly</SelectItem>
-                                    </SelectContent>
-                                </Select>
-                            </div>
-
-                            <div className="backups-page__settings-row">
-                                <div className="backups-page__settings-field">
-                                    <Label htmlFor="backup-retention">Keep Last</Label>
-                                    <p className="backups-page__settings-hint">Number of automatic backups to retain</p>
-                                </div>
-                                <div className="backups-page__settings-input-group">
-                                    <Input
-                                        id="backup-retention"
-                                        type="number"
-                                        min={1}
-                                        max={365}
-                                        value={currentSettings.retention}
-                                        onChange={(e) =>
-                                            handleSettingsChange(
-                                                'retention',
-                                                Math.max(1, parseInt(e.target.value, 10) || 1),
-                                            )
-                                        }
-                                        disabled={!currentSettings.enabled}
-                                        className="backups-page__settings-number"
-                                        data-setting="retention"
-                                    />
-                                    <span className="backups-page__settings-suffix">backups</span>
-                                </div>
-                            </div>
-
-                            <div className="backups-page__settings-actions">
-                                <Button
-                                    variant="primary"
-                                    size="sm"
-                                    onClick={handleSaveSettings}
-                                    disabled={!settingsChanged || isSavingSettings}
-                                    data-action="save-settings"
-                                >
-                                    {isSavingSettings ? (
-                                        <>
-                                            <CircleNotch
+                                        {isCreating ? (
+                                            <CircleNotchIcon
                                                 weight="bold"
                                                 className="backups-page__spinner"
                                                 aria-hidden="true"
                                             />
-                                            Saving...
-                                        </>
-                                    ) : (
-                                        <>
-                                            <FloppyDisk weight="bold" aria-hidden="true" />
-                                            Save Settings
-                                        </>
-                                    )}
-                                </Button>
-                            </div>
+                                        ) : (
+                                            <CloudArrowUpIcon weight="bold" aria-hidden="true" />
+                                        )}
+                                        <span className="backups-page__create-label">
+                                            {isCreating ? 'Queueing...' : 'Create Backup'}
+                                        </span>
+                                    </Button>
+                                </>
+                            ) : undefined
+                        }
+                    />
+
+                    <div className="backups-page__summary">
+                        <div className="backups-page__summary-item">
+                            <HardDrivesIcon
+                                weight="duotone"
+                                className="backups-page__summary-icon"
+                                aria-hidden="true"
+                            />
+                            <span className="backups-page__summary-label">Total Size</span>
+                            <span className="backups-page__summary-value" data-testid="backups-page__summary-value">
+                                {formatBackupSize(totalSize)}
+                            </span>
                         </div>
-                    </section>
+                    </div>
 
                     <div className="backups-page__list" role="list" aria-label="Backups">
                         {isLoading && apiBackups.length === 0 ? (
                             <div className="backups-page__loading">
-                                <CircleNotch weight="bold" className="backups-page__spinner" aria-hidden="true" />
+                                <CircleNotchIcon weight="bold" className="backups-page__spinner" aria-hidden="true" />
                                 <p>Loading backups...</p>
                             </div>
                         ) : apiBackups.length === 0 ? (
                             <EmptyState
-                                icon={<Database weight="duotone" />}
+                                icon={<DatabaseIcon weight="duotone" />}
                                 title="No backups available"
                                 description="Create a backup to protect your data"
                             />
@@ -441,6 +322,7 @@ export function BackupsPage() {
                                 <BackupRow
                                     key={backup.id}
                                     backup={backup}
+                                    onDownload={handleDownload}
                                     onRestore={handleRestoreClick}
                                     onDelete={handleDeleteClick}
                                 />
@@ -449,7 +331,7 @@ export function BackupsPage() {
                     </div>
                 </PullToRefresh>
 
-                <QuickActionsButton actions={createBackupActions} title="Create Backup" />
+                {canManageBackups && <QuickActionsButton actions={createBackupActions} title="Create Backup" />}
 
                 <Dialog open={restoreDialogOpen} onOpenChange={setRestoreDialogOpen}>
                     <DialogContent>
@@ -469,13 +351,13 @@ export function BackupsPage() {
                                 <div className="backups-page__dialog-row">
                                     <span className="backups-page__dialog-label">Created:</span>
                                     <span className="backups-page__dialog-value">
-                                        {formatDateTime(backupToRestore.createdAt)}
+                                        {formatUtcDateTime(backupToRestore.createdAt)}
                                     </span>
                                 </div>
                                 <div className="backups-page__dialog-row">
                                     <span className="backups-page__dialog-label">Size:</span>
                                     <span className="backups-page__dialog-value">
-                                        {formatSize(backupToRestore.sizeBytes)}
+                                        {formatBackupSize(backupToRestore.sizeBytes)}
                                     </span>
                                 </div>
                             </div>
@@ -497,7 +379,7 @@ export function BackupsPage() {
                             >
                                 {isRestoring ? (
                                     <>
-                                        <CircleNotch
+                                        <CircleNotchIcon
                                             weight="bold"
                                             className="backups-page__spinner"
                                             aria-hidden="true"
@@ -506,7 +388,7 @@ export function BackupsPage() {
                                     </>
                                 ) : (
                                     <>
-                                        <ClockCounterClockwise weight="bold" aria-hidden="true" />
+                                        <ClockCounterClockwiseIcon weight="bold" aria-hidden="true" />
                                         Restore
                                     </>
                                 )}
@@ -532,7 +414,7 @@ export function BackupsPage() {
                                 <div className="backups-page__dialog-row">
                                     <span className="backups-page__dialog-label">Created:</span>
                                     <span className="backups-page__dialog-value">
-                                        {formatDateTime(backupToDelete.createdAt)}
+                                        {formatUtcDateTime(backupToDelete.createdAt)}
                                     </span>
                                 </div>
                             </div>
@@ -541,7 +423,7 @@ export function BackupsPage() {
                             <Button
                                 variant="ghost"
                                 onClick={() => setDeleteDialogOpen(false)}
-                                disabled={isDeleting}
+                                disabled={isDeletePending}
                                 data-action="cancel"
                             >
                                 Cancel
@@ -549,12 +431,12 @@ export function BackupsPage() {
                             <Button
                                 variant="destructive"
                                 onClick={handleDeleteConfirm}
-                                disabled={isDeleting}
+                                disabled={isDeletePending}
                                 data-action="confirm-delete"
                             >
-                                {isDeleting ? (
+                                {isDeletePending ? (
                                     <>
-                                        <CircleNotch
+                                        <CircleNotchIcon
                                             weight="bold"
                                             className="backups-page__spinner"
                                             aria-hidden="true"
@@ -563,7 +445,7 @@ export function BackupsPage() {
                                     </>
                                 ) : (
                                     <>
-                                        <Trash weight="bold" aria-hidden="true" />
+                                        <TrashIcon weight="bold" aria-hidden="true" />
                                         Delete
                                     </>
                                 )}
@@ -581,12 +463,20 @@ BackupsPage.displayName = 'BackupsPage';
 interface BackupRowProps {
     backup: BackupItem;
     onRestore: (backup: BackupItem) => void;
+    onDownload: (backup: BackupItem) => void;
     onDelete: (backup: BackupItem) => void;
 }
 
-function BackupRow({ backup, onRestore, onDelete }: BackupRowProps) {
+function BackupRow({ backup, onRestore, onDownload, onDelete }: BackupRowProps) {
+    const deleteButtonClassName = [
+        'backups-page__action-btn',
+        'backups-page__action-btn--danger',
+        'card-actions__btn',
+        'card-actions__btn--danger',
+    ].join(' ');
+
     return (
-        <div className="backups-page__item" role="listitem" data-backup-id={backup.id}>
+        <div className="backups-page__item list-item-card" role="listitem" data-backup-id={backup.id}>
             <div className="backups-page__item-main">
                 <div className="backups-page__item-info">
                     <div className="backups-page__item-header">
@@ -597,10 +487,10 @@ function BackupRow({ backup, onRestore, onDelete }: BackupRowProps) {
                         <span
                             className="backups-page__item-date"
                             data-testid="backups-page__item-date"
-                            title={formatDateTime(backup.createdAt)}
+                            title={formatUtcDateTime(backup.createdAt)}
                         >
-                            <Calendar weight="duotone" aria-hidden="true" />
-                            <span className="backups-page__item-date-full">{formatDate(backup.createdAt)}</span>
+                            <CalendarIcon weight="duotone" aria-hidden="true" />
+                            <span className="backups-page__item-date-full">{formatUtcDate(backup.createdAt)}</span>
                             {isRelativeTimeString(formatRelativeTime(backup.createdAt)) && (
                                 <span className="backups-page__item-date-relative">
                                     ({formatRelativeTime(backup.createdAt)})
@@ -608,12 +498,25 @@ function BackupRow({ backup, onRestore, onDelete }: BackupRowProps) {
                             )}
                         </span>
                         <span className="backups-page__item-size" data-testid="backups-page__item-size">
-                            <HardDrives weight="duotone" aria-hidden="true" />
-                            {formatSize(backup.sizeBytes)}
+                            <HardDrivesIcon weight="duotone" aria-hidden="true" />
+                            {formatBackupSize(backup.sizeBytes)}
                         </span>
                     </div>
                 </div>
                 <div className="backups-page__item-actions card-actions">
+                    <Tooltip content="Download">
+                        <button
+                            type="button"
+                            className="backups-page__action-btn card-actions__btn"
+                            data-testid="backups-page__action-btn"
+                            onClick={() => onDownload(backup)}
+                            aria-label={`Download ${backup.name}`}
+                            data-action="download"
+                            data-target={backup.id}
+                        >
+                            <DownloadSimpleIcon weight="bold" />
+                        </button>
+                    </Tooltip>
                     <Tooltip content="Restore">
                         <button
                             type="button"
@@ -624,20 +527,20 @@ function BackupRow({ backup, onRestore, onDelete }: BackupRowProps) {
                             data-action="restore"
                             data-target={backup.id}
                         >
-                            <ClockCounterClockwise weight="bold" />
+                            <ClockCounterClockwiseIcon weight="bold" />
                         </button>
                     </Tooltip>
                     <Tooltip content="Delete">
                         <button
                             type="button"
-                            className="backups-page__action-btn backups-page__action-btn--danger card-actions__btn card-actions__btn--danger"
+                            className={deleteButtonClassName}
                             data-testid="backups-page__action-btn"
                             onClick={() => onDelete(backup)}
                             aria-label={`Delete ${backup.name}`}
                             data-action="delete"
                             data-target={backup.id}
                         >
-                            <Trash weight="bold" />
+                            <TrashIcon weight="bold" />
                         </button>
                     </Tooltip>
                 </div>

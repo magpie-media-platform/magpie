@@ -1,9 +1,11 @@
-import { apiFetch } from './api';
+import { apiFetch, apiPost } from './api';
 
 export interface SetupStatus {
     isRequired: boolean;
 
     isComplete: boolean;
+
+    requiresAdminClaim: boolean;
 }
 
 export interface CreateAdminRequest {
@@ -12,7 +14,7 @@ export interface CreateAdminRequest {
     password: string;
 }
 
-export interface CreatedUser {
+interface CreatedUser {
     id: string;
     username: string;
     email: string | null;
@@ -31,4 +33,34 @@ export async function createSetupAdmin(request: CreateAdminRequest): Promise<Cre
     });
 }
 
+interface SetupDatabaseStatus {
+    initialized: boolean;
+    provider: string;
+}
+
+interface ConfigureSetupDatabaseRequest {
+    provider: string;
+    connectionString: string | null;
+}
+
+interface ConfigureSetupDatabaseResponse {
+    provider: string;
+    restartRequired: boolean;
+}
+
+export async function fetchSetupDatabaseStatus(): Promise<SetupDatabaseStatus> {
+    return apiFetch<SetupDatabaseStatus>('/system/setup/db-status', { skipAuth: true });
+}
+
+export async function configureSetupDatabase(
+    request: ConfigureSetupDatabaseRequest,
+): Promise<ConfigureSetupDatabaseResponse> {
+    return apiPost<ConfigureSetupDatabaseResponse>('/system/setup/db', request, { skipAuth: true });
+}
+
+export async function completeSetup(): Promise<SetupStatus> {
+    return apiPost<SetupStatus>('/system/setup/complete', undefined, { skipAuth: true });
+}
+
 export const setupStatusQueryKey = ['system', 'setup', 'status'] as const;
+export const setupDatabaseStatusQueryKey = ['system', 'setup', 'db-status'] as const;

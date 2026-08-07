@@ -12,6 +12,8 @@ function renderWithRouter(ui: React.ReactElement) {
 const defaultCounts: HealthStatusCounts = {
     healthy: 5,
     unhealthy: 2,
+    degraded: 3,
+    stabilizing: 1,
     unknown: 1,
     stale: 0,
 };
@@ -31,7 +33,7 @@ describe('HealthCard', () => {
     it('displays total count in header', () => {
         renderWithRouter(<HealthCard heading="Indexers" counts={defaultCounts} />);
 
-        expect(screen.getByText('8')).toBeInTheDocument();
+        expect(screen.getByText('12')).toBeInTheDocument();
     });
 
     it('displays rows for non-zero statuses', () => {
@@ -39,6 +41,8 @@ describe('HealthCard', () => {
 
         expect(screen.getByText('Healthy')).toBeInTheDocument();
         expect(screen.getByText('Unhealthy')).toBeInTheDocument();
+        expect(screen.getByText('Degraded')).toBeInTheDocument();
+        expect(screen.getByText('Stabilizing')).toBeInTheDocument();
         expect(screen.getByText('Unknown')).toBeInTheDocument();
 
         expect(screen.queryByText('Stale')).not.toBeInTheDocument();
@@ -49,21 +53,39 @@ describe('HealthCard', () => {
         const unhealthyRow = screen.getByText('Unhealthy').closest('.health-card__row');
         expect(unhealthyRow).toHaveTextContent('2');
 
+        const degradedRow = screen.getByText('Degraded').closest('.health-card__row');
+        expect(degradedRow).toHaveTextContent('3');
+
+        const stabilizingRow = screen.getByText('Stabilizing').closest('.health-card__row');
+        expect(stabilizingRow).toHaveTextContent('1');
+
         const unknownRow = screen.getByText('Unknown').closest('.health-card__row');
         expect(unknownRow).toHaveTextContent('1');
     });
 
     it('hides zero-count status rows', () => {
-        renderWithRouter(<HealthCard heading="Indexers" counts={{ healthy: 3, unhealthy: 0, unknown: 0, stale: 0 }} />);
+        renderWithRouter(
+            <HealthCard
+                heading="Indexers"
+                counts={{ healthy: 3, unhealthy: 0, degraded: 0, stabilizing: 0, unknown: 0, stale: 0 }}
+            />,
+        );
 
         expect(screen.getByText('Healthy')).toBeInTheDocument();
         expect(screen.queryByText('Unhealthy')).not.toBeInTheDocument();
+        expect(screen.queryByText('Degraded')).not.toBeInTheDocument();
+        expect(screen.queryByText('Stabilizing')).not.toBeInTheDocument();
         expect(screen.queryByText('Unknown')).not.toBeInTheDocument();
         expect(screen.queryByText('Stale')).not.toBeInTheDocument();
     });
 
     it('shows empty state when all counts are zero', () => {
-        renderWithRouter(<HealthCard heading="Indexers" counts={{ healthy: 0, unhealthy: 0, unknown: 0, stale: 0 }} />);
+        renderWithRouter(
+            <HealthCard
+                heading="Indexers"
+                counts={{ healthy: 0, unhealthy: 0, degraded: 0, stabilizing: 0, unknown: 0, stale: 0 }}
+            />,
+        );
 
         expect(screen.getByText('None configured')).toBeInTheDocument();
         expect(screen.getByText('0')).toBeInTheDocument();
@@ -128,6 +150,8 @@ describe('HealthCard interactions', () => {
 
         expect(screen.getByText('Healthy').closest('a')).toHaveAttribute('href', '/indexers?status=healthy');
         expect(screen.getByText('Unhealthy').closest('a')).toHaveAttribute('href', '/indexers?status=unhealthy');
+        expect(screen.getByText('Degraded').closest('a')).toHaveAttribute('href', '/indexers?status=degraded');
+        expect(screen.getByText('Stabilizing').closest('a')).toHaveAttribute('href', '/indexers?status=stabilizing');
         expect(screen.getByText('Unknown').closest('a')).toHaveAttribute('href', '/indexers?status=unknown');
     });
 
@@ -135,13 +159,15 @@ describe('HealthCard interactions', () => {
         renderWithRouter(
             <HealthCard
                 heading="Indexers"
-                counts={{ healthy: 1, unhealthy: 0, unknown: 0, stale: 0 }}
+                counts={{ healthy: 1, unhealthy: 0, degraded: 0, stabilizing: 0, unknown: 0, stale: 0 }}
                 getStatusUrl={getStatusUrl}
             />,
         );
 
         expect(screen.queryByText('Stale')).not.toBeInTheDocument();
         expect(screen.queryByText('Unhealthy')).not.toBeInTheDocument();
+        expect(screen.queryByText('Degraded')).not.toBeInTheDocument();
+        expect(screen.queryByText('Stabilizing')).not.toBeInTheDocument();
         expect(screen.queryByText('Unknown')).not.toBeInTheDocument();
     });
 
@@ -172,6 +198,11 @@ describe('HealthCard data attributes', () => {
 
         expect(screen.getByText('Healthy').closest('.health-card__row')).toHaveAttribute('data-status', 'healthy');
         expect(screen.getByText('Unhealthy').closest('.health-card__row')).toHaveAttribute('data-status', 'unhealthy');
+        expect(screen.getByText('Degraded').closest('.health-card__row')).toHaveAttribute('data-status', 'degraded');
+        expect(screen.getByText('Stabilizing').closest('.health-card__row')).toHaveAttribute(
+            'data-status',
+            'stabilizing',
+        );
         expect(screen.getByText('Unknown').closest('.health-card__row')).toHaveAttribute('data-status', 'unknown');
     });
 });

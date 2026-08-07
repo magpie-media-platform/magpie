@@ -1,10 +1,10 @@
 import { forwardRef, useState, useCallback, type InputHTMLAttributes, type ReactNode } from 'react';
-import { FolderOpen } from '@phosphor-icons/react';
+import { FolderOpenIcon } from '@phosphor-icons/react';
 
-import { useAuth, DisabledTooltip } from '@/auth';
+import { useAuth, DisabledTooltip, type Permission } from '@/auth';
 import { Button } from '@/components/ui/Button';
 import { Input, type InputSize } from '@/components/ui/Input';
-import { FileBrowser } from '@/components/ui/FileBrowser';
+import { FileBrowser } from '@/components/configuration/FileBrowser';
 
 import './PathInput.css';
 
@@ -27,6 +27,12 @@ export interface PathInputProps extends Omit<InputHTMLAttributes<HTMLInputElemen
 
     browseLabel?: string;
 
+    browserInitialPath?: string;
+
+    browserEndpoint?: string;
+
+    browsePermission?: Permission;
+
     leadingIcon?: ReactNode;
 }
 
@@ -41,6 +47,9 @@ export const PathInput = forwardRef<HTMLInputElement, PathInputProps>(
             onChange,
             browseEnabled = true,
             browseLabel,
+            browserInitialPath,
+            browserEndpoint,
+            browsePermission = 'files.browse',
             leadingIcon,
             disabled,
             id,
@@ -52,7 +61,7 @@ export const PathInput = forwardRef<HTMLInputElement, PathInputProps>(
     ) => {
         const [browserOpen, setBrowserOpen] = useState(false);
         const { hasPermission } = useAuth();
-        const canBrowse = browseEnabled && hasPermission('files.browse');
+        const canBrowse = browseEnabled && hasPermission(browsePermission);
 
         const handleInputChange = useCallback(
             (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -96,7 +105,7 @@ export const PathInput = forwardRef<HTMLInputElement, PathInputProps>(
                         {...props}
                     />
                     {browseEnabled && (
-                        <DisabledTooltip action="files.browse">
+                        <DisabledTooltip action={browsePermission}>
                             <Button
                                 type="button"
                                 variant="secondary"
@@ -107,7 +116,7 @@ export const PathInput = forwardRef<HTMLInputElement, PathInputProps>(
                                 className="path-input__browse"
                                 data-action="browse"
                             >
-                                <FolderOpen weight="bold" aria-hidden="true" />
+                                <FolderOpenIcon weight="bold" aria-hidden="true" />
                                 {browseLabel ?? 'Browse'}
                             </Button>
                         </DisabledTooltip>
@@ -118,7 +127,8 @@ export const PathInput = forwardRef<HTMLInputElement, PathInputProps>(
                     onOpenChange={setBrowserOpen}
                     onSelect={handleBrowseSelect}
                     mode={mode}
-                    initialPath={value}
+                    initialPath={browserInitialPath ?? value}
+                    endpoint={browserEndpoint}
                 />
             </div>
         );

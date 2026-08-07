@@ -2,7 +2,7 @@
     .logo {
         display: inline-block;
         flex-shrink: 0;
-        background-color: currentColor;
+        background-color: currentcolor;
         mask-size: contain;
         mask-repeat: no-repeat;
         mask-position: center;
@@ -12,8 +12,8 @@
     }
 
     .logo--default {
-        mask-image: url('/magpie.png');
-        -webkit-mask-image: url('/magpie.png');
+        mask-image: url('/magpie-solid.png');
+        -webkit-mask-image: url('/magpie-solid.png');
     }
 
     .logo--solid {

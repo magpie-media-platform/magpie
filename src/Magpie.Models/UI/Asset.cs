@@ -5,52 +5,52 @@ using Magpie.Models.Enums;
 namespace Magpie.Models.UI;
 
 /// <summary>
-/// A UI asset provided by an extension.
+/// A UI asset that an extension supplies.
 /// </summary>
 public sealed record Asset
 {
     /// <summary>
-    /// The unique identifier.
+    /// The id of this asset.
     /// </summary>
     public required Guid Id { get; init; }
 
     /// <summary>
-    /// The id of the extension that provides this asset.
+    /// The id of the extension that owns this asset.
     /// </summary>
     public required Guid ExtensionId { get; init; }
 
     /// <summary>
-    /// The asset display name.
+    /// The name of this asset.
     /// </summary>
     public required string Name { get; init; }
 
     /// <summary>
-    /// The type of asset.
+    /// The kind of this asset: a script, a style, or a link.
     /// </summary>
     public AssetKind Kind { get; init; }
 
     /// <summary>
-    /// Remote URL for the asset. Mutually exclusive with RelativePath.
+    /// The remote URL of the asset. Only one of this and <see cref="RelativePath"/> has a value.
     /// </summary>
     public string? Url { get; init; }
 
     /// <summary>
-    /// Path for embedded assets. Mutually exclusive with Url.
+    /// The path of an embedded asset. Only one of this and <see cref="Url"/> has a value.
     /// </summary>
     public string? RelativePath { get; init; }
 
     /// <summary>
-    /// For Link assets: the rel attribute value.
+    /// The value of the rel attribute for a link asset.
     /// </summary>
     public string? LinkRel { get; init; }
 
     /// <summary>
-    /// SRI hash for remote assets.
+    /// The subresource integrity hash of a remote asset.
     /// </summary>
     public string? Integrity { get; init; }
 
     /// <summary>
-    /// Asset loading priority.
+    /// The load order of the asset.
     /// </summary>
     public int Priority { get; init; }
 }

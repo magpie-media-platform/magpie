@@ -1,28 +1,10 @@
 import { useQuery } from '@tanstack/react-query';
 
+import { useAuth } from '@/auth';
+import { useInvalidateQueriesOnEvents } from '@/hooks/useInvalidateQueriesOnEvents';
 import { apiGet } from '@/lib/api';
-import { POLLING_INTERVALS } from '@/lib/queryClient';
 import { queryErrorOrNull } from '@/lib/utils';
-import type { DiskSpaceInfo, DownloadStateCounts, ActiveDownloadItem } from '@/types/system';
-import {
-    useIndexerHealth,
-    useDownloadClientHealth,
-    useMediaServerHealth,
-    useActiveDownloads,
-    useRecentJobs,
-    type HealthCounts,
-    type RecentJob,
-} from './useDashboard';
-
-export type ServiceStatus = 'healthy' | 'unhealthy' | 'degraded' | 'unknown';
-
-export interface ServiceHealth {
-    name: string;
-    status: ServiceStatus;
-    message?: string;
-    lastCheckedAt: string;
-    responseTime?: number;
-}
+import type { DiskSpaceInfo, DiskSpaceTotals } from '@/types/system';
 
 interface ApiSystemInfo {
     version: string;
@@ -32,17 +14,7 @@ interface ApiSystemInfo {
     systemRoot: string;
     nodeId: string;
     startedAt: string;
-}
-
-interface ApiHealthResponse {
-    status: string;
-}
-
-interface ApiServiceHealthResponse {
-    name: string;
-    status: string;
-    message?: string;
-    responseTimeMs?: number;
+    restartSupported: boolean;
 }
 
 interface ApiDiskSpaceInfo {
@@ -54,24 +26,14 @@ interface ApiDiskSpaceInfo {
     usedBytes: number;
 }
 
+interface ApiDiskSpaceResponse {
+    folders: ApiDiskSpaceInfo[];
+    totalBytes: number;
+    freeBytes: number;
+    usedBytes: number;
+}
+
 export interface SystemStatusData {
-    services: {
-        api: ServiceHealth;
-        database: ServiceHealth;
-        scheduler: ServiceHealth;
-    };
-
-    integrations: {
-        indexers: HealthCounts;
-        downloadClients: HealthCounts;
-        mediaServers: HealthCounts;
-    };
-
-    downloadQueue: {
-        counts: DownloadStateCounts;
-        activeDownloads: ActiveDownloadItem[];
-    };
-
     systemInfo: {
         version: string;
         runtime: string;
@@ -84,58 +46,22 @@ export interface SystemStatusData {
 
     diskSpace: DiskSpaceInfo[];
 
-    recentJobs: RecentJob[];
+    diskSpaceTotals: DiskSpaceTotals;
 
     isLoading: boolean;
-
-    error: Error | null;
 }
 
-export const systemStatusQueryKeys = {
-    all: ['system-status'] as const,
-    health: ['system-status', 'health'] as const,
-    databaseHealth: ['system-status', 'database-health'] as const,
-    schedulerHealth: ['system-status', 'scheduler-health'] as const,
+const systemStatusQueryKeys = {
     info: ['system-status', 'info'] as const,
     diskSpace: ['system-status', 'disk-space'] as const,
 };
 
-async function fetchSystemHealth(): Promise<ApiHealthResponse> {
-    return apiGet<ApiHealthResponse>('/system/health', { skipAuth: true });
-}
-
 async function fetchSystemInfo(): Promise<ApiSystemInfo> {
-    return apiGet<ApiSystemInfo>('/system/info');
+    return apiGet<ApiSystemInfo>('/system');
 }
 
-async function fetchDiskSpace(): Promise<ApiDiskSpaceInfo[]> {
-    return apiGet<ApiDiskSpaceInfo[]>('/system/disk-space');
-}
-
-async function fetchDatabaseHealth(): Promise<ApiServiceHealthResponse> {
-    return apiGet<ApiServiceHealthResponse>('/system/health/database');
-}
-
-async function fetchSchedulerHealth(): Promise<ApiServiceHealthResponse> {
-    return apiGet<ApiServiceHealthResponse>('/system/health/scheduler');
-}
-
-function mapHealthStatus(status: string): ServiceStatus {
-    const normalized = status.toLowerCase();
-    if (normalized === 'healthy') {
-        return 'healthy';
-    }
-    if (normalized === 'unhealthy') {
-        return 'unhealthy';
-    }
-    if (normalized === 'degraded') {
-        return 'degraded';
-    }
-    return 'unknown';
-}
-
-function timestampToIso(dataUpdatedAt: number): string {
-    return dataUpdatedAt ? new Date(dataUpdatedAt).toISOString() : new Date(0).toISOString();
+async function fetchDiskSpace(): Promise<ApiDiskSpaceResponse> {
+    return apiGet<ApiDiskSpaceResponse>('/system/disk-space');
 }
 
 function mapApiDiskSpaceToUi(diskSpaceInfo: ApiDiskSpaceInfo[]): DiskSpaceInfo[] {
@@ -149,108 +75,50 @@ function mapApiDiskSpaceToUi(diskSpaceInfo: ApiDiskSpaceInfo[]): DiskSpaceInfo[]
     }));
 }
 
-const emptyHealthCounts: HealthCounts = {
-    healthy: 0,
-    unhealthy: 0,
-    unknown: 0,
-    stale: 0,
-};
+function getDiskSpaceData(data: ApiDiskSpaceResponse | undefined) {
+    return {
+        folders: data ? mapApiDiskSpaceToUi(data.folders) : [],
+        totals: data
+            ? {
+                  usedBytes: data.usedBytes,
+                  totalBytes: data.totalBytes,
+                  freeBytes: data.freeBytes,
+              }
+            : { usedBytes: 0, totalBytes: 0, freeBytes: 0 },
+    };
+}
 
-const emptyDownloadCounts: DownloadStateCounts = {
-    downloading: 0,
-    queued: 0,
-    stalled: 0,
-};
+function useDiskSpaceQuery(isAuthenticated: boolean) {
+    useInvalidateQueriesOnEvents(
+        [
+            'content.hierarchyItem.deleted',
+            'content.hierarchyItem.updated',
+            'download.imported',
+            'library.rootFolder.created',
+            'library.rootFolder.updated',
+            'library.rootFolder.deleted',
+        ],
+        [systemStatusQueryKeys.diskSpace],
+        { debounceMs: 1000, exact: true, maxWaitMs: 3000, owner: 'system-status:disk-space' },
+    );
+    return useQuery({
+        queryKey: systemStatusQueryKeys.diskSpace,
+        queryFn: fetchDiskSpace,
+        enabled: isAuthenticated,
+    });
+}
 
 export function useSystemStatus(): SystemStatusData {
-    const healthQuery = useQuery({
-        queryKey: systemStatusQueryKeys.health,
-        queryFn: fetchSystemHealth,
-        refetchInterval: POLLING_INTERVALS.normal,
-        staleTime: POLLING_INTERVALS.normal / 2,
-    });
+    const { isAuthenticated } = useAuth();
 
     const infoQuery = useQuery({
         queryKey: systemStatusQueryKeys.info,
         queryFn: fetchSystemInfo,
-        refetchInterval: POLLING_INTERVALS.normal,
-        staleTime: POLLING_INTERVALS.normal / 2,
+        staleTime: Infinity,
+        enabled: isAuthenticated,
     });
 
-    const diskSpaceQuery = useQuery({
-        queryKey: systemStatusQueryKeys.diskSpace,
-        queryFn: fetchDiskSpace,
-        refetchInterval: POLLING_INTERVALS.slow,
-        staleTime: POLLING_INTERVALS.slow / 2,
-    });
-
-    const databaseHealthQuery = useQuery({
-        queryKey: systemStatusQueryKeys.databaseHealth,
-        queryFn: fetchDatabaseHealth,
-        refetchInterval: POLLING_INTERVALS.normal,
-        staleTime: POLLING_INTERVALS.normal / 2,
-    });
-
-    const schedulerHealthQuery = useQuery({
-        queryKey: systemStatusQueryKeys.schedulerHealth,
-        queryFn: fetchSchedulerHealth,
-        refetchInterval: POLLING_INTERVALS.normal,
-        staleTime: POLLING_INTERVALS.normal / 2,
-    });
-
-    const indexerHealth = useIndexerHealth();
-    const clientHealth = useDownloadClientHealth();
-    const serverHealth = useMediaServerHealth();
-    const activeDownloads = useActiveDownloads(3);
-    const recentJobs = useRecentJobs(5);
-
-    const apiStatus: ServiceStatus = healthQuery.isError
-        ? 'unhealthy'
-        : healthQuery.data
-          ? mapHealthStatus(healthQuery.data.status)
-          : 'unknown';
-
-    const apiServiceHealth: ServiceHealth = {
-        name: 'API',
-        status: apiStatus,
-        message:
-            apiStatus === 'healthy'
-                ? 'All endpoints responding normally'
-                : apiStatus === 'unhealthy'
-                  ? 'Service unavailable'
-                  : 'Checking status...',
-        lastCheckedAt: timestampToIso(healthQuery.dataUpdatedAt),
-    };
-
-    const databaseServiceHealth: ServiceHealth = databaseHealthQuery.data
-        ? {
-              name: databaseHealthQuery.data.name,
-              status: mapHealthStatus(databaseHealthQuery.data.status),
-              message: databaseHealthQuery.data.message,
-              lastCheckedAt: timestampToIso(databaseHealthQuery.dataUpdatedAt),
-              responseTime: databaseHealthQuery.data.responseTimeMs,
-          }
-        : {
-              name: 'Database',
-              status: databaseHealthQuery.isError ? 'unhealthy' : 'unknown',
-              message: databaseHealthQuery.isError ? 'Health check failed' : 'Checking status...',
-              lastCheckedAt: timestampToIso(databaseHealthQuery.dataUpdatedAt),
-          };
-
-    const schedulerServiceHealth: ServiceHealth = schedulerHealthQuery.data
-        ? {
-              name: schedulerHealthQuery.data.name,
-              status: mapHealthStatus(schedulerHealthQuery.data.status),
-              message: schedulerHealthQuery.data.message,
-              lastCheckedAt: timestampToIso(schedulerHealthQuery.dataUpdatedAt),
-              responseTime: schedulerHealthQuery.data.responseTimeMs,
-          }
-        : {
-              name: 'Scheduler',
-              status: schedulerHealthQuery.isError ? 'unhealthy' : 'unknown',
-              message: schedulerHealthQuery.isError ? 'Health check failed' : 'Checking status...',
-              lastCheckedAt: timestampToIso(schedulerHealthQuery.dataUpdatedAt),
-          };
+    const diskSpaceQuery = useDiskSpaceQuery(isAuthenticated);
 
     const systemInfo = infoQuery.data
         ? {
@@ -272,73 +140,39 @@ export function useSystemStatus(): SystemStatusData {
               startedAt: null,
           };
 
-    const diskSpace = diskSpaceQuery.data ? mapApiDiskSpaceToUi(diskSpaceQuery.data) : [];
+    const diskSpaceData = getDiskSpaceData(diskSpaceQuery.data);
 
-    const downloadQueue = {
-        counts: activeDownloads.data?.counts ?? emptyDownloadCounts,
-        activeDownloads:
-            activeDownloads.data?.items?.map((item) => ({
-                id: item.id,
-                title: item.title,
-                progress: item.progress,
-                state: item.state,
-                size: item.size,
-                eta: item.eta,
-            })) ?? [],
-    };
-
-    const isLoading =
-        healthQuery.isLoading ||
-        infoQuery.isLoading ||
-        databaseHealthQuery.isLoading ||
-        schedulerHealthQuery.isLoading ||
-        indexerHealth.isLoading ||
-        clientHealth.isLoading ||
-        serverHealth.isLoading;
-
-    const error =
-        healthQuery.error ||
-        infoQuery.error ||
-        databaseHealthQuery.error ||
-        schedulerHealthQuery.error ||
-        indexerHealth.error ||
-        clientHealth.error ||
-        serverHealth.error;
+    const isLoading = infoQuery.isLoading || diskSpaceQuery.isLoading;
 
     return {
-        services: {
-            api: apiServiceHealth,
-            database: databaseServiceHealth,
-            scheduler: schedulerServiceHealth,
-        },
-        integrations: {
-            indexers: indexerHealth.data ?? emptyHealthCounts,
-            downloadClients: clientHealth.data ?? emptyHealthCounts,
-            mediaServers: serverHealth.data ?? emptyHealthCounts,
-        },
-        downloadQueue,
         systemInfo,
-        diskSpace,
-        recentJobs: recentJobs.data ?? [],
+        diskSpace: diskSpaceData.folders,
+        diskSpaceTotals: diskSpaceData.totals,
         isLoading,
-        error: queryErrorOrNull({ error }),
     };
 }
 
 export function useSystemInfo() {
+    const { isAuthenticated } = useAuth();
+
     return useQuery({
         queryKey: systemStatusQueryKeys.info,
         queryFn: fetchSystemInfo,
-        refetchInterval: POLLING_INTERVALS.slow,
-        staleTime: POLLING_INTERVALS.slow / 2,
+        staleTime: Infinity,
+        enabled: isAuthenticated,
     });
 }
 
-export function useSystemHealth() {
-    return useQuery({
-        queryKey: systemStatusQueryKeys.health,
-        queryFn: fetchSystemHealth,
-        refetchInterval: POLLING_INTERVALS.normal,
-        staleTime: POLLING_INTERVALS.normal / 2,
-    });
+export function useDiskSpace() {
+    const { isAuthenticated } = useAuth();
+    const diskSpaceQuery = useDiskSpaceQuery(isAuthenticated);
+    const diskSpaceData = getDiskSpaceData(diskSpaceQuery.data);
+
+    return {
+        folders: diskSpaceData.folders,
+        totals: diskSpaceData.totals,
+        isLoading: diskSpaceQuery.isLoading,
+        error: queryErrorOrNull(diskSpaceQuery),
+        refetch: diskSpaceQuery.refetch,
+    };
 }

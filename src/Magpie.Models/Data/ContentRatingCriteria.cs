@@ -3,16 +3,17 @@ using Magpie.Models.Filtering;
 namespace Magpie.Models.Data;
 
 /// <summary>
-/// Filter criteria for <see cref="ContentRating"/>.
+/// Filter criteria for content ratings.
 /// </summary>
 public sealed record ContentRatingCriteria
 {
     /// <summary>
-    /// The criteria for <see cref="ContentRating.Body"/>.
+    /// Criteria for the body that gives the rating.
     /// </summary>
     public CriteriaSet<PropertyCriterion<string>> Body { get; init; } = new();
+
     /// <summary>
-    /// The criteria for <see cref="ContentRating.Rating"/>.
+    /// Criteria for the rating value.
     /// </summary>
     public CriteriaSet<PropertyCriterion<string>> Rating { get; init; } = new();
 }

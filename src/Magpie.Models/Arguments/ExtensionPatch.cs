@@ -1,12 +1,11 @@
 using System;
 
-using Magpie.Models.Data;
 using Magpie.Models.Patch;
 
 namespace Magpie.Models.Arguments;
 
 /// <summary>
-/// Patch for <see cref="Extension"/>.
+/// The partial-update arguments for an extension.
 /// </summary>
 public sealed record ExtensionPatch
 {
@@ -16,17 +15,22 @@ public sealed record ExtensionPatch
     public Guid Id { get; init; }
 
     /// <summary>
-    /// The <see cref="Extension.NuGetId"/> to patch.
+    /// The patch for the NuGet package id.
     /// </summary>
     public ScalarPatch<string?>? NuGetId { get; init; }
 
     /// <summary>
-    /// The <see cref="Extension.PackageRepository"/> to patch.
+    /// The patch for the package repository.
     /// </summary>
     public ScalarPatch<string?>? PackageRepository { get; init; }
 
     /// <summary>
-    /// The <see cref="Extension.AutoUpgrade"/> to patch.
+    /// The patch for whether the extension upgrades automatically.
     /// </summary>
     public ScalarPatch<bool>? AutoUpgrade { get; init; }
+
+    /// <summary>
+    /// The patch for the position in the load order.
+    /// </summary>
+    public ScalarPatch<int>? LoadOrder { get; init; }
 }

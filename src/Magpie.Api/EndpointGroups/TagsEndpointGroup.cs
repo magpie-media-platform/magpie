@@ -1,47 +1,39 @@
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 
-using Magpie.Abstractions.Api;
-using Magpie.Abstractions.Repositories;
 using Magpie.Models.Data;
+using Magpie.Sdk.Api;
+using Magpie.Sdk.Services;
 
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
 
 namespace Magpie.Api.EndpointGroups;
 
-internal sealed class TagsEndpointGroup(ITagRepository tagRepository) : IApiEndpointGroup
+internal sealed class TagsEndpointGroup : IApiEndpointGroup
 {
     public string Name => "tags";
 
     public void MapEndpoints(IEndpointRouteBuilder builder)
     {
-        builder.MapGet("", GetTags)
-            .WithName(nameof(GetTags))
-            .Produces<Tag[]>()
+        builder.MapGet("", GetTagsAsync)
+            .WithName(nameof(GetTagsAsync))
+            .Produces<IReadOnlyList<Tag>>()
             .RequireViewer();
     }
 
-    private async Task<IResult> GetTags(string? prefix, Guid? entityId, CancellationToken cancellationToken)
+    internal async Task<IResult> GetTagsAsync(
+        [FromServices] ITagService tagService,
+        string? prefix,
+        Guid? entityId,
+        CancellationToken cancellationToken)
     {
-        if (prefix is not null)
-        {
-            var tagsByPrefix = await tagRepository.GetByPrefixAsync(prefix, cancellationToken)
-                .ConfigureAwait(false);
-            return Results.Ok(tagsByPrefix);
-        }
+        var tags = await tagService.LookupAsync(prefix, entityId, cancellationToken).ConfigureAwait(false);
 
-        if (entityId is not null)
-        {
-            var tagsByEntity = await tagRepository.GetTagsByEntityAsync(entityId.Value, cancellationToken)
-                .ConfigureAwait(false);
-            return Results.Ok(tagsByEntity);
-        }
-
-        var tags = await tagRepository.ListAllAsync(cancellationToken).ConfigureAwait(false);
         return Results.Ok(tags);
     }
-
 }

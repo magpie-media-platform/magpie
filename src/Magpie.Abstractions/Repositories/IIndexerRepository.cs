@@ -1,12 +1,13 @@
 using System;
 
+using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 
 namespace Magpie.Abstractions.Repositories;
 
 /// <summary>
-/// Repository for managing indexers.
+/// The repository contract for indexers.
 /// </summary>
-public interface IIndexerRepository : ICrudRepository<Guid, Indexer>
-{
-}
+public interface IIndexerRepository :
+    IQueryRepository<Indexer, IndexerQuery>,
+    ICrudRepository<Guid, Indexer>;

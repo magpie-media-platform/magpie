@@ -3,52 +3,57 @@ using System;
 namespace Magpie.Models.Data;
 
 /// <summary>
-/// An audit record for historical tracking.
+/// A historical record of one audited operation.
 /// </summary>
 public record AuditRecord
 {
     /// <summary>
-    /// The audit record id.
+    /// The unique id of the audit record.
     /// </summary>
     public Guid Id { get; set; }
 
     /// <summary>
-    /// The identifier of the affected entity, if applicable.
+    /// The id of the audited entity.
     /// </summary>
     public string? EntityId { get; set; }
 
     /// <summary>
-    /// The identifier of the parent entity, if applicable.
+    /// The id of the parent of the audited entity.
     /// </summary>
     public string? ParentEntityId { get; set; }
 
     /// <summary>
-    /// The type of the affected entity.
+    /// The type of the audited entity.
     /// </summary>
     public string? EntityType { get; set; }
 
     /// <summary>
-    /// The audit category.
+    /// The category of the audited operation.
     /// </summary>
     public required string Category { get; set; }
 
     /// <summary>
-    /// The operation performed.
+    /// The name of the audited operation.
     /// </summary>
     public required string Operation { get; set; }
 
     /// <summary>
-    /// Additional detail about the event.
+    /// The detail text of the audited operation.
     /// </summary>
     public string? Detail { get; set; }
 
     /// <summary>
-    /// When the event occurred.
+    /// The UTC time of the audited operation.
     /// </summary>
     public DateTime Timestamp { get; set; }
 
     /// <summary>
-    /// The id of the user that performed the operation.
+    /// The id of the user who did the operation.
     /// </summary>
     public Guid? UserId { get; set; }
+
+    /// <summary>
+    /// The correlation id of the request.
+    /// </summary>
+    public Guid? CorrelationId { get; set; }
 }

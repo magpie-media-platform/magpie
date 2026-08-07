@@ -1,13 +1,17 @@
 import { Link, useNavigate } from 'react-router-dom';
-import { FilmStrip, Cube, ArrowCounterClockwise, Star, Television } from '@phosphor-icons/react';
+import { FilmStripIcon, ArrowCounterClockwiseIcon, PlusIcon, TelevisionIcon } from '@phosphor-icons/react';
 
 import { Button } from '@/components/ui/Button';
-import { Card } from '@/components/ui/Card';
+import { CdnPhosphorIcon } from '@/components/ui/CdnPhosphorIcon';
 import { EmptyState } from '@/components/ui/EmptyState';
+import { PageHeader } from '@/components/ui/PageHeader';
 import { Skeleton } from '@/components/ui/Skeleton';
+import { LibraryCountCard } from '@/components/ui/LibraryCountCard/LibraryCountCard';
+import { formatLibraryItemCount } from '@/components/ui/LibraryCountCard/formatLibraryItemCount';
 import {
     useLibraryTypes,
     useLibraryCounts,
+    useTypeIconName,
     type LibraryTypeDefinition,
     type LibraryCounts,
 } from '@/hooks/useLibraryTypes';
@@ -15,13 +19,6 @@ import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { useAuth, Role } from '@/auth';
 
 import './LibraryLandingPage.css';
-
-function formatCount(count: number | undefined): string | undefined {
-    if (count === undefined) {
-        return undefined;
-    }
-    return count === 1 ? '1 item' : `${count.toLocaleString()} items`;
-}
 
 interface TypeCardProps {
     type: LibraryTypeDefinition;
@@ -31,35 +28,29 @@ interface TypeCardProps {
 }
 
 function TypeCard({ type, basePath, isSubject = false, counts }: TypeCardProps) {
-    const IconComponent = isSubject ? Cube : FilmStrip;
-    const href = `${basePath}/${type.slug}`;
-    const countLabel = formatCount(counts[type.slug]);
+    const typeIconName = useTypeIconName();
 
     return (
-        <Link to={href} className="library-landing__type-link" data-component="type-card" data-type-id={type.id}>
-            <Card interactive className="library-landing__type-card">
-                <div className="library-landing__type-content">
-                    <span
-                        className="library-landing__type-icon"
-                        aria-hidden="true"
-                        data-testid="library-landing__type-icon"
-                    >
-                        <IconComponent weight="duotone" />
-                    </span>
-                    <div className="library-landing__type-info">
-                        <span className="library-landing__type-name">{type.name}</span>
-                        {countLabel !== undefined ? (
-                            <span className="library-landing__type-count">{countLabel}</span>
-                        ) : (
-                            <Skeleton
-                                className="library-landing__count-skeleton"
-                                data-testid="library-landing__count-skeleton"
-                            />
-                        )}
-                    </div>
-                </div>
-            </Card>
-        </Link>
+        <LibraryCountCard
+            to={`${basePath}/${type.slug}`}
+            icon={<CdnPhosphorIcon name={typeIconName(type.slug, { subject: isSubject })} weight="duotone" />}
+            name={type.pluralName}
+            countLabel={formatLibraryItemCount(counts[type.slug])}
+            dataComponent="type-card"
+            linkDataAttributes={{ 'data-type-id': type.id }}
+            iconTestId="library-landing__type-icon"
+            skeletonTestId="library-landing__count-skeleton"
+            classNames={{
+                link: 'library-landing__type-link',
+                card: 'library-landing__type-card',
+                content: 'library-landing__type-content',
+                icon: 'library-landing__type-icon',
+                info: 'library-landing__type-info',
+                name: 'library-landing__type-name',
+                count: 'library-landing__type-count',
+                skeleton: 'library-landing__count-skeleton',
+            }}
+        />
     );
 }
 
@@ -96,21 +87,18 @@ export function LibraryLandingPage() {
 
     return (
         <div className="library-landing" data-page="library-landing">
-            <header className="library-landing__header">
-                <FilmStrip
-                    weight="duotone"
-                    className="library-landing__icon"
-                    aria-hidden="true"
-                    data-testid="library-landing__icon"
-                />
-                <h1 className="library-landing__title">Library</h1>
-            </header>
+            <PageHeader
+                className="library-landing__header"
+                title="Library"
+                description="Browse what's in the library, grouped by content and the subjects it relates to."
+                icon={<FilmStripIcon weight="duotone" aria-hidden="true" data-testid="library-landing__icon" />}
+            />
 
             {error && (
                 <div className="library-landing__error" role="alert">
                     <p>Failed to load library types. Please try again.</p>
                     <Button variant="secondary" onClick={() => refetch()} data-action="retry">
-                        <ArrowCounterClockwise size={16} weight="bold" aria-hidden="true" />
+                        <ArrowCounterClockwiseIcon size={16} weight="bold" aria-hidden="true" />
                         Try Again
                     </Button>
                 </div>
@@ -120,47 +108,49 @@ export function LibraryLandingPage() {
                 <h2 id="content-types-heading" className="library-landing__section-title">
                     Content
                 </h2>
-                <div className="library-landing__grid">
-                    {isLoading ? (
-                        <>
-                            <TypeCardSkeleton />
-                            <TypeCardSkeleton />
-                            <TypeCardSkeleton />
-                        </>
-                    ) : hasContentTypes ? (
-                        contentTypes.map((type) => (
-                            <TypeCard key={type.id} type={type} basePath="/library/content" counts={counts} />
-                        ))
-                    ) : (
-                        <p className="library-landing__empty">
-                            No content types registered. Install extensions to add content types.
-                        </p>
-                    )}
-                </div>
-                {!isLoading && (
-                    <Link to="/library/all" className="library-landing__view-all">
-                        View all content
-                    </Link>
+
+                {!isContentEmpty && (
+                    <>
+                        <div className="library-landing__grid">
+                            {isLoading ? (
+                                <>
+                                    <TypeCardSkeleton />
+                                    <TypeCardSkeleton />
+                                    <TypeCardSkeleton />
+                                </>
+                            ) : hasContentTypes ? (
+                                contentTypes.map((type) => (
+                                    <TypeCard key={type.id} type={type} basePath="/library/content" counts={counts} />
+                                ))
+                            ) : (
+                                <p className="library-landing__empty">
+                                    No content types registered. Install extensions to add content types.
+                                </p>
+                            )}
+                        </div>
+                        {!isLoading && (
+                            <Link to="/library/all" className="library-landing__view-all">
+                                View all content
+                            </Link>
+                        )}
+                    </>
                 )}
             </section>
 
             {isContentEmpty && (
                 <EmptyState
-                    icon={<FilmStrip weight="duotone" />}
+                    icon={<FilmStripIcon weight="duotone" />}
                     title="Your library is empty"
-                    description="Add movies and TV shows to a wishlist to start monitoring them, or connect a media server to import your existing collection."
+                    description="Search every provider and add content to start tracking it, or connect a media server to import your existing collection."
                     action={
                         (canAddContent || isAdmin) && (
                             <div className="library-landing__onboarding-actions">
                                 {canAddContent && (
-                                    <Button
-                                        variant="primary"
-                                        size="sm"
-                                        onClick={() => navigate('/wishlists')}
-                                        data-action="go-to-wishlists"
-                                    >
-                                        <Star weight="duotone" aria-hidden="true" />
-                                        Go to Wishlists
+                                    <Button asChild variant="primary" size="sm">
+                                        <Link to="/library/add" data-action="add-content">
+                                            <PlusIcon weight="bold" aria-hidden="true" />
+                                            Add content
+                                        </Link>
                                     </Button>
                                 )}
                                 {isAdmin && (
@@ -170,7 +160,7 @@ export function LibraryLandingPage() {
                                         onClick={() => navigate('/admin/media-servers')}
                                         data-action="connect-media-server"
                                     >
-                                        <Television weight="duotone" aria-hidden="true" />
+                                        <TelevisionIcon weight="duotone" aria-hidden="true" />
                                         Connect a Media Server
                                     </Button>
                                 )}
@@ -205,7 +195,7 @@ export function LibraryLandingPage() {
                         ))
                     ) : (
                         <p className="library-landing__empty">
-                            No subject types registered. Install extensions to add subject types.
+                            No subject types registered. Install extensions to add them.
                         </p>
                     )}
                 </div>

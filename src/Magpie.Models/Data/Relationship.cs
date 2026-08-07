@@ -3,37 +3,42 @@ using System;
 namespace Magpie.Models.Data;
 
 /// <summary>
-/// A contextual link between two metadata items.
+/// A link from a metadata contribution to another metadata container.
 /// </summary>
 public record Relationship
 {
     /// <summary>
-    /// The relationship id.
+    /// The unique id of the relationship.
     /// </summary>
     public Guid Id { get; set; }
 
     /// <summary>
-    /// The id of the metadata contribution the relationship the belongs to.
+    /// The id of the contribution that supplied the link.
     /// </summary>
     public Guid MetadataContributionId { get; set; }
 
     /// <summary>
-    /// The id of the related metadata container.
+    /// The id of the container at the other end of the link.
     /// </summary>
     public Guid? RelatedMetadataContainerId { get; set; }
 
     /// <summary>
-    /// The display order.
+    /// The position in display order.
     /// </summary>
     public int Ordinal { get; set; }
 
     /// <summary>
-    /// The kind of relationship (e.g., "director", "actor", "studio").
+    /// The kind of link, as a provider-defined slug.
     /// </summary>
     public required string Kind { get; set; }
 
     /// <summary>
-    /// A qualifier for the relationship (e.g., character name for actors).
+    /// The extra detail for the kind.
     /// </summary>
     public string? Qualifier { get; set; }
+
+    /// <summary>
+    /// The <see cref="MetadataContainer"/> at the other end of the link.
+    /// </summary>
+    public MetadataContainer? RelatedMetadataContainer { get; set; }
 }

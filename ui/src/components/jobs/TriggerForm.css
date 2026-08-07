@@ -1,0 +1,33 @@
+@layer components {
+    :is(.event-trigger-form__info-button, .schedule-trigger-form__info-button) {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 0;
+        background: transparent;
+        border: none;
+        color: var(--text-muted);
+        cursor: pointer;
+        border-radius: var(--radius-sm);
+        transition: color var(--duration-fast) var(--easing-default);
+
+        & svg {
+            font-size: var(--text-sm);
+        }
+
+        &:hover {
+            color: var(--accent-primary);
+        }
+
+        &:focus-visible {
+            outline: var(--focus-ring-width) solid var(--focus-ring-color);
+            outline-offset: var(--focus-ring-offset);
+        }
+    }
+
+    :is(.event-trigger-form__tooltip, .schedule-trigger-form__tooltip) {
+        margin: 0;
+        font-size: var(--text-xs);
+        line-height: var(--leading-relaxed);
+    }
+}

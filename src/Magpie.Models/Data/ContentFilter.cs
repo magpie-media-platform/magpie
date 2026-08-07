@@ -8,47 +8,47 @@ namespace Magpie.Models.Data;
 public record ContentFilter
 {
     /// <summary>
-    /// The content filter id.
+    /// The unique id of the content filter.
     /// </summary>
     public Guid Id { get; set; }
 
     /// <summary>
-    /// The id of the user that owns the content filter, if applicable.
+    /// The id of the user who owns the content filter.
     /// </summary>
     public Guid? OwnerUserId { get; set; }
 
     /// <summary>
-    /// The display name.
+    /// The display name of the content filter.
     /// </summary>
     public required string Name { get; set; }
 
     /// <summary>
-    /// The filter criteria.
+    /// The criteria of the content filter.
     /// </summary>
     public required ContentFilterCriteria Criteria { get; set; }
 
     /// <summary>
-    /// Whether the content filter is locked to and only editable by the owner.
+    /// Whether only the owner can edit the content filter.
     /// </summary>
     public bool? OwnerLock { get; set; }
 
     /// <summary>
-    /// When the record was created.
+    /// The UTC time the record was created.
     /// </summary>
     public DateTime CreatedAt { get; set; }
 
     /// <summary>
-    /// The id of the user that created the record.
+    /// The id of the user who created the record.
     /// </summary>
     public Guid? CreatedByUserId { get; set; }
 
     /// <summary>
-    /// When the record was last modified.
+    /// The UTC time the record was last modified.
     /// </summary>
     public DateTime? ModifiedAt { get; set; }
 
     /// <summary>
-    /// The id of the user that last modified the record.
+    /// The id of the user who last modified the record.
     /// </summary>
     public Guid? ModifiedByUserId { get; set; }
 }

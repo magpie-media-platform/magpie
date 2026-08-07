@@ -29,14 +29,14 @@ function fieldCompletions(registry: FieldRegistry): Completion[] {
             label: f.name,
             type: 'variable',
             detail: 'collection',
-            info: `Singular form (e.g. ${f.name} has "value")`,
+            info: `Singular form: ${f.name} has "value"`,
         });
         for (const alias of f.aliases) {
             completions.push({
                 label: alias,
                 type: 'variable',
                 detail: 'collection',
-                info: `Plural form (e.g. ${alias} has (field = "value"))`,
+                info: `Plural form: ${alias} has (field = "value")`,
             });
         }
     }
@@ -80,6 +80,13 @@ function enumCompletions(values: string[]): Completion[] {
     }));
 }
 
+function booleanCompletions(): Completion[] {
+    return [
+        { label: 'true', type: 'keyword' },
+        { label: 'false', type: 'keyword' },
+    ];
+}
+
 function findFieldName(context: CompletionContext): string | null {
     const tree = syntaxTree(context.state);
     const node = tree.resolveInner(context.pos, -1);
@@ -121,7 +128,7 @@ function getCompletionContext(
     context: CompletionContext,
     registry: FieldRegistry,
 ): {
-    kind: 'field' | 'operator' | 'value' | 'collectionOp' | 'itemField' | 'itemValue' | 'keyword' | 'none';
+    kind: 'field' | 'operator' | 'value' | 'collectionOp' | 'itemField' | 'itemValue' | 'none';
     fieldName?: string;
     collectionField?: CollectionFieldDef;
 } {
@@ -135,13 +142,13 @@ function getCompletionContext(
         if (parentName === 'ItemField' && (nodeName === 'ItemOp' || node.prevSibling?.name === 'ItemOp')) {
             return { kind: 'itemValue', collectionField: collField };
         }
-        if (parentName === 'ItemField' && nodeName === 'Identifier') {
-            return { kind: 'itemField', collectionField: collField };
-        }
-        if (parentName === 'ItemValue' || nodeName === 'ItemValue' || nodeName === 'ItemGroup') {
-            return { kind: 'itemField', collectionField: collField };
-        }
         return { kind: 'itemField', collectionField: collField };
+    }
+
+    const beforeCursor = context.state.sliceDoc(0, context.pos);
+    const valueMatch = beforeCursor.match(/(?:^|[\s(])([a-zA-Z_][a-zA-Z0-9_]*)\s*(?:=|!=)\s*$/);
+    if (valueMatch && getScalarField(registry, valueMatch[1])) {
+        return { kind: 'value', fieldName: valueMatch[1] };
     }
 
     const fieldName = findFieldName(context);
@@ -220,6 +227,8 @@ export function filterQueryAutocomplete(registry: FieldRegistry) {
                 const field = getScalarField(registry, ctx.fieldName!);
                 if (field?.enumValues) {
                     options = enumCompletions(field.enumValues);
+                } else if (field?.type === 'boolean') {
+                    options = booleanCompletions();
                 }
                 break;
             }
@@ -229,9 +238,6 @@ export function filterQueryAutocomplete(registry: FieldRegistry) {
                 }
                 break;
             case 'itemValue':
-                break;
-            case 'keyword':
-                options = keywordCompletions();
                 break;
             case 'none':
                 if (context.explicit) {

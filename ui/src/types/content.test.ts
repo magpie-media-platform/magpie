@@ -1,122 +1,124 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-    mapMonitoringIntent,
-    mapMonitoringStatusToApi,
+    formatLevelLabel,
+    getFulfillmentBadge,
     mapFulfillmentStatus,
-    mapFulfillmentStatusToApi,
-    mapContentType,
-    mapContentKindToApi,
+    mapToContentDetailItem,
+    type ApiContentHierarchyItem,
 } from './content';
 
-describe('mapMonitoringIntent', () => {
-    it('maps None (0) to none', () => {
-        expect(mapMonitoringIntent(0)).toBe('none');
-    });
-
-    it('maps Active (1) to active', () => {
-        expect(mapMonitoringIntent(1)).toBe('active');
-    });
-
-    it('maps Excluded (2) to excluded', () => {
-        expect(mapMonitoringIntent(2)).toBe('excluded');
-    });
-});
-
-describe('mapMonitoringStatusToApi', () => {
-    it('maps none to 0', () => {
-        expect(mapMonitoringStatusToApi('none')).toBe(0);
-    });
-
-    it('maps active to 1', () => {
-        expect(mapMonitoringStatusToApi('active')).toBe(1);
-    });
-
-    it('maps excluded to 2', () => {
-        expect(mapMonitoringStatusToApi('excluded')).toBe(2);
-    });
-});
-
 describe('mapFulfillmentStatus', () => {
-    it('maps 0 to missing', () => {
-        expect(mapFulfillmentStatus(0)).toBe('missing');
+    it('maps Missing to missing', () => {
+        expect(mapFulfillmentStatus('Missing')).toBe('missing');
     });
 
-    it('maps 1 to upgradable', () => {
-        expect(mapFulfillmentStatus(1)).toBe('upgradable');
+    it('maps Upgradable to upgradable', () => {
+        expect(mapFulfillmentStatus('Upgradable')).toBe('upgradable');
     });
 
-    it('maps 2 to fulfilled', () => {
-        expect(mapFulfillmentStatus(2)).toBe('fulfilled');
+    it('maps Fulfilled to fulfilled', () => {
+        expect(mapFulfillmentStatus('Fulfilled')).toBe('fulfilled');
     });
 
-    it('maps 3 to fulfilledExternally', () => {
-        expect(mapFulfillmentStatus(3)).toBe('fulfilledExternally');
-    });
-});
-
-describe('mapFulfillmentStatusToApi', () => {
-    it('maps missing to 0', () => {
-        expect(mapFulfillmentStatusToApi('missing')).toBe(0);
+    it('maps FulfilledExternally to fulfilledExternally', () => {
+        expect(mapFulfillmentStatus('FulfilledExternally')).toBe('fulfilledExternally');
     });
 
-    it('maps upgradable to 1', () => {
-        expect(mapFulfillmentStatusToApi('upgradable')).toBe(1);
-    });
-
-    it('maps fulfilled to 2', () => {
-        expect(mapFulfillmentStatusToApi('fulfilled')).toBe(2);
-    });
-
-    it('maps fulfilledExternally to 3', () => {
-        expect(mapFulfillmentStatusToApi('fulfilledExternally')).toBe(3);
+    it('maps Partial to partial', () => {
+        expect(mapFulfillmentStatus('Partial')).toBe('partial');
     });
 });
 
-describe('mapContentType', () => {
-    it('maps episodes to episode', () => {
-        expect(mapContentType('episodes')).toBe('episode');
-    });
-
-    it('maps movies to movie', () => {
-        expect(mapContentType('movies')).toBe('movie');
-    });
-
-    it('maps music to music', () => {
-        expect(mapContentType('music')).toBe('music');
-    });
-
-    it('maps books to book', () => {
-        expect(mapContentType('books')).toBe('book');
-    });
-
-    it('returns unknown for unrecognized types', () => {
-        expect(mapContentType('podcasts')).toBe('unknown');
-    });
-
-    it('handles case insensitivity', () => {
-        expect(mapContentType('Episodes')).toBe('episode');
+describe('getFulfillmentBadge', () => {
+    it('maps each status to its variant and label', () => {
+        expect(getFulfillmentBadge('missing')).toEqual({ variant: 'missing', label: 'Missing' });
+        expect(getFulfillmentBadge('upgradable')).toEqual({ variant: 'upgradable', label: 'Upgradable' });
+        expect(getFulfillmentBadge('fulfilled')).toEqual({ variant: 'fulfilled', label: 'Fulfilled' });
+        expect(getFulfillmentBadge('fulfilledExternally')).toEqual({
+            variant: 'fulfilledExternally',
+            label: 'External',
+        });
+        expect(getFulfillmentBadge('partial')).toEqual({ variant: 'partial', label: 'Partial' });
     });
 });
 
-describe('mapContentKindToApi', () => {
-    it('maps episode to episodes', () => {
-        expect(mapContentKindToApi('episode')).toBe('episodes');
+describe('formatLevelLabel', () => {
+    it('labels a TV show by its level, not the collapsed content type', () => {
+        expect(formatLevelLabel('show')).toBe('Show');
     });
 
-    it('maps movie to movies', () => {
-        expect(mapContentKindToApi('movie')).toBe('movies');
+    it('labels a season and an episode distinctly', () => {
+        expect(formatLevelLabel('season')).toBe('Season');
+        expect(formatLevelLabel('episode')).toBe('Episode');
     });
 
-    it('maps music to music', () => {
-        expect(mapContentKindToApi('music')).toBe('music');
+    it('labels a movie level', () => {
+        expect(formatLevelLabel('movie')).toBe('Movie');
     });
 
-    it('maps book to books', () => {
-        expect(mapContentKindToApi('book')).toBe('books');
+    it('capitalises arbitrary level slugs (music, books)', () => {
+        expect(formatLevelLabel('artist')).toBe('Artist');
+        expect(formatLevelLabel('album')).toBe('Album');
+        expect(formatLevelLabel('book')).toBe('Book');
     });
 
-    it('maps unknown to undefined', () => {
-        expect(mapContentKindToApi('unknown')).toBeUndefined();
+    it('returns empty when the level is blank', () => {
+        expect(formatLevelLabel('')).toBe('');
+        expect(formatLevelLabel(undefined)).toBe('');
+    });
+});
+
+function makeItem(overrides: Partial<ApiContentHierarchyItem> = {}): ApiContentHierarchyItem {
+    return {
+        id: 'content-1',
+        metadataContainerId: 'metadata-1',
+        contentType: 'movie',
+        level: 'movie',
+        slug: 'test-movie',
+        name: 'Test Movie',
+        monitoring: null,
+        effectiveMonitoring: true,
+        createdAt: '2026-01-01T00:00:00Z',
+        ...overrides,
+    };
+}
+
+describe('mapToContentDetailItem', () => {
+    it('maps the materialized publish date', () => {
+        const result = mapToContentDetailItem(
+            makeItem({
+                metadataContainer: {
+                    id: 'metadata-1',
+                    contributions: [{ ordinal: 0, publishDate: '2025-08-04T00:00:00Z' }],
+                },
+            }),
+        );
+
+        expect(result.publishDate).toBe('2025-08-04T00:00:00Z');
+    });
+
+    it('omits the publish date when metadata does not provide one', () => {
+        const result = mapToContentDetailItem(makeItem());
+
+        expect(result.publishDate).toBeUndefined();
+    });
+
+    it('maps previews from metadata contributions', () => {
+        const result = mapToContentDetailItem(
+            makeItem({
+                metadataContainer: {
+                    id: 'metadata-1',
+                    contributions: [
+                        {
+                            ordinal: 0,
+                            previews: [{ ordinal: 0, kind: 'trailer', url: 'https://example.com/trailer' }],
+                        },
+                    ],
+                },
+            }),
+        );
+
+        expect(result.previews).toEqual([{ kind: 'trailer', url: 'https://example.com/trailer' }]);
     });
 });

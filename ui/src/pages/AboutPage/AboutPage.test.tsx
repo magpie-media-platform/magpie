@@ -174,14 +174,6 @@ describe('AboutPage', () => {
             expect(docsLink).toHaveAttribute('href', 'https://docs.magpie.media');
         });
 
-        it('renders Website link', () => {
-            renderAboutPage();
-
-            const websiteLink = screen.getByRole('link', { name: /website/i });
-            expect(websiteLink).toBeInTheDocument();
-            expect(websiteLink).toHaveAttribute('href', 'https://magpie.media');
-        });
-
         it('renders Report a Bug link', () => {
             renderAboutPage();
 
@@ -190,22 +182,12 @@ describe('AboutPage', () => {
             expect(bugLink).toHaveAttribute('href', 'https://github.com/magpie-media/magpie/issues/new');
         });
 
-        it('renders Donate link', () => {
-            renderAboutPage();
-
-            const donateLink = screen.getByRole('link', { name: /donate/i });
-            expect(donateLink).toBeInTheDocument();
-            expect(donateLink).toHaveAttribute('href', 'https://opencollective.com/magpie');
-        });
-
         it('displays link descriptions', () => {
             renderAboutPage();
 
             expect(screen.getByText('Source code, issues, and releases')).toBeInTheDocument();
             expect(screen.getByText('Installation guides and API reference')).toBeInTheDocument();
-            expect(screen.getByText('Official project website')).toBeInTheDocument();
             expect(screen.getByText('Report issues or request features')).toBeInTheDocument();
-            expect(screen.getByText('Support the project development')).toBeInTheDocument();
         });
     });
 
@@ -224,24 +206,20 @@ describe('AboutPage', () => {
             expect(licenseLink).toHaveAttribute('href', 'https://opensource.org/licenses/MIT');
         });
 
-        it('displays copyright information', () => {
+        it('renders the license sentence with no space before the trailing period', () => {
             renderAboutPage();
 
-            expect(screen.getByText(/copyright 2024-2025/i)).toBeInTheDocument();
-        });
-    });
-
-    describe('Acknowledgements Section', () => {
-        it('renders section heading', () => {
-            renderAboutPage();
-
-            expect(screen.getByRole('heading', { name: 'Acknowledgements', level: 2 })).toBeInTheDocument();
+            const licenseLink = screen.getByRole('link', { name: /mit license/i });
+            const sentence = licenseLink.parentElement?.textContent ?? '';
+            expect(sentence).toContain('MIT License.');
+            expect(sentence).not.toContain('MIT License .');
         });
 
-        it('displays thanks message', () => {
+        it('displays copyright information with a dynamic end year', () => {
             renderAboutPage();
 
-            expect(screen.getByText(/thank you to all the contributors/i)).toBeInTheDocument();
+            const currentYear = new Date().getFullYear();
+            expect(screen.getByText(new RegExp(`copyright 2024-${currentYear}`, 'i'))).toBeInTheDocument();
         });
     });
 
@@ -252,7 +230,6 @@ describe('AboutPage', () => {
             expect(screen.getByRole('region', { name: /system information/i })).toBeInTheDocument();
             expect(screen.getByRole('region', { name: /resources/i })).toBeInTheDocument();
             expect(screen.getByRole('region', { name: /license/i })).toBeInTheDocument();
-            expect(screen.getByRole('region', { name: /acknowledgements/i })).toBeInTheDocument();
         });
 
         it('has decorative icons marked as aria-hidden', () => {

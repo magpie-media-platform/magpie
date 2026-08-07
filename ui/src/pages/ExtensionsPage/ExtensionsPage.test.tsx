@@ -1,4 +1,5 @@
-import { act, render, renderHook, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
 import type { ReactNode } from 'react';
@@ -6,9 +7,9 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 import { ToastProvider, ToastStateProvider, ToastViewport } from '@/components/ui/Toast';
 import { RestartRequiredProvider } from '@/components/ui/RestartRequiredBanner';
-import { apiGet, apiPost } from '@/lib/api';
+import { apiGet, apiPatch, apiPost } from '@/lib/api';
 import { useExtensionManagement } from '@/hooks/useExtensionManagement';
-import type { ApiExtension } from '@/hooks/useExtensionManagement';
+import type { ApiExtension, ExtensionUpdateInfo } from '@/hooks/useExtensionManagement';
 
 import { ExtensionsPage } from './ExtensionsPage';
 
@@ -57,6 +58,7 @@ vi.mock('@/components/ui/Switch', () => ({
 const mockApiExtensions: ApiExtension[] = [
     {
         id: 'ext-core',
+        packageId: 'Magpie.Core',
         name: 'Magpie Core',
         version: '1.0.0',
         targetABI: '1.0',
@@ -64,6 +66,7 @@ const mockApiExtensions: ApiExtension[] = [
         assemblyName: 'Magpie.Core',
         installed: true,
         enabled: true,
+
         disabledReason: null,
         loadOrder: 1,
         managed: false,
@@ -78,6 +81,7 @@ const mockApiExtensions: ApiExtension[] = [
     },
     {
         id: 'ext-episodes',
+        packageId: 'Magpie.Extensions.Episodes',
         name: 'Episodes',
         version: '1.0.0',
         targetABI: '1.0',
@@ -85,6 +89,7 @@ const mockApiExtensions: ApiExtension[] = [
         assemblyName: 'Magpie.Extensions.Episodes',
         installed: true,
         enabled: true,
+
         disabledReason: null,
         loadOrder: 10,
         managed: false,
@@ -99,6 +104,7 @@ const mockApiExtensions: ApiExtension[] = [
     },
     {
         id: 'ext-movies',
+        packageId: 'Magpie.Extensions.Movies',
         name: 'Movies',
         version: '1.0.0',
         targetABI: '1.0',
@@ -106,6 +112,7 @@ const mockApiExtensions: ApiExtension[] = [
         assemblyName: 'Magpie.Extensions.Movies',
         installed: true,
         enabled: true,
+
         disabledReason: null,
         loadOrder: 11,
         managed: false,
@@ -119,18 +126,20 @@ const mockApiExtensions: ApiExtension[] = [
         modifiedByUserId: null,
     },
     {
-        id: 'ext-qbittorrent',
-        name: 'qBittorrent',
+        id: 'ext-downloadclient-a',
+        packageId: 'Magpie.Extensions.DownloadClientA',
+        name: 'DownloadClient A',
         version: '2.1.0',
         targetABI: '1.0',
-        filePath: '/extensions/qbittorrent.dll',
-        assemblyName: 'Magpie.Extensions.qBittorrent',
+        filePath: '/extensions/downloadclient-a.dll',
+        assemblyName: 'Magpie.Extensions.DownloadClientA',
         installed: true,
         enabled: true,
+
         disabledReason: null,
         loadOrder: 100,
         managed: true,
-        nuGetId: 'Magpie.Extensions.qBittorrent',
+        nuGetId: 'Magpie.Extensions.DownloadClientA',
         packageRepository: 'https://api.nuget.org/v3/index.json',
         autoUpgrade: false,
         lastChecked: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
@@ -141,6 +150,7 @@ const mockApiExtensions: ApiExtension[] = [
     },
     {
         id: 'ext-plex',
+        packageId: 'Magpie.Extensions.Plex',
         name: 'Plex',
         version: '1.5.0',
         targetABI: '1.0',
@@ -148,6 +158,7 @@ const mockApiExtensions: ApiExtension[] = [
         assemblyName: 'Magpie.Extensions.Plex',
         installed: true,
         enabled: true,
+
         disabledReason: null,
         loadOrder: 101,
         managed: true,
@@ -162,6 +173,7 @@ const mockApiExtensions: ApiExtension[] = [
     },
     {
         id: 'ext-prowlarr',
+        packageId: 'Magpie.Extensions.Prowlarr',
         name: 'Prowlarr',
         version: '1.0.2',
         targetABI: '1.0',
@@ -169,6 +181,7 @@ const mockApiExtensions: ApiExtension[] = [
         assemblyName: 'Magpie.Extensions.Prowlarr',
         installed: true,
         enabled: false,
+
         disabledReason: null,
         loadOrder: 102,
         managed: true,
@@ -183,18 +196,20 @@ const mockApiExtensions: ApiExtension[] = [
     },
 
     {
-        id: 'ext-qbittorrent-v2',
-        name: 'qBittorrent',
+        id: 'ext-downloadclient-a-v2',
+        packageId: 'Magpie.Extensions.DownloadClientA',
+        name: 'DownloadClient A',
         version: '2.0.0',
         targetABI: '1.0',
-        filePath: '/extensions/qbittorrent-2.0.0.dll',
-        assemblyName: 'Magpie.Extensions.qBittorrent, Version=2.0.0.0',
+        filePath: '/extensions/downloadclient-a-2.0.0.dll',
+        assemblyName: 'Magpie.Extensions.DownloadClientA, Version=2.0.0.0',
         installed: false,
         enabled: false,
+
         disabledReason: null,
         loadOrder: 100,
         managed: true,
-        nuGetId: 'Magpie.Extensions.qBittorrent',
+        nuGetId: 'Magpie.Extensions.DownloadClientA',
         packageRepository: 'https://api.nuget.org/v3/index.json',
         autoUpgrade: false,
         lastChecked: null,
@@ -204,18 +219,20 @@ const mockApiExtensions: ApiExtension[] = [
         modifiedByUserId: null,
     },
     {
-        id: 'ext-qbittorrent-v1',
-        name: 'qBittorrent',
+        id: 'ext-downloadclient-a-v1',
+        packageId: 'Magpie.Extensions.DownloadClientA',
+        name: 'DownloadClient A',
         version: '1.0.0',
         targetABI: '1.0',
-        filePath: '/extensions/qbittorrent-1.0.0.dll',
-        assemblyName: 'Magpie.Extensions.qBittorrent, Version=1.0.0.0',
+        filePath: '/extensions/downloadclient-a-1.0.0.dll',
+        assemblyName: 'Magpie.Extensions.DownloadClientA, Version=1.0.0.0',
         installed: false,
         enabled: false,
+
         disabledReason: null,
         loadOrder: 100,
         managed: true,
-        nuGetId: 'Magpie.Extensions.qBittorrent',
+        nuGetId: 'Magpie.Extensions.DownloadClientA',
         packageRepository: 'https://api.nuget.org/v3/index.json',
         autoUpgrade: false,
         lastChecked: null,
@@ -226,6 +243,7 @@ const mockApiExtensions: ApiExtension[] = [
     },
     {
         id: 'ext-plex-v1',
+        packageId: 'Magpie.Extensions.Plex',
         name: 'Plex',
         version: '1.0.0',
         targetABI: '1.0',
@@ -233,6 +251,7 @@ const mockApiExtensions: ApiExtension[] = [
         assemblyName: 'Magpie.Extensions.Plex, Version=1.0.0.0',
         installed: false,
         enabled: false,
+
         disabledReason: null,
         loadOrder: 101,
         managed: true,
@@ -247,6 +266,7 @@ const mockApiExtensions: ApiExtension[] = [
     },
     {
         id: 'ext-broken',
+        packageId: 'Legacy.Extension',
         name: 'Legacy Extension',
         version: '0.5.0',
         targetABI: '0.9',
@@ -254,7 +274,8 @@ const mockApiExtensions: ApiExtension[] = [
         assemblyName: 'Legacy.Extension',
         installed: true,
         enabled: false,
-        disabledReason: 'Incompatible with current ABI version (requires 0.9, current is 1.0)',
+
+        disabledReason: 'Activation failed: targets ABI [2.0.0,), host ABI is 1.0.0.',
         loadOrder: 200,
         managed: false,
         nuGetId: null,
@@ -268,26 +289,19 @@ const mockApiExtensions: ApiExtension[] = [
     },
 ];
 
-const installedExtensions = (() => {
-    const byName = new Map<string, ApiExtension>();
-    for (const ext of mockApiExtensions) {
-        const existing = byName.get(ext.name);
-        if (!existing || new Date(ext.createdAt) > new Date(existing.createdAt)) {
-            byName.set(ext.name, ext);
-        }
-    }
-    return [...byName.values()];
-})();
+const listedExtensions = mockApiExtensions;
+const listedExtensionItems = mockApiExtensions.map((extension) => ({ extension, updateInfo: null }));
 
 vi.mock('@/lib/api', () => ({
     apiGet: vi.fn().mockImplementation((url: string) => {
         if (url === '/extensions') {
-            return Promise.resolve(mockApiExtensions);
+            return Promise.resolve(listedExtensionItems);
         }
         return Promise.resolve([]);
     }),
     apiPost: vi.fn().mockResolvedValue({}),
     apiPatch: vi.fn().mockResolvedValue(undefined),
+    apiDelete: vi.fn().mockResolvedValue(undefined),
     isApiError: vi.fn(() => false),
     buildUrl: vi.fn((path, params) => {
         if (!params) return path;
@@ -367,62 +381,86 @@ describe('ExtensionsPage', () => {
             expect(list).toBeInTheDocument();
 
             const items = screen.getAllByRole('listitem');
-            expect(items.length).toBe(installedExtensions.length);
+            expect(items.length).toBe(listedExtensions.length);
         });
 
-        for (const ext of installedExtensions) {
-            expect(screen.getByText(ext.name)).toBeInTheDocument();
+        for (const ext of listedExtensions) {
+            expect(document.querySelector(`[data-magpie-extension-id="${ext.id}"]`)).toBeInTheDocument();
         }
     });
 
-    it('excludes prior versions from the list', async () => {
+    it('renders duplicate extension names as separate rows', async () => {
         render(<ExtensionsPage />, { wrapper: createWrapper() });
 
         await waitFor(() => {
             const items = screen.getAllByRole('listitem');
-            expect(items.length).toBe(installedExtensions.length);
+            expect(items.length).toBe(listedExtensions.length);
         });
 
-        const currentIds = new Set(installedExtensions.map((e) => e.id));
-        const priorVersions = mockApiExtensions.filter((e) => !currentIds.has(e.id));
-        for (const ext of priorVersions) {
-            expect(document.querySelector(`[data-magpie-extension-id="${ext.id}"]`)).not.toBeInTheDocument();
+        const duplicateNamedExtensions = listedExtensions.filter((e) => e.name === 'DownloadClient A');
+        expect(screen.getAllByText('DownloadClient A')).toHaveLength(duplicateNamedExtensions.length);
+        for (const ext of duplicateNamedExtensions) {
+            expect(document.querySelector(`[data-magpie-extension-id="${ext.id}"]`)).toBeInTheDocument();
         }
-    });
-
-    it('renders summary badges with correct counts', async () => {
-        render(<ExtensionsPage />, { wrapper: createWrapper() });
-
-        await waitFor(() => {
-            expect(screen.getAllByRole('listitem').length).toBe(installedExtensions.length);
-        });
-
-        const summary = screen.getByLabelText('Extension status summary');
-        expect(summary).toBeInTheDocument();
-
-        const enabled = installedExtensions.filter((e) => e.installed && e.enabled && !e.disabledReason);
-        const disabled = installedExtensions.filter((e) => e.installed && !e.enabled && !e.disabledReason);
-        const errored = installedExtensions.filter((e) => e.installed && !!e.disabledReason);
-
-        expect(summary).toHaveTextContent(`${enabled.length}`);
-        expect(summary).toHaveTextContent('Enabled');
-        expect(summary).toHaveTextContent(`${disabled.length}`);
-        expect(summary).toHaveTextContent('Disabled');
-        expect(summary).toHaveTextContent(`${errored.length}`);
-        expect(summary).toHaveTextContent('Error');
     });
 
     it('each card links to the extension detail page', async () => {
         render(<ExtensionsPage />, { wrapper: createWrapper() });
 
         await waitFor(() => {
-            expect(screen.getAllByRole('listitem').length).toBe(installedExtensions.length);
+            expect(screen.getAllByRole('listitem').length).toBe(listedExtensions.length);
         });
 
-        for (const ext of installedExtensions) {
-            const link = screen.getByRole('link', { name: new RegExp(ext.name) });
+        for (const ext of listedExtensions) {
+            const card = document.querySelector(`[data-magpie-extension-id="${ext.id}"]`);
+            const link = card?.querySelector('a');
             expect(link).toHaveAttribute('href', `/admin/extensions/${ext.id}`);
         }
+    });
+
+    it('shows failed activation status and reason from API data', async () => {
+        render(<ExtensionsPage />, { wrapper: createWrapper() });
+
+        await waitFor(() => {
+            expect(screen.getAllByRole('listitem').length).toBe(listedExtensions.length);
+        });
+
+        const card = document.querySelector('[data-magpie-extension-id="ext-broken"]');
+        expect(card).toHaveTextContent('Failed');
+        expect(card).toHaveTextContent('Activation failed: targets ABI [2.0.0,), host ABI is 1.0.0.');
+        expect(card?.querySelector('[data-action="toggle-enabled"]')).not.toBeInTheDocument();
+    });
+
+    it('checks for updates by refreshing the installed list and shows refreshed availability', async () => {
+        let extensionFetches = 0;
+        const update: ExtensionUpdateInfo = {
+            extensionId: 'ext-downloadclient-a',
+            packageId: 'Magpie.Extensions.DownloadClientA',
+            currentVersion: '2.1.0',
+            latestVersion: '2.2.0',
+            hasUpdate: true,
+        };
+        vi.mocked(apiGet).mockImplementation((url: string) => {
+            if (url !== '/extensions') {
+                return Promise.resolve([]);
+            }
+            extensionFetches += 1;
+            return Promise.resolve(
+                mockApiExtensions.map((extension) => ({
+                    extension,
+                    updateInfo: extension.id === update.extensionId && extensionFetches > 1 ? update : null,
+                })),
+            );
+        });
+
+        render(<ExtensionsPage />, { wrapper: createWrapper() });
+        await screen.findByRole('button', { name: 'Check for Updates' });
+
+        fireEvent.click(screen.getByRole('button', { name: 'Check for Updates' }));
+
+        await waitFor(() => expect(extensionFetches).toBeGreaterThanOrEqual(2));
+        expect(await screen.findByTestId('extensions-page__card-update-badge')).toHaveTextContent('Update 2.2.0');
+        expect(vi.mocked(apiPost)).not.toHaveBeenCalledWith('/extensions/check-updates');
     });
 });
 
@@ -516,11 +554,12 @@ describe('ExtensionsPage enable/disable toggle', () => {
         vi.clearAllMocks();
         vi.mocked(apiGet).mockImplementation((url: string) => {
             if (url === '/extensions') {
-                return Promise.resolve(mockApiExtensions);
+                return Promise.resolve(listedExtensionItems);
             }
             return Promise.resolve([]);
         });
         vi.mocked(apiPost).mockResolvedValue({});
+        vi.mocked(apiPatch).mockResolvedValue(undefined);
     });
 
     it('calls POST /extensions/{id}/enable when enabling', async () => {
@@ -547,9 +586,321 @@ describe('ExtensionsPage enable/disable toggle', () => {
         });
 
         await act(async () => {
-            await result.current.toggleEnabled('ext-qbittorrent', false);
+            await result.current.toggleEnabled('ext-downloadclient-a', false);
         });
 
-        expect(vi.mocked(apiPost)).toHaveBeenCalledWith('/extensions/ext-qbittorrent/disable');
+        expect(vi.mocked(apiPost)).toHaveBeenCalledWith('/extensions/ext-downloadclient-a/disable');
+    });
+});
+
+describe('ExtensionsPage load-order reordering', () => {
+    beforeEach(() => {
+        vi.clearAllMocks();
+        vi.mocked(apiGet).mockImplementation((url: string) => {
+            if (url === '/extensions') {
+                return Promise.resolve(listedExtensionItems);
+            }
+            return Promise.resolve([]);
+        });
+        vi.mocked(apiPost).mockResolvedValue({});
+    });
+
+    function makeDataTransfer(payload = '') {
+        const store: Record<string, string> = { 'text/plain': payload };
+        return {
+            effectAllowed: '',
+            dropEffect: '',
+            setDragImage: () => {},
+            setData: (type: string, value: string) => {
+                store[type] = value;
+            },
+            getData: (type: string) => store[type] ?? '',
+        } as unknown as DataTransfer;
+    }
+
+    function cardFor(id: string): HTMLElement {
+        const card = document.querySelector(`[data-magpie-extension-id="${id}"]`);
+        if (!card) {
+            throw new Error(`card ${id} not found`);
+        }
+        return card as HTMLElement;
+    }
+
+    it('renders cards sorted by load order descending (top is highest priority)', async () => {
+        render(<ExtensionsPage />, { wrapper: createWrapper() });
+
+        await waitFor(() => {
+            expect(screen.getAllByRole('listitem').length).toBe(listedExtensions.length);
+        });
+
+        const cards = screen.getAllByRole('listitem');
+        const firstId = cards[0].getAttribute('data-magpie-extension-id');
+        const lastId = cards[cards.length - 1].getAttribute('data-magpie-extension-id');
+
+        expect(firstId).toBe('ext-broken');
+        expect(lastId).toBe('ext-core');
+    });
+
+    it('renders a drag handle on each card', async () => {
+        render(<ExtensionsPage />, { wrapper: createWrapper() });
+
+        await waitFor(() => {
+            expect(screen.getAllByRole('listitem').length).toBe(listedExtensions.length);
+        });
+
+        const handles = screen.getAllByTestId('extensions-page__drag-handle');
+        expect(handles.length).toBe(listedExtensions.length);
+        for (const handle of handles) {
+            expect(handle).toHaveAttribute('draggable', 'true');
+        }
+        for (const card of screen.getAllByRole('listitem')) {
+            expect(card).not.toHaveAttribute('draggable');
+        }
+    });
+
+    it('moves a card up with the keyboard, announces its new position, and retains focus', async () => {
+        let persistedItems = listedExtensionItems.map((item) => ({
+            ...item,
+            extension: { ...item.extension },
+        }));
+        vi.mocked(apiGet).mockImplementation((url: string) => {
+            if (url === '/extensions') {
+                return Promise.resolve(persistedItems);
+            }
+            return Promise.resolve([]);
+        });
+        vi.mocked(apiPatch).mockImplementation((url: string, body?: unknown) => {
+            const id = url.split('/').at(-1);
+            const loadOrder = (body as { loadOrder: { value: number } }).loadOrder.value;
+            persistedItems = persistedItems.map((item) =>
+                item.extension.id === id ? { ...item, extension: { ...item.extension, loadOrder } } : item,
+            );
+            return Promise.resolve(undefined);
+        });
+
+        const user = userEvent.setup();
+        const firstRender = render(<ExtensionsPage />, { wrapper: createWrapper() });
+
+        const moveUp = await screen.findByRole('button', { name: 'Move Magpie Core up' });
+        moveUp.focus();
+        await user.keyboard('{Enter}');
+
+        await waitFor(() => {
+            expect(vi.mocked(apiPatch)).toHaveBeenCalledWith('/extensions/ext-core', {
+                loadOrder: { value: 10 },
+            });
+            expect(vi.mocked(apiPatch)).toHaveBeenCalledWith('/extensions/ext-episodes', {
+                loadOrder: { value: 1 },
+            });
+        });
+        expect(document.querySelector('.sr-only[aria-live="polite"]')).toHaveTextContent(
+            `Magpie Core moved to position ${listedExtensions.length - 1} of ${listedExtensions.length}.`,
+        );
+        await waitFor(() => {
+            expect(moveUp).toHaveFocus();
+        });
+
+        firstRender.unmount();
+        render(<ExtensionsPage />, { wrapper: createWrapper() });
+        await waitFor(() => {
+            const reloadedIds = screen
+                .getAllByRole('listitem')
+                .map((card) => card.getAttribute('data-magpie-extension-id'));
+            expect(reloadedIds.indexOf('ext-core')).toBe(reloadedIds.indexOf('ext-episodes') - 1);
+        });
+    });
+
+    it('moves focus to the sibling control when a keyboard move reaches a boundary', async () => {
+        let moveCompleted = false;
+        vi.mocked(apiGet).mockImplementation((url: string) => {
+            if (url !== '/extensions') {
+                return Promise.resolve([]);
+            }
+
+            return Promise.resolve(
+                listedExtensionItems.map((item) =>
+                    item.extension.id === 'ext-prowlarr' && moveCompleted
+                        ? { ...item, extension: { ...item.extension, loadOrder: 201 } }
+                        : item,
+                ),
+            );
+        });
+        vi.mocked(apiPatch).mockImplementation(() => {
+            moveCompleted = true;
+            return Promise.resolve(undefined);
+        });
+
+        const user = userEvent.setup();
+        render(<ExtensionsPage />, { wrapper: createWrapper() });
+
+        const moveUp = await screen.findByRole('button', { name: 'Move Prowlarr up' });
+        const moveDown = screen.getByRole('button', { name: 'Move Prowlarr down' });
+        moveUp.focus();
+        await user.keyboard('{Enter}');
+
+        await waitFor(() => {
+            expect(moveUp).toBeDisabled();
+            expect(moveDown).toHaveFocus();
+        });
+    });
+
+    it('disables keyboard moves beyond the first and last positions', async () => {
+        render(<ExtensionsPage />, { wrapper: createWrapper() });
+
+        await waitFor(() => {
+            expect(screen.getAllByRole('listitem')).toHaveLength(listedExtensions.length);
+        });
+
+        expect(screen.getByRole('button', { name: 'Move Legacy Extension up' })).toBeDisabled();
+        expect(screen.getByRole('button', { name: 'Move Magpie Core down' })).toBeDisabled();
+    });
+
+    it('moves a card up via drag-and-drop and persists the affected load orders', async () => {
+        render(<ExtensionsPage />, { wrapper: createWrapper() });
+
+        await waitFor(() => {
+            expect(screen.getAllByRole('listitem').length).toBe(listedExtensions.length);
+        });
+
+        const source = within(cardFor('ext-core')).getByTestId('extensions-page__drag-handle');
+        const target = cardFor('ext-movies');
+        const dataTransfer = makeDataTransfer();
+
+        fireEvent.dragStart(source, { dataTransfer });
+        fireEvent.dragOver(target, { dataTransfer });
+        fireEvent.drop(target, { dataTransfer });
+
+        await waitFor(() => {
+            expect(vi.mocked(apiPatch)).toHaveBeenCalledWith('/extensions/ext-core', {
+                loadOrder: { value: 10 },
+            });
+            expect(vi.mocked(apiPatch)).toHaveBeenCalledWith('/extensions/ext-episodes', {
+                loadOrder: { value: 1 },
+            });
+        });
+        expect(vi.mocked(apiPatch)).toHaveBeenCalledTimes(2);
+    });
+
+    it('moves a card down via drag-and-drop and persists the affected load orders', async () => {
+        let persistedItems = listedExtensionItems.map((item) => ({
+            ...item,
+            extension: { ...item.extension },
+        }));
+        vi.mocked(apiGet).mockImplementation((url: string) => {
+            if (url === '/extensions') {
+                return Promise.resolve(persistedItems);
+            }
+            return Promise.resolve([]);
+        });
+        vi.mocked(apiPatch).mockImplementation((url: string, body?: unknown) => {
+            const id = url.split('/').at(-1);
+            const loadOrder = (body as { loadOrder: { value: number } }).loadOrder.value;
+            persistedItems = persistedItems.map((item) =>
+                item.extension.id === id ? { ...item, extension: { ...item.extension, loadOrder } } : item,
+            );
+            return Promise.resolve(undefined);
+        });
+
+        const firstRender = render(<ExtensionsPage />, { wrapper: createWrapper() });
+
+        await waitFor(() => {
+            expect(screen.getAllByRole('listitem').length).toBe(listedExtensions.length);
+        });
+
+        const source = within(cardFor('ext-movies')).getByTestId('extensions-page__drag-handle');
+        const target = cardFor('ext-episodes');
+        const dataTransfer = makeDataTransfer();
+
+        fireEvent.dragStart(source, { dataTransfer });
+        fireEvent.dragOver(target, { dataTransfer });
+        fireEvent.drop(target, { dataTransfer });
+
+        await waitFor(() => {
+            expect(vi.mocked(apiPatch)).toHaveBeenCalledWith('/extensions/ext-movies', {
+                loadOrder: { value: 10 },
+            });
+            expect(vi.mocked(apiPatch)).toHaveBeenCalledWith('/extensions/ext-episodes', {
+                loadOrder: { value: 11 },
+            });
+        });
+        expect(vi.mocked(apiPatch)).toHaveBeenCalledTimes(2);
+
+        firstRender.unmount();
+        render(<ExtensionsPage />, { wrapper: createWrapper() });
+        await waitFor(() => {
+            const reloadedIds = screen
+                .getAllByRole('listitem')
+                .map((card) => card.getAttribute('data-magpie-extension-id'));
+            expect(reloadedIds.indexOf('ext-movies')).toBe(reloadedIds.indexOf('ext-episodes') + 1);
+        });
+    });
+});
+
+describe('ExtensionsPage tie-break mirrors the startup gate', () => {
+    function buildTiedRow(id: string, packageId: string): ApiExtension {
+        return {
+            id,
+            packageId,
+            name: id,
+            version: '1.0.0',
+            targetABI: '1.0',
+            filePath: `/extensions/${id}.dll`,
+            assemblyName: packageId,
+            installed: true,
+            enabled: true,
+
+            disabledReason: null,
+            loadOrder: 1000,
+            managed: false,
+            nuGetId: null,
+            packageRepository: null,
+            autoUpgrade: false,
+            lastChecked: null,
+            createdAt: '2024-01-01T00:00:00Z',
+            createdByUserId: null,
+            modifiedAt: null,
+            modifiedByUserId: null,
+        };
+    }
+
+    beforeEach(() => {
+        vi.clearAllMocks();
+        vi.mocked(apiPost).mockResolvedValue({});
+    });
+
+    it('renders ties in the exact reverse of the gate order (package id descending)', async () => {
+        const tied = [
+            buildTiedRow('ext-b', 'Magpie.B'),
+            buildTiedRow('ext-a', 'Magpie.A'),
+            buildTiedRow('ext-c', 'Magpie.C'),
+        ];
+        const gateAscending = [...tied].sort((a, b) =>
+            a.packageId.toUpperCase() < b.packageId.toUpperCase()
+                ? -1
+                : a.packageId.toUpperCase() > b.packageId.toUpperCase()
+                  ? 1
+                  : 0,
+        );
+
+        vi.mocked(apiGet).mockImplementation((url: string) => {
+            if (url === '/extensions') {
+                return Promise.resolve(tied.map((extension) => ({ extension, updateInfo: null })));
+            }
+            return Promise.resolve([]);
+        });
+
+        render(<ExtensionsPage />, { wrapper: createWrapper() });
+
+        await waitFor(() => {
+            expect(screen.getAllByRole('listitem').length).toBe(tied.length);
+        });
+
+        const renderedIds = screen
+            .getAllByRole('listitem')
+            .map((card) => card.getAttribute('data-magpie-extension-id'));
+        const expectedTopDown = [...gateAscending].reverse().map((e) => e.id);
+
+        expect(renderedIds).toEqual(expectedTopDown);
+        expect(renderedIds).toEqual(['ext-c', 'ext-b', 'ext-a']);
     });
 });

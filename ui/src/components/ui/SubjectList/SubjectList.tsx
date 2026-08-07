@@ -1,5 +1,5 @@
-import { forwardRef, type ComponentPropsWithoutRef, useMemo, useCallback } from 'react';
-import { ImageBroken } from '@phosphor-icons/react';
+import { forwardRef, type ComponentPropsWithoutRef, useMemo, useCallback, useEffect, useState } from 'react';
+import { ImageBrokenIcon } from '@phosphor-icons/react';
 import { type ColumnDef } from '@tanstack/react-table';
 
 import { DataTable, type DataTableProps } from '../DataTable';
@@ -34,21 +34,37 @@ export interface SubjectListProps
 }
 
 function ImageCell({ imageUrl, title }: { imageUrl?: string; title: string }) {
-    if (!imageUrl) {
+    const [failed, setFailed] = useState(false);
+
+    useEffect(() => {
+        setFailed(false);
+    }, [imageUrl]);
+
+    if (!imageUrl || failed) {
         return (
             <div className="subject-list__image subject-list__image--placeholder">
-                <ImageBroken weight="thin" aria-hidden="true" />
+                <ImageBrokenIcon weight="thin" aria-hidden="true" />
             </div>
         );
     }
 
-    return <img src={imageUrl} alt={`${title} image`} className="subject-list__image" loading="lazy" />;
+    return (
+        <img
+            src={imageUrl}
+            alt={`${title} image`}
+            className="subject-list__image"
+            loading="lazy"
+            onError={() => setFailed(true)}
+        />
+    );
 }
 
 function TitleCell({ title }: { title: string }) {
     return (
         <div className="subject-list__title-cell">
-            <span className="subject-list__title">{title}</span>
+            <span className="subject-list__title" title={title}>
+                {title}
+            </span>
         </div>
     );
 }
@@ -69,9 +85,17 @@ export const SubjectList = forwardRef<HTMLDivElement, SubjectListProps>(
             loading = false,
             className,
             enableSorting = true,
+            manualSorting,
+            sorting,
+            onSortingChange,
             enablePagination = false,
             pageSize = 25,
+            manualPagination,
+            pagination,
+            onPaginationChange,
+            rowCount,
             emptyState,
+            keepHeaderWhenEmpty,
             ...props
         },
         ref,
@@ -125,7 +149,7 @@ export const SubjectList = forwardRef<HTMLDivElement, SubjectListProps>(
 
         const classes = ['subject-list', className].filter(Boolean).join(' ');
 
-        const defaultEmptyState = <EmptyState title="No subjects found" size="sm" />;
+        const defaultEmptyState = <EmptyState title="No matches found" size="sm" />;
 
         return (
             <div ref={ref} className={classes} data-component="subject-list" {...props}>
@@ -135,10 +159,18 @@ export const SubjectList = forwardRef<HTMLDivElement, SubjectListProps>(
                     onRowClick={onSubjectClick ? handleRowClick : undefined}
                     loading={loading}
                     enableSorting={enableSorting}
+                    manualSorting={manualSorting}
+                    sorting={sorting}
+                    onSortingChange={onSortingChange}
                     enablePagination={enablePagination}
                     pageSize={pageSize}
+                    manualPagination={manualPagination}
+                    pagination={pagination}
+                    onPaginationChange={onPaginationChange}
+                    rowCount={rowCount}
                     getRowId={getRowId}
                     emptyState={emptyState ?? defaultEmptyState}
+                    keepHeaderWhenEmpty={keepHeaderWhenEmpty}
                 />
             </div>
         );

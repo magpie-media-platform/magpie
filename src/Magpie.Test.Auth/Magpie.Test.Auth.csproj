@@ -29,8 +29,6 @@
     <ProjectReference Include="..\Magpie.Api\Magpie.Api.csproj" />
     <ProjectReference Include="..\Magpie.Auth\Magpie.Auth.csproj" />
     <ProjectReference Include="..\Magpie.Core\Magpie.Core.csproj" />
-    <ProjectReference Include="..\Magpie.Data\Magpie.Data.csproj" />
-    <ProjectReference Include="..\Magpie.Test.Shared\Magpie.Test.Shared.csproj" />
   </ItemGroup>
 
 </Project>

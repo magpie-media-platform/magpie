@@ -3,12 +3,12 @@ using System.Collections.Generic;
 namespace Magpie.Models;
 
 /// <summary>
-/// Defines a content hierarchical structure for a content type.
+/// The definition of a content type and its hierarchy.
 /// </summary>
 public sealed record ContentTypeDefinition
 {
     /// <summary>
-    /// A identifier url-friendly string identifier.
+    /// The stable slug of the content type.
     /// </summary>
     public required string Slug { get; init; }
 
@@ -18,7 +18,22 @@ public sealed record ContentTypeDefinition
     public required string DisplayName { get; init; }
 
     /// <summary>
-    /// The definitions of hierarchical levels that define the content structure.
+    /// The plural display name of the content type.
+    /// </summary>
+    public string? PluralDisplayName { get; init; }
+
+    /// <summary>
+    /// The name of the icon for the content type.
+    /// </summary>
+    public string? IconName { get; init; }
+
+    /// <summary>
+    /// The level definitions of the hierarchy, from root to leaf.
     /// </summary>
     public required IReadOnlyList<ContentHierarchyLevelDefinition> LevelDefinitions { get; init; }
+
+    /// <summary>
+    /// The category slugs of the content type.
+    /// </summary>
+    public IReadOnlyList<string> Categories { get; init; } = [];
 }

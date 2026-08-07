@@ -2,11 +2,6 @@ import { useMemo, useCallback, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 
 export interface SetFilterOptions {
-    /**
-     * Replace the current history entry instead of pushing a new one. Defaults to false so the
-     * back button can undo a filter change. Use `replace: true` for transient updates (e.g. debounced
-     * keystrokes) where intermediate values shouldn't be history entries.
-     */
     replace?: boolean;
 }
 

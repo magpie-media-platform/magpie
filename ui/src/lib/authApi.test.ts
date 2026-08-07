@@ -9,7 +9,6 @@ import {
     hasStoredSession,
     getCurrentUserFromToken,
     clearAuthStorage,
-    refreshTokenStorage,
     tokenExpirationStorage,
 } from './authApi';
 import { tokenStorage } from './api';
@@ -19,9 +18,6 @@ const mockFetch = vi.fn();
 global.fetch = mockFetch;
 
 function createMockJwt(claims: Record<string, unknown>): string {
-    // Default to a far-future `exp` so callers don't have to specify one for every test.
-    // decodeJwtUser strictly requires a numeric `exp` claim; tests that need to assert
-    // the missing-exp case can override this by passing `exp: undefined` (deleted below).
     const claimsWithExp: Record<string, unknown> = {
         exp: Math.floor(Date.now() / 1000) + 3600,
         ...claims,
@@ -98,17 +94,29 @@ describe('authApi', () => {
             expect(decodeJwtUser(token)).toBeNull();
         });
 
-        it('returns null for token with non-numeric role', () => {
+        it('decodes the C# enum role name', () => {
             const token = createMockJwt({
                 sub: 'user-123',
                 name: 'testuser',
                 role: 'Admin',
             });
+            expect(decodeJwtUser(token)).toEqual({
+                id: 'user-123',
+                username: 'testuser',
+                role: Role.Admin,
+            });
+        });
+
+        it('returns null for an unrecognized role name', () => {
+            const token = createMockJwt({
+                sub: 'user-123',
+                name: 'testuser',
+                role: 'Wizard',
+            });
             expect(decodeJwtUser(token)).toBeNull();
         });
 
         it('returns null when the exp claim has already passed', () => {
-            // exp is seconds-since-epoch; subtract a minute so it's clearly in the past.
             const token = createMockJwt({
                 sub: 'user-123',
                 name: 'testuser',
@@ -133,9 +141,6 @@ describe('authApi', () => {
         });
 
         it('returns null when the exp claim is missing', () => {
-            // Strict policy: tokens lacking a numeric `exp` claim are rejected outright,
-            // so a malformed or tampered JWT cannot bypass session expiry by simply
-            // omitting the claim.
             const token = createMockJwt({
                 sub: 'user-123',
                 name: 'testuser',
@@ -164,7 +169,6 @@ describe('authApi', () => {
                 role: '2',
             }),
             accessTokenExpiresAt: new Date(Date.now() + 3600000).toISOString(),
-            refreshToken: 'mock-refresh-token',
         };
 
         it('calls API and stores tokens on successful login', async () => {
@@ -182,6 +186,7 @@ describe('authApi', () => {
                 expect.objectContaining({
                     method: 'POST',
                     body: JSON.stringify({ username: 'testuser', password: 'password' }),
+                    credentials: 'include',
                 }),
             );
 
@@ -192,7 +197,6 @@ describe('authApi', () => {
             });
 
             expect(tokenStorage.get()).toBe(mockTokenResponse.accessToken);
-            expect(refreshTokenStorage.get()).toBe('mock-refresh-token');
             expect(tokenExpirationStorage.get()).toBeInstanceOf(Date);
         });
 
@@ -226,7 +230,6 @@ describe('authApi', () => {
     describe('logout', () => {
         it('clears storage and calls API', async () => {
             tokenStorage.set('access-token');
-            refreshTokenStorage.set('refresh-token');
             tokenExpirationStorage.set(new Date());
 
             mockFetch.mockResolvedValueOnce({
@@ -238,21 +241,21 @@ describe('authApi', () => {
             await logout();
 
             expect(tokenStorage.get()).toBeNull();
-            expect(refreshTokenStorage.get()).toBeNull();
             expect(tokenExpirationStorage.get()).toBeNull();
 
             expect(mockFetch).toHaveBeenCalledWith(
                 expect.stringContaining('/auth/logout'),
                 expect.objectContaining({
                     method: 'POST',
-                    body: JSON.stringify({ refreshToken: 'refresh-token' }),
+                    credentials: 'include',
                 }),
             );
+            const [, init] = mockFetch.mock.calls[0];
+            expect(init.body).toBeUndefined();
         });
 
         it('clears storage even if API call fails', async () => {
             tokenStorage.set('access-token');
-            refreshTokenStorage.set('refresh-token');
             tokenExpirationStorage.set(new Date());
 
             mockFetch.mockRejectedValueOnce(new Error('Network error'));
@@ -260,13 +263,46 @@ describe('authApi', () => {
             await logout();
 
             expect(tokenStorage.get()).toBeNull();
-            expect(refreshTokenStorage.get()).toBeNull();
+            expect(tokenExpirationStorage.get()).toBeNull();
         });
 
-        it('handles missing refresh token gracefully', async () => {
+        it('treats a 401 from the logout call as a successful sign-out', async () => {
+            tokenStorage.set('access-token');
+            tokenExpirationStorage.set(new Date());
+
+            const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+            mockFetch.mockResolvedValueOnce({
+                ok: false,
+                status: 401,
+                headers: new Headers(),
+                text: async () => '',
+            });
+
+            await expect(logout()).resolves.toBeUndefined();
+
+            expect(tokenStorage.get()).toBeNull();
+            expect(tokenExpirationStorage.get()).toBeNull();
+            expect(consoleErrorSpy).not.toHaveBeenCalled();
+
+            consoleErrorSpy.mockRestore();
+        });
+
+        it('authenticates the logout call with the access token', async () => {
+            tokenStorage.set('access-token');
+            tokenExpirationStorage.set(new Date());
+
+            mockFetch.mockResolvedValueOnce({
+                ok: true,
+                status: 204,
+                headers: new Headers(),
+            });
+
             await logout();
 
-            expect(mockFetch).not.toHaveBeenCalled();
+            const [, init] = mockFetch.mock.calls[0];
+            const headers = new Headers(init.headers);
+            expect(headers.get('Authorization')).toBe('Bearer access-token');
         });
     });
 
@@ -278,12 +314,9 @@ describe('authApi', () => {
                 role: '2',
             }),
             accessTokenExpiresAt: new Date(Date.now() + 3600000).toISOString(),
-            refreshToken: 'new-refresh-token',
         };
 
         it('refreshes tokens and returns user', async () => {
-            refreshTokenStorage.set('old-refresh-token');
-
             mockFetch.mockResolvedValueOnce({
                 ok: true,
                 status: 200,
@@ -300,19 +333,21 @@ describe('authApi', () => {
             });
 
             expect(tokenStorage.get()).toBe(mockTokenResponse.accessToken);
-            expect(refreshTokenStorage.get()).toBe('new-refresh-token');
-        });
+            expect(tokenExpirationStorage.get()).toBeInstanceOf(Date);
 
-        it('throws when no refresh token is stored', async () => {
-            await expect(refreshAccessToken()).rejects.toMatchObject({
-                status: 401,
-                message: 'No refresh token available',
-            });
+            expect(mockFetch).toHaveBeenCalledWith(
+                expect.stringContaining('/auth/refresh'),
+                expect.objectContaining({
+                    method: 'POST',
+                    credentials: 'include',
+                }),
+            );
+            const [, init] = mockFetch.mock.calls[0];
+            expect(init.body).toBeUndefined();
         });
 
         it('clears storage on refresh failure', async () => {
             tokenStorage.set('old-access-token');
-            refreshTokenStorage.set('old-refresh-token');
             tokenExpirationStorage.set(new Date());
 
             mockFetch.mockResolvedValueOnce({
@@ -327,7 +362,7 @@ describe('authApi', () => {
             });
 
             expect(tokenStorage.get()).toBeNull();
-            expect(refreshTokenStorage.get()).toBeNull();
+            expect(tokenExpirationStorage.get()).toBeNull();
         });
     });
 
@@ -356,18 +391,12 @@ describe('authApi', () => {
     });
 
     describe('hasStoredSession', () => {
-        it('returns false when no tokens stored', () => {
+        it('returns false when no access token is stored', () => {
             expect(hasStoredSession()).toBe(false);
         });
 
-        it('returns false when only access token is stored', () => {
+        it('returns true when an access token is stored', () => {
             tokenStorage.set('access-token');
-            expect(hasStoredSession()).toBe(false);
-        });
-
-        it('returns true when both tokens are stored', () => {
-            tokenStorage.set('access-token');
-            refreshTokenStorage.set('refresh-token');
             expect(hasStoredSession()).toBe(true);
         });
     });
@@ -398,13 +427,11 @@ describe('authApi', () => {
     describe('clearAuthStorage', () => {
         it('clears all auth-related storage', () => {
             tokenStorage.set('access-token');
-            refreshTokenStorage.set('refresh-token');
             tokenExpirationStorage.set(new Date());
 
             clearAuthStorage();
 
             expect(tokenStorage.get()).toBeNull();
-            expect(refreshTokenStorage.get()).toBeNull();
             expect(tokenExpirationStorage.get()).toBeNull();
         });
     });

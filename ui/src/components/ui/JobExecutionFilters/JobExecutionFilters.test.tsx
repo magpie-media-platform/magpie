@@ -10,7 +10,7 @@ import {
 } from './JobExecutionFilters';
 
 const mockTemplates: TemplateOption[] = [
-    { id: 'template-1', name: 'Refresh Metadata' },
+    { id: 'template-1', name: 'Content metadata refresh item' },
     { id: 'template-2', name: 'Search Missing' },
     { id: 'template-3', name: 'RSS Sync' },
 ];
@@ -18,6 +18,7 @@ const mockTemplates: TemplateOption[] = [
 const mockStatusOptions: StatusFilterOption[] = [
     { value: 'all', label: 'All Statuses' },
     { value: 'running', label: 'Running' },
+    { value: 'queued', label: 'Queued' },
     { value: 'pending', label: 'Pending' },
     { value: 'completed', label: 'Completed' },
     { value: 'failed', label: 'Failed' },
@@ -93,7 +94,7 @@ describe('JobExecutionFilters', () => {
         );
 
         const templateTrigger = screen.getByRole('combobox', { name: /filter by template/i });
-        expect(templateTrigger).toHaveTextContent('Refresh Metadata');
+        expect(templateTrigger).toHaveTextContent('Content metadata refresh item');
     });
 
     it('shows selected status label', () => {
@@ -120,7 +121,7 @@ describe('JobExecutionFilters', () => {
             />,
         );
 
-        expect(screen.queryByText('Clear')).not.toBeInTheDocument();
+        expect(screen.queryByText('Clear filters')).not.toBeInTheDocument();
     });
 
     it('shows "Clear" button when filters are active', () => {
@@ -133,7 +134,7 @@ describe('JobExecutionFilters', () => {
             />,
         );
 
-        expect(screen.getByText('Clear')).toBeInTheDocument();
+        expect(screen.getByText('Clear filters')).toBeInTheDocument();
     });
 });
 
@@ -154,7 +155,7 @@ describe('JobExecutionFilters interactions', () => {
         const templateTrigger = screen.getByRole('combobox', { name: /filter by template/i });
         await user.click(templateTrigger);
 
-        const option = screen.getByRole('option', { name: 'Refresh Metadata' });
+        const option = screen.getByRole('option', { name: 'Content metadata refresh item' });
         await user.click(option);
 
         expect(onChange).toHaveBeenCalledWith({ template: 'template-1', status: '' });
@@ -180,6 +181,33 @@ describe('JobExecutionFilters interactions', () => {
         await user.click(option);
 
         expect(onChange).toHaveBeenCalledWith({ template: '', status: 'running' });
+    });
+
+    it('offers Pending and Queued as separate, independently selectable status options', async () => {
+        const user = userEvent.setup();
+        const onChange = vi.fn();
+
+        render(
+            <JobExecutionFilters
+                filters={defaultFilters}
+                templates={mockTemplates}
+                statusOptions={mockStatusOptions}
+                onChange={onChange}
+            />,
+        );
+
+        const statusTrigger = screen.getByRole('combobox', { name: /filter by status/i });
+        await user.click(statusTrigger);
+
+        expect(screen.getByRole('option', { name: 'Pending' })).toBeInTheDocument();
+        expect(screen.getByRole('option', { name: 'Queued' })).toBeInTheDocument();
+
+        await user.click(screen.getByRole('option', { name: 'Queued' }));
+        expect(onChange).toHaveBeenCalledWith({ template: '', status: 'queued' });
+
+        await user.click(statusTrigger);
+        await user.click(screen.getByRole('option', { name: 'Pending' }));
+        expect(onChange).toHaveBeenCalledWith({ template: '', status: 'pending' });
     });
 
     it('clears template filter when "All Templates" is selected', async () => {
@@ -217,7 +245,7 @@ describe('JobExecutionFilters interactions', () => {
             />,
         );
 
-        const clearButton = screen.getByText('Clear');
+        const clearButton = screen.getByText('Clear filters');
         await user.click(clearButton);
 
         expect(onChange).toHaveBeenCalledWith({ template: '', status: '' });

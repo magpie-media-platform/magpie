@@ -12,21 +12,21 @@ if (typeof ResizeObserver === 'undefined') {
     };
 }
 
-if (typeof Element.prototype.hasPointerCapture !== 'function') {
+if (typeof Element !== 'undefined' && typeof Element.prototype.hasPointerCapture !== 'function') {
     Element.prototype.hasPointerCapture = () => false;
 }
-if (typeof Element.prototype.setPointerCapture !== 'function') {
+if (typeof Element !== 'undefined' && typeof Element.prototype.setPointerCapture !== 'function') {
     Element.prototype.setPointerCapture = () => {};
 }
-if (typeof Element.prototype.releasePointerCapture !== 'function') {
+if (typeof Element !== 'undefined' && typeof Element.prototype.releasePointerCapture !== 'function') {
     Element.prototype.releasePointerCapture = () => {};
 }
 
-if (typeof Element.prototype.scrollIntoView !== 'function') {
+if (typeof Element !== 'undefined' && typeof Element.prototype.scrollIntoView !== 'function') {
     Element.prototype.scrollIntoView = () => {};
 }
 
-if (typeof window.matchMedia !== 'function') {
+if (typeof window !== 'undefined' && typeof window.matchMedia !== 'function') {
     Object.defineProperty(window, 'matchMedia', {
         writable: true,
         value: (query: string) => ({

@@ -10,18 +10,18 @@ vi.mock('@/lib/api', () => ({
     apiDelete: vi.fn(),
 }));
 
-vi.mock('@/lib/filterQuery', () => ({
-    formatFilterCriteria: vi.fn(),
+vi.mock('@/lib/magpieQl', () => ({
+    formatMagpieQlCriteria: vi.fn(),
 }));
 
 import { apiGet, apiPost, apiPatch, apiDelete } from '@/lib/api';
-import { formatFilterCriteria } from '@/lib/filterQuery';
+import { formatMagpieQlCriteria } from '@/lib/magpieQl';
 import {
     useContentFilters,
+    useFormattedCriteria,
     useCreateContentFilter,
     useUpdateContentFilter,
     useDeleteContentFilter,
-    contentFilterQueryKeys,
     type ContentFilter,
 } from './useFilters';
 
@@ -80,7 +80,7 @@ function createWrapper() {
 
 describe('useContentFilters', () => {
     const mockApiGet = vi.mocked(apiGet);
-    const mockFormatFilterCriteria = vi.mocked(formatFilterCriteria);
+    const mockFormatMagpieQlCriteria = vi.mocked(formatMagpieQlCriteria);
 
     beforeEach(() => {
         vi.clearAllMocks();
@@ -95,7 +95,7 @@ describe('useContentFilters', () => {
             return Promise.reject(new Error(`Unexpected URL: ${url}`));
         });
 
-        mockFormatFilterCriteria.mockResolvedValue({ query: '' });
+        mockFormatMagpieQlCriteria.mockResolvedValue({ query: '' });
     });
 
     afterEach(() => {
@@ -167,9 +167,9 @@ describe('useContentFilters', () => {
     });
 
     it('should format filter queries via backend', async () => {
-        mockFormatFilterCriteria.mockResolvedValueOnce({ query: 'genre = Action' });
-        mockFormatFilterCriteria.mockResolvedValueOnce({ query: 'genre = Comedy and kind = Series' });
-        mockFormatFilterCriteria.mockResolvedValueOnce({ query: 'rating >= 8.0' });
+        mockFormatMagpieQlCriteria.mockResolvedValueOnce({ query: 'genre = Action' });
+        mockFormatMagpieQlCriteria.mockResolvedValueOnce({ query: 'genre = Comedy and kind = Series' });
+        mockFormatMagpieQlCriteria.mockResolvedValueOnce({ query: 'rating >= 8.0' });
 
         const { result } = renderHook(() => useContentFilters(), {
             wrapper: createWrapper(),
@@ -184,15 +184,15 @@ describe('useContentFilters', () => {
             expect(actionFilter?.query).toBe('genre = Action');
         });
 
-        expect(mockFormatFilterCriteria).toHaveBeenCalledTimes(3);
-        expect(mockFormatFilterCriteria).toHaveBeenCalledWith(
+        expect(mockFormatMagpieQlCriteria).toHaveBeenCalledTimes(3);
+        expect(mockFormatMagpieQlCriteria).toHaveBeenCalledWith(
             { contentHierarchyItem: { and: [{ genre: 'Action' }] } },
             'content',
         );
     });
 
-    it('should gracefully handle format errors', async () => {
-        mockFormatFilterCriteria.mockResolvedValue({ query: '' });
+    it('surfaces format errors through the hook error state', async () => {
+        mockFormatMagpieQlCriteria.mockRejectedValue(new Error('Format failed'));
 
         const { result } = renderHook(() => useContentFilters(), {
             wrapper: createWrapper(),
@@ -202,9 +202,68 @@ describe('useContentFilters', () => {
             expect(result.current.isLoading).toBe(false);
         });
 
+        await waitFor(() => {
+            expect(result.current.error?.message).toBe('Format failed');
+        });
+
         expect(result.current.filters).toHaveLength(3);
         const filter = result.current.filters.find((f) => f.id === 'shared-1');
         expect(filter?.query).toBe('');
+    });
+});
+
+describe('useFormattedCriteria', () => {
+    const mockFormatMagpieQlCriteria = vi.mocked(formatMagpieQlCriteria);
+
+    beforeEach(() => {
+        vi.clearAllMocks();
+    });
+
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    it('formats criteria through React Query', async () => {
+        const criteria: ContentFilter['criteria'] = {
+            contentHierarchyItem: { and: [{ genre: 'Action' }] },
+        };
+        mockFormatMagpieQlCriteria.mockResolvedValue({ query: 'genre = Action' });
+
+        const { result } = renderHook(() => useFormattedCriteria(criteria), {
+            wrapper: createWrapper(),
+        });
+
+        await waitFor(() => {
+            expect(result.current.data).toBe('genre = Action');
+        });
+
+        expect(result.current.error).toBeNull();
+        expect(mockFormatMagpieQlCriteria).toHaveBeenCalledWith(criteria, 'content');
+    });
+
+    it('does not format empty criteria', () => {
+        const { result } = renderHook(() => useFormattedCriteria({}), {
+            wrapper: createWrapper(),
+        });
+
+        expect(result.current.data).toBeUndefined();
+        expect(result.current.error).toBeNull();
+        expect(mockFormatMagpieQlCriteria).not.toHaveBeenCalled();
+    });
+
+    it('surfaces formatter errors through query state', async () => {
+        mockFormatMagpieQlCriteria.mockRejectedValue(new Error('Format failed'));
+
+        const { result } = renderHook(
+            () => useFormattedCriteria({ contentHierarchyItem: { and: [{ genre: 'Action' }] } }),
+            { wrapper: createWrapper() },
+        );
+
+        await waitFor(() => {
+            expect(result.current.error?.message).toBe('Format failed');
+        });
+
+        expect(result.current.data).toBeUndefined();
     });
 });
 
@@ -255,7 +314,7 @@ describe('useCreateContentFilter', () => {
             });
         });
 
-        expect(mockApiPost).toHaveBeenCalledWith('/content-filters/my', {
+        expect(mockApiPost).toHaveBeenCalledWith('/content-filters', {
             name: 'My Filter',
             criteria: {},
         });
@@ -308,36 +367,19 @@ describe('useUpdateContentFilter', () => {
             });
         });
 
-        expect(mockApiPatch).toHaveBeenCalledWith('/content-filters/my/my-1', {
+        expect(mockApiPatch).toHaveBeenCalledWith('/content-filters/my-1', {
             ownerLock: { value: true },
         });
     });
 });
 
-describe('contentFilterQueryKeys.preview', () => {
-    it('produces different cache keys for shared vs personal previews with same filterId/page/pageSize', () => {
-        const sharedKey = contentFilterQueryKeys.preview('filter-1', true, 1, 10);
-        const personalKey = contentFilterQueryKeys.preview('filter-1', false, 1, 10);
-
-        expect(sharedKey).not.toEqual(personalKey);
-        // Sanity: shared/personal distinction is reflected in the key.
-        expect(JSON.stringify(sharedKey)).not.toEqual(JSON.stringify(personalKey));
-    });
-
-    it('matches itself for the same isShared/page/pageSize', () => {
-        const a = contentFilterQueryKeys.preview('filter-1', true, 1, 10);
-        const b = contentFilterQueryKeys.preview('filter-1', true, 1, 10);
-        expect(a).toEqual(b);
-    });
-});
-
 describe('countCriteria (via useContentFilters)', () => {
     const mockApiGet = vi.mocked(apiGet);
-    const mockFormatFilterCriteria = vi.mocked(formatFilterCriteria);
+    const mockFormatMagpieQlCriteria = vi.mocked(formatMagpieQlCriteria);
 
     beforeEach(() => {
         vi.clearAllMocks();
-        mockFormatFilterCriteria.mockResolvedValue({ query: '' });
+        mockFormatMagpieQlCriteria.mockResolvedValue({ query: '' });
     });
 
     afterEach(() => {
@@ -377,8 +419,6 @@ describe('countCriteria (via useContentFilters)', () => {
         mockApiGet.mockImplementation((url: string) => {
             if (url === '/content-filters') {
                 return Promise.resolve([
-                    // Cast through unknown -- the runtime shape allows `or` even if
-                    // the strict TS type primarily models `and`.
                     makeFilter('b', {
                         contentHierarchyItem: { or: [{ x: 1 }, { y: 2 }, { z: 3 }] },
                     } as unknown as ContentFilter['criteria']),
@@ -431,7 +471,7 @@ describe('countCriteria (via useContentFilters)', () => {
 
 describe('useContentFilters formatted-query race', () => {
     const mockApiGet = vi.mocked(apiGet);
-    const mockFormatFilterCriteria = vi.mocked(formatFilterCriteria);
+    const mockFormatMagpieQlCriteria = vi.mocked(formatMagpieQlCriteria);
 
     beforeEach(() => {
         vi.clearAllMocks();
@@ -458,10 +498,8 @@ describe('useContentFilters formatted-query race', () => {
             resolveB = r;
         });
 
-        // First call returns promiseA (stale), second returns promiseB (fresh).
-        mockFormatFilterCriteria.mockReturnValueOnce(promiseA).mockReturnValueOnce(promiseB);
+        mockFormatMagpieQlCriteria.mockReturnValueOnce(promiseA).mockReturnValueOnce(promiseB);
 
-        // First render: shared returns the filter with initial criteria.
         let currentFilter: ContentFilter = {
             id: 'race-1',
             ownerUserId: null,
@@ -483,24 +521,20 @@ describe('useContentFilters formatted-query race', () => {
 
         const { result } = renderHook(() => useContentFilters(), { wrapper: createWrapper() });
 
-        // Wait for the first format call to be kicked off.
         await waitFor(() => {
-            expect(mockFormatFilterCriteria).toHaveBeenCalledTimes(1);
+            expect(mockFormatMagpieQlCriteria).toHaveBeenCalledTimes(1);
         });
 
-        // Mutate the filter in place and trigger a refetch so the criteria fingerprint changes.
         currentFilter = { ...currentFilter, criteria: updatedCriteria };
 
         await act(async () => {
             await result.current.refetch();
         });
 
-        // The new criteria should kick off a second format call.
         await waitFor(() => {
-            expect(mockFormatFilterCriteria).toHaveBeenCalledTimes(2);
+            expect(mockFormatMagpieQlCriteria).toHaveBeenCalledTimes(2);
         });
 
-        // Resolve the newer (B) request first so it commits.
         await act(async () => {
             resolveB?.({ query: 'fresh-B' });
             await promiseB;
@@ -511,13 +545,11 @@ describe('useContentFilters formatted-query race', () => {
             expect(f?.query).toBe('fresh-B');
         });
 
-        // Now resolve the stale (A) request -- it must NOT overwrite 'fresh-B'.
         await act(async () => {
             resolveA?.({ query: 'stale-A' });
             await promiseA;
         });
 
-        // Give the microtask queue a tick.
         await new Promise((r) => setTimeout(r, 0));
 
         const f = result.current.filters.find((x) => x.id === 'race-1');
@@ -567,6 +599,6 @@ describe('useDeleteContentFilter', () => {
             });
         });
 
-        expect(mockApiDelete).toHaveBeenCalledWith('/content-filters/my/my-1');
+        expect(mockApiDelete).toHaveBeenCalledWith('/content-filters/my-1');
     });
 });

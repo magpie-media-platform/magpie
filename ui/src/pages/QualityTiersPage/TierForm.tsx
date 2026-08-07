@@ -1,7 +1,10 @@
-import { useState, useCallback, useEffect, useMemo, useRef, type ReactNode } from 'react';
-import { FloppyDisk, X, Info, CheckFat } from '@phosphor-icons/react';
+import { useState, useCallback, useEffect, useRef, type ReactNode } from 'react';
+import { FloppyDiskIcon, XIcon, InfoIcon, CheckFatIcon } from '@phosphor-icons/react';
 
 import { useUnsavedChangesGuard } from '@/hooks/useUnsavedChangesGuard';
+import { stripBlankRows, useFormDirty } from '@/hooks/useFormDirty';
+import { useExternalChangeConflict } from '@/hooks/useExternalChangeConflict';
+import type { ApiQualityTierRule } from '@/hooks/useQualityTierLists';
 
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
@@ -10,20 +13,28 @@ import { Switch } from '@/components/ui/Switch';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription, SheetFooter } from '@/components/ui/Sheet';
 import { Tooltip } from '@/components/ui/Tooltip';
 import { UnsavedChangesDialog } from '@/components/ui/UnsavedChangesDialog';
+import { ExternalChangeConflictWarning, StaleSaveConfirmationDialog } from '@/components/ui/ExternalChangeConflict';
 import { CriteriaEditor, type Criterion, type CriterionOperator } from './CriteriaEditor';
+import { isBlankCriterion } from './criteriaEditorUtils';
+import { ExclusionsEditor, type ExclusionDraft } from './RulesEditor';
+import { normalizeExclusions } from './rulesEditorUtils';
 
 export type { Criterion, CriterionOperator };
+export type { ExclusionDraft };
 
 import './TierForm.css';
+import './TierForms.css';
 
 export interface TierFormValues {
     id?: string;
     name: string;
     isCutoff: boolean;
     criteria: Criterion[];
+    exclusions?: ExclusionDraft[];
+    sourceRules?: ApiQualityTierRule[];
 }
 
-export interface TierFormProps {
+interface TierFormProps {
     open: boolean;
 
     onOpenChange: (open: boolean) => void;
@@ -32,7 +43,9 @@ export interface TierFormProps {
 
     tierListName?: string;
 
-    onSubmit: (values: TierFormValues) => void;
+    tierListId?: string;
+
+    onSubmit: (values: TierFormValues) => void | Promise<void>;
 
     isSubmitting?: boolean;
 }
@@ -41,13 +54,25 @@ const emptyValues: TierFormValues = {
     name: '',
     isCutoff: false,
     criteria: [],
+    exclusions: [],
+    sourceRules: [],
 };
+
+function normalizeTier(values: TierFormValues): unknown {
+    return {
+        name: values.name,
+        isCutoff: values.isCutoff,
+        criteria: stripBlankRows(values.criteria, isBlankCriterion),
+        exclusions: normalizeExclusions(values.exclusions ?? []),
+    };
+}
 
 export function TierForm({
     open,
     onOpenChange,
     initialValues,
     tierListName,
+    tierListId,
     onSubmit,
     isSubmitting = false,
 }: TierFormProps): ReactNode {
@@ -58,36 +83,50 @@ export function TierForm({
 
     const cleanValuesRef = useRef<TierFormValues>(initialValues ?? emptyValues);
     const [showUnsavedDialog, setShowUnsavedDialog] = useState(false);
+    const [showStaleSaveConfirmation, setShowStaleSaveConfirmation] = useState(false);
+    const loadedEntityIdRef = useRef<string | null | undefined>(undefined);
+    const isDirty = useFormDirty(values, cleanValuesRef.current, normalizeTier);
+    const isDirtyRef = useRef(isDirty);
+    isDirtyRef.current = isDirty;
 
     useEffect(() => {
-        if (open) {
-            const clean = initialValues ?? emptyValues;
-            setValues(clean);
-            cleanValuesRef.current = clean;
-            setErrors({});
-            setShowUnsavedDialog(false);
+        if (!open) {
+            loadedEntityIdRef.current = undefined;
+            return;
         }
+        const nextEntityId = initialValues?.id ?? null;
+        if (loadedEntityIdRef.current === nextEntityId && isDirtyRef.current) {
+            return;
+        }
+        const clean = initialValues ?? emptyValues;
+        setValues(clean);
+        cleanValuesRef.current = clean;
+        loadedEntityIdRef.current = nextEntityId;
+        setErrors({});
+        setShowUnsavedDialog(false);
+        setShowStaleSaveConfirmation(false);
     }, [open, initialValues]);
 
-    const isDirty = useMemo(
-        () =>
-            values.name !== cleanValuesRef.current.name ||
-            values.isCutoff !== cleanValuesRef.current.isCutoff ||
-            JSON.stringify(values.criteria) !== JSON.stringify(cleanValuesRef.current.criteria),
-        [values],
-    );
+    const conflict = useExternalChangeConflict({
+        dirty: isDirty,
+        entityId: tierListId,
+        eventNames: ['qualityTierList.updated', 'qualityTierList.deleted'],
+        deletedEventNames: ['qualityTierList.deleted'],
+        contextKeys: ['qualityTierList.id'],
+        enabled: open && isEditing && !!tierListId,
+    });
 
-    useUnsavedChangesGuard(open && isDirty);
+    useUnsavedChangesGuard(open && isDirty && !isSubmitting);
 
     const handleOpenChange = useCallback(
         (nextOpen: boolean) => {
-            if (!nextOpen && isDirty) {
+            if (!nextOpen && isDirty && !isSubmitting) {
                 setShowUnsavedDialog(true);
                 return;
             }
             onOpenChange(nextOpen);
         },
-        [isDirty, onOpenChange],
+        [isDirty, isSubmitting, onOpenChange],
     );
 
     const handleDiscard = useCallback(() => {
@@ -116,6 +155,10 @@ export function TierForm({
         setValues((prev) => ({ ...prev, criteria }));
     }, []);
 
+    const handleExclusionsChange = useCallback((exclusions: ExclusionDraft[]) => {
+        setValues((prev) => ({ ...prev, exclusions }));
+    }, []);
+
     const validate = useCallback((): boolean => {
         const newErrors: Record<string, string> = {};
 
@@ -127,14 +170,29 @@ export function TierForm({
         return Object.keys(newErrors).length === 0;
     }, [values]);
 
+    const save = useCallback(async () => {
+        conflict.beginOwnSave();
+        try {
+            await onSubmit(values);
+            conflict.endOwnSave(true);
+        } catch {
+            conflict.endOwnSave(false);
+        }
+    }, [conflict, onSubmit, values]);
+
     const handleSubmit = useCallback(
-        (e: React.FormEvent) => {
+        (e: React.SubmitEvent) => {
             e.preventDefault();
-            if (validate()) {
-                onSubmit(values);
+            if (conflict.state === 'deleted' || !validate()) {
+                return;
             }
+            if (conflict.state === 'stale') {
+                setShowStaleSaveConfirmation(true);
+                return;
+            }
+            void save();
         },
-        [values, validate, onSubmit],
+        [conflict.state, save, validate],
     );
 
     return (
@@ -151,6 +209,13 @@ export function TierForm({
 
                 <form onSubmit={handleSubmit} className="tier-form">
                     <div className="tier-form__body">
+                        {conflict.state && (
+                            <ExternalChangeConflictWarning
+                                state={conflict.state}
+                                entityLabel="Tier list"
+                                id="tier-external-change"
+                            />
+                        )}
                         <div className="tier-form__field">
                             <Label htmlFor="tier-name" error={!!errors.name} required>
                                 Name
@@ -166,7 +231,7 @@ export function TierForm({
                                 data-field="name"
                             />
                             <p className="tier-form__help">
-                                A descriptive name for this quality tier, such as "Bluray-1080p" or "WEB-720p".
+                                A descriptive name for this quality tier, such as "High" or "Standard".
                             </p>
                         </div>
 
@@ -195,13 +260,13 @@ export function TierForm({
                                             className="tier-form__info-button"
                                             aria-label="Cutoff help"
                                         >
-                                            <Info weight="fill" aria-hidden="true" />
+                                            <InfoIcon weight="fill" aria-hidden="true" />
                                         </button>
                                     </Tooltip>
                                 </div>
                             </div>
                             <p className="tier-form__help">
-                                <CheckFat weight="fill" className="tier-form__help-icon" aria-hidden="true" />
+                                <CheckFatIcon weight="fill" className="tier-form__help-icon" aria-hidden="true" />
                                 When set as cutoff, content meeting this tier or higher will not be upgraded.
                             </p>
                         </div>
@@ -210,6 +275,15 @@ export function TierForm({
                             <CriteriaEditor
                                 criteria={values.criteria}
                                 onChange={handleCriteriaChange}
+                                disabled={isSubmitting}
+                            />
+                        </div>
+
+                        <div className="tier-form__field">
+                            <ExclusionsEditor
+                                exclusions={values.exclusions ?? []}
+                                onChange={handleExclusionsChange}
+                                scopeLabel="this tier"
                                 disabled={isSubmitting}
                             />
                         </div>
@@ -223,11 +297,17 @@ export function TierForm({
                             onClick={handleCancel}
                             data-action="cancel"
                         >
-                            <X weight="bold" aria-hidden="true" />
+                            <XIcon weight="bold" aria-hidden="true" />
                             Cancel
                         </Button>
-                        <Button type="submit" variant="primary" loading={isSubmitting} data-action="save">
-                            <FloppyDisk weight="bold" aria-hidden="true" />
+                        <Button
+                            type="submit"
+                            variant="primary"
+                            loading={isSubmitting}
+                            disabled={conflict.state === 'deleted'}
+                            data-action="save"
+                        >
+                            <FloppyDiskIcon weight="bold" aria-hidden="true" />
                             Save
                         </Button>
                     </SheetFooter>
@@ -235,6 +315,17 @@ export function TierForm({
             </SheetContent>
 
             <UnsavedChangesDialog open={showUnsavedDialog} onDiscard={handleDiscard} onCancel={handleKeepEditing} />
+            <StaleSaveConfirmationDialog
+                open={showStaleSaveConfirmation}
+                title="Save changes based on older data?"
+                description="This item changed after editing began. Saving will overwrite the newer changes."
+                saving={isSubmitting}
+                onCancel={() => setShowStaleSaveConfirmation(false)}
+                onConfirm={() => {
+                    setShowStaleSaveConfirmation(false);
+                    void save();
+                }}
+            />
         </Sheet>
     );
 }

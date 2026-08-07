@@ -1,12 +1,11 @@
-import { Warning } from '@phosphor-icons/react';
+import { WarningIcon } from '@phosphor-icons/react';
 
 import { Alert } from '@/components/ui/Alert';
 
-import { useRestartRequired } from './RestartRequiredContext';
+import { useRestartRequired } from '@/hooks/ui/useRestartRequired';
 
 import './RestartRequiredBanner.css';
 
-/** App-wide banner shown when the backend reports a host restart is required. Dismissable; reappears on the next restart-required event. */
 export function RestartRequiredBanner() {
     const { restartRequired, dismissed, dismiss } = useRestartRequired();
 
@@ -19,11 +18,11 @@ export function RestartRequiredBanner() {
             <Alert
                 variant="warning"
                 title="Restart required"
-                icon={<Warning weight="fill" aria-hidden="true" />}
+                icon={<WarningIcon weight="fill" aria-hidden="true" />}
                 dismissible
                 onDismiss={dismiss}
             >
-                Magpie has pending extension changes that will only take effect after the host restarts.
+                Restart Magpie to apply pending extension changes.
             </Alert>
         </div>
     );

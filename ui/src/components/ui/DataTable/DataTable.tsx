@@ -4,21 +4,42 @@ import {
     getCoreRowModel,
     getSortedRowModel,
     getPaginationRowModel,
+    getExpandedRowModel,
     useReactTable,
     type ColumnDef,
+    type ExpandedState,
+    type Header,
     type SortingState,
     type PaginationState,
     type RowSelectionState,
     type OnChangeFn,
     type Row,
+    type RowData,
+    type VisibilityState,
 } from '@tanstack/react-table';
-import { CaretUp, CaretDown, CaretUpDown } from '@phosphor-icons/react';
+import { CaretUpIcon, CaretDownIcon, CaretUpDownIcon } from '@phosphor-icons/react';
+
+import { Pager } from '@/components/ui/Pager';
 
 import './DataTable.css';
+
+declare module '@tanstack/react-table' {
+    // TanStack declaration merging requires both generic parameters.
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    interface ColumnMeta<TData extends RowData, TValue> {
+        headerLabel?: string;
+    }
+}
 
 export type DataTableSize = 'sm' | 'md' | 'lg';
 
 const AUTO_PAGINATE_THRESHOLD = 50;
+
+function HeaderContent<TData>({ header }: { header: Header<TData, unknown> }): ReactNode {
+    const def = header.column.columnDef.header;
+    const context = header.getContext();
+    return typeof def === 'function' ? def(context) : flexRender(def, context);
+}
 
 export interface DataTableProps<TData> extends Omit<ComponentPropsWithoutRef<'div'>, 'children'> {
     columns: ColumnDef<TData, unknown>[];
@@ -41,7 +62,11 @@ export interface DataTableProps<TData> extends Omit<ComponentPropsWithoutRef<'di
 
     onSortingChange?: OnChangeFn<SortingState>;
 
+    columnVisibility?: VisibilityState;
+
     enablePagination?: boolean;
+
+    hidePagination?: boolean;
 
     pageSize?: number;
 
@@ -55,9 +80,19 @@ export interface DataTableProps<TData> extends Omit<ComponentPropsWithoutRef<'di
 
     manualSorting?: boolean;
 
+    enableExpanding?: boolean;
+
+    getSubRows?: (row: TData, index: number) => TData[] | undefined;
+
+    defaultAllExpanded?: boolean;
+
     onRowClick?: (row: TData) => void;
 
     emptyState?: ReactNode;
+
+    filterActions?: ReactNode;
+
+    keepHeaderWhenEmpty?: boolean;
 
     loading?: boolean;
 
@@ -82,15 +117,22 @@ function DataTableInner<TData>(
         enableSorting = true,
         sorting: controlledSorting,
         onSortingChange,
+        columnVisibility,
         enablePagination = false,
+        hidePagination = false,
         pageSize = 10,
         pagination: controlledPagination,
         onPaginationChange,
         rowCount,
         manualPagination = false,
         manualSorting = false,
+        enableExpanding = false,
+        getSubRows,
+        defaultAllExpanded = true,
         onRowClick,
         emptyState,
+        filterActions,
+        keepHeaderWhenEmpty = false,
         loading = false,
         getRowId,
         stickyHeader = false,
@@ -107,6 +149,7 @@ function DataTableInner<TData>(
         pageIndex: 0,
         pageSize,
     });
+    const [expanded, setExpanded] = useState<ExpandedState>(enableExpanding && defaultAllExpanded ? true : {});
 
     const shouldPaginate = enablePagination || (!manualPagination && data.length > AUTO_PAGINATE_THRESHOLD);
 
@@ -154,14 +197,20 @@ function DataTableInner<TData>(
             sorting,
             rowSelection: rowSelectionState,
             pagination,
+            ...(columnVisibility ? { columnVisibility } : {}),
+            ...(enableExpanding ? { expanded } : {}),
         },
         enableRowSelection,
         enableMultiRowSelection,
+        enableExpanding,
         onSortingChange: handleSortingChange,
         onRowSelectionChange: handleRowSelectionChange,
         onPaginationChange: handlePaginationChange,
+        onExpandedChange: enableExpanding ? setExpanded : undefined,
+        getSubRows: enableExpanding ? getSubRows : undefined,
         getCoreRowModel: getCoreRowModel(),
         getSortedRowModel: manualSorting ? undefined : getSortedRowModel(),
+        getExpandedRowModel: enableExpanding ? getExpandedRowModel() : undefined,
         getPaginationRowModel: shouldPaginate && !manualPagination ? getPaginationRowModel() : undefined,
         manualPagination,
         manualSorting,
@@ -170,7 +219,8 @@ function DataTableInner<TData>(
     });
 
     const rows = table.getRowModel().rows;
-    const headerGroups = table.getHeaderGroups();
+    const isEmpty = rows.length === 0;
+    const headerGroups = isEmpty && !keepHeaderWhenEmpty ? [] : table.getHeaderGroups();
 
     const classes = useMemo(
         () =>
@@ -181,11 +231,12 @@ function DataTableInner<TData>(
                 bordered && 'data-table--bordered',
                 striped && 'data-table--striped',
                 loading && 'data-table--loading',
+                filterActions && 'data-table--with-filter-bar',
                 className,
             ]
                 .filter(Boolean)
                 .join(' '),
-        [size, stickyHeader, bordered, striped, loading, className],
+        [size, stickyHeader, bordered, striped, loading, filterActions, className],
     );
 
     const handleRowClickInternal = useCallback(
@@ -209,6 +260,12 @@ function DataTableInner<TData>(
             data-loading={loading || undefined}
             {...props}
         >
+            {filterActions && (
+                <div className="data-table__filter-bar" data-component="data-table-filter-bar">
+                    {filterActions}
+                </div>
+            )}
+
             <div className="data-table__wrapper">
                 <table className="data-table__table" role="grid">
                     <thead className="data-table__header">
@@ -217,6 +274,11 @@ function DataTableInner<TData>(
                                 {headerGroup.headers.map((header) => {
                                     const canSort = enableSorting && header.column.getCanSort();
                                     const sortDirection = header.column.getIsSorted();
+                                    const headerDef = header.column.columnDef.header;
+                                    const sortLabel =
+                                        typeof headerDef === 'string'
+                                            ? headerDef
+                                            : (header.column.columnDef.meta?.headerLabel ?? header.column.id);
 
                                     return (
                                         <th
@@ -228,6 +290,7 @@ function DataTableInner<TData>(
                                             ]
                                                 .filter(Boolean)
                                                 .join(' ')}
+                                            data-column={header.column.id}
                                             style={{
                                                 width: header.getSize() !== 150 ? header.getSize() : undefined,
                                             }}
@@ -258,21 +321,17 @@ function DataTableInner<TData>(
                                                     }
                                                     tabIndex={canSort ? 0 : undefined}
                                                     role={canSort ? 'button' : undefined}
-                                                    aria-label={
-                                                        canSort
-                                                            ? `Sort by ${String(header.column.columnDef.header)}`
-                                                            : undefined
-                                                    }
+                                                    aria-label={canSort ? `Sort by ${sortLabel}` : undefined}
                                                 >
-                                                    {flexRender(header.column.columnDef.header, header.getContext())}
+                                                    <HeaderContent header={header} />
                                                     {canSort && (
                                                         <span className="data-table__sort-icon" aria-hidden="true">
                                                             {sortDirection === 'asc' ? (
-                                                                <CaretUp weight="bold" />
+                                                                <CaretUpIcon weight="bold" />
                                                             ) : sortDirection === 'desc' ? (
-                                                                <CaretDown weight="bold" />
+                                                                <CaretDownIcon weight="bold" />
                                                             ) : (
-                                                                <CaretUpDown weight="bold" />
+                                                                <CaretUpDownIcon weight="bold" />
                                                             )}
                                                         </span>
                                                     )}
@@ -287,7 +346,7 @@ function DataTableInner<TData>(
                     <tbody className="data-table__body">
                         {rows.length === 0 ? (
                             <tr className="data-table__empty-row">
-                                <td colSpan={columns.length} className="data-table__empty-cell">
+                                <td colSpan={table.getVisibleLeafColumns().length} className="data-table__empty-cell">
                                     {emptyState ?? <div className="data-table__empty-state">No data available</div>}
                                 </td>
                             </tr>
@@ -315,18 +374,28 @@ function DataTableInner<TData>(
                                     }
                                     tabIndex={onRowClick ? 0 : undefined}
                                     data-row-id={row.id}
+                                    data-depth={enableExpanding ? row.depth : undefined}
+                                    data-expanded={
+                                        enableExpanding && row.getCanExpand() ? row.getIsExpanded() : undefined
+                                    }
                                     data-state={row.getIsSelected() ? 'selected' : undefined}
                                     data-clickable={onRowClick ? true : undefined}
                                     aria-selected={row.getIsSelected() ? true : undefined}
                                 >
                                     {row.getVisibleCells().map((cell) => {
                                         const header = cell.column.columnDef.header;
-                                        const label = typeof header === 'string' ? header : undefined;
+                                        const label =
+                                            typeof header === 'string'
+                                                ? header
+                                                : cell.column.columnDef.meta?.headerLabel;
                                         return (
                                             <td
                                                 key={cell.id}
-                                                className="data-table__cell"
+                                                className={['data-table__cell', !label && 'data-table__cell--unlabeled']
+                                                    .filter(Boolean)
+                                                    .join(' ')}
                                                 data-label={label || undefined}
+                                                data-column={cell.column.id}
                                             >
                                                 {flexRender(cell.column.columnDef.cell, cell.getContext())}
                                             </td>
@@ -339,58 +408,16 @@ function DataTableInner<TData>(
                 </table>
             </div>
 
-            {shouldPaginate && rows.length > 0 && (
-                <div className="data-table__pagination">
-                    <div className="data-table__pagination-info">
-                        {table.getState().pagination.pageIndex * table.getState().pagination.pageSize + 1}-
-                        {Math.min(
-                            (table.getState().pagination.pageIndex + 1) * table.getState().pagination.pageSize,
-                            rowCount ?? data.length,
-                        )}{' '}
-                        of {rowCount ?? data.length}
-                    </div>
-                    <div className="data-table__pagination-controls">
-                        <button
-                            type="button"
-                            className="data-table__pagination-button"
-                            onClick={() => table.setPageIndex(0)}
-                            disabled={!table.getCanPreviousPage()}
-                            aria-label="Go to first page"
-                        >
-                            First
-                        </button>
-                        <button
-                            type="button"
-                            className="data-table__pagination-button"
-                            onClick={() => table.previousPage()}
-                            disabled={!table.getCanPreviousPage()}
-                            aria-label="Go to previous page"
-                        >
-                            Previous
-                        </button>
-                        <span className="data-table__pagination-page">
-                            Page {table.getState().pagination.pageIndex + 1} of {table.getPageCount()}
-                        </span>
-                        <button
-                            type="button"
-                            className="data-table__pagination-button"
-                            onClick={() => table.nextPage()}
-                            disabled={!table.getCanNextPage()}
-                            aria-label="Go to next page"
-                        >
-                            Next
-                        </button>
-                        <button
-                            type="button"
-                            className="data-table__pagination-button"
-                            onClick={() => table.setPageIndex(table.getPageCount() - 1)}
-                            disabled={!table.getCanNextPage()}
-                            aria-label="Go to last page"
-                        >
-                            Last
-                        </button>
-                    </div>
-                </div>
+            {shouldPaginate && !hidePagination && rows.length > 0 && (
+                <Pager
+                    className="data-table__pager"
+                    page={table.getState().pagination.pageIndex + 1}
+                    pageCount={Math.max(1, table.getPageCount())}
+                    onFirst={() => table.setPageIndex(0)}
+                    onPrevious={() => table.previousPage()}
+                    onNext={() => table.nextPage()}
+                    onLast={() => table.setPageIndex(table.getPageCount() - 1)}
+                />
             )}
 
             {loading && (

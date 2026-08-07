@@ -3,36 +3,42 @@ using Magpie.Models.Filtering;
 namespace Magpie.Models.Data;
 
 /// <summary>
-/// Filter criteria for <see cref="Image"/>.
+/// Filter criteria for an <see cref="Image"/>.
 /// </summary>
 public sealed record ImageCriteria
 {
     /// <summary>
-    /// The criteria for <see cref="Image.Type"/>.
+    /// Criteria for the type of the image.
     /// </summary>
     public CriteriaSet<PropertyCriterion<string>> Type { get; init; } = new();
+
     /// <summary>
-    /// The criteria for <see cref="Image.MimeType"/>.
+    /// Criteria for the MIME type of the image.
     /// </summary>
     public CriteriaSet<PropertyCriterion<string>> MimeType { get; init; } = new();
+
     /// <summary>
-    /// The criteria for <see cref="Image.Url"/>.
+    /// Criteria for the URL of the image.
     /// </summary>
     public CriteriaSet<PropertyCriterion<string>> Url { get; init; } = new();
+
     /// <summary>
-    /// The criteria for <see cref="Image.Source"/>.
+    /// Criteria for the name of the source.
     /// </summary>
     public CriteriaSet<PropertyCriterion<string>> Source { get; init; } = new();
+
     /// <summary>
-    /// The criteria for <see cref="Image.Language"/>.
+    /// Criteria for the language of text in the image.
     /// </summary>
     public CriteriaSet<PropertyCriterion<string>> Language { get; init; } = new();
+
     /// <summary>
-    /// The criteria for <see cref="Image.Width"/>.
+    /// Criteria for the image width in pixels.
     /// </summary>
     public CriteriaSet<PropertyCriterion<int>> Width { get; init; } = new();
+
     /// <summary>
-    /// The criteria for <see cref="Image.Height"/>.
+    /// Criteria for the image height in pixels.
     /// </summary>
     public CriteriaSet<PropertyCriterion<int>> Height { get; init; } = new();
 }

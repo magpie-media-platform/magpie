@@ -9,36 +9,33 @@ namespace Magpie.Models.Data;
 public record IndexerFeed
 {
     /// <summary>
-    /// The indexer feed id.
+    /// The unique id of the indexer feed.
     /// </summary>
     public Guid Id { get; set; }
 
     /// <summary>
-    /// The extension that defines the feed provider.
+    /// The id of the extension that supplies the feed.
     /// </summary>
     public Guid? ExtensionId { get; set; }
 
     /// <summary>
-    /// The indexer feed provider type.
+    /// The name of the provider type.
     /// </summary>
     public required string ProviderType { get; set; }
 
     /// <summary>
-    /// The display name.
+    /// The display name of the feed.
     /// </summary>
     public required string Name { get; set; }
 
     /// <summary>
-    /// A description of the feed.
+    /// The description of the feed.
     /// </summary>
     public string? Description { get; set; }
 
     /// <summary>
-    /// A set of provider-specific settings.
+    /// The provider-specific settings of the feed.
     /// </summary>
-    /// <remarks>
-    /// The settings are stored as serialized JSON.
-    /// </remarks>
     public Dictionary<string, string> Settings { get; set; } = [];
 
     /// <summary>
@@ -47,27 +44,27 @@ public record IndexerFeed
     public bool Enabled { get; set; }
 
     /// <summary>
-    /// When the feed was last synchronized.
+    /// The UTC time of the last sync.
     /// </summary>
     public DateTime? LastSync { get; set; }
 
     /// <summary>
-    /// When the record was created.
+    /// The UTC time the record was created.
     /// </summary>
     public DateTime CreatedAt { get; set; }
 
     /// <summary>
-    /// The id of the user that created the record.
+    /// The id of the user who created the record.
     /// </summary>
     public Guid? CreatedByUserId { get; set; }
 
     /// <summary>
-    /// When the record was last modified.
+    /// The UTC time the record was last modified.
     /// </summary>
     public DateTime? ModifiedAt { get; set; }
 
     /// <summary>
-    /// The id of the user that last modified the record.
+    /// The id of the user who last modified the record.
     /// </summary>
     public Guid? ModifiedByUserId { get; set; }
 }

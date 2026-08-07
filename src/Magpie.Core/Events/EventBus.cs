@@ -1,0 +1,67 @@
+using System;
+using System.Reactive.Linq;
+using System.Reactive.Subjects;
+using System.Threading;
+using System.Threading.Tasks;
+
+using Magpie.Abstractions.Jobs;
+using Magpie.Models;
+using Magpie.Sdk.Services;
+
+namespace Magpie.Core.Events;
+
+internal sealed class EventBus(
+    MagpieHostEnvironment hostEnvironment,
+    IJobExecutionScopeFactory jobExecutionScopes,
+    TimeProvider timeProvider) : IEventBus, IDisposable
+{
+    private readonly Subject<MagpieEvent> _events = new();
+    private readonly Lock _gate = new();
+
+    public IObservable<MagpieEvent> Events => _events.AsObservable();
+
+    public IEventListener CreateListener(string? eventName = null, bool localOnly = false)
+    {
+        return new EventListener(Events, eventName, localOnly ? hostEnvironment.NodeId : null);
+    }
+
+    public Task PublishAsync(MagpieEvent magpieEvent, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(magpieEvent);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var isRemote = !string.IsNullOrWhiteSpace(magpieEvent.NodeId) &&
+            !string.Equals(magpieEvent.NodeId, hostEnvironment.NodeId, StringComparison.Ordinal);
+        if (isRemote)
+        {
+            Emit(magpieEvent);
+            return Task.CompletedTask;
+        }
+
+        var now = timeProvider.GetUtcNow().UtcDateTime;
+        var published = magpieEvent with
+        {
+            Id = magpieEvent.Id == Guid.Empty ? Guid.NewGuid() : magpieEvent.Id,
+            OccurredAt = magpieEvent.OccurredAt == default ? now : magpieEvent.OccurredAt,
+            PublishedAt = magpieEvent.PublishedAt == default ? now : magpieEvent.PublishedAt,
+            NodeId = hostEnvironment.NodeId,
+            JobExecutionId = magpieEvent.JobExecutionId ?? jobExecutionScopes.CurrentExecutionId
+        };
+
+        Emit(published);
+        return Task.CompletedTask;
+    }
+
+    private void Emit(MagpieEvent magpieEvent)
+    {
+        lock (_gate)
+        {
+            _events.OnNext(magpieEvent);
+        }
+    }
+
+    public void Dispose()
+    {
+        _events.Dispose();
+    }
+}

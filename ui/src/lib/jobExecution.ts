@@ -1,6 +1,7 @@
-import type { JobExecutionStatusValue } from '@/hooks/useJobs';
+import { Role, meetsRoleRequirement, type Role as RoleValue } from '@/auth/types';
+import type { JobExecutionStatusValue, JobParameterDefinition, JobScopeValue, JobTriggerModeValue } from '@/types/jobs';
 
-export type JobExecutionStatusDisplay = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
+export type JobExecutionStatusDisplay = 'pending' | 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
 
 export interface StatusFilterOption {
     value: JobExecutionStatusDisplay | 'all';
@@ -10,29 +11,80 @@ export interface StatusFilterOption {
 export interface TemplateOption {
     id: string;
     name: string;
+    onDemand?: boolean;
+    enabled?: boolean;
+    scope?: JobScopeValue;
+    supportedTriggerModes?: JobTriggerModeValue[];
+    requesterTriggerModes?: JobTriggerModeValue[];
+    defaultSchedule?: string | null;
+    parameters?: JobParameterDefinition[];
 }
 
-export function mapStatusToDisplay(status: JobExecutionStatusValue): JobExecutionStatusDisplay {
+export function requiredRoleForJobScope(scope: JobScopeValue | undefined): RoleValue {
+    switch (scope) {
+        case undefined:
+            return Role.Admin;
+        case 'User':
+            return Role.Requester;
+        case 'Content':
+            return Role.Manager;
+        case 'Administrative':
+        case 'System':
+            return Role.Admin;
+    }
+}
+
+export function canRunJobOnDemand(
+    option: Pick<TemplateOption, 'enabled' | 'onDemand' | 'scope' | 'supportedTriggerModes'>,
+    userRole: RoleValue | null | undefined,
+): boolean {
+    if (userRole === null || userRole === undefined) {
+        return false;
+    }
+
+    if (
+        option.onDemand !== true ||
+        option.enabled === false ||
+        option.supportedTriggerModes?.includes('Manual') !== true
+    ) {
+        return false;
+    }
+
+    return meetsRoleRequirement(userRole, requiredRoleForJobScope(option.scope));
+}
+
+export function humanizeJobType(jobType: string): string {
+    return jobType.replace(/([A-Z])/g, ' $1').trim();
+}
+
+export function mapStatusToDisplay(
+    status: JobExecutionStatusValue,
+    notBeforeAt?: string | null,
+): JobExecutionStatusDisplay {
+    if (status === 'Queued' && notBeforeAt && Date.parse(notBeforeAt) > Date.now()) {
+        return 'pending';
+    }
+
     switch (status) {
-        case 0:
-        case 1:
-            return 'pending';
-        case 2:
-        case 6:
+        case 'Queued':
+            return 'queued';
+        case 'Running':
+        case 'CancellationRequested':
             return 'running';
-        case 3:
+        case 'Completed':
             return 'completed';
-        case 4:
+        case 'Failed':
             return 'failed';
-        case 5:
+        case 'Cancelled':
             return 'cancelled';
         default:
-            return 'pending';
+            return 'queued';
     }
 }
 
 export const statusLabels: Record<JobExecutionStatusDisplay, string> = {
     pending: 'Pending',
+    queued: 'Queued',
     running: 'Running',
     completed: 'Completed',
     failed: 'Failed',
@@ -42,6 +94,7 @@ export const statusLabels: Record<JobExecutionStatusDisplay, string> = {
 export const statusFilterOptions: StatusFilterOption[] = [
     { value: 'all', label: 'All Statuses' },
     { value: 'running', label: 'Running' },
+    { value: 'queued', label: 'Queued' },
     { value: 'pending', label: 'Pending' },
     { value: 'completed', label: 'Completed' },
     { value: 'failed', label: 'Failed' },
@@ -87,6 +140,9 @@ export function calculateDuration(
         }
         if (minutes > 0) {
             return `${minutes}m ${seconds % 60}s`;
+        }
+        if (seconds === 0) {
+            return '<1s';
         }
         return `${seconds}s`;
     } catch {

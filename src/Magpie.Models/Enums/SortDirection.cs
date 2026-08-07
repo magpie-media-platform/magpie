@@ -1,22 +1,22 @@
 namespace Magpie.Models.Enums;
 
 /// <summary>
-/// The direction to sort in.
+/// The direction of a sort.
 /// </summary>
 public enum SortDirection
 {
     /// <summary>
-    /// No sorting.
+    /// No sort direction.
     /// </summary>
     None = 0,
 
     /// <summary>
-    /// Sort in ascending order.
+    /// Ascending order.
     /// </summary>
     Ascending,
 
     /// <summary>
-    /// Sort in descending order.
+    /// Descending order.
     /// </summary>
     Descending
 }

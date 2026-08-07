@@ -1,4 +1,4 @@
-import { clearAuthStorage, refreshAccessToken, refreshTokenStorage } from './authApi';
+import { clearAuthStorage, refreshAccessToken } from './authApi';
 
 const API_BASE = import.meta.env.VITE_API_URL || '/api';
 
@@ -13,9 +13,6 @@ const isRefreshEndpoint = (path: string): boolean => {
     return cleaned.endsWith(REFRESH_ENDPOINT);
 };
 
-// Symbol marker attached to errors thrown by the refresh-endpoint failure path
-// (which already ran clearAuthStorage() + dispatchAuthFailure()). The outer catch
-// around ensureRefresh() reads this flag and skips a duplicate dispatch.
 const AUTH_FAILURE_DISPATCHED = Symbol('magpie.api.authFailureDispatched');
 
 type AuthFailureMarked = { [AUTH_FAILURE_DISPATCHED]?: true };
@@ -64,7 +61,7 @@ export const tokenStorage = {
         try {
             localStorage.setItem(TOKEN_KEY, token);
         } catch {
-            /* empty */
+            void 0;
         }
     },
 
@@ -72,7 +69,7 @@ export const tokenStorage = {
         try {
             localStorage.removeItem(TOKEN_KEY);
         } catch {
-            /* empty */
+            void 0;
         }
     },
 
@@ -110,13 +107,29 @@ export function isApiError(value: unknown): value is ApiError {
     );
 }
 
+function hasAbortName(value: unknown): boolean {
+    return (
+        typeof value === 'object' &&
+        value !== null &&
+        'name' in value &&
+        (value as { name?: unknown }).name === 'AbortError'
+    );
+}
+
+export function isAbortError(error: unknown): boolean {
+    if (hasAbortName(error)) {
+        return true;
+    }
+    return isApiError(error) && hasAbortName(error.details);
+}
+
 export const AUTH_FAILURE_EVENT = 'magpie:auth:failure';
 
 function dispatchAuthFailure(): void {
     window.dispatchEvent(new CustomEvent(AUTH_FAILURE_EVENT));
 }
 
-export interface ApiRequestOptions extends Omit<RequestInit, 'body'> {
+interface ApiRequestOptions extends Omit<RequestInit, 'body'> {
     body?: unknown;
 
     skipAuth?: boolean;
@@ -126,7 +139,7 @@ export interface ApiRequestOptions extends Omit<RequestInit, 'body'> {
 
 async function parseErrorBody(response: Response): Promise<unknown> {
     const contentType = response.headers.get('content-type');
-    if (contentType?.includes('application/json')) {
+    if (contentType?.includes('json')) {
         try {
             return await response.json();
         } catch {
@@ -161,7 +174,15 @@ async function errorFromResponse(response: Response): Promise<ApiError> {
     return new ApiError(response.status, message, details);
 }
 
-function buildRequest(path: string, options: ApiRequestOptions): { url: string; init: RequestInit; skipAuth: boolean } {
+function buildRequest(
+    path: string,
+    options: ApiRequestOptions,
+): {
+    url: string;
+    init: RequestInit;
+    skipAuth: boolean;
+    sentToken: string | null;
+} {
     const { body, skipAuth = false, baseUrl = API_BASE, ...fetchOptions } = options;
 
     const headers = new Headers(fetchOptions.headers);
@@ -171,15 +192,18 @@ function buildRequest(path: string, options: ApiRequestOptions): { url: string; 
         headers.set('Content-Type', 'application/json');
     }
 
+    let sentToken: string | null = null;
     if (!skipAuth && !headers.has('Authorization')) {
         const token = tokenStorage.get();
         if (token) {
             headers.set('Authorization', `Bearer ${token}`);
+            sentToken = token;
         }
     }
 
     const url = path.startsWith('http') ? path : `${baseUrl}${path}`;
     const init: RequestInit = {
+        credentials: 'include',
         ...fetchOptions,
         headers,
     };
@@ -192,16 +216,15 @@ function buildRequest(path: string, options: ApiRequestOptions): { url: string; 
         }
     }
 
-    return { url, init, skipAuth };
+    return { url, init, skipAuth, sentToken };
 }
 
-export async function apiFetch<T = void>(path: string, options?: ApiRequestOptions): Promise<T>;
-export async function apiFetch<T = void>(path: string, options: ApiRequestOptions = {}): Promise<T | undefined> {
-    // If caller pre-set Authorization, honor it untouched on first attempt and skip retry.
+export async function apiFetchResponse(path: string, options?: ApiRequestOptions): Promise<Response>;
+export async function apiFetchResponse(path: string, options: ApiRequestOptions = {}): Promise<Response> {
     const callerHeaders = new Headers(options.headers);
     const callerProvidedAuth = callerHeaders.has('Authorization');
 
-    let { url, init, skipAuth } = buildRequest(path, options);
+    let { url, init, skipAuth, sentToken } = buildRequest(path, options);
 
     let response: Response;
     try {
@@ -212,15 +235,31 @@ export async function apiFetch<T = void>(path: string, options: ApiRequestOption
 
     if (response.status === 401) {
         const isRefresh = isRefreshEndpoint(path);
-        const canRetry = !skipAuth && !callerProvidedAuth && !isRefresh && refreshTokenStorage.get() !== null;
+        const managedAuth = !skipAuth && !callerProvidedAuth && !isRefresh;
+
+        const currentToken = tokenStorage.get();
+        if (managedAuth && currentToken && currentToken !== sentToken) {
+            ({ url, init, skipAuth, sentToken } = buildRequest(path, options));
+            try {
+                response = await fetch(url, init);
+            } catch (error) {
+                throw new ApiError(0, error instanceof Error ? error.message : 'Network error', error);
+            }
+            if (response.ok) {
+                return response;
+            }
+        }
+
+        if (managedAuth && sentToken === null && response.status === 401) {
+            throw await errorFromResponse(response);
+        }
+
+        const canRetry = managedAuth && response.status === 401;
 
         if (canRetry) {
             try {
                 await ensureRefresh();
             } catch (error) {
-                // If the refresh endpoint itself returned 401, its own failure path already
-                // ran clearAuthStorage() + dispatchAuthFailure(). Rethrow the inner error
-                // without firing the event a second time.
                 if (isAuthFailureDispatched(error)) {
                     throw error;
                 }
@@ -229,7 +268,6 @@ export async function apiFetch<T = void>(path: string, options: ApiRequestOption
                 throw await errorFromResponse(response);
             }
 
-            // Retry once with the new token; do NOT recurse on another 401.
             ({ url, init, skipAuth } = buildRequest(path, options));
             try {
                 response = await fetch(url, init);
@@ -242,13 +280,11 @@ export async function apiFetch<T = void>(path: string, options: ApiRequestOption
                 dispatchAuthFailure();
                 throw await errorFromResponse(response);
             }
-        } else {
+        } else if (response.status === 401) {
             clearAuthStorage();
             dispatchAuthFailure();
             const apiError = await errorFromResponse(response);
             if (isRefresh) {
-                // Tag so ensureRefresh()'s caller can detect that the failure path
-                // (clearAuthStorage + dispatchAuthFailure) has already run.
                 markAuthFailureDispatched(apiError);
             }
             throw apiError;
@@ -258,6 +294,13 @@ export async function apiFetch<T = void>(path: string, options: ApiRequestOption
     if (!response.ok) {
         throw await errorFromResponse(response);
     }
+
+    return response;
+}
+
+export async function apiFetch<T = void>(path: string, options?: ApiRequestOptions): Promise<T>;
+export async function apiFetch<T = void>(path: string, options: ApiRequestOptions = {}): Promise<T | undefined> {
+    const response = await apiFetchResponse(path, options);
 
     if (response.status === 204) {
         return undefined;
@@ -269,10 +312,13 @@ export async function apiFetch<T = void>(path: string, options: ApiRequestOption
     }
 
     const text = await response.text();
+    if (!text) {
+        return undefined;
+    }
     throw new ApiError(
         response.status,
         `Expected JSON response but received ${contentType ?? 'unknown content type'}`,
-        text || null,
+        text,
     );
 }
 
@@ -315,7 +361,16 @@ export function buildUrl(path: string, params?: object): string {
 
     const searchParams = new URLSearchParams();
     for (const [key, value] of Object.entries(params)) {
-        if (value !== undefined && value !== null) {
+        if (value === undefined || value === null) {
+            continue;
+        }
+        if (Array.isArray(value)) {
+            for (const element of value) {
+                if (element !== undefined && element !== null) {
+                    searchParams.append(key, String(element));
+                }
+            }
+        } else {
             searchParams.set(key, String(value));
         }
     }

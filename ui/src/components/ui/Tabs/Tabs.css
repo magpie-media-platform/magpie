@@ -7,17 +7,12 @@
 
     .tabs-list {
         display: flex;
+        flex-wrap: wrap;
         align-items: center;
         gap: var(--space-xs);
         padding: var(--space-xs);
         background-color: var(--bg-secondary);
         border-radius: var(--radius-md);
-        overflow-x: auto;
-        scrollbar-width: none;
-
-        &::-webkit-scrollbar {
-            display: none;
-        }
     }
 
     .tabs-trigger {
@@ -41,7 +36,7 @@
             background-color var(--duration-fast) var(--easing-default),
             color var(--duration-fast) var(--easing-default);
 
-        &:hover:not([data-state='active']):not([data-disabled]) {
+        &:hover:not([data-state='active'], [data-disabled]) {
             color: var(--text-primary);
             background-color: var(--bg-tertiary);
         }
@@ -62,6 +57,12 @@
             outline: var(--focus-ring-width) solid var(--focus-ring-color);
             outline-offset: var(--focus-ring-offset);
         }
+    }
+
+    .detail-tab-trigger__anchor {
+        display: inline-flex;
+        align-items: center;
+        gap: var(--space-xs);
     }
 
     .tabs-content {
@@ -96,13 +97,38 @@
         }
     }
 
-    @media (max-width: 480px) {
-        .tabs-list {
+    .tabs-list--detail {
+        flex-wrap: nowrap;
+        min-width: 0;
+        overflow-x: auto;
+        scrollbar-width: thin;
+    }
+
+    @media (max-width: 767px) {
+        .tabs-list:not(.tabs-list--detail) .tabs-trigger {
+            flex: 1 1 0;
+            min-width: 0;
+            min-height: var(--touch-target-min);
+        }
+
+        .tabs-list--detail {
             gap: var(--space-2xs);
         }
 
-        .tabs-trigger {
-            padding: var(--space-sm) var(--space-xs);
+        .tabs-list--detail .detail-tab-trigger__label {
+            display: none;
+        }
+
+        .tabs-list--detail .tabs-trigger {
+            flex: 1 0 var(--touch-target-min);
+            min-width: var(--touch-target-min);
+            min-height: var(--touch-target-min);
+            padding: var(--space-sm);
+        }
+
+        .tabs-list--detail .detail-tab-trigger__anchor svg {
+            width: var(--icon-inline-md);
+            height: var(--icon-inline-md);
         }
     }
 }

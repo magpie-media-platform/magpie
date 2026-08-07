@@ -1,0 +1,44 @@
+@layer components {
+    .collapsible-chip-list {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: var(--space-xs);
+        min-width: 0;
+    }
+
+    .collapsible-chip-list__list {
+        display: flex;
+        flex-wrap: wrap;
+        gap: var(--space-xs);
+        margin: 0;
+        padding: 0;
+        list-style: none;
+    }
+
+    .collapsible-chip-list__toggle {
+        display: inline-flex;
+        align-items: center;
+        padding: var(--space-xs) var(--space-sm);
+        font-size: var(--text-xs);
+        font-weight: var(--weight-medium);
+        color: var(--accent-primary);
+        background-color: transparent;
+        border: 1px solid var(--border-default);
+        border-radius: var(--radius-full);
+        cursor: pointer;
+        transition:
+            background-color var(--duration-fast) var(--easing-default),
+            border-color var(--duration-fast) var(--easing-default);
+
+        &:hover {
+            background-color: var(--bg-tertiary);
+            border-color: var(--accent-primary);
+        }
+
+        &:focus-visible {
+            outline: var(--focus-ring-width) solid var(--focus-ring-color);
+            outline-offset: var(--focus-ring-offset);
+        }
+    }
+}

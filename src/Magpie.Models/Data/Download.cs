@@ -1,36 +1,42 @@
 using System;
+using System.Collections.Generic;
 
 using Magpie.Models.Enums;
 
 namespace Magpie.Models.Data;
 
 /// <summary>
-/// A grabbed download.
+/// A download of a release by a download client.
 /// </summary>
 public record Download
 {
     /// <summary>
-    /// The download id.
+    /// The unique id of the download.
     /// </summary>
     public Guid Id { get; set; }
 
     /// <summary>
-    /// The grabbed release, if known.
+    /// The id of the release.
     /// </summary>
     public Guid? ReleaseId { get; set; }
 
     /// <summary>
-    /// The download client handling this download.
+    /// The id of the release source that was used for the grab.
+    /// </summary>
+    public Guid? ReleaseSourceId { get; set; }
+
+    /// <summary>
+    /// The id of the download client.
     /// </summary>
     public Guid DownloadClientId { get; set; }
 
     /// <summary>
-    /// The identifier from the download client.
+    /// The id of the download in the download client.
     /// </summary>
     public required string ExternalId { get; set; }
 
     /// <summary>
-    /// The display title.
+    /// The title of the download.
     /// </summary>
     public required string Title { get; set; }
 
@@ -40,44 +46,87 @@ public record Download
     public DownloadStatus Status { get; set; }
 
     /// <summary>
-    /// The output path from the download client.
+    /// The path of the downloaded files.
     /// </summary>
     public string? OutputPath { get; set; }
 
     /// <summary>
-    /// The reason for current status.
+    /// The reason for the current status.
     /// </summary>
     public string? StatusReason { get; set; }
 
     /// <summary>
-    /// The date the download completed.
+    /// The UTC time the download completed.
     /// </summary>
     public DateTime? DateCompleted { get; set; }
 
     /// <summary>
-    /// When the record was created.
+    /// The completion percent of the download.
+    /// </summary>
+    public decimal? Progress { get; set; }
+
+    /// <summary>
+    /// The UTC time of the last progress update.
+    /// </summary>
+    public DateTime? LastProgressAt { get; set; }
+
+    /// <summary>
+    /// The UTC time of the failure.
+    /// </summary>
+    public DateTime? FailedAt { get; set; }
+
+    /// <summary>
+    /// The reason for the failure.
+    /// </summary>
+    public DownloadFailureReason? FailureReason { get; set; }
+
+    /// <summary>
+    /// The UTC time the download client removed the download.
+    /// </summary>
+    public DateTime? ClientRemovedAt { get; set; }
+
+    /// <summary>
+    /// Whether the download client still holds the download.
+    /// </summary>
+    public bool HeldByPolicy { get; set; }
+
+    /// <summary>
+    /// The UTC time the record was created.
     /// </summary>
     public DateTime CreatedAt { get; set; }
 
     /// <summary>
-    /// The id of the user that created the record.
+    /// The id of the user who created the record.
     /// </summary>
     public Guid? CreatedByUserId { get; set; }
 
     /// <summary>
-    /// When the record was last modified.
+    /// The UTC time the record was last modified.
     /// </summary>
     public DateTime? ModifiedAt { get; set; }
 
     /// <summary>
-    /// The id of the user that last modified the record.
+    /// The id of the user who last modified the record.
     /// </summary>
     public Guid? ModifiedByUserId { get; set; }
 
     /// <summary>
-    /// The <see cref="Release"/> that was grabbed.
+    /// The related release.
     /// </summary>
     public Release? Release { get; set; }
 
+    /// <summary>
+    /// The release source that was used for the grab.
+    /// </summary>
+    public ReleaseSource? ReleaseSource { get; set; }
 
+    /// <summary>
+    /// The content hierarchy nodes in the scope of the download.
+    /// </summary>
+    public ICollection<DownloadScope> Scope { get; } = [];
+
+    /// <summary>
+    /// The snapshot of the release identity keys.
+    /// </summary>
+    public ICollection<ReleaseIdentityKey> ReleaseIdentityKeys { get; } = [];
 }

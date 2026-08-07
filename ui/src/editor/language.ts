@@ -1,6 +1,6 @@
 import { LRLanguage, LanguageSupport } from '@codemirror/language';
 
-import { parser } from './filter-query-parser';
+import { parser } from './filter-query-parser.gen';
 import { filterQueryHighlight } from './highlight';
 import { filterQueryAutocomplete } from './autocomplete';
 import { filterQueryLinter } from './lint';
@@ -23,6 +23,6 @@ export function filterQuery(context: 'content' | 'subject' = 'content'): Languag
         filterQueryLanguage.data.of({
             autocomplete: filterQueryAutocomplete(registry),
         }),
-        filterQueryLinter(context),
+        filterQueryLinter(),
     ]);
 }

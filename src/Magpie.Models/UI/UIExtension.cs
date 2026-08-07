@@ -1,47 +1,50 @@
 using System;
 using System.Collections.Generic;
 
-using Magpie.Models.Enums;
-
 namespace Magpie.Models.UI;
 
 /// <summary>
-/// A UI slot definition provided by an extension.
+/// A UI slot contribution that an extension supplies.
 /// </summary>
 public sealed record UIExtension
 {
     /// <summary>
-    /// The unique identifier of the UI extension.
+    /// The id of this UI extension.
     /// </summary>
     public required Guid Id { get; init; }
 
     /// <summary>
-    /// The display name.
+    /// The id of the extension that owns this UI extension.
+    /// </summary>
+    public required Guid ExtensionId { get; init; }
+
+    /// <summary>
+    /// The display name of this UI extension.
     /// </summary>
     public required string Name { get; init; }
 
     /// <summary>
-    /// The predefined location where this component renders.
+    /// The id of the frontend slot that renders this component.
     /// </summary>
-    public UISlot Slot { get; init; }
+    public required string Slot { get; init; }
 
     /// <summary>
-    /// How the component modifies the slot.
+    /// How the component changes the slot.
     /// </summary>
-    public UISlotModifier Modifier { get; init; }
+    public string Modifier { get; init; } = "After";
 
     /// <summary>
-    /// The web component tag name.
+    /// The tag name of the web component.
     /// </summary>
     public required string TagName { get; init; }
 
     /// <summary>
-    /// Lower values render first.
+    /// The render order of the component. Lower values render first.
     /// </summary>
     public int Priority { get; init; }
 
     /// <summary>
-    /// Custom attributes passed to the web component.
+    /// The custom attributes for the web component, keyed by attribute name.
     /// </summary>
     public IReadOnlyDictionary<string, string>? Attributes { get; init; }
 }

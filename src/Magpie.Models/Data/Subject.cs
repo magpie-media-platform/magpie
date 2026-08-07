@@ -3,52 +3,52 @@ using System;
 namespace Magpie.Models.Data;
 
 /// <summary>
-/// A subject that can be related to content (e.g., person, studio, publisher).
+/// An entity that content can link to.
 /// </summary>
 public record Subject
 {
     /// <summary>
-    /// The subject id.
+    /// The unique id of the subject.
     /// </summary>
     public Guid Id { get; set; }
 
     /// <summary>
-    /// The id of the metadata container.
+    /// The id of the container that holds the metadata of the subject.
     /// </summary>
     public Guid MetadataContainerId { get; set; }
 
     /// <summary>
-    /// The kind of subject (e.g., "person", "studio").
+    /// The kind of subject, as an opaque slug.
     /// </summary>
     public required string Kind { get; set; }
 
     /// <summary>
-    /// When metadata was last refreshed.
+    /// The UTC time of the last refresh from the providers.
     /// </summary>
     public DateTime? DateLastRefreshed { get; set; }
 
     /// <summary>
-    /// When the record was created.
+    /// The UTC time when the record was created.
     /// </summary>
     public DateTime CreatedAt { get; set; }
 
     /// <summary>
-    /// The id of the user that created the record.
+    /// The id of the user who created the record.
     /// </summary>
     public Guid? CreatedByUserId { get; set; }
 
     /// <summary>
-    /// When the record was last modified.
+    /// The UTC time when the record last changed.
     /// </summary>
     public DateTime? ModifiedAt { get; set; }
 
     /// <summary>
-    /// The id of the user that last modified the record.
+    /// The id of the user who last changed the record.
     /// </summary>
     public Guid? ModifiedByUserId { get; set; }
 
     /// <summary>
-    /// The <see cref="MetadataContainer"/> that contains metadata for this subject.
+    /// The <see cref="MetadataContainer"/> that holds the metadata of the subject.
     /// </summary>
     public MetadataContainer? MetadataContainer { get; set; }
 }

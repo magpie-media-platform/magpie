@@ -8,8 +8,11 @@ import type { ReactNode } from 'react';
 import { ToastList, ToastProvider, ToastStateProvider, ToastViewport } from '@/components/ui/Toast';
 import { TooltipProvider } from '@/components/ui/Tooltip';
 import { AuthProvider, Role } from '@/auth';
+import { testEffectivePermissions } from '@/test/permissions';
 
 import { TierListDetailPage } from './TierListDetailPage';
+import type { Criterion } from './CriteriaEditor';
+import { formatOperator, mapCriteriaToApi, mapCriteriaToDisplay } from './tierListDetailMappers';
 
 vi.mock('@/lib/api', async (importOriginal) => {
     const actual = await importOriginal<typeof import('@/lib/api')>();
@@ -22,13 +25,17 @@ vi.mock('@/lib/api', async (importOriginal) => {
     };
 });
 
-import { apiGet, apiPatch } from '@/lib/api';
+import { ApiError, apiGet, apiPatch, apiPost } from '@/lib/api';
 import type { ApiQualityTierList } from '@/hooks/useQualityTierLists';
+
+const guidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const MISSING_DETAIL_ID = '00000000-0000-0000-0000-000000000000';
 
 const mockApiTierLists: Record<string, ApiQualityTierList> = {
     'qtl-1': {
         id: 'qtl-1',
         name: 'HD Standard',
+        mimeTypes: ['video/*'],
         upgradeAllowed: true,
         createdAt: '2024-01-01T00:00:00Z',
         qualityTierRanks: [
@@ -45,9 +52,9 @@ const mockApiTierLists: Record<string, ApiQualityTierList> = {
                         and: [
                             {
                                 items: {
-                                    source: { operator: 0, value: 'Bluray' },
-                                    resolution: { operator: 0, value: '1080p' },
-                                    codec: { operator: 0, value: 'x264' },
+                                    source: { operator: 'Equals', value: 'Bluray' },
+                                    resolution: { operator: 'Equals', value: '1080p' },
+                                    codec: { operator: 'Equals', value: 'x264' },
                                 },
                             },
                         ],
@@ -68,8 +75,8 @@ const mockApiTierLists: Record<string, ApiQualityTierList> = {
                         and: [
                             {
                                 items: {
-                                    source: { operator: 0, value: 'HDTV' },
-                                    resolution: { operator: 0, value: '1080p' },
+                                    source: { operator: 'Equals', value: 'HDTV' },
+                                    resolution: { operator: 'Equals', value: '1080p' },
                                 },
                             },
                         ],
@@ -90,8 +97,8 @@ const mockApiTierLists: Record<string, ApiQualityTierList> = {
                         and: [
                             {
                                 items: {
-                                    source: { operator: 0, value: 'WEB' },
-                                    resolution: { operator: 0, value: '1080p' },
+                                    source: { operator: 'Equals', value: 'WEB' },
+                                    resolution: { operator: 'Equals', value: '1080p' },
                                 },
                             },
                         ],
@@ -112,8 +119,8 @@ const mockApiTierLists: Record<string, ApiQualityTierList> = {
                         and: [
                             {
                                 items: {
-                                    source: { operator: 0, value: 'HDTV' },
-                                    resolution: { operator: 0, value: '720p' },
+                                    source: { operator: 'Equals', value: 'HDTV' },
+                                    resolution: { operator: 'Equals', value: '720p' },
                                 },
                             },
                         ],
@@ -126,6 +133,7 @@ const mockApiTierLists: Record<string, ApiQualityTierList> = {
     'qtl-2': {
         id: 'qtl-2',
         name: '4K Ultra HD',
+        mimeTypes: ['video/*'],
         upgradeAllowed: true,
         createdAt: '2024-01-02T00:00:00Z',
         qualityTierRanks: [
@@ -142,10 +150,10 @@ const mockApiTierLists: Record<string, ApiQualityTierList> = {
                         and: [
                             {
                                 items: {
-                                    source: { operator: 0, value: 'Bluray' },
-                                    resolution: { operator: 0, value: '2160p' },
-                                    codec: { operator: 0, value: 'x265' },
-                                    hdr: { operator: 0, value: 'true' },
+                                    source: { operator: 'Equals', value: 'Bluray' },
+                                    resolution: { operator: 'Equals', value: '2160p' },
+                                    codec: { operator: 'Equals', value: 'x265' },
+                                    hdr: { operator: 'Equals', value: 'true' },
                                 },
                             },
                         ],
@@ -166,9 +174,9 @@ const mockApiTierLists: Record<string, ApiQualityTierList> = {
                         and: [
                             {
                                 items: {
-                                    source: { operator: 0, value: 'WEB' },
-                                    resolution: { operator: 0, value: '2160p' },
-                                    hdr: { operator: 0, value: 'true' },
+                                    source: { operator: 'Equals', value: 'WEB' },
+                                    resolution: { operator: 'Equals', value: '2160p' },
+                                    hdr: { operator: 'Equals', value: 'true' },
                                 },
                             },
                         ],
@@ -189,8 +197,8 @@ const mockApiTierLists: Record<string, ApiQualityTierList> = {
                         and: [
                             {
                                 items: {
-                                    source: { operator: 0, value: 'HDTV' },
-                                    resolution: { operator: 0, value: '2160p' },
+                                    source: { operator: 'Equals', value: 'HDTV' },
+                                    resolution: { operator: 'Equals', value: '2160p' },
                                 },
                             },
                         ],
@@ -203,6 +211,7 @@ const mockApiTierLists: Record<string, ApiQualityTierList> = {
     'qtl-3': {
         id: 'qtl-3',
         name: 'Any Quality',
+        mimeTypes: [],
         upgradeAllowed: false,
         createdAt: '2024-01-03T00:00:00Z',
         qualityTierRanks: [
@@ -215,7 +224,7 @@ const mockApiTierLists: Record<string, ApiQualityTierList> = {
                 qualityTier: {
                     id: 't3-1',
                     name: 'Any',
-                    criteria: { and: [{ items: { source: { operator: 0, value: '*' } } }] },
+                    criteria: { and: [{ items: { source: { operator: 'Equals', value: '*' } } }] },
                     createdAt: '2024-01-03T00:00:00Z',
                 },
             },
@@ -224,6 +233,7 @@ const mockApiTierLists: Record<string, ApiQualityTierList> = {
     'qtl-5': {
         id: 'qtl-5',
         name: 'WEB Preferred',
+        mimeTypes: ['video/*'],
         upgradeAllowed: true,
         createdAt: '2024-01-05T00:00:00Z',
         qualityTierRanks: [
@@ -240,9 +250,9 @@ const mockApiTierLists: Record<string, ApiQualityTierList> = {
                         and: [
                             {
                                 items: {
-                                    source: { operator: 0, value: 'WEB' },
-                                    resolution: { operator: 0, value: '2160p' },
-                                    hdr: { operator: 0, value: 'true' },
+                                    source: { operator: 'Equals', value: 'WEB' },
+                                    resolution: { operator: 'Equals', value: '2160p' },
+                                    hdr: { operator: 'Equals', value: 'true' },
                                 },
                             },
                         ],
@@ -263,9 +273,9 @@ const mockApiTierLists: Record<string, ApiQualityTierList> = {
                         and: [
                             {
                                 items: {
-                                    source: { operator: 0, value: 'WEB' },
-                                    resolution: { operator: 0, value: '1080p' },
-                                    codec: { operator: 0, value: 'x264' },
+                                    source: { operator: 'Equals', value: 'WEB' },
+                                    resolution: { operator: 'Equals', value: '1080p' },
+                                    codec: { operator: 'Equals', value: 'x264' },
                                 },
                             },
                         ],
@@ -286,9 +296,9 @@ const mockApiTierLists: Record<string, ApiQualityTierList> = {
                         and: [
                             {
                                 items: {
-                                    source: { operator: 0, value: 'WEB' },
-                                    resolution: { operator: 0, value: '720p' },
-                                    codec: { operator: 0, value: 'x264' },
+                                    source: { operator: 'Equals', value: 'WEB' },
+                                    resolution: { operator: 'Equals', value: '720p' },
+                                    codec: { operator: 'Equals', value: 'x264' },
                                 },
                             },
                         ],
@@ -309,8 +319,8 @@ const mockApiTierLists: Record<string, ApiQualityTierList> = {
                         and: [
                             {
                                 items: {
-                                    source: { operator: 0, value: 'WEB' },
-                                    resolution: { operator: 0, value: '480p' },
+                                    source: { operator: 'Equals', value: 'WEB' },
+                                    resolution: { operator: 'Equals', value: '480p' },
                                 },
                             },
                         ],
@@ -331,8 +341,8 @@ const mockApiTierLists: Record<string, ApiQualityTierList> = {
                         and: [
                             {
                                 items: {
-                                    source: { operator: 0, value: 'WEB' },
-                                    resolution: { operator: 0, value: '360p' },
+                                    source: { operator: 'Equals', value: 'WEB' },
+                                    resolution: { operator: 'Equals', value: '360p' },
                                 },
                             },
                         ],
@@ -349,7 +359,7 @@ const mockApiTierLists: Record<string, ApiQualityTierList> = {
                 qualityTier: {
                     id: 't5-6',
                     name: 'WEB-Other',
-                    criteria: { and: [{ items: { source: { operator: 0, value: 'WEB' } } }] },
+                    criteria: { and: [{ items: { source: { operator: 'Equals', value: 'WEB' } } }] },
                     createdAt: '2024-01-05T00:00:00Z',
                 },
             },
@@ -386,12 +396,13 @@ function TestWrapper({
     return (
         <QueryClientProvider client={queryClient}>
             <MemoryRouter initialEntries={[initialPath]}>
-                <AuthProvider initialUser={mockUser}>
+                <AuthProvider initialUser={mockUser} initialPermissions={testEffectivePermissions()}>
                     <TooltipProvider>
                         <ToastProvider>
                             <ToastStateProvider>
                                 <Routes>
                                     <Route path="/quality-tiers/:tierListId" element={children} />
+                                    <Route path="/admin/quality-tiers/:tierListId" element={children} />
                                 </Routes>
                                 <ToastList />
                                 <ToastViewport />
@@ -407,6 +418,7 @@ function TestWrapper({
 function setupMockApi() {
     const mockApiGet = vi.mocked(apiGet);
     const mockApiPatch = vi.mocked(apiPatch);
+    const mockApiPost = vi.mocked(apiPost);
 
     beforeEach(() => {
         vi.clearAllMocks();
@@ -418,14 +430,35 @@ function setupMockApi() {
                 if (tierList) {
                     return Promise.resolve(tierList);
                 }
-                return Promise.reject(new Error('Not found'));
+                return Promise.reject(new ApiError(404, 'Not found'));
             }
             if (url.startsWith('/quality-tier-lists')) {
                 return Promise.resolve(Object.values(mockApiTierLists));
             }
+            if (url === '/content-types') {
+                return Promise.resolve([]);
+            }
+            if (url === '/subject-types') {
+                return Promise.resolve([]);
+            }
+            if (url === '/content-types/quality-attributes') {
+                return Promise.resolve({
+                    universalFields: [
+                        { name: 'Title', label: 'Title', isNumeric: false },
+                        { name: 'Size', label: 'Size', isNumeric: true },
+                    ],
+                });
+            }
             return Promise.reject(new Error('Unknown endpoint'));
         });
         mockApiPatch.mockResolvedValue(undefined);
+        mockApiPost.mockResolvedValue({
+            id: '11111111-1111-4111-8111-111111111111',
+            name: 'New Tier',
+            criteria: { and: [] },
+            rules: [],
+            createdAt: '2024-01-06T00:00:00Z',
+        });
     });
 
     afterEach(() => {
@@ -442,9 +475,9 @@ async function renderAndWaitForData(role: Role = Role.Admin, initialPath: string
         </TestWrapper>,
     );
 
-    if (initialPath === '/quality-tiers/invalid-id') {
+    if (initialPath === '/quality-tiers/invalid-id' || initialPath.includes(MISSING_DETAIL_ID)) {
         await waitFor(() => {
-            expect(screen.getByRole('heading', { name: 'Failed to Load Tier List' })).toBeInTheDocument();
+            expect(screen.getByRole('heading', { name: 'Tier List Not Found' })).toBeInTheDocument();
         });
     } else {
         await waitFor(() => {
@@ -453,8 +486,89 @@ async function renderAndWaitForData(role: Role = Role.Admin, initialPath: string
     }
 }
 
+function makeCriterion(overrides: Partial<Criterion> = {}): Criterion {
+    return { id: 'c-1', field: 'source', operator: 'Equals', value: 'Bluray', ...overrides };
+}
+
+describe('TierListDetailPage criteria operator mapping', () => {
+    it('maps numeric operators to their API wire names', () => {
+        const cases: { ui: Criterion['operator']; wire: string }[] = [
+            { ui: 'GreaterThan', wire: 'GreaterThan' },
+            { ui: 'GreaterThanOrEqual', wire: 'GreaterThanOrEqual' },
+            { ui: 'LessThan', wire: 'LessThan' },
+            { ui: 'LessThanOrEqual', wire: 'LessThanOrEqual' },
+        ];
+
+        for (const { ui, wire } of cases) {
+            const api = mapCriteriaToApi([makeCriterion({ field: 'size', operator: ui, value: '100' })]);
+            expect(api.and?.[0].items?.size.operator).toBe(wire);
+        }
+    });
+
+    it('round-trips a size criterion with a numeric operator through API and display', () => {
+        const api = mapCriteriaToApi([makeCriterion({ field: 'size', operator: 'GreaterThanOrEqual', value: '2000' })]);
+        expect(api.and?.[0].items?.size).toEqual({ operator: 'GreaterThanOrEqual', value: '2000' });
+
+        const display = mapCriteriaToDisplay(api, 'tier-x');
+        expect(display).toHaveLength(1);
+        expect(display[0]).toMatchObject({ field: 'size', operator: 'GreaterThanOrEqual', value: '2000' });
+    });
+
+    it('round-trips an age criterion with LessThan', () => {
+        const api = mapCriteriaToApi([makeCriterion({ field: 'age', operator: 'LessThan', value: '30' })]);
+        const display = mapCriteriaToDisplay(api, 'tier-x');
+        expect(display[0]).toMatchObject({ field: 'age', operator: 'LessThan', value: '30' });
+    });
+
+    it('maps a language criterion with Contains to the substring wire operator', () => {
+        const api = mapCriteriaToApi([makeCriterion({ field: 'language', operator: 'Contains', value: 'English' })]);
+        expect(api.and?.[0].items?.language.operator).toBe('ContainsString');
+        const display = mapCriteriaToDisplay(api, 'tier-x');
+        expect(display[0]).toMatchObject({ field: 'language', operator: 'Contains', value: 'English' });
+    });
+
+    it('emits repeated fields as separate API criteria', () => {
+        const api = mapCriteriaToApi([
+            makeCriterion({ id: 'c-1', field: 'source', value: 'Bluray' }),
+            makeCriterion({ id: 'c-2', field: 'resolution', value: '1080p' }),
+            makeCriterion({ id: 'c-3', field: 'source', value: 'WEB' }),
+        ]);
+
+        expect(api.and).toEqual([
+            {
+                items: {
+                    source: { operator: 'Equals', value: 'Bluray' },
+                    resolution: { operator: 'Equals', value: '1080p' },
+                },
+            },
+            { items: { source: { operator: 'Equals', value: 'WEB' } } },
+        ]);
+
+        const display = mapCriteriaToDisplay(api, 'tier-x');
+        expect(display).toEqual([
+            expect.objectContaining({ field: 'source', operator: 'Equals', value: 'Bluray' }),
+            expect.objectContaining({ field: 'resolution', operator: 'Equals', value: '1080p' }),
+            expect.objectContaining({ field: 'source', operator: 'Equals', value: 'WEB' }),
+        ]);
+    });
+
+    it('formats numeric operators as comparison symbols', () => {
+        expect(formatOperator('GreaterThan')).toBe('>');
+        expect(formatOperator('GreaterThanOrEqual')).toBe('≥');
+        expect(formatOperator('LessThan')).toBe('<');
+        expect(formatOperator('LessThanOrEqual')).toBe('≤');
+    });
+
+    it('formats wire string and null operators as readable labels', () => {
+        expect(formatOperator('ContainsString')).toBe('contains');
+        expect(formatOperator('NotStartsWithString')).toBe('not starts with');
+        expect(formatOperator('IsNull')).toBe('is null');
+        expect(formatOperator('IsNotNull')).toBe('is not null');
+    });
+});
+
 describe('TierListDetailPage', () => {
-    setupMockApi();
+    const { mockApiPatch } = setupMockApi();
 
     it('renders with correct data-page attribute', async () => {
         render(
@@ -474,22 +588,17 @@ describe('TierListDetailPage', () => {
         expect(screen.getByRole('heading', { name: 'HD Standard', level: 1 })).toBeInTheDocument();
     });
 
-    it('renders upgrade allowed badge', async () => {
+    it('does not render an upgrade-allowed badge in the header', async () => {
         await renderAndWaitForData();
 
-        expect(screen.getByText('Upgrade')).toBeInTheDocument();
-    });
-
-    it('renders no upgrade badge for tier list without upgrades', async () => {
-        await renderAndWaitForData(Role.Admin, '/quality-tiers/qtl-3');
-
-        expect(screen.getByText('No Upgrade')).toBeInTheDocument();
+        expect(screen.queryByText('Upgrade')).not.toBeInTheDocument();
+        expect(screen.queryByText('No Upgrade')).not.toBeInTheDocument();
     });
 
     it('renders page description', async () => {
         await renderAndWaitForData();
 
-        expect(screen.getByText(/tiers are listed in priority order/i)).toBeInTheDocument();
+        expect(screen.getByText(/tiers are listed from highest to lowest priority/i)).toBeInTheDocument();
     });
 
     it('renders breadcrumb with tier list name', async () => {
@@ -498,6 +607,22 @@ describe('TierListDetailPage', () => {
         expect(screen.getByRole('navigation', { name: /breadcrumb/i })).toBeInTheDocument();
 
         expect(screen.getAllByRole('link', { name: 'Quality Tiers' }).length).toBeGreaterThan(0);
+    });
+
+    it('updates MIME types from the detail header', async () => {
+        const user = userEvent.setup();
+        await renderAndWaitForData(Role.Manager);
+
+        await user.click(screen.getByRole('button', { name: 'Edit MIME types for HD Standard' }));
+        await user.click(screen.getByRole('button', { name: 'Remove video/*' }));
+        await user.type(screen.getByRole('combobox', { name: 'MIME types for HD Standard' }), 'audio/*{Enter}');
+        await user.click(screen.getByRole('button', { name: 'Save MIME changes' }));
+
+        await waitFor(() =>
+            expect(mockApiPatch).toHaveBeenCalledWith('/quality-tier-lists/qtl-1', {
+                mimeTypes: { value: ['audio/*'] },
+            }),
+        );
     });
 });
 
@@ -630,6 +755,79 @@ describe('TierListDetailPage Add Tier button', () => {
         const addButton = document.querySelector('[data-action="add-tier"]');
         expect(addButton).toBeInTheDocument();
     });
+
+    it('posts a valid Guid exclusion id when creating a tier with a new exclusion', async () => {
+        const mockApiPost = vi.mocked(apiPost);
+        const user = userEvent.setup();
+        await renderAndWaitForData(Role.Manager);
+
+        const addButton = document.querySelector('[data-action="add-tier"]') as HTMLButtonElement;
+        await user.click(addButton);
+
+        await user.type(await screen.findByLabelText(/name/i), 'Excluded Tier');
+
+        const form = document.querySelector('[data-component="tier-form"]') as HTMLElement;
+        await user.click(within(form).getByRole('button', { name: /add exclusion/i }));
+        const exclusions = within(form).getByText('Exclusions').closest('[data-component="exclusions-editor"]');
+        await user.click(within(exclusions as HTMLElement).getByRole('button', { name: 'Add' }));
+        await user.type(within(exclusions as HTMLElement).getByLabelText(/criterion 1 value/i), 'CAM');
+        await user.click(within(form).getByRole('button', { name: /save/i }));
+
+        await waitFor(() => {
+            expect(mockApiPost).toHaveBeenCalledWith(
+                '/quality-tiers',
+                expect.objectContaining({ name: 'Excluded Tier' }),
+            );
+        });
+
+        const createCall = mockApiPost.mock.calls.find(([url]) => url === '/quality-tiers');
+        expect(createCall).toBeDefined();
+
+        const body = createCall?.[1] as { rules?: { id: string }[] };
+        expect(body.rules).toHaveLength(1);
+        expect(body.rules?.[0].id).toMatch(guidPattern);
+        expect(body.rules?.[0].id).not.toMatch(/^rule-/);
+    });
+
+    it('posts repeated criteria fields without dropping earlier criteria', async () => {
+        const mockApiPost = vi.mocked(apiPost);
+        const user = userEvent.setup();
+        await renderAndWaitForData(Role.Manager);
+
+        const addButton = document.querySelector('[data-action="add-tier"]') as HTMLButtonElement;
+        await user.click(addButton);
+
+        await user.type(await screen.findByLabelText(/name/i), 'Dual Source');
+
+        const form = document.querySelector('[data-component="tier-form"]') as HTMLElement;
+        await user.click(form.querySelector('[data-action="add-criterion"]') as HTMLButtonElement);
+        await user.click(form.querySelector('[data-action="add-criterion"]') as HTMLButtonElement);
+
+        const values = within(form).getAllByLabelText(/criterion \d+ value/i);
+        await user.type(values[0], 'Bluray');
+        await user.type(values[1], 'WEB');
+
+        await user.click(within(form).getByRole('button', { name: /save/i }));
+
+        await waitFor(() => {
+            expect(mockApiPost).toHaveBeenCalledWith(
+                '/quality-tiers',
+                expect.objectContaining({ name: 'Dual Source' }),
+            );
+        });
+
+        const createCall = mockApiPost.mock.calls.find(([url]) => url === '/quality-tiers');
+        const body = createCall?.[1] as {
+            criteria: {
+                and?: { items?: Record<string, { operator?: string; value?: string | null }> }[];
+            };
+        };
+
+        expect(body.criteria.and).toEqual([
+            { items: { Title: { operator: 'Equals', value: 'Bluray' } } },
+            { items: { Title: { operator: 'Equals', value: 'WEB' } } },
+        ]);
+    });
 });
 
 describe('TierListDetailPage management actions', () => {
@@ -642,6 +840,47 @@ describe('TierListDetailPage management actions', () => {
         expect(editButtons.length).toBe(4);
     });
 
+    it('keeps stored criterion fields when saving an unchanged edited tier', async () => {
+        const mockApiPatchLocal = vi.mocked(apiPatch);
+        const user = userEvent.setup();
+        await renderAndWaitForData(Role.Manager);
+
+        await user.click(screen.getByRole('button', { name: /edit bluray-1080p/i }));
+
+        const form = document.querySelector('[data-component="tier-form"]') as HTMLElement;
+        expect(within(form).getByLabelText(/criterion 1 field/i)).toHaveValue('source');
+        expect(within(form).getByLabelText(/criterion 2 field/i)).toHaveValue('resolution');
+        expect(within(form).getByLabelText(/criterion 3 field/i)).toHaveValue('codec');
+
+        await user.click(within(form).getByRole('button', { name: /save/i }));
+
+        await waitFor(() => {
+            expect(mockApiPatchLocal).toHaveBeenCalledWith(
+                '/quality-tiers/t1-1',
+                expect.objectContaining({ name: { value: 'Bluray-1080p' } }),
+            );
+        });
+
+        const updateCall = mockApiPatchLocal.mock.calls.find(([url]) => url === '/quality-tiers/t1-1');
+        expect(updateCall).toBeDefined();
+
+        const body = updateCall?.[1] as {
+            criteria: {
+                value: {
+                    and?: { items?: Record<string, { operator?: string; value?: string }> }[];
+                };
+            };
+        };
+        const items = body.criteria.value.and?.[0].items ?? {};
+
+        expect(items).toEqual({
+            source: { operator: 'Equals', value: 'Bluray' },
+            resolution: { operator: 'Equals', value: '1080p' },
+            codec: { operator: 'Equals', value: 'x264' },
+        });
+        expect(items).not.toHaveProperty('Title');
+    });
+
     it('Manager can see delete buttons', async () => {
         await renderAndWaitForData(Role.Manager);
 
@@ -649,12 +888,58 @@ describe('TierListDetailPage management actions', () => {
         expect(deleteButtons.length).toBe(4);
     });
 
-    it('Manager can see set-cutoff buttons for non-cutoff tiers', async () => {
+    it('Manager sees a cutoff toggle on every tier', async () => {
         await renderAndWaitForData(Role.Manager);
 
         const setCutoffButtons = document.querySelectorAll('[data-action="set-cutoff"]');
 
-        expect(setCutoffButtons.length).toBe(3);
+        expect(setCutoffButtons.length).toBe(4);
+    });
+
+    it('toggling cutoff on one tier does not clear the existing cutoff (multi-cutoff)', async () => {
+        const mockApiPatchLocal = vi.mocked(apiPatch);
+        const user = userEvent.setup();
+        await renderAndWaitForData(Role.Manager);
+
+        const toggle = document.querySelector('[data-tier-id="t1-2"] [data-action="set-cutoff"]') as HTMLButtonElement;
+        await user.click(toggle);
+
+        await waitFor(() => {
+            expect(mockApiPatchLocal).toHaveBeenCalledWith(
+                '/quality-tier-lists/qtl-1',
+                expect.objectContaining({
+                    qualityTierRanks: {
+                        update: [{ qualityTierId: { value: 't1-2' }, isCutoff: { value: true } }],
+                    },
+                }),
+            );
+        });
+
+        const updates = vi.mocked(apiPatch).mock.calls[0][1] as {
+            qualityTierRanks: { update: { qualityTierId: { value: string } }[] };
+        };
+        const touchedTierIds = updates.qualityTierRanks.update.map((u) => u.qualityTierId.value);
+        expect(touchedTierIds).not.toContain('t1-1');
+    });
+
+    it('clearing cutoff on a cutoff tier only patches that tier', async () => {
+        const mockApiPatchLocal = vi.mocked(apiPatch);
+        const user = userEvent.setup();
+        await renderAndWaitForData(Role.Manager);
+
+        const toggle = document.querySelector('[data-tier-id="t1-1"] [data-action="set-cutoff"]') as HTMLButtonElement;
+        await user.click(toggle);
+
+        await waitFor(() => {
+            expect(mockApiPatchLocal).toHaveBeenCalledWith(
+                '/quality-tier-lists/qtl-1',
+                expect.objectContaining({
+                    qualityTierRanks: {
+                        update: [{ qualityTierId: { value: 't1-1' }, isCutoff: { value: false } }],
+                    },
+                }),
+            );
+        });
     });
 
     it('Viewer cannot see management buttons', async () => {
@@ -847,14 +1132,25 @@ describe('TierListDetailPage not found state', () => {
     it('shows not found message for invalid tier list ID', async () => {
         await renderAndWaitForData(Role.Admin, '/quality-tiers/invalid-id');
 
-        expect(screen.getByRole('heading', { name: 'Failed to Load Tier List' })).toBeInTheDocument();
-        expect(screen.getByText('Not found')).toBeInTheDocument();
+        expect(screen.getByRole('heading', { name: 'Tier List Not Found' })).toBeInTheDocument();
+        expect(screen.getByText(/does not exist/i)).toBeInTheDocument();
     });
 
     it('shows back link in not found state', async () => {
         await renderAndWaitForData(Role.Admin, '/quality-tiers/invalid-id');
 
         expect(screen.getByRole('link', { name: /back to quality tiers/i })).toBeInTheDocument();
+    });
+
+    it('shows not found state for the zero UUID admin tier list route', async () => {
+        await renderAndWaitForData(Role.Admin, `/admin/quality-tiers/${MISSING_DETAIL_ID}`);
+
+        expect(screen.getByRole('heading', { name: 'Tier List Not Found' })).toBeInTheDocument();
+        expect(screen.getByRole('link', { name: /back to quality tiers/i })).toHaveAttribute(
+            'href',
+            '/admin/quality-tiers',
+        );
+        expect(document.querySelector('.tier-list-detail-page__loading')).not.toBeInTheDocument();
     });
 });
 
@@ -1005,5 +1301,61 @@ describe('TierListDetailPage error state', () => {
         await waitFor(() => {
             expect(screen.getByRole('link', { name: /back to quality tiers/i })).toBeInTheDocument();
         });
+    });
+});
+
+describe('TierListDetailPage list criteria and exclusions', () => {
+    setupMockApi();
+
+    async function openListRules(user: ReturnType<typeof userEvent.setup>) {
+        await user.click(document.querySelector('[data-action="list-rules"]') as HTMLElement);
+        await waitFor(() => {
+            expect(document.querySelector('[data-component="list-rules-form"]')).toBeInTheDocument();
+        });
+    }
+
+    it('shows separate list-wide criteria and exclusion sections', async () => {
+        const user = userEvent.setup();
+        await renderAndWaitForData(Role.Manager);
+
+        await openListRules(user);
+
+        expect(screen.getByText('Criteria for the entire list')).toBeInTheDocument();
+        expect(screen.getByText('Exclusions for the entire list')).toBeInTheDocument();
+        expect(screen.getByText(/apply to every tier in "HD Standard"/i)).toBeInTheDocument();
+        expect(screen.getByText(/before any tier in this list is considered/i)).toBeInTheDocument();
+        expect(screen.getByText(/rejects the release before any tier in this list is evaluated/i)).toBeInTheDocument();
+        expect(screen.queryByLabelText(/kind/i)).not.toBeInTheDocument();
+    });
+
+    it('closes without warning when only a blank exclusion was inserted', async () => {
+        const user = userEvent.setup();
+        await renderAndWaitForData(Role.Manager);
+
+        await openListRules(user);
+
+        const sheet = document.querySelector('[data-component="list-rules-form"]') as HTMLElement;
+        await user.click(within(sheet).getByRole('button', { name: /add exclusion/i }));
+        await user.click(within(sheet).getByRole('button', { name: /cancel/i }));
+
+        expect(screen.queryByText('Unsaved Changes')).not.toBeInTheDocument();
+        await waitFor(() => {
+            expect(document.querySelector('[data-component="list-rules-form"]')).not.toBeInTheDocument();
+        });
+    });
+
+    it('warns before discarding a real list exclusion edit', async () => {
+        const user = userEvent.setup();
+        await renderAndWaitForData(Role.Manager);
+
+        await openListRules(user);
+
+        const sheet = document.querySelector('[data-component="list-rules-form"]') as HTMLElement;
+        await user.click(within(sheet).getByRole('button', { name: /add exclusion/i }));
+        await user.type(within(sheet).getByLabelText(/exclusion name/i), 'Reject CAM');
+        await user.click(within(sheet).getByRole('button', { name: /cancel/i }));
+
+        expect(screen.getByText('Unsaved Changes')).toBeInTheDocument();
+        expect(document.querySelector('[data-component="list-rules-form"]')).toBeInTheDocument();
     });
 });

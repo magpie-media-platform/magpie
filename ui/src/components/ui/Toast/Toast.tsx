@@ -1,10 +1,12 @@
-import { forwardRef, type ComponentPropsWithoutRef, type ElementRef, type ReactNode } from 'react';
+import { forwardRef, type ComponentPropsWithoutRef, type ComponentRef, type ReactNode } from 'react';
 import * as ToastPrimitive from '@radix-ui/react-toast';
-import { X } from '@phosphor-icons/react';
+import { XIcon } from '@phosphor-icons/react';
+
+import type { ToastVariant } from '@/hooks/ui/useToast';
 
 import './Toast.css';
 
-export type ToastVariant = 'default' | 'success' | 'error' | 'warning' | 'info';
+export type { ToastVariant } from '@/hooks/ui/useToast';
 
 export type ToastProviderProps = ComponentPropsWithoutRef<typeof ToastPrimitive.Provider>;
 
@@ -28,7 +30,7 @@ export type ToastDescriptionProps = ComponentPropsWithoutRef<typeof ToastPrimiti
 
 const ToastProvider = ToastPrimitive.Provider;
 
-const ToastViewport = forwardRef<ElementRef<typeof ToastPrimitive.Viewport>, ToastViewportProps>(
+const ToastViewport = forwardRef<ComponentRef<typeof ToastPrimitive.Viewport>, ToastViewportProps>(
     ({ className, position = 'bottom-right', ...props }, ref) => {
         const classes = ['toast-viewport', `toast-viewport--${position}`, className].filter(Boolean).join(' ');
 
@@ -38,7 +40,7 @@ const ToastViewport = forwardRef<ElementRef<typeof ToastPrimitive.Viewport>, Toa
 
 ToastViewport.displayName = 'ToastViewport';
 
-const Toast = forwardRef<ElementRef<typeof ToastPrimitive.Root>, ToastProps>(
+const Toast = forwardRef<ComponentRef<typeof ToastPrimitive.Root>, ToastProps>(
     ({ className, variant = 'default', children, ...props }, ref) => {
         const classes = ['toast', `toast--${variant}`, className].filter(Boolean).join(' ');
 
@@ -52,7 +54,7 @@ const Toast = forwardRef<ElementRef<typeof ToastPrimitive.Root>, ToastProps>(
 
 Toast.displayName = 'Toast';
 
-const ToastAction = forwardRef<ElementRef<typeof ToastPrimitive.Action>, ToastActionProps>(
+const ToastAction = forwardRef<ComponentRef<typeof ToastPrimitive.Action>, ToastActionProps>(
     ({ className, ...props }, ref) => {
         const classes = ['toast-action', className].filter(Boolean).join(' ');
 
@@ -62,13 +64,13 @@ const ToastAction = forwardRef<ElementRef<typeof ToastPrimitive.Action>, ToastAc
 
 ToastAction.displayName = 'ToastAction';
 
-const ToastClose = forwardRef<ElementRef<typeof ToastPrimitive.Close>, ToastCloseProps>(
+const ToastClose = forwardRef<ComponentRef<typeof ToastPrimitive.Close>, ToastCloseProps>(
     ({ className, ...props }, ref) => {
         const classes = ['toast-close', className].filter(Boolean).join(' ');
 
         return (
             <ToastPrimitive.Close ref={ref} className={classes} aria-label="Close" {...props}>
-                <X size={16} weight="bold" aria-hidden="true" />
+                <XIcon size={16} weight="bold" aria-hidden="true" />
             </ToastPrimitive.Close>
         );
     },
@@ -76,7 +78,7 @@ const ToastClose = forwardRef<ElementRef<typeof ToastPrimitive.Close>, ToastClos
 
 ToastClose.displayName = 'ToastClose';
 
-const ToastTitle = forwardRef<ElementRef<typeof ToastPrimitive.Title>, ToastTitleProps>(
+const ToastTitle = forwardRef<ComponentRef<typeof ToastPrimitive.Title>, ToastTitleProps>(
     ({ className, ...props }, ref) => {
         const classes = ['toast-title', className].filter(Boolean).join(' ');
 
@@ -86,7 +88,7 @@ const ToastTitle = forwardRef<ElementRef<typeof ToastPrimitive.Title>, ToastTitl
 
 ToastTitle.displayName = 'ToastTitle';
 
-const ToastDescription = forwardRef<ElementRef<typeof ToastPrimitive.Description>, ToastDescriptionProps>(
+const ToastDescription = forwardRef<ComponentRef<typeof ToastPrimitive.Description>, ToastDescriptionProps>(
     ({ className, ...props }, ref) => {
         const classes = ['toast-description', className].filter(Boolean).join(' ');
 

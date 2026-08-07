@@ -2,8 +2,8 @@ import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 
-import { AuthProvider } from './AuthContext';
-import { RequireAuth, RoleGuard, PermissionGuard } from './RouteGuard';
+import { AuthTestProvider as AuthProvider } from '@/test/AuthTestProvider';
+import { RequireAuth, RoleGuard } from './RouteGuard';
 import { Role } from './types';
 
 function renderWithRouter(ui: React.ReactNode, { route = '/' }: { route?: string } = {}) {
@@ -185,10 +185,6 @@ describe('RoleGuard', () => {
     });
 
     it('renders loading state while auth is resolving rather than redirecting to forbidden', () => {
-        // Race condition guarded against: a fresh page load on an admin-only route
-        // where the AuthProvider hasn't resolved the stored user yet. Without the
-        // isLoading short-circuit, hasRole(Admin) returns false for one render cycle
-        // and a real admin briefly lands on /forbidden.
         renderWithRouter(
             <AuthProvider initialLoading={true} skipSessionInit>
                 <Routes>
@@ -208,71 +204,5 @@ describe('RoleGuard', () => {
         expect(screen.queryByText('Admin content')).not.toBeInTheDocument();
         expect(screen.queryByText('Forbidden page')).not.toBeInTheDocument();
         expect(screen.getByRole('status', { name: 'Loading page' })).toBeInTheDocument();
-    });
-});
-
-describe('PermissionGuard', () => {
-    it('renders children when user has permission', () => {
-        const user = { id: '1', username: 'manager', role: Role.Manager };
-
-        renderWithRouter(
-            <AuthProvider initialUser={user}>
-                <Routes>
-                    <Route
-                        path="/"
-                        element={
-                            <PermissionGuard permission="content.edit">
-                                <span>Edit page</span>
-                            </PermissionGuard>
-                        }
-                    />
-                </Routes>
-            </AuthProvider>,
-        );
-
-        expect(screen.getByText('Edit page')).toBeInTheDocument();
-    });
-
-    it('redirects to forbidden when user lacks permission', () => {
-        const user = { id: '1', username: 'viewer', role: Role.Viewer };
-
-        renderWithRouter(
-            <AuthProvider initialUser={user}>
-                <Routes>
-                    <Route
-                        path="/"
-                        element={
-                            <PermissionGuard permission="users.manage">
-                                <span>User management</span>
-                            </PermissionGuard>
-                        }
-                    />
-                    <Route path="/forbidden" element={<span>Forbidden</span>} />
-                </Routes>
-            </AuthProvider>,
-        );
-
-        expect(screen.queryByText('User management')).not.toBeInTheDocument();
-        expect(screen.getByText('Forbidden')).toBeInTheDocument();
-    });
-
-    it('handles not authenticated state', () => {
-        renderWithRouter(
-            <AuthProvider>
-                <Routes>
-                    <Route
-                        path="/"
-                        element={
-                            <PermissionGuard permission="content.view">
-                                <span>Content</span>
-                            </PermissionGuard>
-                        }
-                    />
-                    <Route path="/forbidden" element={<span>Forbidden</span>} />
-                </Routes>
-            </AuthProvider>,
-        );
-
-        expect(screen.getByText('Forbidden')).toBeInTheDocument();
     });
 });

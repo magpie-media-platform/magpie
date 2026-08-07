@@ -549,7 +549,7 @@ describe('Slot', () => {
         expect(screen.getByTestId('default-content')).toBeInTheDocument();
 
         expect(screen.getByRole('alert')).toBeInTheDocument();
-        expect(screen.getByText('Something went wrong')).toBeInTheDocument();
+        expect(screen.getByText('Failed to render page')).toBeInTheDocument();
     });
 
     it('passes entity context attributes to web components when provided', () => {

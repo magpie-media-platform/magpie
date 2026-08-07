@@ -1,117 +1,116 @@
 using System;
-using System.Linq;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 
-using Magpie.Abstractions.Api;
-using Magpie.Abstractions.Jobs;
-using Magpie.Abstractions.Repositories;
-using Magpie.Abstractions.Security;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
+using Magpie.Models.Enums;
+using Magpie.Sdk.Api;
+using Magpie.Sdk.Services;
 
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
 
 namespace Magpie.Api.EndpointGroups;
 
-internal sealed class ScheduleTriggersEndpointGroup(
-    IScheduleTriggerRepository scheduleTriggerRepository,
-    IJobManager jobManager) : IApiEndpointGroup
+internal sealed class ScheduleTriggersEndpointGroup : IApiEndpointGroup
 {
     public string Name => "schedule-triggers";
 
     public void MapEndpoints(IEndpointRouteBuilder builder)
     {
-        builder.MapGet("", GetAllScheduleTriggers)
-            .WithName(nameof(GetAllScheduleTriggers))
-            .Produces<ScheduleTrigger[]>()
+        builder.MapGet("", GetScheduleTriggersAsync)
+            .WithName(nameof(GetScheduleTriggersAsync))
+            .Produces<IReadOnlyList<ScheduleTrigger>>()
             .RequireViewer();
 
-        builder.MapGet("{id:guid}", GetScheduleTriggerById)
-            .WithName(nameof(GetScheduleTriggerById))
+        builder.MapGet("{id:guid}", GetScheduleTriggerAsync)
+            .WithName(nameof(GetScheduleTriggerAsync))
             .Produces<ScheduleTrigger>()
             .ProducesProblem(StatusCodes.Status404NotFound)
             .RequireViewer();
 
-        builder.MapPost("", CreateScheduleTrigger)
-            .WithName(nameof(CreateScheduleTrigger))
+        builder.MapPost("", CreateScheduleTriggerAsync)
+            .WithName(nameof(CreateScheduleTriggerAsync))
             .Produces<ScheduleTrigger>(StatusCodes.Status201Created)
             .ProducesProblem(StatusCodes.Status400BadRequest)
-            .RequireManager();
+            .RequireRequester();
 
-        builder.MapPatch("{id:guid}", PatchScheduleTrigger)
-            .WithName(nameof(PatchScheduleTrigger))
+        builder.MapPatch("{id:guid}", PatchScheduleTriggerAsync)
+            .WithName(nameof(PatchScheduleTriggerAsync))
             .Produces(StatusCodes.Status204NoContent)
-            .ProducesProblem(StatusCodes.Status404NotFound)
             .ProducesProblem(StatusCodes.Status400BadRequest)
-            .RequireManager();
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .RequireRequester();
 
-        builder.MapDelete("{id:guid}", DeleteScheduleTrigger)
-            .WithName(nameof(DeleteScheduleTrigger))
+        builder.MapDelete("{id:guid}", DeleteScheduleTriggerAsync)
+            .WithName(nameof(DeleteScheduleTriggerAsync))
             .Produces(StatusCodes.Status204NoContent)
             .ProducesProblem(StatusCodes.Status404NotFound)
-            .RequireManager();
+            .RequireRequester();
     }
 
-    private async Task<IResult> GetAllScheduleTriggers(CancellationToken cancellationToken)
-    {
-        var triggers = await scheduleTriggerRepository.ListAllAsync(cancellationToken).ConfigureAwait(false);
-        return Results.Ok(triggers.ToArray());
-    }
-
-    private async Task<IResult> GetScheduleTriggerById(Guid id, CancellationToken cancellationToken)
-    {
-        var trigger = await scheduleTriggerRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
-
-        return trigger is null
-            ? Results.NotFound()
-            : Results.Ok(trigger);
-    }
-
-    private async Task<IResult> CreateScheduleTrigger(
-        HttpContext httpContext,
-        ScheduleTriggerCreate request,
+    internal async Task<IResult> GetScheduleTriggersAsync(
+        [FromServices] IJobManager jobManager,
+        AuthenticatedUser user,
+        bool? mine,
         CancellationToken cancellationToken)
     {
-        var currentUserId = httpContext.User.GetUserId();
+        var triggers = await jobManager.ListScheduleTriggersAsync(mine ?? false, user.Id, cancellationToken)
+            .ConfigureAwait(false);
 
-        var trigger = await jobManager.CreateScheduleTriggerAsync(request, currentUserId, cancellationToken)
+        return Results.Ok(triggers);
+    }
+
+    internal async Task<IResult> GetScheduleTriggerAsync(
+        [FromServices] IJobManager jobManager,
+        Guid id,
+        CancellationToken cancellationToken)
+    {
+        var trigger = await jobManager.GetScheduleTriggerAsync(id, cancellationToken).ConfigureAwait(false);
+
+        return trigger is null ? Results.NotFound() : Results.Ok(trigger);
+    }
+
+    internal async Task<IResult> CreateScheduleTriggerAsync(
+        [FromServices] IJobManager jobManager,
+        AuthenticatedUser user,
+        ScheduleTriggerCreate create,
+        CancellationToken cancellationToken)
+    {
+        var trigger = await jobManager.CreateScheduleTriggerAsync(create, user.Id, user.Role, cancellationToken)
             .ConfigureAwait(false);
 
         return Results.Created($"api/{Name}/{trigger.Id}", trigger);
     }
 
-    private async Task<IResult> PatchScheduleTrigger(
-        HttpContext httpContext,
+    internal async Task<IResult> PatchScheduleTriggerAsync(
+        [FromServices] IJobManager jobManager,
+        AuthenticatedUser user,
         Guid id,
-        ScheduleTriggerPatch request,
+        ScheduleTriggerPatch patch,
         CancellationToken cancellationToken)
     {
-        var currentUserId = httpContext.User.GetUserId();
-        var patch = request with { Id = id };
-
-        var updated = await jobManager.UpdateScheduleTriggerAsync(patch, currentUserId, cancellationToken)
+        var patched = await jobManager
+            .PatchScheduleTriggerAsync(id, patch, user.Id, user.IsInRole(Role.Admin), cancellationToken)
             .ConfigureAwait(false);
 
-        return updated
-            ? Results.NoContent()
-            : Results.NotFound();
+        return patched ? Results.NoContent() : Results.NotFound();
     }
 
-    private async Task<IResult> DeleteScheduleTrigger(
-        HttpContext httpContext,
+    internal async Task<IResult> DeleteScheduleTriggerAsync(
+        [FromServices] IJobManager jobManager,
+        AuthenticatedUser user,
         Guid id,
         CancellationToken cancellationToken)
     {
-        var currentUserId = httpContext.User.GetUserId();
-
-        var deleted = await scheduleTriggerRepository.DeleteAsync(id, currentUserId, cancellationToken)
+        var deleted = await jobManager
+            .DeleteScheduleTriggerAsync(id, user.Id, user.IsInRole(Role.Admin), cancellationToken)
             .ConfigureAwait(false);
 
-        return deleted
-            ? Results.NoContent()
-            : Results.NotFound();
+        return deleted ? Results.NoContent() : Results.NotFound();
     }
 }

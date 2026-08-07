@@ -19,6 +19,7 @@ const defaultCounts: FulfillmentCounts = {
     upgradable: 3,
     fulfilled: 42,
     fulfilledExternally: 8,
+    partial: 4,
 };
 
 const recentItems: RecentContentItem[] = [
@@ -98,7 +99,7 @@ describe('ContentStatsWidget loading state', () => {
         renderWithRouter(<ContentStatsWidget counts={defaultCounts} loading />);
 
         const skeletonRows = document.querySelectorAll('.content-stats-widget__row--skeleton');
-        expect(skeletonRows.length).toBe(4);
+        expect(skeletonRows.length).toBe(5);
     });
 
     it('shows skeleton items when loading', () => {
@@ -177,6 +178,56 @@ describe('ContentStatsWidget recent items', () => {
         renderWithRouter(<ContentStatsWidget counts={defaultCounts} recentItems={[]} />);
         expect(screen.queryByText('Recent Additions')).not.toBeInTheDocument();
     });
+
+    it('renders the per-item fulfillment status for a monitored recent item', () => {
+        const items: RecentContentItem[] = [
+            {
+                id: 'mon1',
+                title: 'Monitored Show',
+                addedAt: '1h ago',
+                fulfillment: 'upgradable',
+                effectiveMonitoring: true,
+            },
+        ];
+        renderWithRouter(<ContentStatsWidget counts={defaultCounts} recentItems={items} />);
+
+        const item = document.querySelector('[data-content-id="mon1"]');
+        expect(item?.querySelector('.content-stats-widget__item-status')?.textContent).toBe('Upgradable');
+    });
+
+    it('suppresses the per-item fulfillment status for an excluded recent item', () => {
+        const items: RecentContentItem[] = [
+            {
+                id: 'ex1',
+                title: 'Unmonitored Show',
+                addedAt: '1h ago',
+                fulfillment: 'missing',
+                effectiveMonitoring: false,
+            },
+        ];
+        renderWithRouter(<ContentStatsWidget counts={defaultCounts} recentItems={items} />);
+
+        const item = document.querySelector('[data-content-id="ex1"]');
+        expect(item).toBeInTheDocument();
+        expect(item?.querySelector('.content-stats-widget__item-status')).toBeNull();
+        expect(item).not.toHaveAttribute('data-status');
+    });
+
+    it('suppresses the per-item fulfillment status when exclusion is inherited', () => {
+        const items: RecentContentItem[] = [
+            {
+                id: 'inh1',
+                title: 'Inherited Excluded',
+                addedAt: '1h ago',
+                fulfillment: 'missing',
+                effectiveMonitoring: false,
+            },
+        ];
+        renderWithRouter(<ContentStatsWidget counts={defaultCounts} recentItems={items} />);
+
+        const item = document.querySelector('[data-content-id="inh1"]');
+        expect(item?.querySelector('.content-stats-widget__item-status')).toBeNull();
+    });
 });
 
 describe('ContentStatsWidget navigation', () => {
@@ -202,7 +253,7 @@ describe('ContentStatsWidget navigation', () => {
 
         renderWithRouter(
             <ContentStatsWidget
-                counts={{ total: 10, missing: 0, upgradable: 0, fulfilled: 10, fulfilledExternally: 0 }}
+                counts={{ total: 10, missing: 0, upgradable: 0, fulfilled: 10, fulfilledExternally: 0, partial: 0 }}
                 getStatusUrl={getStatusUrl}
             />,
         );
@@ -266,8 +317,12 @@ describe('ContentStatsWidget navigation', () => {
 
         expect(screen.getByText('Missing').closest('a')).toHaveAttribute('href', '/library?fulfillment=missing');
         expect(screen.getByText('Upgradable').closest('a')).toHaveAttribute('href', '/library?fulfillment=upgradable');
+        expect(screen.getByText('Partial').closest('a')).toHaveAttribute('href', '/library?fulfillment=partial');
         expect(screen.getByText('Fulfilled').closest('a')).toHaveAttribute('href', '/library?fulfillment=fulfilled');
-        expect(screen.getByText('External').closest('a')).toHaveAttribute('href', '/library?fulfillment=fulfilledExternally');
+        expect(screen.getByText('External').closest('a')).toHaveAttribute(
+            'href',
+            '/library?fulfillment=fulfilledExternally',
+        );
     });
 });
 
@@ -280,7 +335,7 @@ describe('ContentStatsWidget view all link', () => {
     it('shows view all link when there are more items than maxItems', () => {
         renderWithRouter(
             <ContentStatsWidget
-                counts={{ total: 0, missing: 0, upgradable: 0, fulfilled: 0, fulfilledExternally: 0 }}
+                counts={{ total: 0, missing: 0, upgradable: 0, fulfilled: 0, fulfilledExternally: 0, partial: 0 }}
                 recentItems={recentItems}
                 maxItems={2}
                 viewAllUrl="/library"
@@ -297,7 +352,7 @@ describe('ContentStatsWidget view all link', () => {
     it('hides view all link when no content and no recent items', () => {
         renderWithRouter(
             <ContentStatsWidget
-                counts={{ total: 0, missing: 0, upgradable: 0, fulfilled: 0, fulfilledExternally: 0 }}
+                counts={{ total: 0, missing: 0, upgradable: 0, fulfilled: 0, fulfilledExternally: 0, partial: 0 }}
                 recentItems={[]}
                 viewAllUrl="/library"
             />,
@@ -353,14 +408,15 @@ describe('ContentStatsWidget accessibility', () => {
         expect(missingRow).toHaveAttribute('aria-label', 'View 5 missing items');
     });
 
-    it('clickable content items have aria-label', () => {
+    it('clickable content items expose the content title in their accessible name', () => {
         const getItemUrl = (item: RecentContentItem) => `/library/${item.id}`;
         renderWithRouter(
             <ContentStatsWidget counts={defaultCounts} recentItems={recentItems} getItemUrl={getItemUrl} />,
         );
 
         const item = screen.getByText('Breaking Bad').closest('.content-stats-widget__item');
-        expect(item).toHaveAttribute('aria-label', 'View Breaking Bad');
+        expect(item).not.toHaveAttribute('aria-label');
+        expect(item).toHaveAccessibleName('Breaking Bad Status: Fulfilled 5 min ago');
     });
 
     it('icon is hidden from screen readers', () => {
@@ -425,7 +481,9 @@ describe('ContentStatsWidget fulfillment variants', () => {
     });
 
     it('applies fulfilledExternally variant class', () => {
-        const items: RecentContentItem[] = [{ id: '1', title: 'Item', addedAt: '5m ago', fulfillment: 'fulfilledExternally' }];
+        const items: RecentContentItem[] = [
+            { id: '1', title: 'Item', addedAt: '5m ago', fulfillment: 'fulfilledExternally' },
+        ];
         renderWithRouter(<ContentStatsWidget counts={defaultCounts} recentItems={items} />);
 
         const item = screen.getByText('Item').closest('.content-stats-widget__item');

@@ -6,11 +6,9 @@ internal sealed class ContentTransformContext
 {
     private ContentHierarchyItemCriteria? _contentItem;
     private MetadataCriteria? _metadata;
-    private MediaFileCriteria? _mediaFile;
 
     public ContentHierarchyItemCriteria ContentItem => _contentItem ??= new();
     public MetadataCriteria Metadata => _metadata ??= new();
-    public MediaFileCriteria MediaFile => _mediaFile ??= new();
 
     public ContentFilterCriteria Build()
     {
@@ -33,14 +31,6 @@ internal sealed class ContentTransformContext
             };
         }
 
-        if (_mediaFile != null)
-        {
-            result = result with
-            {
-                MediaFiles = new() { And = [_mediaFile] }
-            };
-        }
-
         return result;
     }
 
@@ -52,10 +42,5 @@ internal sealed class ContentTransformContext
     public void SetMetadata(MetadataCriteria criteria)
     {
         _metadata = criteria;
-    }
-
-    public void SetMediaFile(MediaFileCriteria criteria)
-    {
-        _mediaFile = criteria;
     }
 }

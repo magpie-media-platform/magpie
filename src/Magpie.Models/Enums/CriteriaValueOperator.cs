@@ -1,87 +1,97 @@
 namespace Magpie.Models.Enums;
 
 /// <summary>
-/// Operators for a value criterion.
+/// A comparison operator for a single criteria field value.
 /// </summary>
 public enum CriteriaValueOperator
 {
     /// <summary>
-    /// Exact equality.
+    /// The field value is equal to the given value.
     /// </summary>
     Equals = 0,
 
     /// <summary>
-    /// Not equal.
+    /// The field value is not equal to the given value.
     /// </summary>
     NotEquals,
 
     /// <summary>
-    /// Field has no value.
+    /// The field has no value.
     /// </summary>
     IsNull,
 
     /// <summary>
-    /// Field has a value.
+    /// The field has a value.
     /// </summary>
     IsNotNull,
 
     /// <summary>
-    /// Greater than.
+    /// The field value is more than the given value.
     /// </summary>
     GreaterThan,
 
     /// <summary>
-    /// Greater than or equal.
+    /// The field value is more than or equal to the given value.
     /// </summary>
     GreaterThanOrEqual,
 
     /// <summary>
-    /// Less than.
+    /// The field value is less than the given value.
     /// </summary>
     LessThan,
 
     /// <summary>
-    /// Less than or equal.
+    /// The field value is less than or equal to the given value.
     /// </summary>
     LessThanOrEqual,
 
     /// <summary>
-    /// Value is one of a set.
+    /// The field value is one of a given set.
     /// </summary>
     In,
 
     /// <summary>
-    /// Value is not one of a set.
+    /// The field value is not one of a given set.
     /// </summary>
     NotIn,
 
     /// <summary>
-    /// String contains substring.
+    /// The field value contains the given substring.
     /// </summary>
     ContainsString,
 
     /// <summary>
-    /// String does not contain substring.
+    /// The field value does not contain the given substring.
     /// </summary>
     NotContainsString,
 
     /// <summary>
-    /// String starts with prefix.
+    /// The field value starts with the given prefix.
     /// </summary>
     StartsWithString,
 
     /// <summary>
-    /// String does not start with prefix.
+    /// The field value does not start with the given prefix.
     /// </summary>
     NotStartsWithString,
 
     /// <summary>
-    /// String ends with suffix.
+    /// The field value ends with the given suffix.
     /// </summary>
     EndsWithString,
 
     /// <summary>
-    /// String does not end with suffix.
+    /// The field value does not end with the given suffix.
     /// </summary>
     NotEndsWithString,
+
+    /// <summary>
+    /// The field value matches a .NET regular expression pattern.
+    /// </summary>
+    Regex,
+
+    /// <summary>
+    /// The field value contains the given value as a whole word, not as a bare substring.
+    /// </summary>
+    ContainsWord,
 }

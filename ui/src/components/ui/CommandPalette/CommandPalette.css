@@ -190,9 +190,9 @@
 
     @media (max-width: 480px) {
         .command-palette {
-            left: 0;
+            left: 50%;
             top: 0;
-            transform: none;
+            transform: translateX(-50%);
             width: 100%;
             max-width: none;
             max-height: 60vh;

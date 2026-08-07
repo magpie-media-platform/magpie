@@ -1,28 +1,14 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 
 import { apiGet, apiPost, apiPatch, apiDelete, buildUrl } from '@/lib/api';
+import type { ApiEventFilter } from '@/lib/eventContextCriteria';
 import { POLLING_INTERVALS } from '@/lib/queryClient';
+import { useInvalidateQueriesOnEvents } from './useInvalidateQueriesOnEvents';
 import { queryErrorOrNull } from '@/lib/utils';
-import type { JobScopeValue, JobExecutionModeValue } from './useJobs';
+import type { JobScopeValue } from './useJobs';
 import type { ScalarPatch, DictionaryPatch } from './useScheduleTriggers';
 
-export interface PropertyCriterion<T> {
-    operator?: string;
-
-    value?: T;
-
-    negate?: boolean;
-}
-
-export interface DictionaryCriteria<TCriterion> {
-    [key: string]: TCriterion;
-}
-
-export interface ApiEventFilter {
-    eventName?: PropertyCriterion<string>;
-
-    eventContext?: DictionaryCriteria<PropertyCriterion<string>>;
-}
+export type { ApiEventFilter, DictionaryCriteria, PropertyCriterion } from '@/lib/eventContextCriteria';
 
 export interface ApiEventTrigger {
     id: string;
@@ -33,13 +19,13 @@ export interface ApiEventTrigger {
 
     scope: JobScopeValue;
 
-    executionMode: JobExecutionModeValue;
-
     eventFilter: ApiEventFilter;
 
     name: string;
 
     enabled: boolean;
+
+    delaySeconds: number;
 
     parameters?: Record<string, string>;
 
@@ -56,6 +42,8 @@ export interface EventTriggerQueryParams {
     extensionId?: string;
 
     enabled?: boolean;
+
+    mine?: boolean;
 }
 
 export interface EventTriggerCreate {
@@ -69,9 +57,9 @@ export interface EventTriggerCreate {
 
     eventFilter: ApiEventFilter;
 
-    executionMode?: JobExecutionModeValue;
-
     enabled?: boolean;
+
+    delaySeconds?: number;
 
     parameters?: Record<string, string>;
 }
@@ -83,14 +71,14 @@ export interface EventTriggerPatch {
 
     eventFilter?: ScalarPatch<ApiEventFilter>;
 
-    executionMode?: ScalarPatch<JobExecutionModeValue>;
-
     enabled?: ScalarPatch<boolean>;
+
+    delaySeconds?: ScalarPatch<number>;
 
     parameters?: DictionaryPatch<string, string>;
 }
 
-export const eventTriggerQueryKeys = {
+const eventTriggerQueryKeys = {
     all: ['event-triggers'] as const,
     list: (params?: EventTriggerQueryParams) => ['event-triggers', 'list', params ?? {}] as const,
     detail: (id: string) => ['event-triggers', 'detail', id] as const,
@@ -118,33 +106,37 @@ async function deleteEventTrigger(id: string): Promise<void> {
 }
 
 export function useEventTriggers(params?: EventTriggerQueryParams) {
+    useInvalidateQueriesOnEvents(
+        ['eventTrigger.created', 'eventTrigger.updated', 'eventTrigger.deleted'],
+        [eventTriggerQueryKeys.list(params)],
+        { exact: true, owner: 'event-triggers:list' },
+    );
     const queryClient = useQueryClient();
 
     const triggersQuery = useQuery({
         queryKey: eventTriggerQueryKeys.list(params),
         queryFn: () => fetchEventTriggers(params),
-        refetchInterval: POLLING_INTERVALS.normal,
         staleTime: POLLING_INTERVALS.normal / 2,
     });
 
     const createMutation = useMutation({
         mutationFn: createEventTrigger,
         onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: eventTriggerQueryKeys.all });
+            void queryClient.invalidateQueries({ queryKey: eventTriggerQueryKeys.all });
         },
     });
 
     const updateMutation = useMutation({
         mutationFn: updateEventTrigger,
         onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: eventTriggerQueryKeys.all });
+            void queryClient.invalidateQueries({ queryKey: eventTriggerQueryKeys.all });
         },
     });
 
     const deleteMutation = useMutation({
         mutationFn: deleteEventTrigger,
         onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: eventTriggerQueryKeys.all });
+            void queryClient.invalidateQueries({ queryKey: eventTriggerQueryKeys.all });
         },
     });
 
@@ -169,11 +161,15 @@ export function useEventTriggers(params?: EventTriggerQueryParams) {
 }
 
 export function useEventTrigger(id: string, enabled = true) {
+    useInvalidateQueriesOnEvents(
+        ['eventTrigger.created', 'eventTrigger.updated', 'eventTrigger.deleted'],
+        [eventTriggerQueryKeys.detail(id)],
+        { entityIds: id ? [id] : [], exact: true, owner: 'event-triggers:detail' },
+    );
     const triggerQuery = useQuery({
         queryKey: eventTriggerQueryKeys.detail(id),
         queryFn: () => fetchEventTriggerById(id),
         enabled: enabled && Boolean(id),
-        refetchInterval: POLLING_INTERVALS.normal,
         staleTime: POLLING_INTERVALS.normal / 2,
     });
 

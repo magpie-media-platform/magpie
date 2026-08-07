@@ -13,8 +13,8 @@
         min-height: 0;
     }
 
-    .wishlists-page .list-toolbar__filters-controls {
-        flex: 1;
+    .wishlists-page__ownership {
+        margin-bottom: var(--space-md);
     }
 
     .wishlists-page__pull-to-refresh .pull-to-refresh__content {
@@ -29,28 +29,9 @@
         margin-bottom: var(--space-md);
     }
 
-    .wishlists-page__header-left {
-        display: flex;
-        align-items: center;
-        gap: var(--space-sm);
-    }
-
     .wishlists-page__icon {
         font-size: var(--text-2xl);
         color: var(--accent-primary);
-    }
-
-    .wishlists-page__title {
-        margin: 0;
-        font-size: var(--text-2xl);
-        font-weight: var(--weight-semibold);
-        color: var(--text-primary);
-    }
-
-    .wishlists-page__header-actions {
-        display: flex;
-        align-items: center;
-        gap: var(--space-sm);
     }
 
     .wishlists-page__list {
@@ -108,6 +89,8 @@
         font-size: var(--text-sm);
         font-weight: var(--weight-medium);
         color: var(--text-primary);
+        min-width: 0;
+        max-width: 100%;
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
@@ -173,6 +156,18 @@
         }
     }
 
+    .wishlists-page__item-query {
+        display: block;
+        margin-top: var(--space-xs);
+        max-width: 100%;
+        font-family: var(--font-mono);
+        font-size: var(--text-xs);
+        color: var(--text-muted);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
     .wishlists-page__item-synced {
         display: inline-flex;
         align-items: center;
@@ -201,20 +196,8 @@
         padding: var(--space-lg);
     }
 
-    .wishlists-page__loading-summary {
-        display: flex;
-        gap: var(--space-sm);
-        margin-bottom: var(--space-sm);
-    }
-
     .wishlists-page__skeleton {
         border-radius: var(--radius-md);
-    }
-
-    .wishlists-page__skeleton--badge {
-        height: 1.5rem;
-        width: 6rem;
-        border-radius: var(--radius-full);
     }
 
     .wishlists-page__skeleton--row {
@@ -231,17 +214,13 @@
             margin-bottom: var(--space-md);
         }
 
-        .wishlists-page__title {
-            font-size: var(--text-xl);
-        }
-
         .wishlists-page__header [data-action='add-wishlist'] {
             display: none;
         }
 
         .wishlists-page__item-main {
             flex-direction: column;
-            align-items: flex-start;
+            align-items: stretch;
             gap: var(--space-sm);
         }
 
@@ -251,12 +230,23 @@
         }
 
         .wishlists-page__item-meta {
-            max-width: 100%;
-            overflow: hidden;
+            min-width: 0;
         }
 
-        .wishlists-page__item-owner {
-            max-width: 150px;
+        .wishlists-page__item-owner,
+        .wishlists-page__item-filter {
+            max-width: 100%;
+            overflow: visible;
+            text-overflow: clip;
+            white-space: normal;
+            overflow-wrap: anywhere;
+        }
+
+        .wishlists-page__item-query {
+            overflow: visible;
+            text-overflow: clip;
+            white-space: normal;
+            overflow-wrap: anywhere;
         }
     }
 

@@ -6,37 +6,32 @@ namespace Magpie.Models.Enums;
 public enum JobExecutionStatus
 {
     /// <summary>
-    /// The job has been created, but is not ready to be queued or run.
+    /// The job waits in the queue.
     /// </summary>
-    Created = 0,
+    Queued = 1,
 
     /// <summary>
-    /// The job is queued and waiting to run.
+    /// The job runs now.
     /// </summary>
-    Queued,
+    Running = 2,
 
     /// <summary>
-    /// The job is currently running.
+    /// The job is complete and had no error.
     /// </summary>
-    Running,
-
-    /// <summary>
-    /// The job completed successfully.
-    /// </summary>
-    Completed,
+    Completed = 3,
 
     /// <summary>
     /// The job failed.
     /// </summary>
-    Failed,
+    Failed = 4,
 
     /// <summary>
     /// The job was cancelled.
     /// </summary>
-    Cancelled,
+    Cancelled = 5,
 
     /// <summary>
-    /// A cancellation has been requested but the job is still running.
+    /// A cancel request exists and the job still runs.
     /// </summary>
-    CancellationRequested
+    CancellationRequested = 6
 }

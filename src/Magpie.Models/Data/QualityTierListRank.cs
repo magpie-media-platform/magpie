@@ -3,52 +3,52 @@ using System;
 namespace Magpie.Models.Data;
 
 /// <summary>
-/// Rank of a quality tier within a quality tier list.
+/// The rank of one quality tier within one quality tier list.
 /// </summary>
 public record QualityTierListRank
 {
     /// <summary>
-    /// The quality tier list id.
+    /// The id of the quality tier list that holds the rank.
     /// </summary>
     public Guid QualityTierListId { get; set; }
 
     /// <summary>
-    /// The quality tier id.
+    /// The id of the ranked quality tier.
     /// </summary>
     public Guid QualityTierId { get; set; }
 
     /// <summary>
-    /// The priority order;
+    /// The position of the tier in priority order.
     /// </summary>
     public int Ordinal { get; set; }
 
     /// <summary>
-    /// Whether this tier is a cutoff point for upgrades.
+    /// Whether an upgrade stops at this tier.
     /// </summary>
     public bool IsCutoff { get; set; }
 
     /// <summary>
-    /// When the record was created.
+    /// The UTC time when the record was created.
     /// </summary>
     public DateTime CreatedAt { get; set; }
 
     /// <summary>
-    /// The id of the user that created the record.
+    /// The id of the user who created the record.
     /// </summary>
     public Guid? CreatedByUserId { get; set; }
 
     /// <summary>
-    /// When the record was last modified.
+    /// The UTC time when the record last changed.
     /// </summary>
     public DateTime? ModifiedAt { get; set; }
 
     /// <summary>
-    /// The id of the user that last modified the record.
+    /// The id of the user who last changed the record.
     /// </summary>
     public Guid? ModifiedByUserId { get; set; }
 
     /// <summary>
-    /// The quality tier.
+    /// The <see cref="QualityTier"/> that the rank applies to.
     /// </summary>
     public QualityTier? QualityTier { get; set; }
 }

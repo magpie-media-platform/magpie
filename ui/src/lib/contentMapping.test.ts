@@ -10,7 +10,8 @@ function makeItem(overrides: Partial<ApiContentItemWithMetadata> = {}): ApiConte
         level: 'series',
         slug: 'test-item',
         name: 'Test Item',
-        monitoring: 0,
+        monitoring: null,
+        effectiveMonitoring: true,
         createdAt: '2025-01-01T00:00:00Z',
         ...overrides,
     };
@@ -21,7 +22,8 @@ describe('extractContentFields', () => {
         const result = extractContentFields(makeItem());
 
         expect(result.title).toBe('Test Item');
-        expect(result.kind).toBe('episode');
+        expect(result.contentType).toBe('episodes');
+        expect(result.level).toBe('series');
         expect(result.fulfillment).toBe('missing');
         expect(result.date).toBeUndefined();
         expect(result.posterUrl).toBeUndefined();
@@ -88,13 +90,13 @@ describe('extractContentFields', () => {
                 contentItem: {
                     id: 'ci-1',
                     contentHierarchyItemId: 'item-1',
-                    fulfillment: 3,
+                    fulfillment: 'FulfilledExternally',
                     createdAt: '2025-01-01T00:00:00Z',
                 },
             }),
         );
 
-        expect(result.fulfillment).not.toBe('missing');
+        expect(result.fulfillment).toBe('fulfilledExternally');
     });
 
     it('sets subtitle for episode-level items when name differs from title', () => {
@@ -129,26 +131,10 @@ describe('extractContentFields', () => {
         expect(result.subtitle).toBeUndefined();
     });
 
-    it('does not set subtitle for non-episode content', () => {
-        const result = extractContentFields(
-            makeItem({
-                contentType: 'movies',
-                level: 'movie',
-                name: 'Different Name',
-                metadataContainer: {
-                    id: 'mc-1',
-                    contributions: [{ ordinal: 0, title: 'Movie Title' }],
-                },
-            }),
-        );
-
-        expect(result.subtitle).toBeUndefined();
-    });
-
-    it('maps content types correctly', () => {
-        expect(extractContentFields(makeItem({ contentType: 'movies' })).kind).toBe('movie');
-        expect(extractContentFields(makeItem({ contentType: 'episodes' })).kind).toBe('episode');
-        expect(extractContentFields(makeItem({ contentType: 'music' })).kind).toBe('music');
-        expect(extractContentFields(makeItem({ contentType: 'books' })).kind).toBe('book');
+    it('preserves content type slugs opaquely', () => {
+        expect(extractContentFields(makeItem({ contentType: 'movies' })).contentType).toBe('movies');
+        expect(extractContentFields(makeItem({ contentType: 'episodes' })).contentType).toBe('episodes');
+        expect(extractContentFields(makeItem({ contentType: 'music' })).contentType).toBe('music');
+        expect(extractContentFields(makeItem({ contentType: 'books' })).contentType).toBe('books');
     });
 });

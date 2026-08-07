@@ -12,7 +12,6 @@
         line-height: var(--leading-normal);
         max-width: 300px;
         overflow-wrap: break-word;
-
         animation-duration: var(--duration-fast);
         animation-timing-function: var(--easing-default);
 

@@ -14,16 +14,27 @@ export interface DiskSpaceInfo {
     freeBytes: number;
 }
 
-export type DownloadState = 'downloading' | 'queued' | 'stalled' | 'completed' | 'failed';
+export interface DiskSpaceTotals {
+    usedBytes: number;
+
+    totalBytes: number;
+
+    freeBytes: number;
+}
+
+export type DownloadState = 'downloading' | 'queued' | 'paused' | 'stalled' | 'completed' | 'failed';
 
 export interface DownloadStateCounts {
     downloading: number;
     queued: number;
+    paused: number;
     stalled: number;
 }
 
 export interface ActiveDownloadItem {
     id: string;
+    contentId?: string;
+    parentId?: string;
     title: string;
     progress: number;
     state: DownloadState;

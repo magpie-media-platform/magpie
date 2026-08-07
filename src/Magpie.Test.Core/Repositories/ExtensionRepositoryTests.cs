@@ -1,18 +1,26 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions.Repositories;
 using Magpie.Core;
 using Magpie.Core.Repositories;
 using Magpie.Data;
+using Magpie.Models;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Models.Patch;
-using Magpie.Test.Shared;
+using Magpie.Sdk.Events;
+using Magpie.Sdk.Services;
 
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
+
+using Moq;
 
 using NUnit.Framework;
 
@@ -23,6 +31,7 @@ public class ExtensionRepositoryTests
 {
     private MagpieDbContext _context = null!;
     private IExtensionRepository _subject = null!;
+    private List<MagpieEvent> _publishedEvents = null!;
     private Guid _userId;
 
     [SetUp]
@@ -49,17 +58,18 @@ public class ExtensionRepositoryTests
 
         _userId = user.Id;
 
-        var loggerFactory = LoggerFactory.Create(b => b.AddTestLogger());
-        var auditRecordRepository = new AuditRecordRepository(
-            _context,
-            loggerFactory.CreateLogger<AuditRecordRepository>());
-        var transactionManager = new TransactionManager(_context);
+        _publishedEvents = [];
+        var eventBus = new Mock<IEventBus>();
+        eventBus
+            .Setup(bus => bus.PublishAsync(It.IsAny<MagpieEvent>(), It.IsAny<CancellationToken>()))
+            .Callback<MagpieEvent, CancellationToken>((magpieEvent, _) => _publishedEvents.Add(magpieEvent))
+            .Returns(Task.CompletedTask);
 
         _subject = new ExtensionRepository(
             _context,
-            auditRecordRepository,
-            transactionManager,
-            loggerFactory.CreateLogger<ExtensionRepository>());
+            new TransactionManager(_context, NullLogger<TransactionManager>.Instance),
+            eventBus.Object,
+            NullLoggerFactory.Instance.CreateLogger<ExtensionRepository>());
     }
 
     [TearDown]
@@ -70,7 +80,7 @@ public class ExtensionRepositoryTests
     }
 
     [Test]
-    public async Task GetByIdAsync_ReturnsExtension()
+    public async Task GetByIdAsync_ReturnsExtension_WhenExtensionExists()
     {
         // Arrange
         var extension = new Extension
@@ -86,10 +96,10 @@ public class ExtensionRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.Extensions.Add(extension);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        var result = await _subject.GetByIdAsync(extension.Id);
+        var result = await _subject.GetByIdAsync(extension.Id).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -104,18 +114,54 @@ public class ExtensionRepositoryTests
     public async Task GetByIdAsync_ReturnsNull_WhenNotFound()
     {
         // Act
-        var result = await _subject.GetByIdAsync(Guid.NewGuid());
+        var result = await _subject.GetByIdAsync(Guid.NewGuid()).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.Null);
     }
 
     [Test]
-    public async Task ListAllAsync_ReturnsAllExtensions()
+    public async Task QueryAsync_ReturnsExtension_WhenPackageIdMatches()
+    {
+        // Arrange
+        var extension = new Extension
+        {
+            PackageId = "Magpie.Extensions.PackageLookup",
+            Name = "TestExtension",
+            Version = "1.0.0",
+            FilePath = "/path/to/extension.dll",
+            AssemblyName = "TestExtension, Version=1.0.0.0",
+            Enabled = true,
+            LoadOrder = 100,
+            Managed = false,
+            AutoUpgrade = false,
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.Extensions.Add(extension);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        var result = await _subject.QueryAsync(new ExtensionQuery
+        {
+            PackageId = "Magpie.Extensions.PackageLookup"
+        }, new() { PageNumber = 1, PageSize = 100 }, null).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.Items, Has.Exactly(1).Items);
+            Assert.That(result.Items.Single().PackageId, Is.EqualTo("Magpie.Extensions.PackageLookup"));
+            Assert.That(result.Items.Single().Name, Is.EqualTo("TestExtension"));
+        }
+    }
+
+    [Test]
+    public async Task ListAllAsync_ReturnsAllExtensions_WhenExtensionsExist()
     {
         // Arrange
         var extension1 = new Extension
         {
+            PackageId = "Magpie.Extensions.ListOne",
             Name = "Extension1",
             Version = "1.0.0",
             FilePath = "/path/to/ext1.dll",
@@ -128,6 +174,7 @@ public class ExtensionRepositoryTests
         };
         var extension2 = new Extension
         {
+            PackageId = "Magpie.Extensions.ListTwo",
             Name = "Extension2",
             Version = "2.0.0",
             FilePath = "/path/to/ext2.dll",
@@ -139,10 +186,10 @@ public class ExtensionRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.Extensions.AddRange(extension1, extension2);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        var result = await _subject.ListAllAsync();
+        var result = await _subject.ListAllAsync().ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Has.Exactly(2).Items);
@@ -152,14 +199,14 @@ public class ExtensionRepositoryTests
     public async Task ListAllAsync_ReturnsEmptyList_WhenNoExtensions()
     {
         // Act
-        var result = await _subject.ListAllAsync();
+        var result = await _subject.ListAllAsync().ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.Empty);
     }
 
     [Test]
-    public async Task CreateAsync_CreatesExtension()
+    public async Task CreateAsync_CreatesExtension_WhenRequestIsValid()
     {
         // Arrange
         var model = new Extension
@@ -176,12 +223,12 @@ public class ExtensionRepositoryTests
         };
 
         // Act
-        var result = await _subject.CreateAsync(model, _userId);
+        var result = await _subject.CreateAsync(model, _userId).ConfigureAwait(false);
 
         // Assert
         var entity = await _context.Extensions
             .AsNoTracking()
-            .FirstOrDefaultAsync(e => e.Name == "NewExtension");
+            .FirstOrDefaultAsync(e => e.Name == "NewExtension").ConfigureAwait(false);
 
         using (Assert.EnterMultipleScope())
         {
@@ -193,7 +240,7 @@ public class ExtensionRepositoryTests
     }
 
     [Test]
-    public async Task CreateAsync_CreatesExtensionWithAllFields()
+    public async Task CreateAsync_CreatesExtensionWithAllFields_WhenAllFieldsAreSet()
     {
         // Arrange
         var lastChecked = DateTime.UtcNow.AddDays(-1);
@@ -214,12 +261,12 @@ public class ExtensionRepositoryTests
         };
 
         // Act
-        var result = await _subject.CreateAsync(model, _userId);
+        var result = await _subject.CreateAsync(model, _userId).ConfigureAwait(false);
 
         // Assert
         var entity = await _context.Extensions
             .AsNoTracking()
-            .FirstOrDefaultAsync(e => e.Name == "FullExtension");
+            .FirstOrDefaultAsync(e => e.Name == "FullExtension").ConfigureAwait(false);
 
         using (Assert.EnterMultipleScope())
         {
@@ -236,34 +283,7 @@ public class ExtensionRepositoryTests
     }
 
     [Test]
-    public async Task CreateAsync_CreatesAuditRecord()
-    {
-        // Arrange
-        var model = new Extension
-        {
-            Name = "AuditedExtension",
-            Version = "1.0.0",
-            FilePath = "/path/to/audited.dll",
-            AssemblyName = "AuditedExtension, Version=1.0.0.0",
-            Enabled = true,
-            LoadOrder = 100,
-            Managed = false,
-            AutoUpgrade = false
-        };
-
-        // Act
-        await _subject.CreateAsync(model, _userId);
-
-        // Assert
-        var auditRecords = await _context.AuditRecords.ToListAsync();
-        Assert.That(auditRecords, Has.One.Matches<AuditRecord>(r =>
-            r.Operation == "Create" &&
-            r.EntityType == "Extension" &&
-            r.UserId == _userId));
-    }
-
-    [Test]
-    public async Task UpdateAsync_UpdatesExtension()
+    public async Task UpdateAsync_UpdatesExtension_WhenExtensionExists()
     {
         // Arrange
         var extension = new Extension
@@ -279,7 +299,7 @@ public class ExtensionRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.Extensions.Add(extension);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         var model = new Extension
         {
@@ -300,12 +320,12 @@ public class ExtensionRepositoryTests
         };
 
         // Act
-        var result = await _subject.UpdateAsync(model, _userId);
+        var result = await _subject.UpdateAsync(model, _userId).ConfigureAwait(false);
 
         // Assert
         var updatedEntity = await _context.Extensions
             .AsNoTracking()
-            .FirstOrDefaultAsync(e => e.Id == extension.Id);
+            .FirstOrDefaultAsync(e => e.Id == extension.Id).ConfigureAwait(false);
 
         using (Assert.EnterMultipleScope())
         {
@@ -313,8 +333,10 @@ public class ExtensionRepositoryTests
             Assert.That(updatedEntity, Has.Property(nameof(updatedEntity.Name)).EqualTo("UpdatedName"));
             Assert.That(updatedEntity, Has.Property(nameof(updatedEntity.Version)).EqualTo("2.0.0"));
             Assert.That(updatedEntity, Has.Property(nameof(updatedEntity.Enabled)).False);
-            Assert.That(updatedEntity, Has.Property(nameof(updatedEntity.DisabledReason))
-                .EqualTo("Disabled for testing"));
+            Assert.That(
+                updatedEntity,
+                Has.Property(nameof(updatedEntity.DisabledReason))
+                    .EqualTo("Disabled for testing"));
             Assert.That(updatedEntity, Has.Property(nameof(updatedEntity.LoadOrder)).EqualTo(200));
             Assert.That(updatedEntity, Has.Property(nameof(updatedEntity.Managed)).True);
             Assert.That(updatedEntity, Has.Property(nameof(updatedEntity.ModifiedAt)).Not.Null);
@@ -340,46 +362,14 @@ public class ExtensionRepositoryTests
         };
 
         // Act
-        var result = await _subject.UpdateAsync(model, _userId);
+        var result = await _subject.UpdateAsync(model, _userId).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.False);
     }
 
     [Test]
-    public async Task UpdateAsync_CreatesAuditRecord()
-    {
-        // Arrange
-        var extension = new Extension
-        {
-            Name = "ExtensionToUpdate",
-            Version = "1.0.0",
-            FilePath = "/path/to/update.dll",
-            AssemblyName = "ExtensionToUpdate, Version=1.0.0.0",
-            Enabled = true,
-            LoadOrder = 100,
-            Managed = false,
-            AutoUpgrade = false,
-            CreatedAt = DateTime.UtcNow
-        };
-        _context.Extensions.Add(extension);
-        await _context.SaveChangesAsync();
-
-        var model = extension with { Version = "2.0.0" };
-
-        // Act
-        await _subject.UpdateAsync(model, _userId);
-
-        // Assert
-        var auditRecords = await _context.AuditRecords.ToListAsync();
-        Assert.That(auditRecords, Has.One.Matches<AuditRecord>(r =>
-            r.Operation == "Update" &&
-            r.EntityType == "Extension" &&
-            r.UserId == _userId));
-    }
-
-    [Test]
-    public async Task DeleteAsync_DeletesExtension()
+    public async Task DeleteAsync_DeletesExtension_WhenExtensionExists()
     {
         // Arrange
         var extension = new Extension
@@ -395,13 +385,13 @@ public class ExtensionRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.Extensions.Add(extension);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        var result = await _subject.DeleteAsync(extension.Id, _userId);
+        var result = await _subject.DeleteAsync(extension.Id, _userId).ConfigureAwait(false);
 
         // Assert
-        var entityExists = await _context.Extensions.AnyAsync(e => e.Id == extension.Id);
+        var entityExists = await _context.Extensions.AnyAsync(e => e.Id == extension.Id).ConfigureAwait(false);
 
         using (Assert.EnterMultipleScope())
         {
@@ -414,45 +404,14 @@ public class ExtensionRepositoryTests
     public async Task DeleteAsync_ReturnsFalse_WhenNotFound()
     {
         // Act
-        var result = await _subject.DeleteAsync(Guid.NewGuid(), _userId);
+        var result = await _subject.DeleteAsync(Guid.NewGuid(), _userId).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.False);
     }
 
     [Test]
-    public async Task DeleteAsync_CreatesAuditRecord()
-    {
-        // Arrange
-        var extension = new Extension
-        {
-            Name = "ExtensionToDelete",
-            Version = "1.0.0",
-            FilePath = "/path/to/delete.dll",
-            AssemblyName = "ExtensionToDelete, Version=1.0.0.0",
-            Enabled = true,
-            LoadOrder = 100,
-            Managed = false,
-            AutoUpgrade = false,
-            CreatedAt = DateTime.UtcNow
-        };
-        _context.Extensions.Add(extension);
-        await _context.SaveChangesAsync();
-
-        // Act
-        await _subject.DeleteAsync(extension.Id, _userId);
-
-        // Assert
-        var auditRecords = await _context.AuditRecords.ToListAsync();
-
-        Assert.That(auditRecords, Has.One
-            .With.Property(nameof(AuditRecord.Operation)).EqualTo("Delete")
-            .And.Property(nameof(AuditRecord.EntityType)).EqualTo("Extension")
-            .And.Property(nameof(AuditRecord.UserId)).EqualTo(_userId));
-    }
-
-    [Test]
-    public async Task PatchAsync_PatchesNuGetIdField()
+    public async Task PatchAsync_PatchesNuGetIdField_WhenNuGetIdIsSet()
     {
         // Arrange
         var extension = new Extension
@@ -468,7 +427,7 @@ public class ExtensionRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.Extensions.Add(extension);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         var patch = new ExtensionPatch
         {
@@ -477,12 +436,12 @@ public class ExtensionRepositoryTests
         };
 
         // Act
-        var result = await _subject.PatchAsync(patch, _userId);
+        var result = await _subject.PatchAsync(patch, _userId).ConfigureAwait(false);
 
         // Assert
         var updatedEntity = await _context.Extensions
             .AsNoTracking()
-            .FirstOrDefaultAsync(e => e.Id == extension.Id);
+            .FirstOrDefaultAsync(e => e.Id == extension.Id).ConfigureAwait(false);
 
         using (Assert.EnterMultipleScope())
         {
@@ -494,7 +453,7 @@ public class ExtensionRepositoryTests
     }
 
     [Test]
-    public async Task PatchAsync_PatchesAutoUpgradeField()
+    public async Task PatchAsync_PatchesAutoUpgradeField_WhenAutoUpgradeIsSet()
     {
         // Arrange
         var extension = new Extension
@@ -510,7 +469,7 @@ public class ExtensionRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.Extensions.Add(extension);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         var patch = new ExtensionPatch
         {
@@ -519,12 +478,12 @@ public class ExtensionRepositoryTests
         };
 
         // Act
-        var result = await _subject.PatchAsync(patch, _userId);
+        var result = await _subject.PatchAsync(patch, _userId).ConfigureAwait(false);
 
         // Assert
         var updatedEntity = await _context.Extensions
             .AsNoTracking()
-            .FirstOrDefaultAsync(e => e.Id == extension.Id);
+            .FirstOrDefaultAsync(e => e.Id == extension.Id).ConfigureAwait(false);
 
         using (Assert.EnterMultipleScope())
         {
@@ -534,7 +493,7 @@ public class ExtensionRepositoryTests
     }
 
     [Test]
-    public async Task PatchAsync_PatchesPackageRepositoryField()
+    public async Task PatchAsync_PatchesPackageRepositoryField_WhenPackageRepositoryIsSet()
     {
         // Arrange
         var extension = new Extension
@@ -550,7 +509,7 @@ public class ExtensionRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.Extensions.Add(extension);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         var patch = new ExtensionPatch
         {
@@ -559,23 +518,25 @@ public class ExtensionRepositoryTests
         };
 
         // Act
-        var result = await _subject.PatchAsync(patch, _userId);
+        var result = await _subject.PatchAsync(patch, _userId).ConfigureAwait(false);
 
         // Assert
         var updatedEntity = await _context.Extensions
             .AsNoTracking()
-            .FirstOrDefaultAsync(e => e.Id == extension.Id);
+            .FirstOrDefaultAsync(e => e.Id == extension.Id).ConfigureAwait(false);
 
         using (Assert.EnterMultipleScope())
         {
             Assert.That(result, Is.True);
-            Assert.That(updatedEntity, Has.Property(nameof(updatedEntity.PackageRepository))
-                .EqualTo("https://custom.nuget.org"));
+            Assert.That(
+                updatedEntity,
+                Has.Property(nameof(updatedEntity.PackageRepository))
+                    .EqualTo("https://custom.nuget.org"));
         }
     }
 
     [Test]
-    public async Task PatchAsync_PatchesMultipleFields()
+    public async Task PatchAsync_PatchesMultipleFields_WhenSeveralFieldsAreSet()
     {
         // Arrange
         var extension = new Extension
@@ -591,31 +552,43 @@ public class ExtensionRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.Extensions.Add(extension);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         var patch = new ExtensionPatch
         {
             Id = extension.Id,
             NuGetId = new ScalarPatch<string?> { Value = "MultiPatch.Package" },
             PackageRepository = new ScalarPatch<string?> { Value = "https://multi.nuget.org" },
-            AutoUpgrade = new ScalarPatch<bool> { Value = true }
+            AutoUpgrade = new ScalarPatch<bool> { Value = true },
+            LoadOrder = new ScalarPatch<int> { Value = 42 }
         };
 
         // Act
-        var result = await _subject.PatchAsync(patch, _userId);
+        var result = await _subject.PatchAsync(patch, _userId).ConfigureAwait(false);
 
         // Assert
         var updatedEntity = await _context.Extensions
             .AsNoTracking()
-            .FirstOrDefaultAsync(e => e.Id == extension.Id);
+            .FirstOrDefaultAsync(e => e.Id == extension.Id).ConfigureAwait(false);
 
         using (Assert.EnterMultipleScope())
         {
             Assert.That(result, Is.True);
             Assert.That(updatedEntity, Has.Property(nameof(updatedEntity.NuGetId)).EqualTo("MultiPatch.Package"));
-            Assert.That(updatedEntity, Has.Property(nameof(updatedEntity.PackageRepository))
-                .EqualTo("https://multi.nuget.org"));
+            Assert.That(
+                updatedEntity,
+                Has.Property(nameof(updatedEntity.PackageRepository))
+                    .EqualTo("https://multi.nuget.org"));
             Assert.That(updatedEntity, Has.Property(nameof(updatedEntity.AutoUpgrade)).True);
+            Assert.That(updatedEntity, Has.Property(nameof(updatedEntity.LoadOrder)).EqualTo(42));
+            Assert.That(_publishedEvents, Has.Count.EqualTo(1));
+            Assert.That(_publishedEvents[0].Name, Is.EqualTo(MagpieEvents.Names.ExtensionUpdated));
+            Assert.That(
+                _publishedEvents[0].Context[MagpieEvents.Keys.ExtensionId],
+                Is.EqualTo(extension.Id.ToString("D")));
+            Assert.That(
+                _publishedEvents[0].Context[MagpieEvents.Keys.ExtensionChangedFields],
+                Is.EqualTo("nuGetId,packageRepository,autoUpgrade,loadOrder"));
         }
     }
 
@@ -630,45 +603,9 @@ public class ExtensionRepositoryTests
         };
 
         // Act
-        var result = await _subject.PatchAsync(patch, _userId);
+        var result = await _subject.PatchAsync(patch, _userId).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.False);
-    }
-
-    [Test]
-    public async Task PatchAsync_CreatesAuditRecord()
-    {
-        // Arrange
-        var extension = new Extension
-        {
-            Name = "AuditedPatchExtension",
-            Version = "1.0.0",
-            FilePath = "/path/to/audited.dll",
-            AssemblyName = "AuditedPatchExtension, Version=1.0.0.0",
-            Enabled = true,
-            LoadOrder = 100,
-            Managed = true,
-            AutoUpgrade = false,
-            CreatedAt = DateTime.UtcNow
-        };
-        _context.Extensions.Add(extension);
-        await _context.SaveChangesAsync();
-
-        var patch = new ExtensionPatch
-        {
-            Id = extension.Id,
-            AutoUpgrade = new ScalarPatch<bool> { Value = true }
-        };
-
-        // Act
-        await _subject.PatchAsync(patch, _userId);
-
-        // Assert
-        var auditRecords = await _context.AuditRecords.ToListAsync();
-        Assert.That(auditRecords, Has.One
-            .With.Property(nameof(AuditRecord.Operation)).EqualTo("Patch")
-            .And.Property(nameof(AuditRecord.EntityType)).EqualTo("Extension")
-            .And.Property(nameof(AuditRecord.UserId)).EqualTo(_userId));
     }
 }

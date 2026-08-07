@@ -1,14 +1,15 @@
 import { render, screen, within, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, useSearchParams } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 
 import { ToastProvider, ToastStateProvider, ToastViewport } from '@/components/ui/Toast';
 import { TooltipProvider } from '@/components/ui/Tooltip';
 import { AuthProvider, Role } from '@/auth';
-import type { ApiJobExecution, JobExecutionStatusValue, JobScopeValue } from '@/hooks/useJobs';
+import { testEffectivePermissions } from '@/test/permissions';
+import type { ApiJobSpec, ApiJobExecution, JobExecutionStatusValue, JobScopeValue } from '@/hooks/useJobs';
 import type { ApiScheduleTrigger } from '@/hooks/useScheduleTriggers';
 import type { ApiEventTrigger } from '@/hooks/useEventTriggers';
 
@@ -23,19 +24,20 @@ vi.mock('@/lib/api', async (importOriginal) => {
     };
 });
 
-import { apiGet, apiPost } from '@/lib/api';
+import { apiGet, apiPatch, apiPost } from '@/lib/api';
 
 import { JobsPage } from './JobsPage';
 
 const mockApiGet = vi.mocked(apiGet);
+const mockApiPatch = vi.mocked(apiPatch);
 const mockApiPost = vi.mocked(apiPost);
 
 const mockJobs: ApiJobExecution[] = [
     {
         id: 'exec-1',
         jobType: 'RSS Sync',
-        scope: 2 as JobScopeValue,
-        status: 2 as JobExecutionStatusValue,
+        scope: 'Content' as JobScopeValue,
+        status: 'Running' as JobExecutionStatusValue,
         progress: 45,
         createdAt: '2024-01-15T10:30:00Z',
         startedAt: '2024-01-15T10:30:00Z',
@@ -44,9 +46,9 @@ const mockJobs: ApiJobExecution[] = [
     },
     {
         id: 'exec-2',
-        jobType: 'Refresh Metadata',
-        scope: 2 as JobScopeValue,
-        status: 2 as JobExecutionStatusValue,
+        jobType: 'ContentMetadataRefreshItem',
+        scope: 'Content' as JobScopeValue,
+        status: 'Running' as JobExecutionStatusValue,
         progress: 78,
         createdAt: '2024-01-15T10:28:00Z',
         startedAt: '2024-01-15T10:28:00Z',
@@ -56,8 +58,8 @@ const mockJobs: ApiJobExecution[] = [
     {
         id: 'exec-3',
         jobType: 'Search Missing',
-        scope: 2 as JobScopeValue,
-        status: 1 as JobExecutionStatusValue,
+        scope: 'Content' as JobScopeValue,
+        status: 'Queued' as JobExecutionStatusValue,
         progress: 0,
         createdAt: '2024-01-15T10:32:00Z',
         startedAt: null,
@@ -67,8 +69,8 @@ const mockJobs: ApiJobExecution[] = [
     {
         id: 'exec-4',
         jobType: 'Cleanup Downloads',
-        scope: 2 as JobScopeValue,
-        status: 3 as JobExecutionStatusValue,
+        scope: 'Content' as JobScopeValue,
+        status: 'Completed' as JobExecutionStatusValue,
         progress: 100,
         createdAt: '2024-01-15T10:00:00Z',
         startedAt: '2024-01-15T10:00:00Z',
@@ -78,8 +80,8 @@ const mockJobs: ApiJobExecution[] = [
     {
         id: 'exec-5',
         jobType: 'Sync Plex Library',
-        scope: 2 as JobScopeValue,
-        status: 3 as JobExecutionStatusValue,
+        scope: 'Content' as JobScopeValue,
+        status: 'Completed' as JobExecutionStatusValue,
         progress: 100,
         createdAt: '2024-01-15T09:45:00Z',
         startedAt: '2024-01-15T09:45:00Z',
@@ -89,8 +91,8 @@ const mockJobs: ApiJobExecution[] = [
     {
         id: 'exec-6',
         jobType: 'Backup Database',
-        scope: 1 as JobScopeValue,
-        status: 3 as JobExecutionStatusValue,
+        scope: 'Administrative' as JobScopeValue,
+        status: 'Completed' as JobExecutionStatusValue,
         progress: 100,
         createdAt: '2024-01-15T09:00:00Z',
         startedAt: '2024-01-15T09:00:00Z',
@@ -99,9 +101,9 @@ const mockJobs: ApiJobExecution[] = [
     },
     {
         id: 'exec-7',
-        jobType: 'Import Trakt List',
-        scope: 2 as JobScopeValue,
-        status: 4 as JobExecutionStatusValue,
+        jobType: 'Import Provider I List',
+        scope: 'Content' as JobScopeValue,
+        status: 'Failed' as JobExecutionStatusValue,
         progress: 34,
         createdAt: '2024-01-15T08:30:00Z',
         startedAt: '2024-01-15T08:30:00Z',
@@ -111,8 +113,8 @@ const mockJobs: ApiJobExecution[] = [
     {
         id: 'exec-8',
         jobType: 'RSS Sync',
-        scope: 2 as JobScopeValue,
-        status: 5 as JobExecutionStatusValue,
+        scope: 'Content' as JobScopeValue,
+        status: 'Cancelled' as JobExecutionStatusValue,
         progress: 22,
         createdAt: '2024-01-15T07:30:00Z',
         startedAt: '2024-01-15T07:30:00Z',
@@ -126,9 +128,9 @@ const mockScheduleTriggers: ApiScheduleTrigger[] = [
         id: 'trigger-1',
         name: 'Hourly RSS Sync',
         jobType: 'RSS Sync',
-        scope: 2 as JobScopeValue,
+        scope: 'Content' as JobScopeValue,
         schedule: '0 * * * *',
-        executionMode: 0,
+        executionMode: 'Queue',
         enabled: true,
         nextRunAt: '2024-01-15T12:00:00Z',
         lastRunAt: '2024-01-15T11:00:00Z',
@@ -137,10 +139,10 @@ const mockScheduleTriggers: ApiScheduleTrigger[] = [
     {
         id: 'trigger-2',
         name: 'Daily Metadata Refresh',
-        jobType: 'Refresh Metadata',
-        scope: 2 as JobScopeValue,
+        jobType: 'ContentMetadataRefreshItem',
+        scope: 'Content' as JobScopeValue,
         schedule: '0 6 * * *',
-        executionMode: 0,
+        executionMode: 'Queue',
         enabled: true,
         nextRunAt: '2024-01-16T06:00:00Z',
         lastRunAt: '2024-01-15T06:00:00Z',
@@ -150,9 +152,9 @@ const mockScheduleTriggers: ApiScheduleTrigger[] = [
         id: 'trigger-3',
         name: 'Weekly Database Backup',
         jobType: 'Backup Database',
-        scope: 1 as JobScopeValue,
+        scope: 'Administrative' as JobScopeValue,
         schedule: '0 0 * * 0',
-        executionMode: 0,
+        executionMode: 'Queue',
         enabled: true,
         nextRunAt: '2024-01-21T00:00:00Z',
         lastRunAt: '2024-01-14T00:00:00Z',
@@ -162,9 +164,9 @@ const mockScheduleTriggers: ApiScheduleTrigger[] = [
         id: 'trigger-4',
         name: 'Nightly Missing Search',
         jobType: 'Search Missing',
-        scope: 2 as JobScopeValue,
+        scope: 'Content' as JobScopeValue,
         schedule: '0 2 * * *',
-        executionMode: 0,
+        executionMode: 'Queue',
         enabled: false,
         nextRunAt: null,
         lastRunAt: '2024-01-14T02:00:00Z',
@@ -174,9 +176,9 @@ const mockScheduleTriggers: ApiScheduleTrigger[] = [
         id: 'trigger-5',
         name: 'Plex Library Sync',
         jobType: 'Sync Plex Library',
-        scope: 2 as JobScopeValue,
+        scope: 'Content' as JobScopeValue,
         schedule: '0 */6 * * *',
-        executionMode: 0,
+        executionMode: 'Queue',
         enabled: true,
         nextRunAt: '2024-01-15T18:00:00Z',
         lastRunAt: '2024-01-15T12:00:00Z',
@@ -188,41 +190,73 @@ const mockEventTriggers: ApiEventTrigger[] = [
     {
         id: 'event-1',
         name: 'Refresh on Download Complete',
-        jobType: 'Refresh Metadata',
-        scope: 2 as JobScopeValue,
-        executionMode: 0,
+        jobType: 'ContentMetadataRefreshItem',
+        scope: 'Content' as JobScopeValue,
         eventFilter: {
             eventName: { value: 'download\\.completed' },
+            eventContext: {
+                items: {
+                    'content.type': { operator: 'Regex', value: '^kind-x$', negate: true },
+                },
+            },
         },
         enabled: true,
+        delaySeconds: 0,
         createdAt: '2024-01-01T00:00:00Z',
     },
     {
         id: 'event-2',
         name: 'Search on Content Added',
         jobType: 'Search Missing',
-        scope: 2 as JobScopeValue,
-        executionMode: 0,
+        scope: 'Content' as JobScopeValue,
         eventFilter: {
             eventName: { value: 'content\\.added' },
             eventContext: {
-                contentType: { value: 'episode' },
+                items: {
+                    contentType: { value: 'episode' },
+                },
             },
         },
         enabled: true,
+        delaySeconds: 0,
         createdAt: '2024-01-01T00:00:00Z',
     },
     {
         id: 'event-3',
         name: 'Sync Plex on Import',
         jobType: 'Sync Plex Library',
-        scope: 2 as JobScopeValue,
-        executionMode: 1,
+        scope: 'Content' as JobScopeValue,
         eventFilter: {
             eventName: { value: 'file\\.imported' },
         },
         enabled: true,
+        delaySeconds: 0,
         createdAt: '2024-01-01T00:00:00Z',
+    },
+];
+
+const mockJobSpecs: ApiJobSpec[] = [
+    {
+        jobType: 'ContentMetadataRefreshItem',
+        displayName: 'Content metadata refresh item',
+        description: 'Refreshes metadata for one content item.',
+        category: 'Content',
+        scope: 'Content' as JobScopeValue,
+        enabled: false,
+        onDemand: false,
+        supportedTriggerModes: ['Manual', 'Schedule', 'Event'],
+        parameters: [],
+    },
+    {
+        jobType: 'ReleaseSearchItem',
+        displayName: 'Release search item',
+        description: 'Searches available releases for one content item.',
+        category: 'Content',
+        scope: 'Content' as JobScopeValue,
+        enabled: false,
+        onDemand: false,
+        supportedTriggerModes: ['Manual', 'Schedule', 'Event'],
+        parameters: [],
     },
 ];
 
@@ -239,18 +273,20 @@ function TestWrapper({
     children,
     role = Role.Admin,
     initialRoute = '/',
+    queryClient,
 }: {
     children: ReactNode;
     role?: Role;
     initialRoute?: string;
+    queryClient?: QueryClient;
 }) {
     const mockUser = { id: '1', username: 'test', role };
-    const queryClient = createTestQueryClient();
+    const client = queryClient ?? createTestQueryClient();
 
     return (
-        <QueryClientProvider client={queryClient}>
+        <QueryClientProvider client={client}>
             <MemoryRouter initialEntries={[initialRoute]}>
-                <AuthProvider initialUser={mockUser}>
+                <AuthProvider initialUser={mockUser} initialPermissions={testEffectivePermissions()}>
                     <TooltipProvider>
                         <ToastProvider>
                             <ToastStateProvider>
@@ -265,34 +301,86 @@ function TestWrapper({
     );
 }
 
+const EXECUTIONS_PAGE_SIZE = 50;
+
+function countByStatus(jobs: ApiJobExecution[]): Record<string, number> {
+    const counts: Record<string, number> = {};
+    for (const job of jobs) {
+        counts[job.status] = (counts[job.status] ?? 0) + 1;
+    }
+    return counts;
+}
+
+function pageJobs(url: string, source: ApiJobExecution[]) {
+    const query = url.includes('?') ? new URLSearchParams(url.slice(url.indexOf('?') + 1)) : new URLSearchParams();
+
+    const jobType = query.get('jobType');
+    const wireStatuses = query.getAll('status');
+    const pageNumber = Number.parseInt(query.get('pageNumber') ?? '1', 10) || 1;
+    const pageSize = Number.parseInt(query.get('pageSize') ?? String(EXECUTIONS_PAGE_SIZE), 10) || EXECUTIONS_PAGE_SIZE;
+
+    let filtered = [...source];
+    if (jobType) {
+        filtered = filtered.filter((job) => job.jobType === jobType);
+    }
+    if (wireStatuses.length > 0) {
+        const allowed = new Set(wireStatuses);
+        filtered = filtered.filter((job) => allowed.has(job.status));
+    }
+    filtered.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
+    const start = (pageNumber - 1) * pageSize;
+    return {
+        items: filtered.slice(start, start + pageSize),
+        pageNumber,
+        pageSize,
+        totalItems: filtered.length,
+    };
+}
+
+function defaultApiGetResponse(url: string) {
+    if (url === '/jobs/specs') {
+        return Promise.resolve(mockJobSpecs);
+    }
+    if (url === '/jobs/status-counts') {
+        return Promise.resolve(countByStatus(mockJobs));
+    }
+    if (url === '/jobs' || url.startsWith('/jobs?')) {
+        return Promise.resolve(pageJobs(url, mockJobs));
+    }
+    if (url === '/schedule-triggers') {
+        return Promise.resolve(mockScheduleTriggers);
+    }
+    if (url === '/event-triggers' || url.startsWith('/event-triggers?')) {
+        return Promise.resolve(mockEventTriggers);
+    }
+    return Promise.reject(new Error(`Unmocked URL: ${url}`));
+}
+
 function setupDefaultMocks() {
-    mockApiGet.mockImplementation((url: string) => {
-        if (url === '/jobs' || url.startsWith('/jobs?')) {
-            return Promise.resolve({
-                items: mockJobs,
-                pageNumber: 1,
-                pageSize: 20,
-                totalItems: mockJobs.length,
-            });
-        }
-        if (url === '/schedule-triggers') {
-            return Promise.resolve(mockScheduleTriggers);
-        }
-        if (url === '/event-triggers' || url.startsWith('/event-triggers?')) {
-            return Promise.resolve(mockEventTriggers);
-        }
-        return Promise.reject(new Error(`Unmocked URL: ${url}`));
-    });
+    mockApiGet.mockImplementation(defaultApiGetResponse);
+    mockApiPatch.mockResolvedValue(undefined);
     mockApiPost.mockResolvedValue('new-job-id');
+}
+
+function cleanupRadixBodyState() {
+    document.querySelectorAll('[data-radix-focus-guard]').forEach((element) => element.remove());
+    document.body.style.pointerEvents = '';
+    document.body.removeAttribute('data-scroll-locked');
+    if (document.body.getAttribute('style') === '') {
+        document.body.removeAttribute('style');
+    }
 }
 
 beforeEach(() => {
     vi.clearAllMocks();
+    cleanupRadixBodyState();
     setupDefaultMocks();
 });
 
 afterEach(() => {
     vi.restoreAllMocks();
+    cleanupRadixBodyState();
 });
 
 describe('JobsPage', () => {
@@ -313,10 +401,20 @@ describe('JobsPage', () => {
             </TestWrapper>,
         );
 
-        expect(screen.getByRole('heading', { name: 'Jobs', level: 1 })).toBeInTheDocument();
+        expect(screen.getByRole('heading', { name: 'System Jobs', level: 1 })).toBeInTheDocument();
     });
 
-    it('renders the job count for default executions tab', async () => {
+    it('renders the system-scoped page description', () => {
+        render(
+            <TestWrapper>
+                <JobsPage />
+            </TestWrapper>,
+        );
+
+        expect(screen.getByText('View job history and configure automatic triggers.')).toBeInTheDocument();
+    });
+
+    it('does not render a title count adornment', async () => {
         render(
             <TestWrapper>
                 <JobsPage />
@@ -324,27 +422,10 @@ describe('JobsPage', () => {
         );
 
         await waitFor(() => {
-            const count = screen.getByTestId('jobs-page__count');
-            expect(count).toHaveTextContent('8');
+            expect(screen.getByRole('list', { name: /job history/i })).toBeInTheDocument();
         });
-    });
 
-    it('title badge updates to combined triggers count on Triggers tab', async () => {
-        const user = userEvent.setup();
-
-        render(
-            <TestWrapper>
-                <JobsPage />
-            </TestWrapper>,
-        );
-
-        const triggersTab = screen.getByRole('tab', { name: /triggers/i });
-        await user.click(triggersTab);
-
-        await waitFor(() => {
-            const count = screen.getByTestId('jobs-page__count');
-            expect(count).toHaveTextContent('8');
-        });
+        expect(screen.queryByTestId('jobs-page__count')).not.toBeInTheDocument();
     });
 
     it('renders the page icon as decorative', () => {
@@ -360,29 +441,30 @@ describe('JobsPage', () => {
 });
 
 describe('JobsPage tabs', () => {
-    it('renders Executions and Triggers tabs', () => {
+    it('renders History, Scheduled Jobs, and Event Triggers tabs', () => {
         render(
             <TestWrapper>
                 <JobsPage />
             </TestWrapper>,
         );
 
-        expect(screen.getByRole('tab', { name: /executions/i })).toBeInTheDocument();
-        expect(screen.getByRole('tab', { name: /triggers/i })).toBeInTheDocument();
+        expect(screen.getByRole('tab', { name: /history/i })).toBeInTheDocument();
+        expect(screen.getByRole('tab', { name: /scheduled jobs/i })).toBeInTheDocument();
+        expect(screen.getByRole('tab', { name: /event triggers/i })).toBeInTheDocument();
     });
 
-    it('Executions tab is selected by default', () => {
+    it('History tab is selected by default', () => {
         render(
             <TestWrapper>
                 <JobsPage />
             </TestWrapper>,
         );
 
-        const executionsTab = screen.getByRole('tab', { name: /executions/i });
+        const executionsTab = screen.getByRole('tab', { name: /history/i });
         expect(executionsTab).toHaveAttribute('data-state', 'active');
     });
 
-    it('switches to Triggers tab when clicked', async () => {
+    it('switches to Scheduled Jobs tab when clicked', async () => {
         const user = userEvent.setup();
 
         render(
@@ -391,23 +473,20 @@ describe('JobsPage tabs', () => {
             </TestWrapper>,
         );
 
-        const triggersTab = screen.getByRole('tab', { name: /triggers/i });
-        await user.click(triggersTab);
+        const schedulesTab = screen.getByRole('tab', { name: /scheduled jobs/i });
+        await user.click(schedulesTab);
 
-        expect(triggersTab).toHaveAttribute('data-state', 'active');
+        expect(schedulesTab).toHaveAttribute('data-state', 'active');
     });
 
-    it('shows combined trigger count in Triggers tab', async () => {
+    it('does not render count pills on the tabs', () => {
         render(
             <TestWrapper>
                 <JobsPage />
             </TestWrapper>,
         );
 
-        await waitFor(() => {
-            const triggersTab = screen.getByRole('tab', { name: /triggers/i });
-            expect(within(triggersTab).getByText('8')).toBeInTheDocument();
-        });
+        expect(document.querySelector('.tab-count')).not.toBeInTheDocument();
     });
 });
 
@@ -419,7 +498,7 @@ describe('JobsPage Executions tab', () => {
             </TestWrapper>,
         );
 
-        expect(screen.getByRole('list', { name: /job executions/i })).toBeInTheDocument();
+        expect(screen.getByRole('list', { name: /job history/i })).toBeInTheDocument();
     });
 
     it('renders execution items', async () => {
@@ -430,13 +509,13 @@ describe('JobsPage Executions tab', () => {
         );
 
         await waitFor(() => {
-            const list = screen.getByRole('list', { name: /job executions/i });
+            const list = screen.getByRole('list', { name: /job history/i });
             const items = within(list).getAllByRole('listitem');
             expect(items.length).toBe(8);
         });
     });
 
-    it('renders status summary badges', async () => {
+    it('does not render status summary pills', async () => {
         render(
             <TestWrapper>
                 <JobsPage />
@@ -444,12 +523,92 @@ describe('JobsPage Executions tab', () => {
         );
 
         await waitFor(() => {
-            expect(document.querySelector('[data-status="running"]')).toBeInTheDocument();
-            expect(document.querySelector('[data-status="pending"]')).toBeInTheDocument();
-            expect(document.querySelector('[data-status="completed"]')).toBeInTheDocument();
-            expect(document.querySelector('[data-status="failed"]')).toBeInTheDocument();
-            expect(document.querySelector('[data-status="cancelled"]')).toBeInTheDocument();
+            expect(screen.getByRole('list', { name: /job history/i })).toBeInTheDocument();
         });
+
+        expect(document.querySelector('[aria-label="Executions by status"]')).not.toBeInTheDocument();
+    });
+
+    it('renders the run-a-job button without a page caution', async () => {
+        render(
+            <TestWrapper>
+                <JobsPage />
+            </TestWrapper>,
+        );
+
+        expect(screen.getByRole('button', { name: /run a job/i })).toBeInTheDocument();
+        expect(screen.queryByTestId('jobs-page__run-caution')).not.toBeInTheDocument();
+    });
+
+    it('limits manager manual run options to backend-allowed job scopes', async () => {
+        const user = userEvent.setup();
+        const scopedSpecs: ApiJobSpec[] = [
+            {
+                jobType: 'ContentManual',
+                displayName: 'Content Manual',
+                category: 'Content',
+                scope: 'Content' as JobScopeValue,
+                enabled: true,
+                onDemand: true,
+                supportedTriggerModes: ['Manual'],
+                parameters: [],
+            },
+            {
+                jobType: 'UserManual',
+                displayName: 'User Manual',
+                category: 'Content',
+                scope: 'User' as JobScopeValue,
+                enabled: true,
+                onDemand: true,
+                supportedTriggerModes: ['Manual'],
+                parameters: [],
+            },
+            {
+                jobType: 'AdministrativeManual',
+                displayName: 'Administrative Manual',
+                category: 'System',
+                scope: 'Administrative' as JobScopeValue,
+                enabled: true,
+                onDemand: true,
+                supportedTriggerModes: ['Manual'],
+                parameters: [],
+            },
+            {
+                jobType: 'SystemManual',
+                displayName: 'System Manual',
+                category: 'System',
+                scope: 'System' as JobScopeValue,
+                enabled: true,
+                onDemand: true,
+                supportedTriggerModes: ['Manual'],
+                parameters: [],
+            },
+        ];
+        mockApiGet.mockImplementation((url: string) => {
+            if (url === '/jobs/specs') return Promise.resolve(scopedSpecs);
+            if (url === '/jobs/status-counts') return Promise.resolve(countByStatus(mockJobs));
+            if (url === '/jobs' || url.startsWith('/jobs?')) return Promise.resolve(pageJobs(url, mockJobs));
+            if (url === '/schedule-triggers') return Promise.resolve([]);
+            if (url === '/event-triggers' || url.startsWith('/event-triggers?')) return Promise.resolve([]);
+            return Promise.reject(new Error(`Unmocked URL: ${url}`));
+        });
+
+        render(
+            <TestWrapper role={Role.Manager}>
+                <JobsPage />
+            </TestWrapper>,
+        );
+
+        await user.click(screen.getByRole('button', { name: /run a job/i }));
+
+        const dialog = document.querySelector('[data-component="run-job-dialog"]') as HTMLElement;
+        const jobSelect = dialog.querySelector('[data-field="jobType"]') as HTMLElement;
+        await user.click(jobSelect);
+
+        expect(screen.getByRole('option', { name: 'Content Manual' })).toBeInTheDocument();
+        expect(screen.getByRole('option', { name: 'User Manual' })).toBeInTheDocument();
+        expect(screen.queryByRole('option', { name: 'Administrative Manual' })).not.toBeInTheDocument();
+        expect(screen.queryByRole('option', { name: 'System Manual' })).not.toBeInTheDocument();
     });
 
     it('renders filters component', () => {
@@ -513,7 +672,7 @@ describe('JobsPage Executions tab - filtering', () => {
         );
 
         await waitFor(() => {
-            const list = screen.getByRole('list', { name: /job executions/i });
+            const list = screen.getByRole('list', { name: /job history/i });
             expect(within(list).getAllByRole('listitem')).toHaveLength(8);
         });
 
@@ -524,7 +683,7 @@ describe('JobsPage Executions tab - filtering', () => {
         await user.click(failedOption);
 
         await waitFor(() => {
-            const list = screen.getByRole('list', { name: /job executions/i });
+            const list = screen.getByRole('list', { name: /job history/i });
             const items = within(list).getAllByRole('listitem');
             expect(items.length).toBe(1);
         });
@@ -540,7 +699,7 @@ describe('JobsPage Executions tab - filtering', () => {
         );
 
         await waitFor(() => {
-            const list = screen.getByRole('list', { name: /job executions/i });
+            const list = screen.getByRole('list', { name: /job history/i });
             expect(within(list).getAllByRole('listitem')).toHaveLength(8);
         });
 
@@ -551,7 +710,7 @@ describe('JobsPage Executions tab - filtering', () => {
         await user.click(rssSyncOption);
 
         await waitFor(() => {
-            const list = screen.getByRole('list', { name: /job executions/i });
+            const list = screen.getByRole('list', { name: /job history/i });
             const items = within(list).getAllByRole('listitem');
             expect(items.length).toBe(2);
         });
@@ -567,7 +726,7 @@ describe('JobsPage Executions tab - filtering', () => {
         );
 
         await waitFor(() => {
-            const list = screen.getByRole('list', { name: /job executions/i });
+            const list = screen.getByRole('list', { name: /job history/i });
             expect(within(list).getAllByRole('listitem')).toHaveLength(8);
         });
 
@@ -584,9 +743,132 @@ describe('JobsPage Executions tab - filtering', () => {
         await user.click(runningOption);
 
         await waitFor(() => {
-            expect(screen.getByText('No job executions found')).toBeInTheDocument();
+            expect(screen.getByText('No job history found')).toBeInTheDocument();
             expect(screen.getByText('Try adjusting your filters')).toBeInTheDocument();
         });
+    });
+});
+
+describe('JobsPage Executions tab - server paging', () => {
+    function makeManyJobs(count: number): ApiJobExecution[] {
+        return Array.from({ length: count }, (_, i) => ({
+            id: `exec-${i}`,
+            jobType: 'RSS Sync',
+            scope: 'Content' as JobScopeValue,
+            status: 'Completed' as JobExecutionStatusValue,
+            progress: 100,
+            createdAt: new Date(Date.UTC(2024, 0, 1, 0, 0, count - i)).toISOString(),
+            startedAt: '2024-01-01T00:00:00Z',
+            completedAt: '2024-01-01T00:00:01Z',
+            statusMessage: `Run ${i}`,
+        }));
+    }
+
+    it('renders only a bounded page of rows regardless of total count', async () => {
+        const many = makeManyJobs(130);
+        mockApiGet.mockImplementation((url: string) => {
+            if (url === '/jobs/specs') return Promise.resolve(mockJobSpecs);
+            if (url === '/jobs/status-counts') return Promise.resolve(countByStatus(many));
+            if (url === '/jobs' || url.startsWith('/jobs?')) return Promise.resolve(pageJobs(url, many));
+            if (url === '/schedule-triggers') return Promise.resolve([]);
+            if (url === '/event-triggers' || url.startsWith('/event-triggers?')) return Promise.resolve([]);
+            return Promise.reject(new Error(`Unmocked URL: ${url}`));
+        });
+
+        render(
+            <TestWrapper>
+                <JobsPage />
+            </TestWrapper>,
+        );
+
+        await waitFor(() => {
+            const list = screen.getByRole('list', { name: /job history/i });
+            expect(within(list).getAllByRole('listitem')).toHaveLength(EXECUTIONS_PAGE_SIZE);
+        });
+
+        expect(screen.getByText('Page 1 of 3')).toBeInTheDocument();
+    });
+
+    it('advances to the next page and requests the next pageNumber from the server', async () => {
+        const user = userEvent.setup();
+        const many = makeManyJobs(130);
+        mockApiGet.mockImplementation((url: string) => {
+            if (url === '/jobs/specs') return Promise.resolve(mockJobSpecs);
+            if (url === '/jobs/status-counts') return Promise.resolve(countByStatus(many));
+            if (url === '/jobs' || url.startsWith('/jobs?')) return Promise.resolve(pageJobs(url, many));
+            if (url === '/schedule-triggers') return Promise.resolve([]);
+            if (url === '/event-triggers' || url.startsWith('/event-triggers?')) return Promise.resolve([]);
+            return Promise.reject(new Error(`Unmocked URL: ${url}`));
+        });
+
+        render(
+            <TestWrapper>
+                <JobsPage />
+            </TestWrapper>,
+        );
+
+        await waitFor(() => {
+            expect(screen.getByText('Page 1 of 3')).toBeInTheDocument();
+        });
+
+        expect(document.querySelector('[data-execution-id="exec-0"]')).toBeInTheDocument();
+
+        await user.click(screen.getByRole('button', { name: /next page/i }));
+
+        await waitFor(() => {
+            expect(screen.getByText('Page 2 of 3')).toBeInTheDocument();
+        });
+
+        await waitFor(() => {
+            expect(document.querySelector('[data-execution-id="exec-50"]')).toBeInTheDocument();
+        });
+        expect(document.querySelector('[data-execution-id="exec-0"]')).not.toBeInTheDocument();
+
+        const lastJobsCall = mockApiGet.mock.calls
+            .map((c) => c[0] as string)
+            .filter((u) => u.startsWith('/jobs?'))
+            .pop();
+        expect(lastJobsCall).toContain('pageNumber=2');
+    });
+
+    it('does not render the pager when results fit on one page', async () => {
+        render(
+            <TestWrapper>
+                <JobsPage />
+            </TestWrapper>,
+        );
+
+        await waitFor(() => {
+            const list = screen.getByRole('list', { name: /job history/i });
+            expect(within(list).getAllByRole('listitem')).toHaveLength(8);
+        });
+
+        expect(document.querySelector('[data-component="executions-pager"]')).not.toBeInTheDocument();
+    });
+
+    it('renders first and last page controls in the shared pager', async () => {
+        const many = makeManyJobs(130);
+        mockApiGet.mockImplementation((url: string) => {
+            if (url === '/jobs/specs') return Promise.resolve(mockJobSpecs);
+            if (url === '/jobs/status-counts') return Promise.resolve(countByStatus(many));
+            if (url === '/jobs' || url.startsWith('/jobs?')) return Promise.resolve(pageJobs(url, many));
+            if (url === '/schedule-triggers') return Promise.resolve([]);
+            if (url === '/event-triggers' || url.startsWith('/event-triggers?')) return Promise.resolve([]);
+            return Promise.reject(new Error(`Unmocked URL: ${url}`));
+        });
+
+        render(
+            <TestWrapper>
+                <JobsPage />
+            </TestWrapper>,
+        );
+
+        await waitFor(() => {
+            expect(screen.getByText('Page 1 of 3')).toBeInTheDocument();
+        });
+
+        expect(screen.getByRole('button', { name: /first page/i })).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: /last page/i })).toBeInTheDocument();
     });
 });
 
@@ -618,6 +900,65 @@ describe('JobsPage Executions tab - execution details', () => {
         expect(logs).toHaveAttribute('data-state', 'open');
     });
 
+    it('expands and scrolls the execution linked by the job query parameter', async () => {
+        const scrollIntoView = vi.spyOn(Element.prototype, 'scrollIntoView');
+
+        render(
+            <TestWrapper initialRoute="/?job=exec-2">
+                <JobsPage />
+            </TestWrapper>,
+        );
+
+        const linkedRow = await waitFor(() => {
+            const row = document.querySelector('[data-execution-id="exec-2"]');
+            expect(row).toBeInTheDocument();
+            return row as HTMLElement;
+        });
+
+        expect(within(linkedRow).getByTestId('execution-row__trigger')).toHaveAttribute('aria-expanded', 'true');
+        expect(within(linkedRow).getByTestId('execution-row__logs')).toHaveAttribute('data-state', 'open');
+        expect(scrollIntoView).toHaveBeenCalledWith({ block: 'center' });
+    });
+
+    it('fetches and expands a linked child execution omitted by the roots-only list', async () => {
+        const scrollIntoView = vi.spyOn(Element.prototype, 'scrollIntoView');
+        const linkedExecutionId = '11111111-1111-4111-8111-111111111111';
+        const linkedExecution: ApiJobExecution = {
+            id: linkedExecutionId,
+            parentExecutionId: '22222222-2222-4222-8222-222222222222',
+            jobType: 'DownloadRefresh',
+            scope: 'Content',
+            status: 'Completed',
+            progress: 100,
+            createdAt: '2024-01-15T10:31:00Z',
+            startedAt: '2024-01-15T10:31:00Z',
+            completedAt: '2024-01-15T10:31:05Z',
+        };
+        mockApiGet.mockImplementation((url: string) => {
+            if (url === `/jobs/${linkedExecutionId}`) {
+                return Promise.resolve(linkedExecution);
+            }
+            return defaultApiGetResponse(url);
+        });
+
+        render(
+            <TestWrapper initialRoute={`/?job=${linkedExecutionId}`}>
+                <JobsPage />
+            </TestWrapper>,
+        );
+
+        const linkedRow = await waitFor(() => {
+            const row = document.querySelector(`[data-execution-id="${linkedExecutionId}"]`);
+            expect(row).toBeInTheDocument();
+            return row as HTMLElement;
+        });
+
+        expect(mockApiGet).toHaveBeenCalledWith(`/jobs/${linkedExecutionId}`);
+        expect(within(linkedRow).getByTestId('execution-row__trigger')).toHaveAttribute('aria-expanded', 'true');
+        expect(within(linkedRow).getByTestId('execution-row__logs')).toHaveAttribute('data-state', 'open');
+        expect(scrollIntoView).toHaveBeenCalledWith({ block: 'center' });
+    });
+
     it('clicking expanded execution row collapses it', async () => {
         const user = userEvent.setup();
 
@@ -637,33 +978,111 @@ describe('JobsPage Executions tab - execution details', () => {
 
         expect(logs).toHaveAttribute('data-state', 'closed');
     });
+
+    it('expanded execution row survives a polling refresh that updates the same execution', async () => {
+        const user = userEvent.setup();
+
+        let callCount = 0;
+        mockApiGet.mockImplementation((url: string) => {
+            if (url === '/jobs/specs') return Promise.resolve(mockJobSpecs);
+            if (url === '/jobs/status-counts') return Promise.resolve({});
+            if (url === '/jobs' || url.startsWith('/jobs?')) {
+                callCount++;
+                const items: ApiJobExecution[] = [
+                    {
+                        id: 'exec-poll',
+                        jobType: 'RSS Sync',
+                        scope: 'Content' as JobScopeValue,
+                        status: (callCount === 1 ? 'Running' : 'Completed') as JobExecutionStatusValue,
+                        progress: callCount === 1 ? 30 : 100,
+                        createdAt: '2024-01-15T10:00:00Z',
+                        startedAt: '2024-01-15T10:00:01Z',
+                        completedAt: callCount === 1 ? null : '2024-01-15T10:00:30Z',
+                        statusMessage: callCount === 1 ? 'Checking feed' : null,
+                    },
+                ];
+                return Promise.resolve({ items, pageNumber: 1, pageSize: 20, totalItems: 1 });
+            }
+            if (url === '/schedule-triggers') return Promise.resolve([]);
+            if (url === '/event-triggers' || url.startsWith('/event-triggers?')) return Promise.resolve([]);
+            return Promise.reject(new Error(`Unmocked URL: ${url}`));
+        });
+
+        const queryClient = createTestQueryClient();
+
+        render(
+            <TestWrapper queryClient={queryClient}>
+                <JobsPage />
+            </TestWrapper>,
+        );
+
+        const [trigger] = await screen.findAllByTestId('execution-row__trigger');
+        await user.click(trigger);
+        const [logs] = await screen.findAllByTestId('execution-row__logs');
+        expect(logs).toHaveAttribute('data-state', 'open');
+
+        await queryClient.invalidateQueries({ queryKey: ['jobs', 'list'] });
+
+        await waitFor(() => {
+            const root = document.querySelector('[data-execution-id="exec-poll"]');
+            expect(root).toHaveAttribute('data-status', 'completed');
+        });
+
+        const [logsAfter] = await screen.findAllByTestId('execution-row__logs');
+        expect(logsAfter).toHaveAttribute('data-state', 'open');
+        expect(logsAfter).toBe(logs);
+    });
+
+    it('renders exactly one row per execution.id even after a poll refresh', async () => {
+        let callCount = 0;
+        mockApiGet.mockImplementation((url: string) => {
+            if (url === '/jobs/specs') return Promise.resolve(mockJobSpecs);
+            if (url === '/jobs/status-counts') return Promise.resolve({});
+            if (url === '/jobs' || url.startsWith('/jobs?')) {
+                callCount++;
+                const items: ApiJobExecution[] = [
+                    {
+                        id: 'exec-stream',
+                        jobType: 'RSS Sync',
+                        scope: 'Content' as JobScopeValue,
+                        status: 'Running' as JobExecutionStatusValue,
+                        progress: callCount * 25,
+                        createdAt: '2024-01-15T10:00:00Z',
+                        startedAt: '2024-01-15T10:00:01Z',
+                        completedAt: null,
+                        statusMessage: `Checking feed ${callCount}`,
+                    },
+                ];
+                return Promise.resolve({ items, pageNumber: 1, pageSize: 20, totalItems: 1 });
+            }
+            if (url === '/schedule-triggers') return Promise.resolve([]);
+            if (url === '/event-triggers' || url.startsWith('/event-triggers?')) return Promise.resolve([]);
+            return Promise.reject(new Error(`Unmocked URL: ${url}`));
+        });
+
+        const queryClient = createTestQueryClient();
+
+        render(
+            <TestWrapper queryClient={queryClient}>
+                <JobsPage />
+            </TestWrapper>,
+        );
+
+        await waitFor(() => {
+            expect(document.querySelectorAll('[data-execution-id="exec-stream"]')).toHaveLength(1);
+        });
+
+        await queryClient.invalidateQueries({ queryKey: ['jobs', 'list'] });
+
+        await waitFor(() => {
+            expect(screen.getByText('Checking feed 2')).toBeInTheDocument();
+        });
+        expect(document.querySelectorAll('[data-execution-id="exec-stream"]')).toHaveLength(1);
+    });
 });
 
-describe('JobsPage Triggers tab', () => {
-    it('renders Triggers tab', () => {
-        render(
-            <TestWrapper>
-                <JobsPage />
-            </TestWrapper>,
-        );
-
-        expect(screen.getByRole('tab', { name: /triggers/i })).toBeInTheDocument();
-    });
-
-    it('shows combined triggers count in tab', async () => {
-        render(
-            <TestWrapper>
-                <JobsPage />
-            </TestWrapper>,
-        );
-
-        await waitFor(() => {
-            const triggersTab = screen.getByRole('tab', { name: /triggers/i });
-            expect(within(triggersTab).getByText('8')).toBeInTheDocument();
-        });
-    });
-
-    it('renders triggers list when Triggers tab is selected', async () => {
+describe('JobsPage Schedules tab', () => {
+    it('renders the schedule triggers list when the tab is selected', async () => {
         const user = userEvent.setup();
 
         render(
@@ -672,29 +1091,9 @@ describe('JobsPage Triggers tab', () => {
             </TestWrapper>,
         );
 
-        const triggersTab = screen.getByRole('tab', { name: /triggers/i });
-        await user.click(triggersTab);
+        await user.click(screen.getByRole('tab', { name: /scheduled jobs/i }));
 
-        expect(screen.getByRole('list', { name: /triggers/i })).toBeInTheDocument();
-    });
-
-    it('renders both schedule and event trigger items', async () => {
-        const user = userEvent.setup();
-
-        render(
-            <TestWrapper>
-                <JobsPage />
-            </TestWrapper>,
-        );
-
-        const triggersTab = screen.getByRole('tab', { name: /triggers/i });
-        await user.click(triggersTab);
-
-        await waitFor(() => {
-            const list = screen.getByRole('list', { name: /triggers/i });
-            const items = within(list).getAllByRole('listitem');
-            expect(items.length).toBe(8);
-        });
+        expect(screen.getByRole('list', { name: /schedule triggers/i })).toBeInTheDocument();
     });
 
     it('renders schedule trigger names', async () => {
@@ -706,14 +1105,77 @@ describe('JobsPage Triggers tab', () => {
             </TestWrapper>,
         );
 
-        const triggersTab = screen.getByRole('tab', { name: /triggers/i });
-        await user.click(triggersTab);
+        await user.click(screen.getByRole('tab', { name: /scheduled jobs/i }));
 
         await waitFor(() => {
             expect(screen.getByText('Hourly RSS Sync')).toBeInTheDocument();
             expect(screen.getByText('Daily Metadata Refresh')).toBeInTheDocument();
             expect(screen.getByText('Weekly Database Backup')).toBeInTheDocument();
         });
+    });
+
+    it('renders schedule cadence labels with the UTC qualifier', async () => {
+        const user = userEvent.setup();
+
+        render(
+            <TestWrapper>
+                <JobsPage />
+            </TestWrapper>,
+        );
+
+        await user.click(screen.getByRole('tab', { name: /scheduled jobs/i }));
+
+        await waitFor(() => {
+            expect(screen.getByText('Every hour (UTC)')).toBeInTheDocument();
+            expect(screen.getByText('Daily at 6 AM (UTC)')).toBeInTheDocument();
+            expect(screen.getByText('Weekly on Sunday (UTC)')).toBeInTheDocument();
+        });
+    });
+
+    it('applies data-trigger-id to each schedule item', async () => {
+        const user = userEvent.setup();
+
+        render(
+            <TestWrapper>
+                <JobsPage />
+            </TestWrapper>,
+        );
+
+        await user.click(screen.getByRole('tab', { name: /scheduled jobs/i }));
+
+        await waitFor(() => {
+            expect(document.querySelectorAll('[data-trigger-id]').length).toBe(5);
+        });
+    });
+
+    it('does not render a caution note on the schedules tab', async () => {
+        const user = userEvent.setup();
+
+        render(
+            <TestWrapper>
+                <JobsPage />
+            </TestWrapper>,
+        );
+
+        await user.click(screen.getByRole('tab', { name: /scheduled jobs/i }));
+
+        expect(screen.queryByTestId('jobs-page__schedule-caution')).not.toBeInTheDocument();
+    });
+});
+
+describe('JobsPage Events tab', () => {
+    it('renders the event triggers list when the tab is selected', async () => {
+        const user = userEvent.setup();
+
+        render(
+            <TestWrapper>
+                <JobsPage />
+            </TestWrapper>,
+        );
+
+        await user.click(screen.getByRole('tab', { name: /event triggers/i }));
+
+        expect(screen.getByRole('list', { name: /event triggers/i })).toBeInTheDocument();
     });
 
     it('renders event trigger names', async () => {
@@ -725,8 +1187,7 @@ describe('JobsPage Triggers tab', () => {
             </TestWrapper>,
         );
 
-        const triggersTab = screen.getByRole('tab', { name: /triggers/i });
-        await user.click(triggersTab);
+        await user.click(screen.getByRole('tab', { name: /event triggers/i }));
 
         await waitFor(() => {
             expect(screen.getByText('Refresh on Download Complete')).toBeInTheDocument();
@@ -735,7 +1196,7 @@ describe('JobsPage Triggers tab', () => {
         });
     });
 
-    it('applies data-trigger-id to trigger items', async () => {
+    it('applies data-event-trigger-id to each event item', async () => {
         const user = userEvent.setup();
 
         render(
@@ -744,19 +1205,136 @@ describe('JobsPage Triggers tab', () => {
             </TestWrapper>,
         );
 
-        const triggersTab = screen.getByRole('tab', { name: /triggers/i });
-        await user.click(triggersTab);
+        await user.click(screen.getByRole('tab', { name: /event triggers/i }));
 
         await waitFor(() => {
-            const scheduleItems = document.querySelectorAll('[data-trigger-id]');
-            const eventItems = document.querySelectorAll('[data-event-trigger-id]');
-            expect(scheduleItems.length + eventItems.length).toBe(8);
+            expect(document.querySelectorAll('[data-event-trigger-id]').length).toBe(3);
         });
+    });
+
+    it('counts executable context criteria inside the items wrapper', async () => {
+        const user = userEvent.setup();
+
+        render(
+            <TestWrapper>
+                <JobsPage />
+            </TestWrapper>,
+        );
+
+        await user.click(screen.getByRole('tab', { name: /event triggers/i }));
+
+        const row = await waitFor(() => {
+            const element = document.querySelector('[data-event-trigger-id="event-1"]');
+            expect(element).toBeInTheDocument();
+            return element as HTMLElement;
+        });
+
+        expect(within(row).getByText('1 filter')).toBeInTheDocument();
+    });
+
+    it('renders multi-event filter values instead of all events', async () => {
+        const user = userEvent.setup();
+        const multiEventTrigger: ApiEventTrigger = {
+            id: 'event-multi',
+            name: 'Cleanup After Download Ends',
+            jobType: 'Cleanup Downloads',
+            scope: 'Administrative' as JobScopeValue,
+            eventFilter: {
+                eventName: { operator: 'In', values: ['download.imported', 'download.failed'] },
+            },
+            enabled: true,
+            delaySeconds: 0,
+            createdAt: '2024-01-01T00:00:00Z',
+        };
+        mockApiGet.mockImplementation((url: string) => {
+            if (url === '/event-triggers' || url.startsWith('/event-triggers?')) {
+                return Promise.resolve([...mockEventTriggers, multiEventTrigger]);
+            }
+            return defaultApiGetResponse(url);
+        });
+
+        render(
+            <TestWrapper>
+                <JobsPage />
+            </TestWrapper>,
+        );
+
+        await user.click(screen.getByRole('tab', { name: /event triggers/i }));
+
+        const row = await waitFor(() => {
+            const element = document.querySelector('[data-event-trigger-id="event-multi"]');
+            expect(element).toBeInTheDocument();
+            return element as HTMLElement;
+        });
+
+        expect(within(row).getByText('download.imported, download.failed')).toBeInTheDocument();
+        expect(within(row).queryByText('All events')).not.toBeInTheDocument();
+    });
+
+    it('does not render a caution note on the events tab', async () => {
+        const user = userEvent.setup();
+
+        render(
+            <TestWrapper>
+                <JobsPage />
+            </TestWrapper>,
+        );
+
+        await user.click(screen.getByRole('tab', { name: /event triggers/i }));
+
+        expect(screen.queryByTestId('jobs-page__event-caution')).not.toBeInTheDocument();
     });
 });
 
-describe('JobsPage Triggers tab - Add Trigger', () => {
-    it('shows Add Schedule and Add Event Trigger buttons for Admin role', async () => {
+describe('JobsPage roots-only toggle', () => {
+    it('defaults the toggle on and requests rootsOnly=true', async () => {
+        render(
+            <TestWrapper>
+                <JobsPage />
+            </TestWrapper>,
+        );
+
+        const toggle = await screen.findByRole('switch', { name: /show top level only/i });
+        expect(toggle).toHaveAttribute('data-state', 'checked');
+
+        await waitFor(() => {
+            const jobsCalls = mockApiGet.mock.calls.map((c) => c[0] as string).filter((u) => u.startsWith('/jobs?'));
+            expect(jobsCalls.some((u) => u.includes('rootsOnly=true'))).toBe(true);
+        });
+    });
+
+    it('passes rootsOnly=false to the server when the toggle is turned off', async () => {
+        const user = userEvent.setup();
+
+        render(
+            <TestWrapper>
+                <JobsPage />
+            </TestWrapper>,
+        );
+
+        const toggle = await screen.findByRole('switch', { name: /show top level only/i });
+        await user.click(toggle);
+
+        await waitFor(() => {
+            const jobsCalls = mockApiGet.mock.calls.map((c) => c[0] as string).filter((u) => u.startsWith('/jobs?'));
+            expect(jobsCalls.some((u) => u.includes('rootsOnly=false'))).toBe(true);
+        });
+    });
+
+    it('restores the toggle off state from the ?rootsOnly=0 search param', async () => {
+        render(
+            <TestWrapper initialRoute="/?rootsOnly=0">
+                <JobsPage />
+            </TestWrapper>,
+        );
+
+        const toggle = await screen.findByRole('switch', { name: /show top level only/i });
+        expect(toggle).toHaveAttribute('data-state', 'unchecked');
+    });
+});
+
+describe('JobsPage Schedules tab - Add and Actions', () => {
+    it('shows Add Schedule button for Admin role', async () => {
         const user = userEvent.setup();
 
         render(
@@ -765,11 +1343,69 @@ describe('JobsPage Triggers tab - Add Trigger', () => {
             </TestWrapper>,
         );
 
-        const triggersTab = screen.getByRole('tab', { name: /triggers/i });
-        await user.click(triggersTab);
+        await user.click(screen.getByRole('tab', { name: /scheduled jobs/i }));
 
         expect(screen.getByRole('button', { name: /add schedule/i })).toBeInTheDocument();
+    });
+
+    it('shows Add Event Trigger button for Admin role', async () => {
+        const user = userEvent.setup();
+
+        render(
+            <TestWrapper role={Role.Admin}>
+                <JobsPage />
+            </TestWrapper>,
+        );
+
+        await user.click(screen.getByRole('tab', { name: /event triggers/i }));
+
         expect(screen.getByRole('button', { name: /add event trigger/i })).toBeInTheDocument();
+    });
+
+    it('creates an event trigger with wrapped context criteria', async () => {
+        const user = userEvent.setup();
+        mockApiGet.mockImplementation((url: string) => {
+            if (url === '/jobs/specs') {
+                return Promise.resolve([{ ...mockJobSpecs[0], enabled: true }]);
+            }
+            return defaultApiGetResponse(url);
+        });
+
+        render(
+            <TestWrapper role={Role.Admin}>
+                <JobsPage />
+            </TestWrapper>,
+        );
+
+        await user.click(screen.getByRole('tab', { name: /event triggers/i }));
+        await user.click(screen.getByRole('button', { name: /add event trigger/i }));
+        await user.type(screen.getByRole('textbox', { name: /^name/i }), 'Kind-X metadata refresh');
+        await user.click(screen.getByRole('combobox', { name: /job template/i }));
+        await user.click(screen.getByRole('option', { name: 'Content metadata refresh item' }));
+        await user.type(screen.getByRole('textbox', { name: 'Pattern (Regex)' }), 'content\\.metadata\\.refresh');
+        await user.click(screen.getByRole('button', { name: 'Add Filter' }));
+        await user.type(screen.getByRole('textbox', { name: 'Filter 1 key' }), 'content.type');
+        await user.type(screen.getByRole('textbox', { name: 'Filter 1 pattern' }), '^kind-x$');
+        await user.click(screen.getByRole('switch', { name: 'Filter 1 negate' }));
+        await user.click(screen.getByRole('button', { name: /save/i }));
+
+        await waitFor(() => {
+            expect(mockApiPost).toHaveBeenCalledWith('/event-triggers', {
+                name: 'Kind-X metadata refresh',
+                jobType: 'ContentMetadataRefreshItem',
+                eventFilter: {
+                    eventName: { operator: 'regex', value: 'content\\.metadata\\.refresh' },
+                    eventContext: {
+                        items: {
+                            'content.type': { operator: 'regex', value: '^kind-x$', negate: true },
+                        },
+                    },
+                },
+                scope: 'Administrative',
+                enabled: true,
+                delaySeconds: 0,
+            });
+        });
     });
 
     it('hides Add buttons for Manager role', async () => {
@@ -781,10 +1417,10 @@ describe('JobsPage Triggers tab - Add Trigger', () => {
             </TestWrapper>,
         );
 
-        const triggersTab = screen.getByRole('tab', { name: /triggers/i });
-        await user.click(triggersTab);
-
+        await user.click(screen.getByRole('tab', { name: /scheduled jobs/i }));
         expect(screen.queryByRole('button', { name: /add schedule/i })).not.toBeInTheDocument();
+
+        await user.click(screen.getByRole('tab', { name: /event triggers/i }));
         expect(screen.queryByRole('button', { name: /add event trigger/i })).not.toBeInTheDocument();
     });
 
@@ -797,18 +1433,53 @@ describe('JobsPage Triggers tab - Add Trigger', () => {
             </TestWrapper>,
         );
 
-        const triggersTab = screen.getByRole('tab', { name: /triggers/i });
-        await user.click(triggersTab);
-
-        const addButton = screen.getByRole('button', { name: /add schedule/i });
-        await user.click(addButton);
+        await user.click(screen.getByRole('tab', { name: /scheduled jobs/i }));
+        await user.click(screen.getByRole('button', { name: /add schedule/i }));
 
         expect(screen.getByText('Add Schedule Trigger')).toBeInTheDocument();
-    });
-});
 
-describe('JobsPage Triggers tab - Trigger Actions', () => {
-    it('shows toggle switch for each trigger', async () => {
+        await user.keyboard('{Escape}');
+    });
+
+    it('uses non-on-demand catalog specs for job choices on a clean install', async () => {
+        const user = userEvent.setup();
+
+        mockApiGet.mockImplementation((url: string) => {
+            if (url === '/jobs/specs') return Promise.resolve(mockJobSpecs);
+            if (url === '/jobs/status-counts') return Promise.resolve({});
+            if (url === '/jobs' || url.startsWith('/jobs?')) {
+                return Promise.resolve({ items: [], pageNumber: 1, pageSize: 20, totalItems: 0 });
+            }
+            if (url === '/schedule-triggers') return Promise.resolve([]);
+            if (url === '/event-triggers' || url.startsWith('/event-triggers?')) return Promise.resolve([]);
+            return Promise.reject(new Error(`Unmocked URL: ${url}`));
+        });
+
+        render(
+            <TestWrapper role={Role.Admin}>
+                <JobsPage />
+            </TestWrapper>,
+        );
+
+        await user.click(screen.getByRole('tab', { name: /scheduled jobs/i }));
+        await user.click(screen.getByRole('button', { name: /add schedule/i }));
+
+        const templateTrigger = screen.getByRole('combobox', { name: /job template/i });
+        await user.click(templateTrigger);
+
+        const refreshOption = screen.getByRole('option', { name: 'Content metadata refresh item (unavailable)' });
+        const releaseSearchOption = screen.getByRole('option', { name: 'Release search item (unavailable)' });
+
+        expect(refreshOption).toBeInTheDocument();
+        expect(refreshOption).toHaveAttribute('aria-disabled', 'true');
+        expect(releaseSearchOption).toBeInTheDocument();
+        expect(releaseSearchOption).toHaveAttribute('aria-disabled', 'true');
+        expect(screen.queryByRole('option', { name: /backup database/i })).not.toBeInTheDocument();
+
+        await user.keyboard('{Escape}');
+    });
+
+    it('keeps historical trigger job types editable when the catalog spec is unavailable', async () => {
         const user = userEvent.setup();
 
         render(
@@ -817,12 +1488,45 @@ describe('JobsPage Triggers tab - Trigger Actions', () => {
             </TestWrapper>,
         );
 
-        const triggersTab = screen.getByRole('tab', { name: /triggers/i });
-        await user.click(triggersTab);
+        await user.click(screen.getByRole('tab', { name: /scheduled jobs/i }));
+
+        const editButton = await waitFor(() => {
+            const btn = document.querySelector('[data-action="edit"][data-target="trigger-2"]');
+            expect(btn).toBeInTheDocument();
+            return btn as HTMLElement;
+        });
+        await user.click(editButton);
+
+        expect(screen.getByRole('combobox', { name: /job template/i })).toHaveTextContent(
+            'Content metadata refresh item',
+        );
+
+        await user.click(screen.getByRole('button', { name: /save/i }));
 
         await waitFor(() => {
-            const switches = document.querySelectorAll('[data-action="toggle"]');
-            expect(switches.length).toBe(5);
+            expect(mockApiPatch).toHaveBeenCalledWith('/schedule-triggers/trigger-2', {
+                name: { value: 'Daily Metadata Refresh' },
+                schedule: { value: '0 6 * * *' },
+                enabled: { value: true },
+            });
+        });
+
+        await user.keyboard('{Escape}');
+    });
+
+    it('shows toggle switch for each schedule trigger', async () => {
+        const user = userEvent.setup();
+
+        render(
+            <TestWrapper role={Role.Admin}>
+                <JobsPage />
+            </TestWrapper>,
+        );
+
+        await user.click(screen.getByRole('tab', { name: /scheduled jobs/i }));
+
+        await waitFor(() => {
+            expect(document.querySelectorAll('[data-action="toggle"]').length).toBe(5);
         });
     });
 
@@ -835,14 +1539,11 @@ describe('JobsPage Triggers tab - Trigger Actions', () => {
             </TestWrapper>,
         );
 
-        const triggersTab = screen.getByRole('tab', { name: /triggers/i });
-        await user.click(triggersTab);
+        await user.click(screen.getByRole('tab', { name: /scheduled jobs/i }));
 
         await waitFor(() => {
-            const editButtons = document.querySelectorAll('[data-action="edit"]');
-            const deleteButtons = document.querySelectorAll('[data-action="delete"]');
-            expect(editButtons.length).toBe(5);
-            expect(deleteButtons.length).toBe(5);
+            expect(document.querySelectorAll('[data-action="edit"]').length).toBe(5);
+            expect(document.querySelectorAll('[data-action="delete"]').length).toBe(5);
         });
     });
 
@@ -855,8 +1556,7 @@ describe('JobsPage Triggers tab - Trigger Actions', () => {
             </TestWrapper>,
         );
 
-        const triggersTab = screen.getByRole('tab', { name: /triggers/i });
-        await user.click(triggersTab);
+        await user.click(screen.getByRole('tab', { name: /scheduled jobs/i }));
 
         expect(document.querySelectorAll('[data-action="edit"]').length).toBe(0);
         expect(document.querySelectorAll('[data-action="delete"]').length).toBe(0);
@@ -871,13 +1571,30 @@ describe('JobsPage Triggers tab - Trigger Actions', () => {
             </TestWrapper>,
         );
 
-        const triggersTab = screen.getByRole('tab', { name: /triggers/i });
-        await user.click(triggersTab);
+        await user.click(screen.getByRole('tab', { name: /scheduled jobs/i }));
 
         await waitFor(() => {
-            const runNowButtons = document.querySelectorAll('[data-action="run-now"]');
-            expect(runNowButtons.length).toBe(5);
+            expect(document.querySelectorAll('[data-action="run-now"]').length).toBe(4);
         });
+    });
+
+    it('hides run now button when catalog spec is not OnDemand', async () => {
+        const user = userEvent.setup();
+
+        render(
+            <TestWrapper role={Role.Admin}>
+                <JobsPage />
+            </TestWrapper>,
+        );
+
+        await user.click(screen.getByRole('tab', { name: /scheduled jobs/i }));
+
+        await waitFor(() => {
+            expect(screen.getByText('Daily Metadata Refresh')).toBeInTheDocument();
+        });
+
+        expect(document.querySelector('[data-trigger-id="trigger-2"] [data-action="run-now"]')).not.toBeInTheDocument();
+        expect(document.querySelector('[data-trigger-id="trigger-1"] [data-action="run-now"]')).toBeInTheDocument();
     });
 
     it('opens edit form when edit button is clicked', async () => {
@@ -889,8 +1606,7 @@ describe('JobsPage Triggers tab - Trigger Actions', () => {
             </TestWrapper>,
         );
 
-        const triggersTab = screen.getByRole('tab', { name: /triggers/i });
-        await user.click(triggersTab);
+        await user.click(screen.getByRole('tab', { name: /scheduled jobs/i }));
 
         const editButton = await waitFor(() => {
             const btn = document.querySelector('[data-action="edit"]');
@@ -911,8 +1627,7 @@ describe('JobsPage Triggers tab - Trigger Actions', () => {
             </TestWrapper>,
         );
 
-        const triggersTab = screen.getByRole('tab', { name: /triggers/i });
-        await user.click(triggersTab);
+        await user.click(screen.getByRole('tab', { name: /scheduled jobs/i }));
 
         const deleteButton = await waitFor(() => {
             const btn = document.querySelector('[data-action="delete"]');
@@ -934,8 +1649,7 @@ describe('JobsPage Triggers tab - Trigger Actions', () => {
             </TestWrapper>,
         );
 
-        const triggersTab = screen.getByRole('tab', { name: /triggers/i });
-        await user.click(triggersTab);
+        await user.click(screen.getByRole('tab', { name: /scheduled jobs/i }));
 
         const runNowButton = await waitFor(() => {
             const btn = document.querySelector('[data-action="run-now"]');
@@ -945,12 +1659,16 @@ describe('JobsPage Triggers tab - Trigger Actions', () => {
         await user.click(runNowButton);
 
         await waitFor(() => {
-            expect(mockApiPost).toHaveBeenCalledWith('/jobs', expect.anything());
+            expect(mockApiPost).toHaveBeenCalledWith('/jobs/enqueue', {
+                jobType: 'RSS Sync',
+                extensionId: undefined,
+                parameters: undefined,
+            });
         });
     });
 });
 
-describe('JobsPage Triggers tab - Event Trigger Actions', () => {
+describe('JobsPage Events tab - Event Trigger Actions', () => {
     it('shows toggle switch for event triggers', async () => {
         const user = userEvent.setup();
 
@@ -960,12 +1678,10 @@ describe('JobsPage Triggers tab - Event Trigger Actions', () => {
             </TestWrapper>,
         );
 
-        const triggersTab = screen.getByRole('tab', { name: /triggers/i });
-        await user.click(triggersTab);
+        await user.click(screen.getByRole('tab', { name: /event triggers/i }));
 
         await waitFor(() => {
-            const switches = document.querySelectorAll('[data-action="toggle-event"]');
-            expect(switches.length).toBe(3);
+            expect(document.querySelectorAll('[data-action="toggle-event"]').length).toBe(3);
         });
     });
 
@@ -978,15 +1694,64 @@ describe('JobsPage Triggers tab - Event Trigger Actions', () => {
             </TestWrapper>,
         );
 
-        const triggersTab = screen.getByRole('tab', { name: /triggers/i });
-        await user.click(triggersTab);
+        await user.click(screen.getByRole('tab', { name: /event triggers/i }));
 
         await waitFor(() => {
-            const editButtons = document.querySelectorAll('[data-action="edit-event"]');
-            const deleteButtons = document.querySelectorAll('[data-action="delete-event"]');
-            expect(editButtons.length).toBe(3);
-            expect(deleteButtons.length).toBe(3);
+            expect(document.querySelectorAll('[data-action="edit-event"]').length).toBe(3);
+            expect(document.querySelectorAll('[data-action="delete-event"]').length).toBe(3);
         });
+    });
+
+    it('locks event trigger template edits and omits jobType from patch payload', async () => {
+        const user = userEvent.setup();
+
+        render(
+            <TestWrapper role={Role.Admin}>
+                <JobsPage />
+            </TestWrapper>,
+        );
+
+        await user.click(screen.getByRole('tab', { name: /event triggers/i }));
+
+        const editButton = await waitFor(() => {
+            const btn = document.querySelector('[data-action="edit-event"][data-target="event-1"]');
+            expect(btn).toBeInTheDocument();
+            return btn as HTMLElement;
+        });
+        await user.click(editButton);
+
+        const templateTrigger = screen.getByRole('combobox', { name: /job template/i });
+        expect(templateTrigger).toBeDisabled();
+        expect(templateTrigger).toHaveTextContent('Content metadata refresh item');
+        expect(
+            screen.getByText('Job template cannot be changed after the event trigger is created.'),
+        ).toBeInTheDocument();
+        expect(screen.getByRole('textbox', { name: 'Filter 1 key' })).toHaveValue('content.type');
+        expect(screen.getByRole('textbox', { name: 'Filter 1 pattern' })).toHaveValue('^kind-x$');
+        expect(screen.getByRole('switch', { name: 'Filter 1 negate' })).toBeChecked();
+
+        await user.click(screen.getByRole('button', { name: /save/i }));
+
+        await waitFor(() => {
+            expect(mockApiPatch).toHaveBeenCalledWith('/event-triggers/event-1', expect.anything());
+        });
+
+        const patchPayload = mockApiPatch.mock.calls.find(([url]) => url === '/event-triggers/event-1')?.[1];
+        expect(patchPayload).toMatchObject({
+            name: { value: 'Refresh on Download Complete' },
+            eventFilter: {
+                value: {
+                    eventName: { operator: 'regex', value: 'download\\.completed' },
+                    eventContext: {
+                        items: {
+                            'content.type': { operator: 'Regex', value: '^kind-x$', negate: true },
+                        },
+                    },
+                },
+            },
+            enabled: { value: true },
+        });
+        expect(patchPayload).not.toHaveProperty('jobType');
     });
 
     it('hides edit and delete buttons for event triggers for Manager role', async () => {
@@ -998,8 +1763,7 @@ describe('JobsPage Triggers tab - Event Trigger Actions', () => {
             </TestWrapper>,
         );
 
-        const triggersTab = screen.getByRole('tab', { name: /triggers/i });
-        await user.click(triggersTab);
+        await user.click(screen.getByRole('tab', { name: /event triggers/i }));
 
         expect(document.querySelectorAll('[data-action="edit-event"]').length).toBe(0);
         expect(document.querySelectorAll('[data-action="delete-event"]').length).toBe(0);
@@ -1014,18 +1778,17 @@ describe('JobsPage accessibility', () => {
             </TestWrapper>,
         );
 
-        expect(screen.getByRole('list', { name: /job executions/i })).toBeInTheDocument();
+        expect(screen.getByRole('list', { name: /job history/i })).toBeInTheDocument();
     });
 
-    it('summary section has accessible label', () => {
+    it('roots-only toggle has an accessible label', async () => {
         render(
             <TestWrapper>
                 <JobsPage />
             </TestWrapper>,
         );
 
-        const summary = document.querySelector('[aria-label="Executions by status"]');
-        expect(summary).toBeInTheDocument();
+        expect(await screen.findByRole('switch', { name: /show top level only/i })).toBeInTheDocument();
     });
 
     it('progress bars have aria attributes', async () => {
@@ -1058,8 +1821,7 @@ describe('JobsPage accessibility', () => {
             </TestWrapper>,
         );
 
-        const triggersTab = screen.getByRole('tab', { name: /triggers/i });
-        await user.click(triggersTab);
+        await user.click(screen.getByRole('tab', { name: /scheduled jobs/i }));
 
         await waitFor(() => {
             const switches = document.querySelectorAll('[data-action="toggle"]');
@@ -1081,8 +1843,7 @@ describe('JobsPage accessibility', () => {
             </TestWrapper>,
         );
 
-        const triggersTab = screen.getByRole('tab', { name: /triggers/i });
-        await user.click(triggersTab);
+        await user.click(screen.getByRole('tab', { name: /scheduled jobs/i }));
 
         await waitFor(() => {
             const editButtons = document.querySelectorAll('[data-action="edit"]');
@@ -1101,9 +1862,39 @@ describe('JobsPage accessibility', () => {
     });
 });
 
+describe('JobsPage Executions tab - loading state', () => {
+    it('shows a loading indicator during the initial load', () => {
+        render(
+            <TestWrapper>
+                <JobsPage />
+            </TestWrapper>,
+        );
+
+        expect(screen.getByTestId('jobs-page__loading')).toBeInTheDocument();
+        expect(screen.queryByText('No job history found')).not.toBeInTheDocument();
+    });
+
+    it('replaces the loading indicator with the execution list once loaded', async () => {
+        render(
+            <TestWrapper>
+                <JobsPage />
+            </TestWrapper>,
+        );
+
+        await waitFor(() => {
+            const list = screen.getByRole('list', { name: /job history/i });
+            expect(within(list).getAllByRole('listitem').length).toBe(8);
+        });
+
+        expect(screen.queryByTestId('jobs-page__loading')).not.toBeInTheDocument();
+    });
+});
+
 describe('JobsPage empty states', () => {
-    it('shows empty state when no jobs', () => {
+    it('shows empty state when no jobs', async () => {
         mockApiGet.mockImplementation((url: string) => {
+            if (url === '/jobs/specs') return Promise.resolve(mockJobSpecs);
+            if (url === '/jobs/status-counts') return Promise.resolve({});
             if (url === '/jobs' || url.startsWith('/jobs?')) {
                 return Promise.resolve({ items: [], pageNumber: 1, pageSize: 20, totalItems: 0 });
             }
@@ -1119,13 +1910,15 @@ describe('JobsPage empty states', () => {
             </TestWrapper>,
         );
 
-        expect(screen.getByText('No job executions found')).toBeInTheDocument();
+        expect(await screen.findByText('No job history found')).toBeInTheDocument();
     });
 
-    it('shows empty state when no triggers', async () => {
+    it('shows empty states when no triggers', async () => {
         const user = userEvent.setup();
 
         mockApiGet.mockImplementation((url: string) => {
+            if (url === '/jobs/specs') return Promise.resolve(mockJobSpecs);
+            if (url === '/jobs/status-counts') return Promise.resolve({});
             if (url === '/jobs' || url.startsWith('/jobs?')) {
                 return Promise.resolve({ items: mockJobs, pageNumber: 1, pageSize: 20, totalItems: mockJobs.length });
             }
@@ -1140,23 +1933,40 @@ describe('JobsPage empty states', () => {
             </TestWrapper>,
         );
 
-        const triggersTab = screen.getByRole('tab', { name: /triggers/i });
-        await user.click(triggersTab);
+        await user.click(screen.getByRole('tab', { name: /scheduled jobs/i }));
+        expect(screen.getByText('No schedule triggers')).toBeInTheDocument();
 
-        expect(screen.getByText('No triggers found')).toBeInTheDocument();
+        await user.click(screen.getByRole('tab', { name: /event triggers/i }));
+        expect(screen.getByText('No event triggers')).toBeInTheDocument();
     });
 });
 
 describe('JobsPage URL persistence', () => {
-    it('restores active tab from ?tab=triggers search param', () => {
+    function UrlObserver() {
+        const [params] = useSearchParams();
+        return <span data-testid="url-params">{params.toString()}</span>;
+    }
+
+    it('restores active tab from ?tab=schedules search param', () => {
         render(
-            <TestWrapper initialRoute="/?tab=triggers">
+            <TestWrapper initialRoute="/?tab=schedules">
                 <JobsPage />
             </TestWrapper>,
         );
 
-        const triggersTab = screen.getByRole('tab', { name: /triggers/i });
-        expect(triggersTab).toHaveAttribute('data-state', 'active');
+        const schedulesTab = screen.getByRole('tab', { name: /scheduled jobs/i });
+        expect(schedulesTab).toHaveAttribute('data-state', 'active');
+    });
+
+    it('restores active tab from ?tab=events search param', () => {
+        render(
+            <TestWrapper initialRoute="/?tab=events">
+                <JobsPage />
+            </TestWrapper>,
+        );
+
+        const eventsTab = screen.getByRole('tab', { name: /event triggers/i });
+        expect(eventsTab).toHaveAttribute('data-state', 'active');
     });
 
     it('defaults to executions tab when no ?tab= param', () => {
@@ -1166,8 +1976,27 @@ describe('JobsPage URL persistence', () => {
             </TestWrapper>,
         );
 
-        const executionsTab = screen.getByRole('tab', { name: /executions/i });
+        const executionsTab = screen.getByRole('tab', { name: /history/i });
         expect(executionsTab).toHaveAttribute('data-state', 'active');
+    });
+
+    it('falls back to Executions and normalizes the URL when ?tab= is invalid', async () => {
+        render(
+            <TestWrapper initialRoute="/?tab=bogus&status=failed">
+                <JobsPage />
+                <UrlObserver />
+            </TestWrapper>,
+        );
+
+        expect(screen.getByRole('tab', { name: /history/i })).toHaveAttribute('data-state', 'active');
+        await waitFor(() => {
+            expect(screen.getByTestId('url-params').textContent).toBe('status=failed');
+        });
+        await waitFor(() => {
+            const list = screen.getByRole('list', { name: /job history/i });
+            const items = within(list).getAllByRole('listitem');
+            expect(items.length).toBe(1);
+        });
     });
 
     it('restores template filter from ?template= search param', async () => {
@@ -1178,7 +2007,7 @@ describe('JobsPage URL persistence', () => {
         );
 
         await waitFor(() => {
-            const list = screen.getByRole('list', { name: /job executions/i });
+            const list = screen.getByRole('list', { name: /job history/i });
             const items = within(list).getAllByRole('listitem');
             expect(items.length).toBe(2);
         });
@@ -1192,7 +2021,7 @@ describe('JobsPage URL persistence', () => {
         );
 
         await waitFor(() => {
-            const list = screen.getByRole('list', { name: /job executions/i });
+            const list = screen.getByRole('list', { name: /job history/i });
             const items = within(list).getAllByRole('listitem');
             expect(items.length).toBe(1);
         });
@@ -1206,7 +2035,7 @@ describe('JobsPage URL persistence', () => {
         );
 
         await waitFor(() => {
-            const list = screen.getByRole('list', { name: /job executions/i });
+            const list = screen.getByRole('list', { name: /job history/i });
             const items = within(list).getAllByRole('listitem');
             expect(items.length).toBe(1);
         });

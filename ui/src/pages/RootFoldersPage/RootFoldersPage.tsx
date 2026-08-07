@@ -1,33 +1,75 @@
 import { useState, useCallback, useMemo } from 'react';
-import { FolderOpen, Trash, PencilSimple, Plus } from '@phosphor-icons/react';
+import {
+    FolderOpenIcon,
+    HardDrivesIcon,
+    TrashIcon,
+    PencilSimpleIcon,
+    PlusIcon,
+    WarningCircleIcon,
+} from '@phosphor-icons/react';
+import { type ColumnDef, type SortingState } from '@tanstack/react-table';
 
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
+import { ClearFiltersButton } from '@/components/ui/ClearFiltersButton';
+import { ColumnHeaderFilter, type FacetOption } from '@/components/ui/ColumnHeaderFilter';
+import { DataTable } from '@/components/ui/DataTable';
+import { DiskSpaceWidget } from '@/components/ui/DiskSpaceWidget';
+import { EmptyState } from '@/components/ui/EmptyState';
+import { Pager } from '@/components/ui/Pager';
 import { QuickActionsButton, type QuickAction } from '@/components/ui/QuickActionsButton';
 import { DeleteConfirmDialog } from '@/components/ui/DeleteConfirmDialog/DeleteConfirmDialog';
+import { PageHeader } from '@/components/ui/PageHeader';
 import { PullToRefresh } from '@/components/ui/PullToRefresh';
+import { Tooltip } from '@/components/ui/Tooltip';
 import { useToast } from '@/components/ui/Toast';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { useLibraryTypes, type LibraryTypeDefinition } from '@/hooks/useLibraryTypes';
 import { useRootFolders, type ApiRootFolder } from '@/hooks/useRootFolders';
+import { useDiskSpace } from '@/hooks/useSystemStatus';
 import { useToggle } from '@/hooks/useToggle';
+import { useUrlTableState } from '@/hooks/useUrlTableState';
 
-import { EmptyState } from '@/components/ui/EmptyState';
-import { Select, SelectTrigger, SelectContent, SelectItem } from '@/components/ui/Select';
-import { Tooltip } from '@/components/ui/Tooltip';
-
-import { RootFolderForm, type RootFolderFormValues } from './RootFolderForm';
+import { MonitoringDefaultPanel } from './MonitoringDefaultPanel';
+import { RootFolderForm, type RootFolderFormValues } from '@/components/configuration/RootFolderForm';
 
 import './RootFoldersPage.css';
 import '@/styles/card-actions.css';
-import '@/styles/list-toolbar.css';
 
-function getContentTypeName(contentTypeId: string, contentTypes: LibraryTypeDefinition[]): string {
-    const contentType = contentTypes.find((ct) => ct.id === contentTypeId);
+function getContentTypeName(id: string, contentTypes: LibraryTypeDefinition[]): string {
+    const contentType = contentTypes.find((ct) => ct.id === id);
     return contentType?.name ?? 'Unknown';
 }
 
-const ALL_VALUE = '__all__';
+function getMonitoringLabel(value: boolean | null): string {
+    return value === null ? 'Inherit' : value ? 'Active' : 'Excluded';
+}
+
+function getMonitoringVariant(value: boolean | null): Parameters<typeof Badge>[0]['variant'] {
+    return value === null ? 'info' : value ? 'healthy' : 'unknown';
+}
+
+function toRootFolderFormValues(folder: ApiRootFolder): RootFolderFormValues {
+    return {
+        id: folder.id,
+        name: folder.name,
+        path: folder.path,
+        contentType: folder.contentType,
+        isDefault: folder.isDefault,
+        defaultMonitoring: folder.defaultMonitoring,
+        renameTemplate: folder.renameTemplate ?? '',
+        upgradeFileHandling: folder.upgradeFileHandling,
+        defaults: folder.defaults ?? [],
+    };
+}
+
+const PAGE_SIZE = 25;
+
+const DEFAULT_SORTING: SortingState = [{ id: 'name', desc: false }];
+
+const SORT_KEYS = ['name', 'path', 'contentType', 'monitoring'] as const;
+
+const DEFAULT_FILTERS = { contentType: '' };
 
 export function RootFoldersPage() {
     useDocumentTitle('Root Folders');
@@ -39,54 +81,49 @@ export function RootFoldersPage() {
 
     const { contentTypes } = useLibraryTypes();
 
-    const { folders, isLoading, createFolder, isCreating, updateFolder, isUpdating, deleteFolder, refetch } =
+    const { folders, isLoading, error, createFolder, isCreating, updateFolder, isUpdating, deleteFolder, refetch } =
         useRootFolders();
+    const currentEditingFolder = useMemo(() => {
+        if (!editingFolder?.id) {
+            return editingFolder;
+        }
+        const folder = folders.find((candidate) => candidate.id === editingFolder.id);
+        return folder ? toRootFolderFormValues(folder) : editingFolder;
+    }, [editingFolder, folders]);
+    const {
+        folders: diskSpaceFolders,
+        totals: diskSpaceTotals,
+        isLoading: isDiskSpaceLoading,
+        refetch: refetchDiskSpace,
+    } = useDiskSpace();
 
     const isSubmitting = isCreating || isUpdating;
 
-    const totalFolders = folders.length;
+    const { sorting, filters, page, setSorting, setFilters, setPage } = useUrlTableState({
+        defaultSort: DEFAULT_SORTING,
+        defaultFilters: DEFAULT_FILTERS,
+        sortKeys: SORT_KEYS,
+    });
 
-    const [contentTypeFilter, setContentTypeFilter] = useState('');
+    const contentTypeFilter = filters.contentType;
 
-    const contentTypeOptions = useMemo(() => {
-        const usedIds = [...new Set(folders.map((f) => f.contentTypeId))];
+    const contentTypeOptions = useMemo<FacetOption[]>(() => {
+        const usedIds = [...new Set(folders.map((f) => f.contentType))];
         return usedIds
-            .map((id) => {
-                const ct = contentTypes.find((c) => c.id === id);
-                return { value: id, label: ct?.name ?? 'Unknown' };
-            })
+            .map((id) => ({ value: id, label: getContentTypeName(id, contentTypes) }))
             .sort((a, b) => a.label.localeCompare(b.label));
-    }, [folders, contentTypes]);
-
-    const contentTypeCounts = useMemo(() => {
-        const counts: Record<string, number> = {};
-        for (const folder of folders) {
-            const name = getContentTypeName(folder.contentTypeId, contentTypes);
-            counts[name] = (counts[name] ?? 0) + 1;
-        }
-        return counts;
     }, [folders, contentTypes]);
 
     const filteredFolders = useMemo(() => {
         if (!contentTypeFilter) {
             return folders;
         }
-        return folders.filter((f) => f.contentTypeId === contentTypeFilter);
+        return folders.filter((f) => f.contentType === contentTypeFilter);
     }, [folders, contentTypeFilter]);
 
-    const handleContentTypeFilterChange = useCallback((value: string) => {
-        setContentTypeFilter(value === ALL_VALUE ? '' : value);
-    }, []);
-
     const handleClearFilters = useCallback(() => {
-        setContentTypeFilter('');
-    }, []);
-
-    const hasActiveFilters = contentTypeFilter !== '';
-
-    const contentTypeLabel = contentTypeFilter
-        ? (contentTypeOptions.find((o) => o.value === contentTypeFilter)?.label ?? 'Unknown')
-        : 'All Types';
+        setFilters({ contentType: '' });
+    }, [setFilters]);
 
     const handleAddFolder = useCallback(() => {
         setEditingFolder(null);
@@ -94,7 +131,7 @@ export function RootFoldersPage() {
     }, [openForm]);
 
     const addFolderActions: QuickAction[] = useMemo(
-        () => [{ id: 'add-folder', label: 'Add Folder', icon: <Plus weight="bold" />, onClick: handleAddFolder }],
+        () => [{ id: 'add-folder', label: 'Add Folder', icon: <PlusIcon weight="bold" />, onClick: handleAddFolder }],
         [handleAddFolder],
     );
 
@@ -102,12 +139,7 @@ export function RootFoldersPage() {
         (id: string) => {
             const folder = folders.find((f) => f.id === id);
             if (folder) {
-                setEditingFolder({
-                    id: folder.id,
-                    name: folder.name,
-                    path: folder.path,
-                    contentTypeId: folder.contentTypeId,
-                });
+                setEditingFolder(toRootFolderFormValues(folder));
                 openForm();
             }
         },
@@ -117,41 +149,80 @@ export function RootFoldersPage() {
     const handleFormSubmit = useCallback(
         async (values: RootFolderFormValues) => {
             try {
+                const trimmedTemplate = values.renameTemplate.trim();
+                const renameTemplateValue = trimmedTemplate === '' ? null : trimmedTemplate;
                 if (values.id) {
                     await updateFolder(values.id, {
                         name: values.name,
                         path: values.path,
-                        contentTypeId: values.contentTypeId,
+                        contentType: values.contentType,
+                        isDefault: values.isDefault,
+                        defaultMonitoring: { value: values.defaultMonitoring },
+                        renameTemplate: { value: renameTemplateValue },
+                        upgradeFileHandling: values.upgradeFileHandling,
+                        defaults: values.defaults,
                     });
                     toast({
                         title: values.name,
-                        description: 'Root folder updated successfully',
+                        description: 'Root folder updated.',
                         variant: 'success',
                     });
                 } else {
                     await createFolder({
                         name: values.name,
                         path: values.path,
-                        contentTypeId: values.contentTypeId,
+                        contentType: values.contentType,
+                        isDefault: values.isDefault,
+                        defaultMonitoring: values.defaultMonitoring,
+                        renameTemplate: renameTemplateValue,
+                        upgradeFileHandling: values.upgradeFileHandling,
+                        defaults: values.defaults,
                     });
                     toast({
                         title: values.name,
-                        description: 'Root folder added successfully',
+                        description: 'Root folder added.',
                         variant: 'success',
                     });
                 }
 
+                void refetchDiskSpace();
+
                 closeForm();
                 setEditingFolder(null);
-            } catch {
+            } catch (error) {
                 toast({
                     title: values.name,
-                    description: 'Failed to save root folder',
+                    description: error instanceof Error ? error.message : 'Failed to save root folder',
+                    variant: 'error',
+                });
+                throw error;
+            }
+        },
+        [toast, createFolder, updateFolder, refetchDiskSpace, closeForm],
+    );
+
+    const handleSetDefaultFolder = useCallback(
+        async (folder: ApiRootFolder) => {
+            if (folder.isDefault) {
+                return;
+            }
+
+            try {
+                await updateFolder(folder.id, { isDefault: true });
+                toast({
+                    title: folder.name,
+                    description: 'Default root folder updated.',
+                    variant: 'success',
+                });
+            } catch {
+                toast({
+                    title: folder.name,
+                    description: 'Failed to update the default root folder',
                     variant: 'error',
                 });
             }
         },
-        [toast, createFolder, updateFolder, closeForm],
+        [toast, updateFolder],
     );
 
     const handleFormClose = useCallback(
@@ -184,9 +255,10 @@ export function RootFoldersPage() {
 
         try {
             await deleteFolder(deletingFolder.id);
+            void refetchDiskSpace();
             toast({
                 title: deletingFolder.name,
-                description: 'Root folder deleted successfully',
+                description: 'Root folder deleted.',
                 variant: 'success',
             });
         } catch {
@@ -199,132 +271,259 @@ export function RootFoldersPage() {
             setIsDeleting(false);
             setDeletingFolder(null);
         }
-    }, [deletingFolder, deleteFolder, toast]);
+    }, [deletingFolder, deleteFolder, refetchDiskSpace, toast]);
 
     const handleCancelDelete = useCallback(() => {
         setDeletingFolder(null);
     }, []);
 
     const handleRefresh = useCallback(async () => {
-        await refetch();
-    }, [refetch]);
+        await Promise.all([refetch(), refetchDiskSpace()]);
+    }, [refetchDiskSpace, refetch]);
+
+    const columns = useMemo<ColumnDef<ApiRootFolder>[]>(
+        () => [
+            {
+                id: 'name',
+                accessorFn: (row) => row.name,
+                header: 'Name',
+                size: 220,
+                cell: ({ row }) => (
+                    <span className="root-folders-table__name" title={row.original.name}>
+                        {row.original.name}
+                    </span>
+                ),
+            },
+            {
+                id: 'path',
+                accessorFn: (row) => row.path,
+                header: 'Path',
+                size: 280,
+                cell: ({ row }) => (
+                    <span className="root-folders-table__path" title={row.original.path}>
+                        {row.original.path}
+                    </span>
+                ),
+            },
+            {
+                id: 'contentType',
+                accessorFn: (row) => getContentTypeName(row.contentType, contentTypes),
+                header: () => (
+                    <ColumnHeaderFilter
+                        type="facet"
+                        label="Type"
+                        active={contentTypeFilter !== ''}
+                        options={contentTypeOptions}
+                        value={contentTypeFilter}
+                        onChange={(value) => setFilters({ contentType: value })}
+                    />
+                ),
+                meta: { headerLabel: 'Type' },
+                size: 160,
+                cell: ({ row }) => {
+                    const name = getContentTypeName(row.original.contentType, contentTypes);
+                    return (
+                        <Badge variant={name === 'Unknown' ? 'unknown' : 'info'} size="sm" dot={name === 'Unknown'}>
+                            {name}
+                        </Badge>
+                    );
+                },
+            },
+            {
+                id: 'monitoring',
+                accessorFn: (row) => row.defaultMonitoring,
+                header: 'Monitoring',
+                size: 130,
+                cell: ({ row }) => {
+                    const monitoring = row.original.defaultMonitoring;
+                    return (
+                        <Badge variant={getMonitoringVariant(monitoring)} size="sm">
+                            {getMonitoringLabel(monitoring)}
+                        </Badge>
+                    );
+                },
+            },
+            {
+                id: 'default',
+                accessorFn: (row) => row.isDefault,
+                header: 'Default',
+                enableSorting: false,
+                size: 100,
+                cell: ({ row }) => {
+                    const folder = row.original;
+                    const contentTypeName = getContentTypeName(folder.contentType, contentTypes);
+                    return (
+                        <label className="root-folders-table__default-radio">
+                            <input
+                                type="radio"
+                                name={`default-root-folder-${folder.contentType}`}
+                                checked={folder.isDefault}
+                                onChange={() => void handleSetDefaultFolder(folder)}
+                                disabled={isUpdating}
+                                aria-label={`Set ${folder.name} as default for ${contentTypeName}`}
+                                data-action="set-default"
+                                data-target={folder.id}
+                            />
+                            <span className="sr-only">Default for {contentTypeName}</span>
+                        </label>
+                    );
+                },
+            },
+            {
+                id: 'actions',
+                header: '',
+                enableSorting: false,
+                size: 120,
+                cell: ({ row }) => (
+                    <div className="root-folders-page__item-actions card-actions">
+                        <Tooltip content="Edit">
+                            <button
+                                type="button"
+                                className="root-folders-page__action-btn card-actions__btn"
+                                data-testid="root-folders-page__action-btn"
+                                onClick={() => handleEditFolder(row.original.id)}
+                                aria-label={`Edit ${row.original.name}`}
+                                data-action="edit"
+                                data-target={row.original.id}
+                            >
+                                <PencilSimpleIcon weight="bold" />
+                            </button>
+                        </Tooltip>
+                        <Tooltip content="Delete">
+                            <button
+                                type="button"
+                                className="root-folders-page__action-btn root-folders-page__action-btn--danger card-actions__btn card-actions__btn--danger"
+                                data-testid="root-folders-page__action-btn"
+                                onClick={() => handleDeleteFolder(row.original.id)}
+                                aria-label={`Delete ${row.original.name}`}
+                                data-action="delete"
+                                data-target={row.original.id}
+                            >
+                                <TrashIcon weight="bold" />
+                            </button>
+                        </Tooltip>
+                    </div>
+                ),
+            },
+        ],
+        [
+            contentTypes,
+            contentTypeOptions,
+            contentTypeFilter,
+            setFilters,
+            handleEditFolder,
+            handleDeleteFolder,
+            handleSetDefaultFolder,
+            isUpdating,
+        ],
+    );
+
+    const hasActiveFilters = contentTypeFilter !== '';
+
+    const pageCount = Math.max(1, Math.ceil(filteredFolders.length / PAGE_SIZE));
+    const currentPage = Math.min(page, pageCount);
+    const pagination = useMemo(() => ({ pageIndex: currentPage - 1, pageSize: PAGE_SIZE }), [currentPage]);
+
+    const getRowId = useCallback((row: ApiRootFolder) => row.id, []);
+
+    const emptyState = (
+        <EmptyState
+            icon={<FolderOpenIcon weight="duotone" />}
+            title={hasActiveFilters ? 'No root folders found' : 'No root folders configured'}
+            description={
+                hasActiveFilters
+                    ? 'No folders match the active filter. Adjust or clear the filter to see more.'
+                    : 'A root folder determines where imported content is stored.'
+            }
+            action={
+                hasActiveFilters ? (
+                    <Button variant="secondary" size="sm" onClick={handleClearFilters}>
+                        Clear filter
+                    </Button>
+                ) : undefined
+            }
+            size="sm"
+        />
+    );
+
+    const errorState = (
+        <EmptyState
+            icon={<WarningCircleIcon weight="duotone" />}
+            title="Failed to load root folders"
+            action={
+                <Button variant="secondary" size="sm" onClick={() => refetch()}>
+                    Retry
+                </Button>
+            }
+            size="sm"
+        />
+    );
 
     return (
         <div className="root-folders-page" data-page="root-folders">
             <PullToRefresh onRefresh={handleRefresh} className="root-folders-page__pull-to-refresh">
-                <header className="root-folders-page__header">
-                    <div className="root-folders-page__header-left">
-                        <FolderOpen
-                            weight="duotone"
-                            className="root-folders-page__icon"
-                            aria-hidden="true"
-                            data-testid="root-folders-page__icon"
-                        />
-                        <h1 className="root-folders-page__title">Root Folders</h1>
-                        <span className="page-count root-folders-page__count" data-testid="root-folders-page__count">
-                            {totalFolders}
-                        </span>
-                    </div>
-                    <div className="root-folders-page__header-actions">
-                        <Button variant="primary" size="sm" data-action="add-folder" onClick={handleAddFolder}>
-                            <Plus weight="bold" aria-hidden="true" />
-                            <span className="root-folders-page__add-label">Add Folder</span>
-                        </Button>
-                    </div>
-                </header>
-
-                {contentTypeOptions.length > 0 && (
-                    <div className="list-toolbar__summary" aria-label="Content type summary">
-                        {contentTypeOptions.map((opt) => (
-                            <Badge
-                                key={opt.value}
-                                variant="info"
-                                size="sm"
-                                badgeStyle="outline"
-                                count={contentTypeCounts[opt.label]}
-                            >
-                                {opt.label}
-                            </Badge>
-                        ))}
-                    </div>
-                )}
-
-                {contentTypeOptions.length > 1 && (
-                    <div className="list-toolbar__filters" data-component="folder-filters">
-                        <div className="list-toolbar__filters-controls">
-                            <Select
-                                value={contentTypeFilter || ALL_VALUE}
-                                onValueChange={handleContentTypeFilterChange}
-                            >
-                                <SelectTrigger
-                                    size="sm"
-                                    placeholder="All Types"
-                                    aria-label="Filter by content type"
-                                    data-filter="content-type"
-                                >
-                                    {contentTypeLabel}
-                                </SelectTrigger>
-                                <SelectContent>
-                                    <SelectItem value={ALL_VALUE}>All Types</SelectItem>
-                                    {contentTypeOptions.map((opt) => (
-                                        <SelectItem key={opt.value} value={opt.value}>
-                                            {opt.label}
-                                        </SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
-
-                            {hasActiveFilters && (
-                                <Button
-                                    variant="ghost"
-                                    size="sm"
-                                    onClick={handleClearFilters}
-                                    className="list-toolbar__clear-filters"
-                                    data-action="clear-filters"
-                                >
-                                    Clear
-                                </Button>
-                            )}
+                <PageHeader
+                    className="root-folders-page__header"
+                    title="Root Folders"
+                    description="Locations where imported content is stored and scanned."
+                    icon={<FolderOpenIcon weight="duotone" aria-hidden="true" data-testid="root-folders-page__icon" />}
+                    actions={
+                        <div className="root-folders-page__header-actions">
+                            {hasActiveFilters && <ClearFiltersButton onClick={handleClearFilters} />}
+                            <Button variant="primary" size="sm" data-action="add-folder" onClick={handleAddFolder}>
+                                <PlusIcon weight="bold" aria-hidden="true" />
+                                <span className="root-folders-page__add-label">Add Folder</span>
+                            </Button>
                         </div>
-                    </div>
-                )}
+                    }
+                />
 
-                <div className="root-folders-page__list" role="list" aria-label="Root folders">
-                    {isLoading ? (
-                        <EmptyState title="Loading..." size="sm" />
-                    ) : folders.length === 0 ? (
-                        <EmptyState
-                            icon={<FolderOpen weight="duotone" />}
-                            title="No root folders configured"
-                            description="Add a root folder to specify where your content is stored"
-                            action={
-                                <Button
-                                    variant="primary"
-                                    size="sm"
-                                    onClick={handleAddFolder}
-                                    data-action="add-folder-empty"
-                                >
-                                    <Plus weight="bold" aria-hidden="true" />
-                                    <span>Add Folder</span>
-                                </Button>
-                            }
+                <MonitoringDefaultPanel />
+
+                <section className="root-folders-page__disk-space" aria-labelledby="root-folders-disk-space-heading">
+                    <h2 id="root-folders-disk-space-heading" className="root-folders-page__section-title">
+                        <HardDrivesIcon weight="duotone" aria-hidden="true" />
+                        Disk Space
+                    </h2>
+                    <DiskSpaceWidget
+                        heading="Root Folders"
+                        icon={<HardDrivesIcon weight="duotone" />}
+                        folders={diskSpaceFolders}
+                        totals={diskSpaceTotals}
+                        loading={isDiskSpaceLoading}
+                        headingLevel={3}
+                    />
+                </section>
+
+                <div className="root-folders-table" data-area="root-folders">
+                    <DataTable<ApiRootFolder>
+                        columns={columns}
+                        data={filteredFolders}
+                        enableSorting
+                        sorting={sorting}
+                        onSortingChange={(updater) =>
+                            setSorting(typeof updater === 'function' ? updater(sorting) : updater)
+                        }
+                        enablePagination={filteredFolders.length > PAGE_SIZE}
+                        hidePagination
+                        pageSize={PAGE_SIZE}
+                        pagination={pagination}
+                        getRowId={getRowId}
+                        loading={isLoading}
+                        emptyState={error ? errorState : emptyState}
+                        keepHeaderWhenEmpty={hasActiveFilters}
+                        aria-label="Root folders"
+                    />
+                    {filteredFolders.length > PAGE_SIZE && (
+                        <Pager
+                            className="root-folders-table__pager"
+                            page={currentPage}
+                            pageCount={pageCount}
+                            onFirst={() => setPage(1)}
+                            onPrevious={() => setPage(Math.max(1, currentPage - 1))}
+                            onNext={() => setPage(Math.min(pageCount, currentPage + 1))}
+                            onLast={() => setPage(pageCount)}
                         />
-                    ) : filteredFolders.length === 0 ? (
-                        <EmptyState
-                            icon={<FolderOpen weight="duotone" />}
-                            title="No root folders found"
-                            description="Try adjusting your filters"
-                        />
-                    ) : (
-                        filteredFolders.map((folder) => (
-                            <FolderRow
-                                key={folder.id}
-                                folder={folder}
-                                contentTypes={contentTypes}
-                                onEdit={handleEditFolder}
-                                onDelete={handleDeleteFolder}
-                            />
-                        ))
                     )}
                 </div>
             </PullToRefresh>
@@ -343,7 +542,7 @@ export function RootFoldersPage() {
             <RootFolderForm
                 open={formOpen}
                 onOpenChange={handleFormClose}
-                initialValues={editingFolder}
+                initialValues={currentEditingFolder}
                 contentTypes={contentTypes}
                 onSubmit={handleFormSubmit}
                 isSubmitting={isSubmitting}
@@ -353,66 +552,5 @@ export function RootFoldersPage() {
 }
 
 RootFoldersPage.displayName = 'RootFoldersPage';
-
-interface FolderRowProps {
-    folder: ApiRootFolder;
-    contentTypes: LibraryTypeDefinition[];
-    onEdit: (id: string) => void;
-    onDelete: (id: string) => void;
-}
-
-function FolderRow({ folder, contentTypes, onEdit, onDelete }: FolderRowProps) {
-    const contentTypeName = getContentTypeName(folder.contentTypeId, contentTypes);
-
-    return (
-        <div className="root-folders-page__item" role="listitem" data-folder-id={folder.id}>
-            <div className="root-folders-page__item-main">
-                <div className="root-folders-page__item-info">
-                    <div className="root-folders-page__item-header">
-                        <span className="root-folders-page__item-name">{folder.name}</span>
-                        <Badge
-                            variant={contentTypeName === 'Unknown' ? 'unknown' : 'info'}
-                            size="sm"
-                            dot={contentTypeName === 'Unknown'}
-                        >
-                            {contentTypeName}
-                        </Badge>
-                    </div>
-                    <div className="root-folders-page__item-meta">
-                        <span className="root-folders-page__item-path">{folder.path}</span>
-                    </div>
-                </div>
-                <div className="root-folders-page__item-actions card-actions">
-                    <Tooltip content="Edit">
-                        <button
-                            type="button"
-                            className="root-folders-page__action-btn card-actions__btn"
-                            data-testid="root-folders-page__action-btn"
-                            onClick={() => onEdit(folder.id)}
-                            aria-label={`Edit ${folder.name}`}
-                            data-action="edit"
-                            data-target={folder.id}
-                        >
-                            <PencilSimple weight="bold" />
-                        </button>
-                    </Tooltip>
-                    <Tooltip content="Delete">
-                        <button
-                            type="button"
-                            className="root-folders-page__action-btn root-folders-page__action-btn--danger card-actions__btn card-actions__btn--danger"
-                            data-testid="root-folders-page__action-btn"
-                            onClick={() => onDelete(folder.id)}
-                            aria-label={`Delete ${folder.name}`}
-                            data-action="delete"
-                            data-target={folder.id}
-                        >
-                            <Trash weight="bold" />
-                        </button>
-                    </Tooltip>
-                </div>
-            </div>
-        </div>
-    );
-}
 
 export default RootFoldersPage;

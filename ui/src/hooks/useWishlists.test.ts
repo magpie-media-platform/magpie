@@ -155,7 +155,7 @@ describe('useWishlists', () => {
     });
 
     describe('creating wishlists', () => {
-        it('should create a wishlist via POST /wishlists/my', async () => {
+        it('should create a wishlist via POST /wishlists', async () => {
             mockApiGet.mockResolvedValue(mockApiWishlists);
             mockApiPost.mockResolvedValue({
                 id: 'wl-4',
@@ -180,14 +180,48 @@ describe('useWishlists', () => {
                 await result.current.createWishlist({
                     name: 'New Wishlist',
                     contentFilterId: 'filter-1',
-                    enabled: true,
                 });
             });
 
-            expect(mockApiPost).toHaveBeenCalledWith('/wishlists/my', {
+            expect(mockApiPost).toHaveBeenCalledWith('/wishlists', {
                 name: 'New Wishlist',
                 contentFilterId: 'filter-1',
-                enabled: true,
+            });
+        });
+
+        it('passes enabled when creating a wishlist', async () => {
+            mockApiGet.mockResolvedValue(mockApiWishlists);
+            mockApiPost.mockResolvedValue({
+                id: 'wl-4',
+                name: 'New Wishlist',
+                contentFilterId: 'filter-1',
+                qualityTierListId: null,
+                ownerUserId: 'user-1',
+                ownerLock: false,
+                enabled: false,
+                createdAt: '2024-01-04T00:00:00Z',
+            });
+
+            const { result } = renderHook(() => useWishlists(), {
+                wrapper: createWrapper(),
+            });
+
+            await waitFor(() => {
+                expect(result.current.isLoading).toBe(false);
+            });
+
+            await act(async () => {
+                await result.current.createWishlist({
+                    name: 'New Wishlist',
+                    contentFilterId: 'filter-1',
+                    enabled: false,
+                });
+            });
+
+            expect(mockApiPost).toHaveBeenCalledWith('/wishlists', {
+                name: 'New Wishlist',
+                contentFilterId: 'filter-1',
+                enabled: false,
             });
         });
 
@@ -209,7 +243,7 @@ describe('useWishlists', () => {
             });
 
             act(() => {
-                result.current.createWishlist({
+                void result.current.createWishlist({
                     name: 'New Wishlist',
                     contentFilterId: 'filter-1',
                 });
@@ -238,7 +272,7 @@ describe('useWishlists', () => {
     });
 
     describe('updating wishlists', () => {
-        it('should update own wishlist via PATCH /wishlists/my/{id}', async () => {
+        it('should update own wishlist via PATCH /wishlists/{id}', async () => {
             mockApiGet.mockResolvedValue(mockApiWishlists);
             mockApiPatch.mockResolvedValue(undefined);
 
@@ -260,7 +294,7 @@ describe('useWishlists', () => {
                 );
             });
 
-            expect(mockApiPatch).toHaveBeenCalledWith('/wishlists/my/wl-1', {
+            expect(mockApiPatch).toHaveBeenCalledWith('/wishlists/wl-1', {
                 name: { value: 'Updated Movies' },
             });
         });
@@ -310,7 +344,7 @@ describe('useWishlists', () => {
             });
 
             act(() => {
-                result.current.updateWishlist(
+                void result.current.updateWishlist(
                     'wl-1',
                     {
                         name: { value: 'Updated' },
@@ -334,9 +368,9 @@ describe('useWishlists', () => {
     });
 
     describe('locking/unlocking wishlists', () => {
-        it('should lock a wishlist via POST /wishlists/my/{id}/lock', async () => {
+        it('should lock a wishlist by patching ownerLock', async () => {
             mockApiGet.mockResolvedValue(mockApiWishlists);
-            mockApiPost.mockResolvedValue({ ...mockApiWishlists[0], ownerLock: true });
+            mockApiPatch.mockResolvedValue(undefined);
 
             const { result } = renderHook(() => useWishlists(), {
                 wrapper: createWrapper(),
@@ -350,12 +384,12 @@ describe('useWishlists', () => {
                 await result.current.toggleLock('wl-1', true);
             });
 
-            expect(mockApiPost).toHaveBeenCalledWith('/wishlists/my/wl-1/lock');
+            expect(mockApiPatch).toHaveBeenCalledWith('/wishlists/wl-1', { ownerLock: { value: true } });
         });
 
-        it('should unlock a wishlist via POST /wishlists/my/{id}/unlock', async () => {
+        it('should unlock a wishlist by patching ownerLock', async () => {
             mockApiGet.mockResolvedValue(mockApiWishlists);
-            mockApiPost.mockResolvedValue({ ...mockApiWishlists[1], ownerLock: false });
+            mockApiPatch.mockResolvedValue(undefined);
 
             const { result } = renderHook(() => useWishlists(), {
                 wrapper: createWrapper(),
@@ -369,17 +403,17 @@ describe('useWishlists', () => {
                 await result.current.toggleLock('wl-2', false);
             });
 
-            expect(mockApiPost).toHaveBeenCalledWith('/wishlists/my/wl-2/unlock');
+            expect(mockApiPatch).toHaveBeenCalledWith('/wishlists/wl-2', { ownerLock: { value: false } });
         });
 
         it('should set isLocking while toggling lock', async () => {
             mockApiGet.mockResolvedValue(mockApiWishlists);
 
-            let resolvePost: (value: ApiWishlist) => void;
-            const postPromise = new Promise<ApiWishlist>((resolve) => {
-                resolvePost = resolve;
+            let resolvePatch: () => void;
+            const patchPromise = new Promise<void>((resolve) => {
+                resolvePatch = resolve;
             });
-            mockApiPost.mockReturnValue(postPromise);
+            mockApiPatch.mockReturnValue(patchPromise);
 
             const { result } = renderHook(() => useWishlists(), {
                 wrapper: createWrapper(),
@@ -390,7 +424,7 @@ describe('useWishlists', () => {
             });
 
             act(() => {
-                result.current.toggleLock('wl-1', true);
+                void result.current.toggleLock('wl-1', true);
             });
 
             await waitFor(() => {
@@ -398,7 +432,7 @@ describe('useWishlists', () => {
             });
 
             act(() => {
-                resolvePost!({ ...mockApiWishlists[0], ownerLock: true });
+                resolvePatch!();
             });
 
             await waitFor(() => {
@@ -408,7 +442,7 @@ describe('useWishlists', () => {
     });
 
     describe('deleting wishlists', () => {
-        it('should delete own wishlist via DELETE /wishlists/my/{id}', async () => {
+        it('should delete own wishlist via DELETE /wishlists/{id}', async () => {
             mockApiGet.mockResolvedValue(mockApiWishlists);
             mockApiDelete.mockResolvedValue(undefined);
 
@@ -421,13 +455,13 @@ describe('useWishlists', () => {
             });
 
             await act(async () => {
-                await result.current.deleteWishlist('wl-1', true);
+                await result.current.deleteWishlist('wl-1', true, false);
             });
 
-            expect(mockApiDelete).toHaveBeenCalledWith('/wishlists/my/wl-1');
+            expect(mockApiDelete).toHaveBeenCalledWith('/wishlists/wl-1');
         });
 
-        it('should delete user wishlist via DELETE /wishlists/{userId}/{id}', async () => {
+        it('should append deleteFilter query param when cascading filter delete', async () => {
             mockApiGet.mockResolvedValue(mockApiWishlists);
             mockApiDelete.mockResolvedValue(undefined);
 
@@ -440,10 +474,29 @@ describe('useWishlists', () => {
             });
 
             await act(async () => {
-                await result.current.deleteWishlist('wl-3', false, 'user-2');
+                await result.current.deleteWishlist('wl-1', true, true);
             });
 
-            expect(mockApiDelete).toHaveBeenCalledWith('/wishlists/user-2/wl-3');
+            expect(mockApiDelete).toHaveBeenCalledWith('/wishlists/wl-1?deleteFilter=true');
+        });
+
+        it('should delete a visible wishlist via DELETE /wishlists/{id}', async () => {
+            mockApiGet.mockResolvedValue(mockApiWishlists);
+            mockApiDelete.mockResolvedValue(undefined);
+
+            const { result } = renderHook(() => useWishlists(), {
+                wrapper: createWrapper(),
+            });
+
+            await waitFor(() => {
+                expect(result.current.isLoading).toBe(false);
+            });
+
+            await act(async () => {
+                await result.current.deleteWishlist('wl-3', false, false, 'user-2');
+            });
+
+            expect(mockApiDelete).toHaveBeenCalledWith('/wishlists/wl-3');
         });
 
         it('should set isDeleting while deleting', async () => {
@@ -464,7 +517,7 @@ describe('useWishlists', () => {
             });
 
             act(() => {
-                result.current.deleteWishlist('wl-1', true);
+                void result.current.deleteWishlist('wl-1', true, false);
             });
 
             await waitFor(() => {

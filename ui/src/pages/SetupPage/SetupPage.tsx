@@ -1,168 +1,154 @@
-import { useCallback, useState, type FormEvent, type ReactNode } from 'react';
-import { Navigate, useNavigate } from 'react-router-dom';
-import { UserPlus } from '@phosphor-icons/react';
+import { useCallback, useMemo, useState, type ReactNode } from 'react';
+import { Navigate, useLocation, useNavigate } from 'react-router-dom';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 
-import { Button } from '@/components/ui/Button';
-import { Input } from '@/components/ui/Input';
-import { Label } from '@/components/ui/Label';
 import { Logo } from '@/components/ui/Logo';
+import { Button } from '@/components/ui/Button';
 import { useAuth } from '@/auth';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
-import { useSetupStatus, useCreateSetupAdmin } from '@/hooks/useSetup';
-import { isApiError } from '@/lib/api';
+import { useSetupStatus } from '@/hooks/useSetup';
+import { settingsQueryKeys, type ApiSettingsGroup } from '@/hooks/useSettings';
+import { apiGet } from '@/lib/api';
 import { RouteLoadingState } from '@/router/RouteLoadingState';
 
+import { AdminClaimStep } from './AdminClaimStep';
+import { CompletionStep } from './CompletionStep';
+import { DbProviderStep } from './DbProviderStep';
+import { FirstDownloadClientStep } from './FirstDownloadClientStep';
+import { FirstIndexerStep } from './FirstIndexerStep';
+import { FirstMediaServerStep } from './FirstMediaServerStep';
+import { FirstRootFolderStep } from './FirstRootFolderStep';
+import { MetadataProviderStep } from './MetadataProviderStep';
+import {
+    SETUP_STEPS,
+    type SetupStepAvailability,
+    type SetupStepId,
+    nextStepAfter,
+    pickInitialStep,
+} from './setupSteps';
+
 import './SetupPage.css';
-
-function getErrorMessage(error: unknown): string {
-    if (isApiError(error)) {
-        if (error.status === 409) {
-            return 'Setup has already been completed.';
-        }
-        return error.message || 'Could not create the admin account. Please try again.';
-    }
-
-    if (error instanceof Error && error.message) {
-        return error.message;
-    }
-
-    return 'Could not create the admin account. Please try again.';
-}
 
 export function SetupPage(): ReactNode {
     useDocumentTitle('Set Up Magpie');
 
-    const { isAuthenticated } = useAuth();
+    const { isAuthenticated, isLoading: isAuthLoading } = useAuth();
+    const location = useLocation();
     const navigate = useNavigate();
+    const queryClient = useQueryClient();
 
     const statusQuery = useSetupStatus();
-    const createAdmin = useCreateSetupAdmin();
+    const status = statusQuery.data ?? null;
 
-    const [username, setUsername] = useState('');
-    const [password, setPassword] = useState('');
-    const [confirmPassword, setConfirmPassword] = useState('');
-    const [error, setError] = useState<string | null>(null);
-
-    const isSubmitting = createAdmin.isPending;
-
-    const handleSubmit = useCallback(
-        async (event: FormEvent<HTMLFormElement>) => {
-            event.preventDefault();
-
-            const trimmedUsername = username.trim();
-            if (!trimmedUsername || !password) {
-                setError('Please enter a username and password.');
-                return;
-            }
-
-            if (password !== confirmPassword) {
-                setError('Passwords do not match.');
-                return;
-            }
-
-            setError(null);
-            try {
-                await createAdmin.mutateAsync({
-                    username: trimmedUsername,
-                    password,
-                });
-                navigate('/login', { replace: true });
-            } catch (err) {
-                setError(getErrorMessage(err));
-            }
-        },
-        [confirmPassword, createAdmin, navigate, password, username],
+    const groupsQuery = useQuery({
+        queryKey: settingsQueryKeys.all,
+        queryFn: () => apiGet<ApiSettingsGroup[]>('/settings/groups'),
+        enabled: isAuthenticated,
+        retry: false,
+    });
+    const stepAvailability = useMemo<SetupStepAvailability>(
+        () => ({
+            includeMetadata: (groupsQuery.data ?? []).some((group) => group.extensionId && group.settings.length > 0),
+        }),
+        [groupsQuery.data],
     );
 
-    if (statusQuery.isLoading) {
+    const [stepId, setStepId] = useState<SetupStepId | null>(null);
+
+    const resolvedStepId = useMemo<SetupStepId | null>(() => {
+        if (stepId !== null) {
+            return stepId;
+        }
+        if (!status) {
+            return null;
+        }
+        return pickInitialStep(status);
+    }, [stepId, status]);
+
+    const handleAdvance = useCallback(async () => {
+        if (!resolvedStepId) {
+            return;
+        }
+
+        const availability =
+            resolvedStepId === 'admin'
+                ? {
+                      includeMetadata: (
+                          await queryClient.fetchQuery({
+                              queryKey: settingsQueryKeys.all,
+                              queryFn: () => apiGet<ApiSettingsGroup[]>('/settings/groups'),
+                              retry: false,
+                          })
+                      ).some((group) => group.extensionId && group.settings.length > 0),
+                  }
+                : stepAvailability;
+        const next = nextStepAfter(resolvedStepId, availability);
+        if (next === null) {
+            void navigate(isAuthenticated ? '/' : '/login', { replace: true });
+            return;
+        }
+        setStepId(next);
+    }, [resolvedStepId, queryClient, stepAvailability, navigate, isAuthenticated]);
+
+    if ((statusQuery.isLoading && resolvedStepId === null) || isAuthLoading) {
         return <RouteLoadingState />;
     }
 
-    // If setup is already complete, send the user away from this page.
-    if (statusQuery.data && !statusQuery.data.isRequired) {
+    if (status?.isRequired && !status.requiresAdminClaim && !isAuthenticated) {
+        return <Navigate to="/login" state={{ from: location }} replace />;
+    }
+
+    if (status && !status.isRequired && !status.requiresAdminClaim) {
         return <Navigate to={isAuthenticated ? '/' : '/login'} replace />;
     }
 
+    const currentStep = resolvedStepId ? SETUP_STEPS[resolvedStepId] : null;
+    const currentState = statusQuery.isError ? 'error' : (resolvedStepId ?? 'loading');
+
     return (
-        <div className="setup-page" data-page="setup">
+        <div className="setup-page" data-page="setup" data-current-step={currentState}>
             <div className="setup-page__card">
                 <div className="setup-page__brand">
                     <Logo size={48} variant="solid" />
                     <h1 className="setup-page__title">Welcome to Magpie</h1>
-                    <p className="setup-page__subtitle">Create the first administrator account to get started.</p>
+                    <p className="setup-page__subtitle">
+                        {currentStep?.subtitle ?? 'Configure Magpie for your environment.'}
+                    </p>
                 </div>
 
-                <form className="setup-page__form" onSubmit={handleSubmit} noValidate>
-                    <div className="setup-page__field">
-                        <Label htmlFor="setup-username" required>
-                            Username
-                        </Label>
-                        <Input
-                            id="setup-username"
-                            type="text"
-                            value={username}
-                            onChange={(event) => setUsername(event.target.value)}
-                            autoComplete="username"
-                            autoFocus
-                            disabled={isSubmitting}
-                            required
-                            data-field="username"
-                            aria-describedby={error ? 'setup-error' : undefined}
-                        />
-                    </div>
-
-                    <div className="setup-page__field">
-                        <Label htmlFor="setup-password" required>
-                            Password
-                        </Label>
-                        <Input
-                            id="setup-password"
-                            type="password"
-                            value={password}
-                            onChange={(event) => setPassword(event.target.value)}
-                            autoComplete="new-password"
-                            disabled={isSubmitting}
-                            required
-                            data-field="password"
-                            aria-describedby={error ? 'setup-error' : undefined}
-                        />
-                    </div>
-
-                    <div className="setup-page__field">
-                        <Label htmlFor="setup-confirm-password" required>
-                            Confirm password
-                        </Label>
-                        <Input
-                            id="setup-confirm-password"
-                            type="password"
-                            value={confirmPassword}
-                            onChange={(event) => setConfirmPassword(event.target.value)}
-                            autoComplete="new-password"
-                            disabled={isSubmitting}
-                            required
-                            data-field="confirm-password"
-                            aria-describedby={error ? 'setup-error' : undefined}
-                        />
-                    </div>
-
-                    {error && (
-                        <p id="setup-error" className="setup-page__error" role="alert" data-testid="setup-error">
-                            {error}
+                {statusQuery.isError ? (
+                    <div className="setup-page__status-error" role="alert" data-testid="setup-status-error">
+                        <p className="setup-page__error">
+                            Failed to load browser setup status. Complete setup with the local Magpie CLI. Then retry
+                            this check.
                         </p>
-                    )}
-
-                    <Button
-                        type="submit"
-                        variant="primary"
-                        size="lg"
-                        loading={isSubmitting}
-                        className="setup-page__submit"
-                        data-action="create-admin"
-                    >
-                        <UserPlus weight="bold" aria-hidden="true" />
-                        Create administrator
-                    </Button>
-                </form>
+                        <Button
+                            type="button"
+                            variant="primary"
+                            onClick={() => void statusQuery.refetch()}
+                            loading={statusQuery.isFetching}
+                            className="setup-page__submit"
+                        >
+                            Retry
+                        </Button>
+                    </div>
+                ) : resolvedStepId === 'db' ? (
+                    <DbProviderStep onAdvance={handleAdvance} />
+                ) : resolvedStepId === 'admin' ? (
+                    <AdminClaimStep onAdvance={handleAdvance} />
+                ) : resolvedStepId === 'metadata' ? (
+                    <MetadataProviderStep onAdvance={handleAdvance} />
+                ) : resolvedStepId === 'indexer' ? (
+                    <FirstIndexerStep onAdvance={handleAdvance} />
+                ) : resolvedStepId === 'download' ? (
+                    <FirstDownloadClientStep onAdvance={handleAdvance} />
+                ) : resolvedStepId === 'root' ? (
+                    <FirstRootFolderStep onAdvance={handleAdvance} />
+                ) : resolvedStepId === 'server' ? (
+                    <FirstMediaServerStep onAdvance={handleAdvance} />
+                ) : resolvedStepId === 'done' ? (
+                    <CompletionStep onAdvance={handleAdvance} />
+                ) : null}
             </div>
         </div>
     );

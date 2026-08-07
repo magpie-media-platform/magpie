@@ -81,6 +81,18 @@ describe('Button', () => {
         expect(button).toHaveAttribute('aria-disabled', 'true');
     });
 
+    it('exposes the variant class and disabled state used to neutralize disabled destructive fills', () => {
+        render(
+            <Button variant="destructive" disabled>
+                Remove
+            </Button>,
+        );
+        const button = screen.getByRole('button');
+        expect(button).toHaveClass('button--destructive');
+        expect(button).toBeDisabled();
+        expect(button).toHaveAttribute('aria-disabled', 'true');
+    });
+
     it('shows loading state', () => {
         render(<Button loading>Loading</Button>);
         const button = screen.getByRole('button');

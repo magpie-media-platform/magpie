@@ -227,6 +227,27 @@ describe('PullToRefresh', () => {
             expect(container.firstChild).toHaveAttribute('data-state', 'idle');
         });
 
+        it('resets an armed pull when the touch is cancelled', () => {
+            const { container } = render(
+                <PullToRefresh onRefresh={mockOnRefresh} threshold={40}>
+                    <div>Content</div>
+                </PullToRefresh>,
+            );
+
+            const content = container.querySelector('.pull-to-refresh__content');
+            Object.defineProperty(content, 'scrollTop', { value: 0, writable: true });
+
+            fireEvent.touchStart(content!, createTouchEvent(0));
+            fireEvent.touchMove(content!, createTouchEvent(100));
+            expect(container.firstChild).toHaveAttribute('data-state', 'ready');
+
+            fireEvent.touchCancel(content!);
+            fireEvent.touchEnd(content!);
+
+            expect(container.firstChild).toHaveAttribute('data-state', 'idle');
+            expect(mockOnRefresh).not.toHaveBeenCalled();
+        });
+
         it('ignores upward swipes', () => {
             const { container } = render(
                 <PullToRefresh onRefresh={mockOnRefresh}>
@@ -330,7 +351,7 @@ describe('PullToRefresh', () => {
             );
 
             act(() => {
-                ref.current?.refresh();
+                void ref.current?.refresh();
             });
 
             await waitFor(() => {

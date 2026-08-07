@@ -1,50 +1,43 @@
 import { syntaxTree } from '@codemirror/language';
 import { linter, type Diagnostic } from '@codemirror/lint';
 
-import { parseFilterQuery } from '@/lib/filterQuery';
+export function describeSyntaxError(doc: string, from: number, to: number): string {
+    const token = doc.slice(from, to).trim();
+    if (token) {
+        const snippet = token.length > 24 ? `${token.slice(0, 24)}...` : token;
+        return `Unexpected "${snippet}"`;
+    }
+    if (from >= doc.trimEnd().length) {
+        return 'Unexpected end of query: the expression looks unfinished';
+    }
+    return 'Syntax error';
+}
 
-export function filterQueryLinter(context: 'content' | 'subject') {
+export function filterQueryLinter() {
     return linter(
-        async (view) => {
-            const diagnostics: Diagnostic[] = [];
+        (view) => {
             const doc = view.state.doc.toString();
 
             if (!doc.trim()) {
-                return diagnostics;
+                return [];
             }
 
+            const grammarDiagnostics: Diagnostic[] = [];
             const tree = syntaxTree(view.state);
             tree.iterate({
                 enter(node) {
                     if (node.type.isError) {
-                        diagnostics.push({
+                        grammarDiagnostics.push({
                             from: node.from,
                             to: Math.max(node.to, node.from + 1),
                             severity: 'error',
-                            message: 'Syntax error',
+                            message: describeSyntaxError(doc, node.from, node.to),
                         });
                     }
                 },
             });
 
-            if (diagnostics.length === 0) {
-                try {
-                    const result = await parseFilterQuery(doc, context);
-                    if (result.error) {
-                        const pos = Math.min(result.error.position, doc.length);
-                        diagnostics.push({
-                            from: pos,
-                            to: Math.min(pos + 1, doc.length),
-                            severity: 'error',
-                            message: result.error.message,
-                        });
-                    }
-                } catch {
-                    // ignore
-                }
-            }
-
-            return diagnostics;
+            return grammarDiagnostics;
         },
         { delay: 400 },
     );

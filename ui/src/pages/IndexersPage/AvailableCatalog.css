@@ -1,0 +1,74 @@
+@layer components {
+    .available-catalog {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-md);
+    }
+
+    .available-catalog__toolbar {
+        display: flex;
+        justify-content: flex-end;
+    }
+
+    .available-catalog__table {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-md);
+    }
+
+    .available-catalog__pager {
+        align-self: center;
+    }
+
+    .available-catalog__table .data-table__table {
+        table-layout: fixed;
+    }
+
+    .available-catalog__table .data-table__cell[data-column='name'],
+    .available-catalog__table .data-table__cell[data-column='providerType'],
+    .available-catalog__table .data-table__cell[data-column='languages'],
+    .available-catalog__table .data-table__cell[data-column='categories'] {
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .available-catalog__name-cell {
+        display: flex;
+        align-items: center;
+        gap: var(--space-sm);
+        min-width: 0;
+        max-width: 100%;
+    }
+
+    .available-catalog__name {
+        display: block;
+        flex: 1 1 auto;
+        min-width: 0;
+        font-weight: var(--weight-medium);
+        color: var(--text-primary);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .available-catalog__provider {
+        display: block;
+        font-family: var(--font-mono);
+        color: var(--text-secondary);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .available-catalog__tags {
+        color: var(--text-muted);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        display: block;
+    }
+
+    .available-catalog__empty-cell {
+        color: var(--text-muted);
+    }
+}

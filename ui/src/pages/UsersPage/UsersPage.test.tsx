@@ -1,13 +1,14 @@
 import { render, screen, within, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, useSearchParams } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 
-import { ToastProvider, ToastStateProvider, ToastViewport } from '@/components/ui/Toast';
+import { ToastProvider, ToastStateProvider, ToastViewport, ToastList } from '@/components/ui/Toast';
 import { TooltipProvider } from '@/components/ui/Tooltip';
 import { AuthProvider, Role } from '@/auth';
+import { testEffectivePermissions } from '@/test/permissions';
 import type { UserItem } from '@/types';
 
 import { UsersPage } from './UsersPage';
@@ -141,7 +142,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
     };
 });
 
-import { apiGet, apiPost, apiDelete } from '@/lib/api';
+import { apiGet, apiPost, apiPatch, apiDelete, ApiError } from '@/lib/api';
 
 function createTestQueryClient() {
     return new QueryClient({
@@ -169,11 +170,12 @@ function TestWrapper({ children, initialEntries }: { children: ReactNode; initia
     return (
         <QueryClientProvider client={queryClient}>
             <MemoryRouter initialEntries={initialEntries}>
-                <AuthProvider initialUser={mockUser}>
+                <AuthProvider initialUser={mockUser} initialPermissions={testEffectivePermissions()}>
                     <TooltipProvider>
                         <ToastProvider>
                             <ToastStateProvider>
                                 {children}
+                                <ToastList />
                                 <ToastViewport />
                             </ToastStateProvider>
                         </ToastProvider>
@@ -188,7 +190,10 @@ beforeEach(() => {
     vi.clearAllMocks();
 
     vi.mocked(apiGet).mockImplementation((url: string) => {
-        if (url === '/api-keys/my' || url.startsWith('/api-keys/')) {
+        if (url === '/auth-providers') {
+            return Promise.resolve(['ldap']);
+        }
+        if (url === '/api-keys' || url === '/api-keys/my' || url.startsWith('/api-keys/')) {
             return Promise.resolve([]);
         }
         return Promise.resolve(mockPagedResponse);
@@ -234,6 +239,53 @@ describe('UsersPage', () => {
         });
     });
 
+    it('uses the total user count and reaches users on later API pages', async () => {
+        const user = userEvent.setup();
+        const laterUser: UserItem = {
+            ...mockUsers[1],
+            id: 'user-26',
+            username: 'later_user',
+        };
+        vi.mocked(apiGet).mockImplementation((url: string) => {
+            if (url === '/auth-providers') {
+                return Promise.resolve(['ldap']);
+            }
+            if (url === '/api-keys' || url === '/api-keys/my' || url.startsWith('/api-keys/')) {
+                return Promise.resolve([]);
+            }
+            if (url === '/users?pageNumber=2&pageSize=25') {
+                return Promise.resolve({
+                    items: [laterUser],
+                    pageNumber: 2,
+                    pageSize: 25,
+                    totalItems: 26,
+                });
+            }
+            return Promise.resolve({
+                items: mockUsers,
+                pageNumber: 1,
+                pageSize: 25,
+                totalItems: 26,
+            });
+        });
+
+        render(
+            <TestWrapper>
+                <UsersPage />
+            </TestWrapper>,
+        );
+
+        const usersTab = document.querySelector('[data-tab="users"]');
+        await waitFor(() => {
+            expect(usersTab?.querySelector('[data-testid="users-page__tab-count"]')).toHaveTextContent('26');
+        });
+        await user.click(screen.getByRole('button', { name: 'Go to next page' }));
+
+        expect(await screen.findByText('later_user')).toBeInTheDocument();
+        expect(apiGet).toHaveBeenCalledWith('/users?pageNumber=2&pageSize=25');
+        expect(screen.getByText('Page 2 of 2')).toBeInTheDocument();
+    });
+
     it('renders the page icon as decorative', async () => {
         render(
             <TestWrapper>
@@ -255,80 +307,47 @@ describe('UsersPage', () => {
         const addButtons = screen.getAllByRole('button', { name: /add user/i });
         expect(addButtons.length).toBeGreaterThanOrEqual(1);
     });
-});
 
-describe('UsersPage summary badges', () => {
-    it('renders summary badges for each role', async () => {
+    it('includes the disabled state in the create user request', async () => {
+        const user = userEvent.setup();
+        vi.mocked(apiPost).mockResolvedValue({
+            id: 'user-7',
+            username: 'disabled_new',
+            email: null,
+            extensionId: null,
+            providerType: 'local',
+            externalId: null,
+            settings: null,
+            enabled: false,
+            role: Role.Viewer,
+            failedLoginAttempts: 0,
+            lockedUntil: null,
+            lastLoginAt: null,
+            createdAt: '2024-01-07T00:00:00Z',
+            createdByUserId: 'user-1',
+            modifiedAt: null,
+            modifiedByUserId: null,
+        });
+
         render(
             <TestWrapper>
                 <UsersPage />
             </TestWrapper>,
         );
 
-        await waitFor(() => {
-            expect(screen.getAllByText('Admin').length).toBeGreaterThanOrEqual(1);
-        });
-        expect(screen.getAllByText('Manager').length).toBeGreaterThanOrEqual(1);
-        expect(screen.getAllByText('Requester').length).toBeGreaterThanOrEqual(1);
-        expect(screen.getAllByText('Viewer').length).toBeGreaterThanOrEqual(1);
-    });
-
-    it('applies data-status attributes to summary badges', async () => {
-        render(
-            <TestWrapper>
-                <UsersPage />
-            </TestWrapper>,
-        );
+        await user.click(document.querySelector('[data-action="add-user"]') as HTMLButtonElement);
+        await user.type(screen.getByLabelText(/username/i), 'disabled_new');
+        await user.type(screen.getByLabelText(/^password$/i), 'password123');
+        await user.click(screen.getByLabelText(/user enabled/i));
+        await user.click(screen.getByRole('button', { name: /^create$/i }));
 
         await waitFor(() => {
-            const summary = document.querySelector('[aria-label="Role summary"]');
-            const badges = summary?.querySelectorAll('[data-component="badge"]') ?? [];
-            expect(badges.length).toBeGreaterThan(0);
-        });
-
-        const summary = document.querySelector('[aria-label="Role summary"]');
-        const badges = summary?.querySelectorAll('[data-component="badge"]') ?? [];
-        const statuses = Array.from(badges).map((b) => b.getAttribute('data-status'));
-
-        expect(statuses).toContain('primary');
-        expect(statuses).toContain('warning');
-        expect(statuses).toContain('info');
-        expect(statuses).toContain('default');
-    });
-
-    it('renders badge dots as decorative', async () => {
-        render(
-            <TestWrapper>
-                <UsersPage />
-            </TestWrapper>,
-        );
-
-        await waitFor(() => {
-            const summary = document.querySelector('[aria-label="Role summary"]');
-            const dots = summary?.querySelectorAll('[data-component="badge"] [aria-hidden="true"]') ?? [];
-            expect(dots.length).toBeGreaterThan(0);
-        });
-
-        const summary = document.querySelector('[aria-label="Role summary"]');
-        const dots = summary?.querySelectorAll('[data-component="badge"] [aria-hidden="true"]') ?? [];
-        dots.forEach((dot) => {
-            expect(dot).toHaveAttribute('aria-hidden', 'true');
-        });
-    });
-
-    it('shows correct count for admin users', async () => {
-        render(
-            <TestWrapper>
-                <UsersPage />
-            </TestWrapper>,
-        );
-
-        await waitFor(() => {
-            const summary = document.querySelector('[aria-label="Role summary"]');
-            const adminBadge = summary?.querySelector('[data-component="badge"][data-status="primary"]');
-            const count = adminBadge?.querySelector('[data-component="badge"] .badge__count');
-
-            expect(count).toHaveTextContent('1');
+            expect(apiPost).toHaveBeenCalledWith('/users', {
+                username: 'disabled_new',
+                password: 'password123',
+                role: Role.Viewer,
+                enabled: false,
+            });
         });
     });
 });
@@ -727,141 +746,11 @@ describe('UsersPage actions', () => {
     });
 });
 
-describe('UsersPage filters', () => {
-    it('renders role and enabled filter dropdowns', async () => {
-        render(
-            <TestWrapper>
-                <UsersPage />
-            </TestWrapper>,
-        );
-
-        expect(document.querySelector('[data-filter="role"]')).toBeInTheDocument();
-        expect(document.querySelector('[data-filter="enabled"]')).toBeInTheDocument();
-    });
-
-    it('role filter displays "All Roles" by default', async () => {
-        render(
-            <TestWrapper>
-                <UsersPage />
-            </TestWrapper>,
-        );
-
-        const roleTrigger = document.querySelector('[data-filter="role"]');
-        expect(roleTrigger).toHaveTextContent('All Roles');
-    });
-
-    it('enabled filter displays "All Enabled" by default', async () => {
-        render(
-            <TestWrapper>
-                <UsersPage />
-            </TestWrapper>,
-        );
-
-        const enabledTrigger = document.querySelector('[data-filter="enabled"]');
-        expect(enabledTrigger).toHaveTextContent('All Enabled');
-    });
-
-    it('filters items by role when selection changes', async () => {
-        const user = userEvent.setup();
-        render(
-            <TestWrapper>
-                <UsersPage />
-            </TestWrapper>,
-        );
-
-        await waitFor(() => {
-            expect(screen.getByText('admin')).toBeInTheDocument();
-        });
-
-        const roleTrigger = document.querySelector('[data-filter="role"]') as HTMLElement;
-        await user.click(roleTrigger);
-
-        const adminOption = await screen.findByRole('option', { name: 'Admin' });
-        await user.click(adminOption);
-
-        const list = screen.getByRole('list', { name: /users/i });
-        const items = within(list).getAllByRole('listitem');
-        expect(items.length).toBe(1);
-        expect(screen.getByText('admin')).toBeInTheDocument();
-    });
-
-    it('filters items by enabled state when selection changes', async () => {
-        const user = userEvent.setup();
-        render(
-            <TestWrapper>
-                <UsersPage />
-            </TestWrapper>,
-        );
-
-        await waitFor(() => {
-            expect(screen.getByText('disabled_user')).toBeInTheDocument();
-        });
-
-        const enabledTrigger = document.querySelector('[data-filter="enabled"]') as HTMLElement;
-        await user.click(enabledTrigger);
-
-        const disabledOption = await screen.findByRole('option', { name: 'Disabled' });
-        await user.click(disabledOption);
-
-        const list = screen.getByRole('list', { name: /users/i });
-        const items = within(list).getAllByRole('listitem');
-        expect(items.length).toBe(1);
-        expect(screen.getByText('disabled_user')).toBeInTheDocument();
-    });
-
-    it('shows clear button when filters are active', async () => {
-        const user = userEvent.setup();
-        render(
-            <TestWrapper>
-                <UsersPage />
-            </TestWrapper>,
-        );
-
-        expect(document.querySelector('[data-action="clear-filters"]')).not.toBeInTheDocument();
-
-        const roleTrigger = document.querySelector('[data-filter="role"]') as HTMLElement;
-        await user.click(roleTrigger);
-
-        const adminOption = await screen.findByRole('option', { name: 'Admin' });
-        await user.click(adminOption);
-
-        expect(document.querySelector('[data-action="clear-filters"]')).toBeInTheDocument();
-    });
-
-    it('clears filters when clear button is clicked', async () => {
-        const user = userEvent.setup();
-        render(
-            <TestWrapper>
-                <UsersPage />
-            </TestWrapper>,
-        );
-
-        await waitFor(() => {
-            expect(screen.getByText('admin')).toBeInTheDocument();
-        });
-
-        const roleTrigger = document.querySelector('[data-filter="role"]') as HTMLElement;
-        await user.click(roleTrigger);
-
-        const adminOption = await screen.findByRole('option', { name: 'Admin' });
-        await user.click(adminOption);
-
-        const clearButton = document.querySelector('[data-action="clear-filters"]') as HTMLElement;
-        await user.click(clearButton);
-
-        await waitFor(() => {
-            const list = screen.getByRole('list', { name: /users/i });
-            const items = within(list).getAllByRole('listitem');
-            expect(items.length).toBe(6);
-        });
-    });
-});
-
 describe('UsersPage enable/disable toggle', () => {
     it('disables an enabled user when toggle is clicked', async () => {
         const user = userEvent.setup();
 
-        vi.mocked(apiPost).mockResolvedValue({ ...mockUsers[1], enabled: false });
+        vi.mocked(apiPatch).mockResolvedValue(undefined);
 
         render(
             <TestWrapper>
@@ -880,14 +769,16 @@ describe('UsersPage enable/disable toggle', () => {
         await user.click(toggle);
 
         await waitFor(() => {
-            expect(apiPost).toHaveBeenCalledWith('/users/user-2/disable');
+            expect(apiPatch).toHaveBeenCalledWith('/users/user-2', {
+                enabled: { value: false },
+            });
         });
     });
 
     it('enables a disabled user when toggle is clicked', async () => {
         const user = userEvent.setup();
 
-        vi.mocked(apiPost).mockResolvedValue({ ...mockUsers[5], enabled: true });
+        vi.mocked(apiPatch).mockResolvedValue(undefined);
 
         render(
             <TestWrapper>
@@ -906,7 +797,9 @@ describe('UsersPage enable/disable toggle', () => {
         await user.click(toggle);
 
         await waitFor(() => {
-            expect(apiPost).toHaveBeenCalledWith('/users/user-6/enable');
+            expect(apiPatch).toHaveBeenCalledWith('/users/user-6', {
+                enabled: { value: true },
+            });
         });
     });
 });
@@ -969,19 +862,48 @@ describe('UsersPage API Keys tab', () => {
         expect(screen.getByRole('button', { name: /create key/i })).toBeInTheDocument();
     });
 
-    it('calls create API when Create Key is clicked', async () => {
+    it('opens the create dialog and requires a name before submitting', async () => {
+        const user = userEvent.setup();
+
+        render(
+            <TestWrapper>
+                <UsersPage />
+            </TestWrapper>,
+        );
+
+        const apiKeysTab = document.querySelector('[data-tab="api-keys"]') as HTMLElement;
+        await user.click(apiKeysTab);
+
+        await user.click(screen.getByRole('button', { name: /create key/i }));
+
+        await waitFor(() => {
+            expect(document.querySelector('[data-component="create-api-key-dialog"]')).toBeInTheDocument();
+        });
+
+        await user.click(document.querySelector('[data-action="submit-create-key"]') as HTMLButtonElement);
+
+        expect(await screen.findByText(/name is required/i)).toBeInTheDocument();
+        expect(apiPost).not.toHaveBeenCalled();
+    });
+
+    it('creates a named key and reveals the plaintext once', async () => {
         const user = userEvent.setup();
 
         vi.mocked(apiPost).mockResolvedValue({
-            id: 'new-key',
-            userId: 'user-1',
-            name: 'API Key 1',
-            key: 'mgp_test_plaintext',
-            keyPrefix: 'mgp_test',
-            enabled: true,
-            expiresAt: null,
-            createdAt: '2024-03-01T00:00:00Z',
-            createdByUserId: 'user-1',
+            key: {
+                id: 'new-key',
+                userId: 'user-1',
+                name: 'Home automation',
+                keyPrefix: 'mgp_test',
+                enabled: true,
+                expiresAt: null,
+                lastUsedAt: null,
+                createdAt: '2024-03-01T00:00:00Z',
+                createdByUserId: 'user-1',
+                modifiedAt: null,
+                modifiedByUserId: null,
+            },
+            plaintextKey: 'mgp_test_plaintext_secret',
         });
 
         render(
@@ -993,17 +915,81 @@ describe('UsersPage API Keys tab', () => {
         const apiKeysTab = document.querySelector('[data-tab="api-keys"]') as HTMLElement;
         await user.click(apiKeysTab);
 
-        const createButton = screen.getByRole('button', { name: /create key/i });
-        await user.click(createButton);
+        await user.click(screen.getByRole('button', { name: /create key/i }));
+
+        const nameInput = document.querySelector('[data-field="api-key-name"]') as HTMLInputElement;
+        await user.type(nameInput, 'Home automation');
+
+        await user.click(document.querySelector('[data-action="submit-create-key"]') as HTMLButtonElement);
 
         await waitFor(() => {
-            expect(apiPost).toHaveBeenCalledWith('/api-keys/my', expect.objectContaining({ name: expect.any(String) }));
+            expect(apiPost).toHaveBeenCalledWith('/api-keys', {
+                name: 'Home automation',
+                expiresAt: null,
+            });
+        });
+
+        await waitFor(() => {
+            expect(document.querySelector('[data-component="reveal-api-key-dialog"]')).toBeInTheDocument();
+        });
+        expect(screen.getByTestId('reveal-api-key-value')).toHaveTextContent('mgp_test_plaintext_secret');
+    });
+
+    it('copies the revealed key to the clipboard and dismisses the modal', async () => {
+        const user = userEvent.setup();
+        const writeText = vi.fn().mockResolvedValue(undefined);
+        Object.defineProperty(navigator, 'clipboard', {
+            value: { writeText },
+            configurable: true,
+        });
+
+        vi.mocked(apiPost).mockResolvedValue({
+            key: {
+                id: 'new-key',
+                userId: 'user-1',
+                name: 'CI token',
+                keyPrefix: 'mgp_ci',
+                enabled: true,
+                expiresAt: null,
+                lastUsedAt: null,
+                createdAt: '2024-03-01T00:00:00Z',
+                createdByUserId: 'user-1',
+                modifiedAt: null,
+                modifiedByUserId: null,
+            },
+            plaintextKey: 'mgp_ci_plaintext_secret',
+        });
+
+        render(
+            <TestWrapper>
+                <UsersPage />
+            </TestWrapper>,
+        );
+
+        const apiKeysTab = document.querySelector('[data-tab="api-keys"]') as HTMLElement;
+        await user.click(apiKeysTab);
+
+        await user.click(screen.getByRole('button', { name: /create key/i }));
+        await user.type(document.querySelector('[data-field="api-key-name"]') as HTMLInputElement, 'CI token');
+        await user.click(document.querySelector('[data-action="submit-create-key"]') as HTMLButtonElement);
+
+        await waitFor(() => {
+            expect(document.querySelector('[data-component="reveal-api-key-dialog"]')).toBeInTheDocument();
+        });
+
+        await user.click(document.querySelector('[data-action="copy-api-key"]') as HTMLButtonElement);
+        expect(writeText).toHaveBeenCalledWith('mgp_ci_plaintext_secret');
+
+        await user.click(document.querySelector('[data-action="dismiss-reveal-key"]') as HTMLButtonElement);
+
+        await waitFor(() => {
+            expect(document.querySelector('[data-component="reveal-api-key-dialog"]')).not.toBeInTheDocument();
         });
     });
 });
 
-describe('UsersPage API Keys user selector', () => {
-    it('renders user selector in API Keys tab', async () => {
+describe('UsersPage API Keys Mine/All toggle', () => {
+    it('renders a Mine/All ownership toggle for admins, no dropdown', async () => {
         const user = userEvent.setup();
 
         render(
@@ -1015,30 +1001,13 @@ describe('UsersPage API Keys user selector', () => {
         const apiKeysTab = document.querySelector('[data-tab="api-keys"]') as HTMLElement;
         await user.click(apiKeysTab);
 
-        expect(document.querySelector('[data-component="user-selector"]')).toBeInTheDocument();
+        expect(document.querySelector('[data-component="user-selector"]')).not.toBeInTheDocument();
+        expect(document.querySelector('[data-filter="user"]')).not.toBeInTheDocument();
+        expect(document.querySelector('[data-filter="scope"][data-value="mine"]')).toBeInTheDocument();
+        expect(document.querySelector('[data-filter="scope"][data-value="all"]')).toBeInTheDocument();
     });
 
-    it('displays current user as default selection', async () => {
-        const user = userEvent.setup();
-
-        render(
-            <TestWrapper>
-                <UsersPage />
-            </TestWrapper>,
-        );
-
-        await waitFor(() => {
-            expect(screen.getByText('admin')).toBeInTheDocument();
-        });
-
-        const apiKeysTab = document.querySelector('[data-tab="api-keys"]') as HTMLElement;
-        await user.click(apiKeysTab);
-
-        const userSelector = document.querySelector('[data-filter="user"]');
-        expect(userSelector).toHaveTextContent('admin');
-    });
-
-    it('shows empty state when user has no API keys', async () => {
+    it('shows empty state for the current user with no keys', async () => {
         const user = userEvent.setup();
 
         render(
@@ -1057,8 +1026,37 @@ describe('UsersPage API Keys user selector', () => {
         expect(screen.getByText('No API keys')).toBeInTheDocument();
     });
 
-    it("updates description when viewing another user's keys", async () => {
+    it('fetches every users keys and labels owners when switching to All', async () => {
         const user = userEvent.setup();
+
+        const allKeys = [
+            {
+                id: 'key-all-1',
+                userId: 'user-2',
+                name: 'Manager Key',
+                keyPrefix: 'mgp_mgr',
+                enabled: true,
+                expiresAt: null,
+                lastUsedAt: null,
+                createdAt: '2024-01-01T00:00:00Z',
+                createdByUserId: 'user-2',
+                modifiedAt: null,
+                modifiedByUserId: null,
+            },
+        ];
+
+        vi.mocked(apiGet).mockImplementation((url: string) => {
+            if (url === '/auth-providers') {
+                return Promise.resolve(['ldap']);
+            }
+            if (url === '/api-keys') {
+                return Promise.resolve(allKeys);
+            }
+            if (url === '/api-keys/my' || url.startsWith('/api-keys/')) {
+                return Promise.resolve([]);
+            }
+            return Promise.resolve(mockPagedResponse);
+        });
 
         render(
             <TestWrapper>
@@ -1073,19 +1071,61 @@ describe('UsersPage API Keys user selector', () => {
         const apiKeysTab = document.querySelector('[data-tab="api-keys"]') as HTMLElement;
         await user.click(apiKeysTab);
 
-        expect(screen.getByText(/keys are scoped to your user account/i)).toBeInTheDocument();
+        const allToggle = document.querySelector('[data-filter="scope"][data-value="all"]') as HTMLElement;
+        await user.click(allToggle);
 
-        const userSelector = document.querySelector('[data-filter="user"]') as HTMLElement;
-        await user.click(userSelector);
+        await waitFor(() => {
+            expect(apiGet).toHaveBeenCalledWith('/api-keys');
+        });
 
-        const managerOption = await screen.findByRole('option', { name: /manager/i });
-        await user.click(managerOption);
-
-        expect(screen.getByText(/managing keys for manager/i)).toBeInTheDocument();
+        expect(await screen.findByText('Manager Key')).toBeInTheDocument();
+        expect(screen.getByTestId('api-key-owner-badge')).toHaveTextContent('manager');
     });
 
-    it('marks current user option with "(you)" indicator', async () => {
+    it('updates the API Keys tab count when switching from Mine to All', async () => {
         const user = userEvent.setup();
+
+        const allKeys = [
+            {
+                id: 'key-all-1',
+                userId: 'user-2',
+                name: 'Manager Key',
+                keyPrefix: 'mgp_mgr',
+                enabled: true,
+                expiresAt: null,
+                lastUsedAt: null,
+                createdAt: '2024-01-01T00:00:00Z',
+                createdByUserId: 'user-2',
+                modifiedAt: null,
+                modifiedByUserId: null,
+            },
+            {
+                id: 'key-all-2',
+                userId: 'user-3',
+                name: 'Requester Key',
+                keyPrefix: 'mgp_req',
+                enabled: true,
+                expiresAt: null,
+                lastUsedAt: null,
+                createdAt: '2024-01-02T00:00:00Z',
+                createdByUserId: 'user-3',
+                modifiedAt: null,
+                modifiedByUserId: null,
+            },
+        ];
+
+        vi.mocked(apiGet).mockImplementation((url: string) => {
+            if (url === '/auth-providers') {
+                return Promise.resolve(['ldap']);
+            }
+            if (url === '/api-keys') {
+                return Promise.resolve(allKeys);
+            }
+            if (url === '/api-keys' || url === '/api-keys/my' || url.startsWith('/api-keys/')) {
+                return Promise.resolve([]);
+            }
+            return Promise.resolve(mockPagedResponse);
+        });
 
         render(
             <TestWrapper>
@@ -1093,18 +1133,155 @@ describe('UsersPage API Keys user selector', () => {
             </TestWrapper>,
         );
 
+        const apiKeysTab = document.querySelector('[data-tab="api-keys"]') as HTMLElement;
+        const count = apiKeysTab.querySelector('[data-testid="users-page__tab-count"]');
+        expect(count).toHaveTextContent('0');
+
+        await user.click(apiKeysTab);
+        await user.click(document.querySelector('[data-filter="scope"][data-value="all"]') as HTMLElement);
+
+        expect(await screen.findByText('Manager Key')).toBeInTheDocument();
+        expect(screen.getByText('Requester Key')).toBeInTheDocument();
         await waitFor(() => {
-            expect(screen.getByText('admin')).toBeInTheDocument();
+            expect(count).toHaveTextContent('2');
+        });
+    });
+});
+
+describe('UsersPage API key enable toggle', () => {
+    const disabledKey = [
+        {
+            id: 'key-1',
+            userId: 'user-1',
+            name: 'Test Key',
+            keyPrefix: 'mgp_test',
+            enabled: false,
+            expiresAt: null,
+            lastUsedAt: null,
+            createdAt: '2024-01-01T00:00:00Z',
+            createdByUserId: 'user-1',
+            modifiedAt: null,
+            modifiedByUserId: null,
+        },
+    ];
+
+    const enabledKey = [
+        {
+            id: 'key-1',
+            userId: 'user-1',
+            name: 'Test Key',
+            keyPrefix: 'mgp_test',
+            enabled: true,
+            expiresAt: null,
+            lastUsedAt: null,
+            createdAt: '2024-01-01T00:00:00Z',
+            createdByUserId: 'user-1',
+            modifiedAt: null,
+            modifiedByUserId: null,
+        },
+    ];
+
+    it('patches the key enabled to true when a disabled key is toggled on', async () => {
+        const user = userEvent.setup();
+        vi.mocked(apiPatch).mockResolvedValue(undefined);
+        vi.mocked(apiGet).mockImplementation((url: string) => {
+            if (url === '/auth-providers') {
+                return Promise.resolve(['ldap']);
+            }
+            if (url === '/api-keys/my') {
+                return Promise.resolve(disabledKey);
+            }
+            if (url.startsWith('/api-keys')) {
+                return Promise.resolve([]);
+            }
+            return Promise.resolve(mockPagedResponse);
         });
 
-        const apiKeysTab = document.querySelector('[data-tab="api-keys"]') as HTMLElement;
-        await user.click(apiKeysTab);
+        render(
+            <TestWrapper>
+                <UsersPage />
+            </TestWrapper>,
+        );
 
-        const userSelector = document.querySelector('[data-filter="user"]') as HTMLElement;
-        await user.click(userSelector);
+        await user.click(document.querySelector('[data-tab="api-keys"]') as HTMLElement);
 
-        const adminOption = await screen.findByRole('option', { name: /admin.*\(you\)/i });
-        expect(adminOption).toBeInTheDocument();
+        await waitFor(() => {
+            expect(document.querySelector('[data-action="toggle-enabled"][data-target="key-1"]')).toBeInTheDocument();
+        });
+
+        await user.click(document.querySelector('[data-action="toggle-enabled"][data-target="key-1"]') as HTMLElement);
+
+        await waitFor(() => {
+            expect(apiPatch).toHaveBeenCalledWith('/api-keys/key-1', { enabled: { value: true } });
+        });
+    });
+
+    it('patches the key enabled to false when an enabled key is toggled off', async () => {
+        const user = userEvent.setup();
+        vi.mocked(apiPatch).mockResolvedValue(undefined);
+        vi.mocked(apiGet).mockImplementation((url: string) => {
+            if (url === '/auth-providers') {
+                return Promise.resolve(['ldap']);
+            }
+            if (url === '/api-keys/my') {
+                return Promise.resolve(enabledKey);
+            }
+            if (url.startsWith('/api-keys')) {
+                return Promise.resolve([]);
+            }
+            return Promise.resolve(mockPagedResponse);
+        });
+
+        render(
+            <TestWrapper>
+                <UsersPage />
+            </TestWrapper>,
+        );
+
+        await user.click(document.querySelector('[data-tab="api-keys"]') as HTMLElement);
+
+        await waitFor(() => {
+            expect(document.querySelector('[data-action="toggle-enabled"][data-target="key-1"]')).toBeInTheDocument();
+        });
+
+        await user.click(document.querySelector('[data-action="toggle-enabled"][data-target="key-1"]') as HTMLElement);
+
+        await waitFor(() => {
+            expect(apiPatch).toHaveBeenCalledWith('/api-keys/key-1', { enabled: { value: false } });
+        });
+    });
+
+    it('shows the server error detail when the toggle patch fails', async () => {
+        const user = userEvent.setup();
+        vi.mocked(apiPatch).mockRejectedValue(new ApiError(403, 'That API key belongs to another user.'));
+        vi.mocked(apiGet).mockImplementation((url: string) => {
+            if (url === '/auth-providers') {
+                return Promise.resolve(['ldap']);
+            }
+            if (url === '/api-keys/my') {
+                return Promise.resolve(enabledKey);
+            }
+            if (url.startsWith('/api-keys')) {
+                return Promise.resolve([]);
+            }
+            return Promise.resolve(mockPagedResponse);
+        });
+
+        render(
+            <TestWrapper>
+                <UsersPage />
+            </TestWrapper>,
+        );
+
+        await user.click(document.querySelector('[data-tab="api-keys"]') as HTMLElement);
+
+        await waitFor(() => {
+            expect(document.querySelector('[data-action="toggle-enabled"][data-target="key-1"]')).toBeInTheDocument();
+        });
+
+        await user.click(document.querySelector('[data-action="toggle-enabled"][data-target="key-1"]') as HTMLElement);
+
+        expect(await screen.findByText('That API key belongs to another user.')).toBeInTheDocument();
     });
 });
 
@@ -1117,17 +1294,6 @@ describe('UsersPage accessibility', () => {
         );
 
         expect(screen.getByRole('list', { name: /users/i })).toBeInTheDocument();
-    });
-
-    it('summary section has accessible label', async () => {
-        render(
-            <TestWrapper>
-                <UsersPage />
-            </TestWrapper>,
-        );
-
-        const summary = document.querySelector('[aria-label="Role summary"]');
-        expect(summary).toBeInTheDocument();
     });
 
     it('toggle switches have aria-labels', async () => {
@@ -1165,27 +1331,16 @@ describe('UsersPage accessibility', () => {
             expect(btn).toHaveAttribute('aria-label');
         });
     });
-
-    it('filter triggers have aria-labels', async () => {
-        render(
-            <TestWrapper>
-                <UsersPage />
-            </TestWrapper>,
-        );
-
-        const roleFilter = document.querySelector('[data-filter="role"]');
-        expect(roleFilter).toHaveAttribute('aria-label', 'Filter by role');
-
-        const enabledFilter = document.querySelector('[data-filter="enabled"]');
-        expect(enabledFilter).toHaveAttribute('aria-label', 'Filter by enabled state');
-    });
 });
 
 describe('UsersPage delete confirmations', () => {
     beforeEach(() => {
         vi.clearAllMocks();
         vi.mocked(apiGet).mockImplementation((url: string) => {
-            if (url === '/api-keys/my' || url.startsWith('/api-keys/')) {
+            if (url === '/auth-providers') {
+                return Promise.resolve(['ldap']);
+            }
+            if (url === '/api-keys' || url === '/api-keys/my' || url.startsWith('/api-keys/')) {
                 return Promise.resolve([]);
             }
             return Promise.resolve(mockPagedResponse);
@@ -1295,6 +1450,9 @@ describe('UsersPage delete confirmations', () => {
         ];
 
         vi.mocked(apiGet).mockImplementation((url: string) => {
+            if (url === '/auth-providers') {
+                return Promise.resolve(['ldap']);
+            }
             if (url === '/api-keys/my') {
                 return Promise.resolve(mockApiKeys);
             }
@@ -1349,6 +1507,9 @@ describe('UsersPage delete confirmations', () => {
         ];
 
         vi.mocked(apiGet).mockImplementation((url: string) => {
+            if (url === '/auth-providers') {
+                return Promise.resolve(['ldap']);
+            }
             if (url === '/api-keys/my') {
                 return Promise.resolve(mockApiKeys);
             }
@@ -1382,7 +1543,7 @@ describe('UsersPage delete confirmations', () => {
         await user.click(confirmButton);
 
         await waitFor(() => {
-            expect(apiDelete).toHaveBeenCalledWith('/api-keys/my/key-1');
+            expect(apiDelete).toHaveBeenCalledWith('/api-keys/key-1');
         });
     });
 
@@ -1406,6 +1567,9 @@ describe('UsersPage delete confirmations', () => {
         ];
 
         vi.mocked(apiGet).mockImplementation((url: string) => {
+            if (url === '/auth-providers') {
+                return Promise.resolve(['ldap']);
+            }
             if (url === '/api-keys/my') {
                 return Promise.resolve(mockApiKeys);
             }
@@ -1447,6 +1611,11 @@ describe('UsersPage delete confirmations', () => {
 });
 
 describe('UsersPage search params persistence', () => {
+    function UrlObserver() {
+        const [params] = useSearchParams();
+        return <span data-testid="url-params">{params.toString()}</span>;
+    }
+
     it('restores api-keys tab from URL search params', async () => {
         render(
             <TestWrapper initialEntries={['/?tab=api-keys']}>
@@ -1457,54 +1626,6 @@ describe('UsersPage search params persistence', () => {
         expect(screen.getByRole('list', { name: /api keys/i })).toBeInTheDocument();
     });
 
-    it('restores role filter from URL search params', async () => {
-        render(
-            <TestWrapper initialEntries={[`/?role=${Role.Admin}`]}>
-                <UsersPage />
-            </TestWrapper>,
-        );
-
-        await waitFor(() => {
-            const list = screen.getByRole('list', { name: /users/i });
-            const items = within(list).getAllByRole('listitem');
-            expect(items.length).toBe(1);
-        });
-
-        expect(screen.getByText('admin')).toBeInTheDocument();
-    });
-
-    it('restores enabled filter from URL search params', async () => {
-        render(
-            <TestWrapper initialEntries={['/?enabled=false']}>
-                <UsersPage />
-            </TestWrapper>,
-        );
-
-        await waitFor(() => {
-            const list = screen.getByRole('list', { name: /users/i });
-            const items = within(list).getAllByRole('listitem');
-            expect(items.length).toBe(1);
-        });
-
-        expect(screen.getByText('disabled_user')).toBeInTheDocument();
-    });
-
-    it('restores combined role and enabled filters from URL search params', async () => {
-        render(
-            <TestWrapper initialEntries={[`/?role=${Role.Requester}&enabled=true`]}>
-                <UsersPage />
-            </TestWrapper>,
-        );
-
-        await waitFor(() => {
-            const list = screen.getByRole('list', { name: /users/i });
-            const items = within(list).getAllByRole('listitem');
-            expect(items.length).toBe(1);
-        });
-
-        expect(screen.getByText('requester')).toBeInTheDocument();
-    });
-
     it('defaults to users tab when no tab param is set', () => {
         render(
             <TestWrapper>
@@ -1513,5 +1634,19 @@ describe('UsersPage search params persistence', () => {
         );
 
         expect(screen.getByRole('list', { name: /users/i })).toBeInTheDocument();
+    });
+
+    it('falls back to Users and normalizes the URL when ?tab= is invalid', async () => {
+        render(
+            <TestWrapper initialEntries={['/?tab=bogus']}>
+                <UsersPage />
+                <UrlObserver />
+            </TestWrapper>,
+        );
+
+        expect(screen.getByRole('list', { name: /users/i })).toBeInTheDocument();
+        await waitFor(() => {
+            expect(screen.getByTestId('url-params').textContent).toBe('');
+        });
     });
 });

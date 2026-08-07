@@ -3,27 +3,27 @@ using System;
 namespace Magpie.Models.Data;
 
 /// <summary>
-/// A preview or trailer for content.
+/// A trailer or other preview clip for content.
 /// </summary>
 public record Preview
 {
     /// <summary>
-    /// The preview id.
+    /// The unique id of the preview.
     /// </summary>
     public Guid Id { get; set; }
 
     /// <summary>
-    /// The metadata contribution this preview belongs to.
+    /// The id of the contribution that supplied the preview.
     /// </summary>
     public Guid MetadataContributionId { get; set; }
 
     /// <summary>
-    /// The display order.
+    /// The position in display order.
     /// </summary>
     public int Ordinal { get; set; }
 
     /// <summary>
-    /// The kind of preview (e.g., "trailer", "teaser", "clip").
+    /// The kind of preview, such as trailer or clip.
     /// </summary>
     public required string Kind { get; set; }
 
@@ -33,27 +33,32 @@ public record Preview
     public string? MimeType { get; set; }
 
     /// <summary>
-    /// The URL to the preview.
+    /// The slug of the strategy that embeds the preview in a page.
+    /// </summary>
+    public string? EmbedKind { get; set; }
+
+    /// <summary>
+    /// The URL of the preview.
     /// </summary>
     public required Uri Url { get; set; }
 
     /// <summary>
-    /// Attribution source for the preview.
+    /// The name of the upstream source.
     /// </summary>
     public string? Source { get; set; }
 
     /// <summary>
-    /// The title of the preview.
+    /// The title of the preview to show.
     /// </summary>
     public string? Title { get; set; }
 
     /// <summary>
-    /// When the preview was released.
+    /// The date when the preview became public.
     /// </summary>
     public DateTime? ReleaseDate { get; set; }
 
     /// <summary>
-    /// The language of the preview.
+    /// The language of the preview, as a language code.
     /// </summary>
     public string? Language { get; set; }
 }

@@ -1,8 +1,8 @@
 import { forwardRef, useState, type ComponentPropsWithoutRef, type ReactNode } from 'react';
-import { DotsThreeVertical } from '@phosphor-icons/react';
+import { DotsThreeVerticalIcon } from '@phosphor-icons/react';
 
 import { Button } from '../Button';
-import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from '../Sheet';
+import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '../Sheet';
 
 import './QuickActionsButton.css';
 
@@ -74,15 +74,12 @@ export const QuickActionsButton = forwardRef<HTMLDivElement, QuickActionsButtonP
                             aria-label={title}
                             data-action="open-quick-actions"
                         >
-                            <DotsThreeVertical weight="bold" aria-hidden="true" />
+                            <DotsThreeVerticalIcon weight="bold" aria-hidden="true" />
                         </Button>
                     </SheetTrigger>
                     <SheetContent side="bottom" className="quick-actions-button__sheet">
                         <SheetHeader className="quick-actions-button__sheet-header">
                             <SheetTitle>{title}</SheetTitle>
-                            <SheetDescription className="sr-only">
-                                Select an action from the list below.
-                            </SheetDescription>
                         </SheetHeader>
                         <div className="quick-actions-button__actions" role="group" aria-label="Quick actions">
                             {actions.map((action) => (

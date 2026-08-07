@@ -1,0 +1,147 @@
+@layer components {
+    .integration-settings-form {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-lg);
+    }
+
+    .integration-settings-form__field {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-xs);
+    }
+
+    .integration-settings-form__field--toggle {
+        gap: var(--space-xs);
+    }
+
+    .integration-settings-form__toggle-wrapper {
+        display: flex;
+        align-items: center;
+        gap: var(--space-sm);
+    }
+
+    .integration-settings-form__toggle-wrapper .label {
+        margin-bottom: 0;
+        cursor: pointer;
+    }
+
+    .integration-settings-form__help {
+        margin: 0;
+        font-size: var(--text-xs);
+        color: var(--text-muted);
+        line-height: var(--leading-normal);
+    }
+
+    .integration-settings-form__error {
+        margin: 0;
+        font-size: var(--text-xs);
+        color: var(--status-unhealthy);
+        line-height: var(--leading-normal);
+    }
+
+    .integration-settings-form__form-issues {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-xs);
+        margin: 0;
+        padding: 0;
+        list-style: none;
+    }
+
+    .integration-settings-form__mappings {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-sm);
+        min-width: 0;
+        max-width: 100%;
+        overflow-x: auto;
+    }
+
+    .integration-settings-form__mappings-table {
+        min-width: 100%;
+        width: auto;
+        border-collapse: collapse;
+        font-size: var(--text-sm);
+    }
+
+    .integration-settings-form__mappings-table th,
+    .integration-settings-form__mappings-table td {
+        padding: var(--space-xs);
+        text-align: left;
+        vertical-align: middle;
+        border-bottom: 1px solid var(--border-default, rgb(0 0 0 / 8%));
+    }
+
+    .integration-settings-form__mappings-table th {
+        font-weight: var(--weight-medium, 500);
+        color: var(--text-muted);
+    }
+
+    .integration-settings-form__mappings-empty {
+        text-align: center;
+        color: var(--text-muted);
+        font-style: italic;
+    }
+
+    .integration-settings-form__required-marker {
+        color: var(--status-unhealthy);
+    }
+
+    .integration-settings-form__cell-fallback {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-2xs, var(--space-xs));
+    }
+
+    @media (max-width: 600px) {
+        .integration-settings-form__mappings {
+            overflow-x: visible;
+        }
+
+        .integration-settings-form__mappings-table,
+        .integration-settings-form__mappings-table tbody,
+        .integration-settings-form__mappings-table tr,
+        .integration-settings-form__mappings-table td {
+            display: block;
+            width: 100%;
+        }
+
+        .integration-settings-form__mappings-table thead {
+            display: none;
+        }
+
+        .integration-settings-form__mappings-table tr {
+            padding: var(--space-sm);
+            margin-bottom: var(--space-sm);
+            background-color: var(--bg-tertiary);
+            border-radius: var(--radius-sm);
+        }
+
+        .integration-settings-form__mappings-table td {
+            padding: var(--space-2xs) 0;
+            border-bottom: none;
+        }
+
+        .integration-settings-form__mappings-table td[data-label]::before {
+            content: attr(data-label);
+            display: block;
+            margin-bottom: var(--space-2xs);
+            font-size: var(--text-xs);
+            font-weight: var(--weight-medium, 500);
+            color: var(--text-muted);
+        }
+
+        .integration-settings-form__mappings-table td [data-component='select'],
+        .integration-settings-form__mappings-table td [data-component='input'],
+        .integration-settings-form__mappings-table td .select-trigger,
+        .integration-settings-form__mappings-table td .input-container {
+            width: 100%;
+            min-width: 0;
+        }
+
+        .integration-settings-form__mappings-empty::before {
+            content: none;
+        }
+    }
+}

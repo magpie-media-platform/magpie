@@ -1,13 +1,20 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { onlineManager, QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import type { ReactNode } from 'react';
 
 import { AuthProvider } from '@/auth/AuthContext';
 import { Role } from '@/auth/types';
+import { ToastProvider, ToastStateProvider } from '@/components/ui/Toast';
+import { testEffectivePermissions } from '@/test/permissions';
 import { ApiError } from '@/lib/api';
+import * as apiModule from '@/lib/api';
+import * as authApiModule from '@/lib/authApi';
 import * as setupApiModule from '@/lib/setupApi';
+import type { ApiSettingsGroup } from '@/hooks/useSettings';
+import { LoginPage } from '@/pages/LoginPage/LoginPage';
 
 import { SetupPage } from './SetupPage';
 
@@ -17,11 +24,41 @@ vi.mock('@/lib/setupApi', async (importOriginal) => {
         ...actual,
         fetchSetupStatus: vi.fn(),
         createSetupAdmin: vi.fn(),
+        fetchSetupDatabaseStatus: vi.fn(),
+        configureSetupDatabase: vi.fn(),
+    };
+});
+
+vi.mock('@/lib/api', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('@/lib/api')>();
+    return {
+        ...actual,
+        apiGet: vi.fn(),
+    };
+});
+
+function mockApiGet(settingsGroups: ApiSettingsGroup[]) {
+    vi.mocked(apiModule.apiGet).mockImplementation(async (path: string) => {
+        if (path === '/settings/groups') {
+            return settingsGroups as never;
+        }
+        return [] as never;
+    });
+}
+
+vi.mock('@/lib/authApi', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('@/lib/authApi')>();
+    return {
+        ...actual,
+        login: vi.fn(),
+        logout: vi.fn(),
+        refreshAccessToken: vi.fn(),
     };
 });
 
 interface RenderOptions {
     initialUser?: { id: string; username: string; role: Role } | null;
+    loginElement?: ReactNode;
 }
 
 function createTestQueryClient() {
@@ -33,51 +70,188 @@ function createTestQueryClient() {
     });
 }
 
-function renderSetupPage({ initialUser = null }: RenderOptions = {}) {
+function renderSetupPage({ initialUser = null, loginElement = <div>Login page</div> }: RenderOptions = {}) {
     const queryClient = createTestQueryClient();
     return render(
         <QueryClientProvider client={queryClient}>
-            <MemoryRouter initialEntries={['/setup']}>
-                <AuthProvider initialUser={initialUser} skipSessionInit>
-                    <Routes>
-                        <Route path="/setup" element={<SetupPage />} />
-                        <Route path="/login" element={<div>Login page</div>} />
-                        <Route path="/" element={<div>Home page</div>} />
-                    </Routes>
-                </AuthProvider>
-            </MemoryRouter>
+            <ToastStateProvider>
+                <ToastProvider>
+                    <MemoryRouter initialEntries={['/setup']}>
+                        <AuthProvider
+                            initialUser={initialUser}
+                            skipSessionInit
+                            initialPermissions={testEffectivePermissions()}
+                        >
+                            <Routes>
+                                <Route path="/setup" element={<SetupPage />} />
+                                <Route path="/login" element={loginElement} />
+                                <Route path="/" element={<div>Home page</div>} />
+                            </Routes>
+                        </AuthProvider>
+                    </MemoryRouter>
+                </ToastProvider>
+            </ToastStateProvider>
         </QueryClientProvider>,
     );
 }
 
+async function waitForStep(targetStep: string) {
+    const { waitFor } = await import('@testing-library/react');
+    await waitFor(() => {
+        const el = document.querySelector(`[data-step="${targetStep}"]`);
+        if (!el) {
+            throw new Error(`Step ${targetStep} not yet rendered`);
+        }
+    });
+}
+
+async function claimAdmin(user: ReturnType<typeof userEvent.setup>) {
+    await waitForStep('admin');
+    await user.type(screen.getByLabelText(/^username/i), 'admin');
+    await user.type(screen.getByLabelText(/^password/i), 'secret123');
+    await user.type(screen.getByLabelText(/confirm password/i), 'secret123');
+    await user.click(screen.getByRole('button', { name: /create administrator/i }));
+}
+
+function mockAdminClaim() {
+    vi.mocked(setupApiModule.fetchSetupStatus).mockResolvedValue({
+        isRequired: true,
+        isComplete: false,
+        requiresAdminClaim: true,
+    });
+    vi.mocked(setupApiModule.createSetupAdmin).mockResolvedValue({
+        id: 'user-1',
+        username: 'admin',
+        email: null,
+        role: Role.Admin,
+    });
+    vi.mocked(authApiModule.login).mockResolvedValue({
+        id: 'user-1',
+        username: 'admin',
+        role: Role.Admin,
+    });
+}
+
+const SETTINGS_GROUP_WITH_KEYS: ApiSettingsGroup = {
+    id: 'group-1',
+    name: 'Provider A',
+    extensionId: 'ext-1',
+    createdAt: '2024-01-01T00:00:00Z',
+    settings: [
+        {
+            id: 'set-1',
+            settingsGroupId: 'group-1',
+            key: 'apiKey',
+            value: '',
+            createdAt: '2024-01-01T00:00:00Z',
+        },
+    ],
+};
+
 describe('SetupPage', () => {
     beforeEach(() => {
         vi.resetAllMocks();
+        vi.mocked(setupApiModule.fetchSetupDatabaseStatus).mockResolvedValue({
+            initialized: true,
+            provider: 'SQLite',
+        });
+        mockApiGet([]);
     });
 
     afterEach(() => {
         vi.restoreAllMocks();
     });
 
-    it('renders the setup form when status indicates setup is required', async () => {
+    it('renders the wizard shell when setup is required', async () => {
         vi.mocked(setupApiModule.fetchSetupStatus).mockResolvedValue({
             isRequired: true,
             isComplete: false,
+            requiresAdminClaim: true,
         });
 
         renderSetupPage();
 
         expect(await screen.findByRole('heading', { name: /welcome to magpie/i })).toBeInTheDocument();
+        const page = document.querySelector('[data-page="setup"]');
+        expect(page).not.toBeNull();
+    });
+
+    it('shows an accessible failure state and retries setup status only on request', async () => {
+        const user = userEvent.setup();
+        vi.mocked(setupApiModule.fetchSetupStatus)
+            .mockRejectedValueOnce(new Error('Unexpected response type'))
+            .mockResolvedValueOnce({
+                isRequired: false,
+                isComplete: true,
+                requiresAdminClaim: false,
+            });
+
+        renderSetupPage();
+
+        const alert = await screen.findByRole('alert');
+        expect(alert).toHaveTextContent(/failed to load browser setup status/i);
+        expect(document.querySelector('[data-page="setup"]')).toHaveAttribute('data-current-step', 'error');
+        expect(vi.mocked(setupApiModule.fetchSetupStatus)).toHaveBeenCalledTimes(1);
+
+        window.dispatchEvent(new Event('focus'));
+        expect(vi.mocked(setupApiModule.fetchSetupStatus)).toHaveBeenCalledTimes(1);
+
+        await user.click(screen.getByRole('button', { name: 'Retry' }));
+
+        expect(await screen.findByText('Login page')).toBeInTheDocument();
+        expect(vi.mocked(setupApiModule.fetchSetupStatus)).toHaveBeenCalledTimes(2);
+    });
+
+    it('does not retry setup status on reconnect and keeps retry manual', async () => {
+        const user = userEvent.setup();
+        vi.mocked(setupApiModule.fetchSetupStatus).mockRejectedValueOnce(new Error('Offline')).mockResolvedValueOnce({
+            isRequired: false,
+            isComplete: true,
+            requiresAdminClaim: false,
+        });
+
+        renderSetupPage();
+
+        expect(await screen.findByTestId('setup-status-error')).toBeInTheDocument();
+        expect(vi.mocked(setupApiModule.fetchSetupStatus)).toHaveBeenCalledTimes(1);
+
+        await act(async () => {
+            onlineManager.setOnline(false);
+            onlineManager.setOnline(true);
+            await Promise.resolve();
+        });
+
+        expect(vi.mocked(setupApiModule.fetchSetupStatus)).toHaveBeenCalledTimes(1);
+
+        await user.click(screen.getByRole('button', { name: 'Retry' }));
+
+        expect(await screen.findByText('Login page')).toBeInTheDocument();
+        expect(vi.mocked(setupApiModule.fetchSetupStatus)).toHaveBeenCalledTimes(2);
+    });
+
+    it('lands on the admin-claim step when the db is already initialised', async () => {
+        vi.mocked(setupApiModule.fetchSetupStatus).mockResolvedValue({
+            isRequired: true,
+            isComplete: false,
+            requiresAdminClaim: true,
+        });
+
+        renderSetupPage();
+
+        await waitForStep('admin');
+
         expect(screen.getByLabelText(/^username/i)).toBeInTheDocument();
         expect(screen.getByLabelText(/^password/i)).toBeInTheDocument();
         expect(screen.getByLabelText(/confirm password/i)).toBeInTheDocument();
         expect(screen.getByRole('button', { name: /create administrator/i })).toBeInTheDocument();
+        expect(vi.mocked(apiModule.apiGet)).not.toHaveBeenCalledWith('/settings/groups');
     });
 
     it('redirects unauthenticated users to /login when setup is already complete', async () => {
         vi.mocked(setupApiModule.fetchSetupStatus).mockResolvedValue({
             isRequired: false,
             isComplete: true,
+            requiresAdminClaim: false,
         });
 
         renderSetupPage();
@@ -90,6 +264,7 @@ describe('SetupPage', () => {
         vi.mocked(setupApiModule.fetchSetupStatus).mockResolvedValue({
             isRequired: false,
             isComplete: true,
+            requiresAdminClaim: false,
         });
 
         renderSetupPage({ initialUser: { id: 'user-1', username: 'admin', role: Role.Admin } });
@@ -97,11 +272,59 @@ describe('SetupPage', () => {
         expect(await screen.findByText('Home page')).toBeInTheDocument();
     });
 
-    it('submits the create-admin form and navigates to /login on success', async () => {
+    it('sends an externally claimed unauthenticated setup through login before loading protected settings', async () => {
         const user = userEvent.setup();
         vi.mocked(setupApiModule.fetchSetupStatus).mockResolvedValue({
             isRequired: true,
             isComplete: false,
+            requiresAdminClaim: false,
+        });
+        vi.mocked(authApiModule.login).mockResolvedValue({
+            id: 'user-1',
+            username: 'admin',
+            role: Role.Admin,
+        });
+        let resolveGroups!: (groups: ApiSettingsGroup[]) => void;
+        const groupsResponse = new Promise<ApiSettingsGroup[]>((resolve) => {
+            resolveGroups = resolve;
+        });
+        vi.mocked(apiModule.apiGet).mockImplementation(async (path: string) => {
+            if (path === '/settings/groups') {
+                return groupsResponse as never;
+            }
+            return [] as never;
+        });
+
+        renderSetupPage({ loginElement: <LoginPage /> });
+
+        expect(await screen.findByRole('button', { name: /sign in/i })).toBeInTheDocument();
+        expect(vi.mocked(apiModule.apiGet)).not.toHaveBeenCalledWith('/settings/groups');
+
+        await user.type(screen.getByLabelText(/username/i), 'admin');
+        await user.type(screen.getByLabelText(/password/i), 'secret123');
+        await user.click(screen.getByRole('button', { name: /sign in/i }));
+
+        await waitFor(() => {
+            expect(vi.mocked(apiModule.apiGet)).toHaveBeenCalledWith('/settings/groups');
+        });
+        expect(await screen.findByText(/loading installed extensions/i)).toBeInTheDocument();
+        expect(screen.queryByText('Provider A')).not.toBeInTheDocument();
+
+        await act(async () => {
+            resolveGroups([SETTINGS_GROUP_WITH_KEYS]);
+        });
+
+        await waitForStep('metadata');
+        expect(await screen.findByText('Provider A')).toBeInTheDocument();
+        expect(vi.mocked(apiModule.apiGet)).toHaveBeenCalledWith('/settings/groups');
+    });
+
+    it('submits the create-admin form and advances the wizard', async () => {
+        const user = userEvent.setup();
+        vi.mocked(setupApiModule.fetchSetupStatus).mockResolvedValue({
+            isRequired: true,
+            isComplete: false,
+            requiresAdminClaim: true,
         });
         vi.mocked(setupApiModule.createSetupAdmin).mockResolvedValue({
             id: 'user-1',
@@ -109,23 +332,32 @@ describe('SetupPage', () => {
             email: null,
             role: Role.Admin,
         });
+        vi.mocked(authApiModule.login).mockResolvedValue({
+            id: 'user-1',
+            username: 'admin',
+            role: Role.Admin,
+        });
 
         renderSetupPage();
+        await waitForStep('admin');
 
-        await user.type(await screen.findByLabelText(/^username/i), 'admin');
+        await user.type(screen.getByLabelText(/^username/i), 'admin');
         await user.type(screen.getByLabelText(/^password/i), 'secret123');
         await user.type(screen.getByLabelText(/confirm password/i), 'secret123');
         await user.click(screen.getByRole('button', { name: /create administrator/i }));
 
         await waitFor(() => {
-            expect(vi.mocked(setupApiModule.createSetupAdmin)).toHaveBeenCalledWith({
-                username: 'admin',
-                password: 'secret123',
-            });
+            expect(vi.mocked(setupApiModule.createSetupAdmin)).toHaveBeenCalled();
+        });
+        expect(vi.mocked(setupApiModule.createSetupAdmin).mock.calls[0][0]).toEqual({
+            username: 'admin',
+            password: 'secret123',
         });
 
         await waitFor(() => {
-            expect(screen.getByText('Login page')).toBeInTheDocument();
+            const page = document.querySelector('[data-page="setup"]');
+            expect(page).not.toBeNull();
+            expect(page?.getAttribute('data-current-step')).not.toBe('admin');
         });
     });
 
@@ -134,11 +366,13 @@ describe('SetupPage', () => {
         vi.mocked(setupApiModule.fetchSetupStatus).mockResolvedValue({
             isRequired: true,
             isComplete: false,
+            requiresAdminClaim: true,
         });
 
         renderSetupPage();
+        await waitForStep('admin');
 
-        await user.type(await screen.findByLabelText(/^username/i), 'admin');
+        await user.type(screen.getByLabelText(/^username/i), 'admin');
         await user.type(screen.getByLabelText(/^password/i), 'secret123');
         await user.type(screen.getByLabelText(/confirm password/i), 'different');
         await user.click(screen.getByRole('button', { name: /create administrator/i }));
@@ -153,11 +387,13 @@ describe('SetupPage', () => {
         vi.mocked(setupApiModule.fetchSetupStatus).mockResolvedValue({
             isRequired: true,
             isComplete: false,
+            requiresAdminClaim: true,
         });
 
         renderSetupPage();
+        await waitForStep('admin');
 
-        await user.click(await screen.findByRole('button', { name: /create administrator/i }));
+        await user.click(screen.getByRole('button', { name: /create administrator/i }));
 
         const errorEl = await screen.findByTestId('setup-error');
         expect(errorEl).toHaveTextContent(/please enter a username and password/i);
@@ -169,18 +405,20 @@ describe('SetupPage', () => {
         vi.mocked(setupApiModule.fetchSetupStatus).mockResolvedValue({
             isRequired: true,
             isComplete: false,
+            requiresAdminClaim: true,
         });
         vi.mocked(setupApiModule.createSetupAdmin).mockRejectedValue(new ApiError(409, 'Setup already complete'));
 
         renderSetupPage();
+        await waitForStep('admin');
 
-        await user.type(await screen.findByLabelText(/^username/i), 'admin');
+        await user.type(screen.getByLabelText(/^username/i), 'admin');
         await user.type(screen.getByLabelText(/^password/i), 'secret123');
         await user.type(screen.getByLabelText(/confirm password/i), 'secret123');
         await user.click(screen.getByRole('button', { name: /create administrator/i }));
 
         const errorEl = await screen.findByTestId('setup-error');
-        expect(errorEl).toHaveTextContent(/setup has already been completed/i);
+        expect(errorEl).toHaveTextContent(/administrator account has already been claimed/i);
         expect(screen.queryByText('Login page')).not.toBeInTheDocument();
     });
 
@@ -189,12 +427,14 @@ describe('SetupPage', () => {
         vi.mocked(setupApiModule.fetchSetupStatus).mockResolvedValue({
             isRequired: true,
             isComplete: false,
+            requiresAdminClaim: true,
         });
         vi.mocked(setupApiModule.createSetupAdmin).mockRejectedValue(new Error('Network down'));
 
         renderSetupPage();
+        await waitForStep('admin');
 
-        await user.type(await screen.findByLabelText(/^username/i), 'admin');
+        await user.type(screen.getByLabelText(/^username/i), 'admin');
         await user.type(screen.getByLabelText(/^password/i), 'secret123');
         await user.type(screen.getByLabelText(/confirm password/i), 'secret123');
         await user.click(screen.getByRole('button', { name: /create administrator/i }));
@@ -207,11 +447,115 @@ describe('SetupPage', () => {
         vi.mocked(setupApiModule.fetchSetupStatus).mockResolvedValue({
             isRequired: true,
             isComplete: false,
+            requiresAdminClaim: true,
         });
 
         renderSetupPage();
 
         await screen.findByRole('heading', { name: /welcome to magpie/i });
         expect(document.querySelector('[data-page="setup"]')).toBeInTheDocument();
+    });
+
+    it('skips the metadata step when no extension settings groups exist', async () => {
+        const user = userEvent.setup();
+        mockAdminClaim();
+        mockApiGet([]);
+
+        renderSetupPage();
+        await claimAdmin(user);
+
+        await waitForStep('indexer');
+        expect(document.querySelector('[data-step="metadata"]')).toBeNull();
+    });
+
+    it('shows the metadata step when an extension settings group exists', async () => {
+        const user = userEvent.setup();
+        mockAdminClaim();
+        mockApiGet([SETTINGS_GROUP_WITH_KEYS]);
+
+        renderSetupPage();
+        await claimAdmin(user);
+
+        await waitForStep('metadata');
+        expect(await screen.findByText('Provider A')).toBeInTheDocument();
+    });
+
+    it('keeps the claimed-admin form disabled until extension settings finish loading', async () => {
+        const user = userEvent.setup();
+        mockAdminClaim();
+
+        let resolveGroups!: (groups: ApiSettingsGroup[]) => void;
+        const groupsResponse = new Promise<ApiSettingsGroup[]>((resolve) => {
+            resolveGroups = resolve;
+        });
+        vi.mocked(apiModule.apiGet).mockImplementation(async (path: string) => {
+            if (path === '/settings/groups') {
+                return groupsResponse as never;
+            }
+            return [] as never;
+        });
+
+        renderSetupPage();
+        await claimAdmin(user);
+
+        await waitFor(() => {
+            expect(vi.mocked(apiModule.apiGet)).toHaveBeenCalledWith('/settings/groups');
+        });
+        const continueButton = screen.getByRole('button', { name: /continue setup/i });
+        expect(continueButton).toBeDisabled();
+        expect(screen.getByLabelText(/^username/i)).toBeDisabled();
+
+        await user.click(continueButton);
+        expect(vi.mocked(setupApiModule.createSetupAdmin)).toHaveBeenCalledTimes(1);
+
+        await act(async () => {
+            resolveGroups([]);
+        });
+        await waitForStep('indexer');
+        expect(vi.mocked(setupApiModule.createSetupAdmin)).toHaveBeenCalledTimes(1);
+        expect(vi.mocked(authApiModule.login)).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps a settings-load failure on the admin step and lets the user retry without recreating the admin', async () => {
+        const user = userEvent.setup();
+        mockAdminClaim();
+        vi.mocked(apiModule.apiGet).mockRejectedValueOnce(new ApiError(500, 'Could not load extension settings'));
+
+        renderSetupPage();
+        await claimAdmin(user);
+
+        const error = await screen.findByTestId('setup-error');
+        expect(error).toHaveTextContent(/administrator created, but setup failed to continue/i);
+        expect(error).toHaveTextContent(/continue setup to try again/i);
+        expect(document.querySelector('[data-step="admin"]')).toBeInTheDocument();
+        expect(vi.mocked(setupApiModule.createSetupAdmin)).toHaveBeenCalledTimes(1);
+
+        mockApiGet([]);
+        await user.click(screen.getByRole('button', { name: /continue setup/i }));
+
+        await waitForStep('indexer');
+        expect(vi.mocked(setupApiModule.createSetupAdmin)).toHaveBeenCalledTimes(1);
+        expect(vi.mocked(authApiModule.login)).toHaveBeenCalledTimes(1);
+    });
+
+    it('presents the root-folder step before the media-server step', async () => {
+        const user = userEvent.setup();
+        mockAdminClaim();
+        mockApiGet([]);
+
+        renderSetupPage();
+        await claimAdmin(user);
+
+        await waitForStep('indexer');
+        await user.click(screen.getByRole('button', { name: /skip for now/i }));
+
+        await waitForStep('download');
+        await user.click(screen.getByRole('button', { name: /skip for now/i }));
+
+        await waitForStep('root');
+        expect(document.querySelector('[data-step="server"]')).toBeNull();
+        await user.click(screen.getByRole('button', { name: /skip for now/i }));
+
+        await waitForStep('server');
     });
 });

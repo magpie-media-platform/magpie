@@ -1,12 +1,11 @@
 using System;
 
-using Magpie.Models.Data;
 using Magpie.Models.Patch;
 
 namespace Magpie.Models.Arguments;
 
 /// <summary>
-/// Patch for <see cref="Tag"/>s. 
+/// The base partial-update arguments for tag edits.
 /// </summary>
 public record TagsPatch
 {
@@ -16,7 +15,7 @@ public record TagsPatch
     public Guid Id { get; init; }
 
     /// <summary>
-    /// The <see cref="Tag"/>s to patch.
+    /// The patch for the tags.
     /// </summary>
     public SetPatch<string, string>? Tags { get; init; }
 }

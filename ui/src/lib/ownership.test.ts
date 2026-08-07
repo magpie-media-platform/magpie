@@ -22,6 +22,16 @@ describe('canEditOwned', () => {
         expect(canEditOwned(item, userId, false, makeHasRole(Role.Requester), Role.Requester)).toBe(false);
     });
 
+    it('denies non-owner manager from editing a locked item', () => {
+        const item = { ownerId: otherId, ownerLock: true };
+        expect(canEditOwned(item, userId, true, makeHasRole(Role.Manager), Role.Requester)).toBe(false);
+    });
+
+    it('allows admin to edit a locked item they do not own', () => {
+        const item = { ownerId: otherId, ownerLock: true };
+        expect(canEditOwned(item, userId, true, makeHasRole(Role.Admin), Role.Requester)).toBe(true);
+    });
+
     it('allows manager to edit shared item (null ownerId)', () => {
         const item = { ownerId: null, ownerLock: false };
         expect(canEditOwned(item, userId, true, makeHasRole(Role.Manager), Role.Requester)).toBe(true);

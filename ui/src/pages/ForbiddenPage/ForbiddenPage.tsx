@@ -1,5 +1,5 @@
 import { useLocation, Link, useNavigate } from 'react-router-dom';
-import { ShieldWarning, House, ArrowLeft } from '@phosphor-icons/react';
+import { ShieldWarningIcon, HouseIcon, ArrowLeftIcon } from '@phosphor-icons/react';
 
 import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
@@ -17,7 +17,7 @@ interface ForbiddenLocationState {
 const roleAccessDescription: Record<Role, string> = {
     [Role.Viewer]: 'You have read-only access to content and status.',
     [Role.Requester]: 'You can request content and manage your own requests.',
-    [Role.Manager]: 'You can manage content, indexers, and clients.',
+    [Role.Manager]: 'You can manage content, downloads, wishlists, filters, and tags, and run jobs.',
     [Role.Admin]: 'You have administrative access to most resources.',
 };
 
@@ -38,14 +38,15 @@ export function ForbiddenPage() {
     }
 
     const handleGoBack = () => {
-        navigate(-1);
+        void navigate(-1);
     };
 
     return (
         <div className="forbidden-page" data-page="forbidden">
             <EmptyState
-                icon={<ShieldWarning weight="duotone" />}
+                icon={<ShieldWarningIcon weight="duotone" />}
                 title="Access denied"
+                titleLevel={1}
                 description={description}
                 action={
                     <div className="forbidden-page__actions">
@@ -59,12 +60,12 @@ export function ForbiddenPage() {
                         )}
                         <div className="forbidden-page__buttons">
                             <Button variant="secondary" onClick={handleGoBack} data-action="go-back">
-                                <ArrowLeft weight="bold" aria-hidden="true" />
+                                <ArrowLeftIcon weight="bold" aria-hidden="true" />
                                 Go Back
                             </Button>
                             <Button asChild variant="secondary">
                                 <Link to="/">
-                                    <House weight="bold" aria-hidden="true" />
+                                    <HouseIcon weight="bold" aria-hidden="true" />
                                     Go to Dashboard
                                 </Link>
                             </Button>

@@ -35,7 +35,8 @@
             outline-offset: var(--focus-ring-offset);
         }
 
-        &:disabled {
+        &:disabled,
+        &[aria-disabled='true'] {
             opacity: var(--opacity-disabled);
             cursor: not-allowed;
 

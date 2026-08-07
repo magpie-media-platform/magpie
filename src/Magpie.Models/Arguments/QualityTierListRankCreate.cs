@@ -5,7 +5,7 @@ using Magpie.Models.Data;
 namespace Magpie.Models.Arguments;
 
 /// <summary>
-/// Create arguments for <see cref="QualityTierListRank"/>
+/// The create arguments for a quality tier list rank.
 /// </summary>
 public sealed record QualityTierListRankCreate
 {

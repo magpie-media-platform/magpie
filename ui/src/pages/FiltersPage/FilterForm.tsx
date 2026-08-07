@@ -1,8 +1,10 @@
-import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { FloppyDisk, X } from '@phosphor-icons/react';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { FloppyDiskIcon, XIcon, CodeIcon, SlidersIcon } from '@phosphor-icons/react';
 
 import { useToggle } from '@/hooks/useToggle';
 import { useUnsavedChangesGuard } from '@/hooks/useUnsavedChangesGuard';
+import { useFormDirty } from '@/hooks/useFormDirty';
+import { useExternalChangeConflict } from '@/hooks/useExternalChangeConflict';
 
 import { Button } from '@/components/ui/Button';
 import {
@@ -17,18 +19,22 @@ import { Input } from '@/components/ui/Input';
 import { Label } from '@/components/ui/Label';
 import { Switch } from '@/components/ui/Switch';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription, SheetFooter } from '@/components/ui/Sheet';
-import { SimpleFilterBuilder, isSimpleQuery } from '@/components/ui/SimpleFilterBuilder';
+import { SimpleFilterBuilder } from '@/components/filters/SimpleFilterBuilder';
 import { UnsavedChangesDialog } from '@/components/ui/UnsavedChangesDialog';
+import { ExternalChangeConflictWarning, StaleSaveConfirmationDialog } from '@/components/ui/ExternalChangeConflict';
 import { FilterQueryEditor } from '@/editor';
-import { parseFilterQuery } from '@/lib/filterQuery';
+import { hasFilterQuerySyntaxErrors } from '@/editor/validation';
+import { getErrorMessage } from '@/lib/errors';
+import { parseMagpieQl } from '@/lib/magpieQl';
+import { isSimpleQuery } from '@/lib/simpleFilterQuery';
 import type { ContentFilterCriteria } from '@/hooks/useFilters';
+
+import './FilterForm.css';
+import '@/styles/mode-switch.css';
 
 function isContentFilterCriteria(value: unknown): value is ContentFilterCriteria {
     return typeof value === 'object' && value !== null;
 }
-
-import './FilterForm.css';
-import '@/styles/mode-switch.css';
 
 export interface FilterFormValues {
     name: string;
@@ -52,7 +58,7 @@ export interface FilterFormProps {
         query?: string;
     } | null;
 
-    onSubmit: (values: FilterFormValues) => void;
+    onSubmit: (values: FilterFormValues) => void | Promise<void>;
 
     isSubmitting: boolean;
 
@@ -61,6 +67,8 @@ export interface FilterFormProps {
     canEdit: boolean;
 
     isShared: boolean;
+
+    existingNames?: string[];
 }
 
 type FilterMode = 'simple' | 'advanced';
@@ -71,6 +79,8 @@ interface FilterCleanState {
     query: string;
 }
 
+const EMPTY_EXISTING_NAMES: string[] = [];
+
 export function FilterForm({
     open,
     onOpenChange,
@@ -80,47 +90,64 @@ export function FilterForm({
     isOwner,
     canEdit,
     isShared,
+    existingNames = EMPTY_EXISTING_NAMES,
 }: FilterFormProps) {
     const [name, setName] = useState('');
     const [shared, setShared] = useState(false);
     const [query, setQuery] = useState('');
     const [mode, setMode] = useState<FilterMode>('simple');
     const [parseError, setParseError] = useState<string | null>(null);
+    const [nameError, setNameError] = useState<string | null>(null);
     const [confirmSwitchOpen, , openConfirmSwitch, closeConfirmSwitch] = useToggle();
 
     const cleanStateRef = useRef<FilterCleanState>({ name: '', shared: false, query: '' });
 
     const [showUnsavedDialog, setShowUnsavedDialog] = useState(false);
+    const [showStaleSaveConfirmation, setShowStaleSaveConfirmation] = useState(false);
+    const loadedEntityIdRef = useRef<string | null | undefined>(undefined);
+    const isDirty = useFormDirty({ name, shared, query }, cleanStateRef.current);
+    const isDirtyRef = useRef(isDirty);
+    isDirtyRef.current = isDirty;
 
     useEffect(() => {
-        if (open) {
-            if (initialValues) {
-                const q = initialValues.query ?? '';
-                setName(initialValues.name);
-                setShared(initialValues.ownerId === null);
-                setQuery(q);
-                setMode(q && !isSimpleQuery(q, 'content') ? 'advanced' : 'simple');
-                cleanStateRef.current = {
-                    name: initialValues.name,
-                    shared: initialValues.ownerId === null,
-                    query: q,
-                };
-            } else {
-                setName('');
-                setShared(false);
-                setQuery('');
-                setMode('simple');
-                cleanStateRef.current = { name: '', shared: false, query: '' };
-            }
-            setParseError(null);
-            setShowUnsavedDialog(false);
+        if (!open) {
+            loadedEntityIdRef.current = undefined;
+            return;
         }
+        const nextEntityId = initialValues?.id ?? null;
+        if (loadedEntityIdRef.current === nextEntityId && isDirtyRef.current) {
+            return;
+        }
+        if (initialValues) {
+            const q = initialValues.query ?? '';
+            setName(initialValues.name);
+            setShared(initialValues.ownerId === null);
+            setQuery(q);
+            setMode(q && !isSimpleQuery(q, 'content') ? 'advanced' : 'simple');
+            cleanStateRef.current = { name: initialValues.name, shared: initialValues.ownerId === null, query: q };
+        } else {
+            setName('');
+            setShared(false);
+            setQuery('');
+            setMode('simple');
+            cleanStateRef.current = { name: '', shared: false, query: '' };
+        }
+        loadedEntityIdRef.current = nextEntityId;
+        setParseError(null);
+        setNameError(null);
+        setShowUnsavedDialog(false);
+        setShowStaleSaveConfirmation(false);
     }, [open, initialValues]);
 
-    const isDirty = useMemo(() => {
-        const clean = cleanStateRef.current;
-        return name !== clean.name || shared !== clean.shared || query !== clean.query;
-    }, [name, shared, query]);
+    const isEditing = !!initialValues?.id;
+    const conflict = useExternalChangeConflict({
+        dirty: isDirty,
+        entityId: initialValues?.id,
+        eventNames: ['contentFilter.updated', 'contentFilter.deleted'],
+        deletedEventNames: ['contentFilter.deleted'],
+        contextKeys: ['contentFilter.id'],
+        enabled: open && isEditing && canEdit,
+    });
 
     useUnsavedChangesGuard(open && isDirty && canEdit);
 
@@ -165,38 +192,75 @@ export function FilterForm({
         closeConfirmSwitch();
     }, [closeConfirmSwitch]);
 
-    const handleSubmit = useCallback(
-        async (e: React.FormEvent) => {
-            e.preventDefault();
-            if (!name.trim()) {
+    const save = useCallback(async () => {
+        const trimmedName = name.trim();
+        if (!trimmedName) {
+            return;
+        }
+
+        const isDuplicate = existingNames.some(
+            (existing) => existing.trim().toLowerCase() === trimmedName.toLowerCase(),
+        );
+        if (isDuplicate) {
+            setNameError('A filter with this name already exists. Choose a different name.');
+            return;
+        }
+
+        let criteria: ContentFilterCriteria = {};
+        if (query.trim()) {
+            if (hasFilterQuerySyntaxErrors(query)) {
+                setParseError('Fix the query syntax before saving.');
                 return;
             }
 
-            let criteria: ContentFilterCriteria = {};
-            if (query.trim()) {
-                const result = await parseFilterQuery(query, 'content');
-                if (result.error) {
-                    setParseError(result.error.message);
-                    return;
-                }
-                if (isContentFilterCriteria(result.criteria)) {
-                    criteria = result.criteria;
-                }
+            const result = await parseMagpieQl(query, 'content').catch((error: unknown) => {
+                setParseError(getErrorMessage(error, 'Failed to validate the query.'));
+                return null;
+            });
+            if (!result) {
+                return;
             }
+            if (result.error) {
+                setParseError(result.error.message);
+                return;
+            }
+            if (isContentFilterCriteria(result.criteria)) {
+                criteria = result.criteria;
+            }
+        }
 
-            setParseError(null);
-            onSubmit({ name, isShared: shared, query, criteria });
+        setParseError(null);
+        setNameError(null);
+        conflict.beginOwnSave();
+        try {
+            await onSubmit({ name: trimmedName, isShared: shared, query, criteria });
+            conflict.endOwnSave(true);
+        } catch {
+            conflict.endOwnSave(false);
+        }
+    }, [conflict, existingNames, name, onSubmit, query, shared]);
+
+    const handleSubmit = useCallback(
+        (e: React.SubmitEvent) => {
+            e.preventDefault();
+            if (conflict.state === 'deleted') {
+                return;
+            }
+            if (conflict.state === 'stale') {
+                setShowStaleSaveConfirmation(true);
+                return;
+            }
+            void save();
         },
-        [name, shared, query, onSubmit],
+        [conflict.state, save],
     );
 
-    const isEditing = !!initialValues?.id;
     const title = isEditing ? 'Edit Filter' : 'Create Filter';
     const description = isEditing
         ? canEdit
             ? 'Modify the filter criteria to change what content matches.'
             : 'View the filter criteria (read-only).'
-        : 'Define criteria to match content items.';
+        : 'Define criteria to match hierarchy items.';
 
     const isValid = name.trim().length > 0;
     const disabled = !canEdit || isSubmitting;
@@ -211,6 +275,13 @@ export function FilterForm({
                     </SheetHeader>
 
                     <div className="filter-form__body">
+                        {conflict.state && (
+                            <ExternalChangeConflictWarning
+                                state={conflict.state}
+                                entityLabel="Filter"
+                                id="filter-external-change"
+                            />
+                        )}
                         <div className="filter-form__field">
                             <Label htmlFor="filter-name" required>
                                 Name
@@ -218,10 +289,17 @@ export function FilterForm({
                             <Input
                                 id="filter-name"
                                 value={name}
-                                onChange={(e) => setName(e.target.value)}
+                                onChange={(e) => {
+                                    setName(e.target.value);
+                                    if (nameError) {
+                                        setNameError(null);
+                                    }
+                                }}
                                 placeholder="Enter filter name"
                                 disabled={disabled}
                                 required
+                                error={!!nameError}
+                                errorMessage={nameError ?? undefined}
                                 data-field="name"
                             />
                         </div>
@@ -247,7 +325,7 @@ export function FilterForm({
 
                         {isEditing && !canEdit && (
                             <div className="filter-form__readonly-notice">
-                                <X weight="bold" aria-hidden="true" />
+                                <XIcon weight="bold" aria-hidden="true" />
                                 <span>
                                     {isShared
                                         ? 'Only managers can edit shared filters.'
@@ -273,36 +351,42 @@ export function FilterForm({
                                     onChange={setQuery}
                                     context="content"
                                     readOnly={disabled}
-                                    placeholder='e.g. genre has "Action" and monitoring = Active'
+                                    placeholder='genre has "Action" and monitoring = true'
                                 />
                             )}
                         </div>
 
                         <div className="mode-switch">
                             {mode === 'simple' ? (
-                                <button
-                                    type="button"
-                                    className="mode-switch__link"
+                                <Button
+                                    variant="ghost"
+                                    size="sm"
                                     onClick={() => handleModeSwitch('advanced')}
                                     disabled={disabled}
                                     data-action="switch-to-advanced"
                                 >
-                                    Switch to advanced editor
-                                </button>
+                                    <CodeIcon weight="bold" aria-hidden="true" />
+                                    Advanced filter
+                                </Button>
                             ) : (
-                                <button
-                                    type="button"
-                                    className="mode-switch__link"
+                                <Button
+                                    variant="ghost"
+                                    size="sm"
                                     onClick={() => handleModeSwitch('simple')}
                                     disabled={disabled}
                                     data-action="switch-to-simple"
                                 >
-                                    Switch to simple mode
-                                </button>
+                                    <SlidersIcon weight="bold" aria-hidden="true" />
+                                    Simple filter
+                                </Button>
                             )}
                         </div>
 
-                        {parseError && <div className="filter-form__error" role="alert">{parseError}</div>}
+                        {parseError && (
+                            <div className="filter-form__error" role="alert">
+                                {parseError}
+                            </div>
+                        )}
                     </div>
 
                     <SheetFooter>
@@ -313,18 +397,18 @@ export function FilterForm({
                             onClick={handleCancel}
                             data-action="cancel"
                         >
-                            <X weight="bold" aria-hidden="true" />
+                            <XIcon weight="bold" aria-hidden="true" />
                             {canEdit ? 'Cancel' : 'Close'}
                         </Button>
                         {canEdit && (
                             <Button
                                 type="submit"
                                 variant="primary"
-                                disabled={!isValid}
+                                disabled={!isValid || conflict.state === 'deleted'}
                                 loading={isSubmitting}
                                 data-action="save-filter"
                             >
-                                <FloppyDisk weight="bold" aria-hidden="true" />
+                                <FloppyDiskIcon weight="bold" aria-hidden="true" />
                                 Save Filter
                             </Button>
                         )}
@@ -338,12 +422,11 @@ export function FilterForm({
                     if (!o) closeConfirmSwitch();
                 }}
             >
-                <DialogContent data-component="confirm-mode-switch">
+                <DialogContent size="alert" data-component="confirm-mode-switch">
                     <DialogHeader>
                         <DialogTitle>Switch to Simple Mode</DialogTitle>
                         <DialogDescription>
-                            The current query uses features not available in simple mode. Switching will reset the
-                            query.
+                            This query uses options that simple mode cannot represent. Switching modes will clear it.
                         </DialogDescription>
                     </DialogHeader>
                     <DialogFooter>
@@ -363,6 +446,17 @@ export function FilterForm({
             </Dialog>
 
             <UnsavedChangesDialog open={showUnsavedDialog} onDiscard={handleDiscard} onCancel={handleKeepEditing} />
+            <StaleSaveConfirmationDialog
+                open={showStaleSaveConfirmation}
+                title="Save changes based on older data?"
+                description="This item changed after editing began. Saving will overwrite the newer changes."
+                saving={isSubmitting}
+                onCancel={() => setShowStaleSaveConfirmation(false)}
+                onConfirm={() => {
+                    setShowStaleSaveConfirmation(false);
+                    void save();
+                }}
+            />
         </Sheet>
     );
 }

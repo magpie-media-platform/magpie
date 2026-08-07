@@ -6,11 +6,15 @@ export interface SubjectSlotProps {
     children?: ReactNode;
 
     className?: string;
+
+    entityId?: string;
+
+    entityType?: string;
 }
 
-export function SubjectListSlot({ children, className }: SubjectSlotProps) {
+export function SubjectListSlot({ children, className, entityId, entityType }: SubjectSlotProps) {
     return (
-        <Slot slot="subject.list" className={className}>
+        <Slot slot="subject.list" className={className} entityId={entityId} entityType={entityType}>
             {children}
         </Slot>
     );
@@ -18,9 +22,9 @@ export function SubjectListSlot({ children, className }: SubjectSlotProps) {
 
 SubjectListSlot.displayName = 'SubjectListSlot';
 
-export function SubjectDetailsHeaderSlot({ children, className }: SubjectSlotProps) {
+export function SubjectDetailsHeaderSlot({ children, className, entityId, entityType }: SubjectSlotProps) {
     return (
-        <Slot slot="subject.details.header" className={className}>
+        <Slot slot="subject.details.header" className={className} entityId={entityId} entityType={entityType}>
             {children}
         </Slot>
     );
@@ -28,9 +32,9 @@ export function SubjectDetailsHeaderSlot({ children, className }: SubjectSlotPro
 
 SubjectDetailsHeaderSlot.displayName = 'SubjectDetailsHeaderSlot';
 
-export function SubjectDetailsTabsSlot({ children, className }: SubjectSlotProps) {
+export function SubjectDetailsTabsSlot({ children, className, entityId, entityType }: SubjectSlotProps) {
     return (
-        <Slot slot="subject.details.tabs" className={className}>
+        <Slot slot="subject.details.tabs" className={className} entityId={entityId} entityType={entityType}>
             {children}
         </Slot>
     );

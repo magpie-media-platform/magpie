@@ -1,177 +1,177 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
-using Magpie.Abstractions.Api;
-using Magpie.Abstractions.Jobs;
-using Magpie.Abstractions.Repositories;
-using Magpie.Abstractions.Security;
+using Magpie.Models.Api;
 using Magpie.Models.Arguments;
+using Magpie.Models.Bulk;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
+using Magpie.Models.Filtering;
+using Magpie.Models.Integrations;
 using Magpie.Models.Paging;
-using Magpie.QueryLanguage;
+using Magpie.Models.Releases;
+using Magpie.Sdk.Api;
+using Magpie.Sdk.Services;
 
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
 
 namespace Magpie.Api.EndpointGroups;
 
-internal sealed class ContentEndpointGroup(
-    IContentHierarchyItemRepository contentHierarchyItemRepository,
-    IJobManager jobManager) : IApiEndpointGroup
+[MagpieCommandGroup("content", "content", "Manage library content")]
+internal sealed class ContentEndpointGroup : IApiEndpointGroup
 {
     public string Name => "content";
 
     public void MapEndpoints(IEndpointRouteBuilder builder)
     {
-        builder.MapGet("", QueryContent)
-            .WithName(nameof(QueryContent))
+        builder.MapGet("", QueryContentAsync)
+            .WithName(nameof(QueryContentAsync))
             .Produces<PagedList<ContentHierarchyItem>>()
             .ProducesProblem(StatusCodes.Status400BadRequest)
             .RequireViewer();
 
-        builder.MapGet("stats", GetContentStats)
-            .WithName(nameof(GetContentStats))
+        builder.MapGet("stats", GetContentStatsAsync)
+            .WithName(nameof(GetContentStatsAsync))
             .Produces<ContentStats>()
             .RequireViewer();
 
-        builder.MapGet("{id:guid}", GetContentById)
-            .WithName(nameof(GetContentById))
+        builder.MapGet("{id:guid}", GetContentByIdAsync)
+            .WithName(nameof(GetContentByIdAsync))
             .Produces<ContentHierarchyItem>()
             .ProducesProblem(StatusCodes.Status404NotFound)
             .RequireViewer();
 
-        builder.MapGet("{id:guid}/children", GetContentChildren)
-            .WithName(nameof(GetContentChildren))
+        builder.MapGet("{id:guid}/children", GetContentChildrenAsync)
+            .WithName(nameof(GetContentChildrenAsync))
             .Produces<PagedList<ContentHierarchyItem>>()
             .ProducesProblem(StatusCodes.Status404NotFound)
             .RequireViewer();
 
-        builder.MapPatch("{id:guid}", PatchContent)
-            .WithName(nameof(PatchContent))
-            .Produces(StatusCodes.Status204NoContent)
-            .ProducesProblem(StatusCodes.Status404NotFound)
-            .ProducesProblem(StatusCodes.Status400BadRequest)
-            .RequireRequester();
-
-        builder.MapDelete("{id:guid}", DeleteContent)
-            .WithName(nameof(DeleteContent))
+        builder.MapPatch("{id:guid}", PatchContentAsync)
+            .WithName(nameof(PatchContentAsync))
             .Produces(StatusCodes.Status204NoContent)
             .ProducesProblem(StatusCodes.Status404NotFound)
             .RequireManager();
 
-        builder.MapPost("{id:guid}/refresh", RefreshContent)
-            .WithName(nameof(RefreshContent))
-            .Produces<Guid>(StatusCodes.Status202Accepted)
+        builder.MapDelete("{id:guid}", DeleteContentAsync)
+            .WithName(nameof(DeleteContentAsync))
+            .Produces(StatusCodes.Status204NoContent)
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .RequireManager();
+
+        builder.MapPatch("bulk", BulkPatchContentAsync)
+            .WithName(nameof(BulkPatchContentAsync))
+            .Produces<BulkResult>()
+            .ProducesProblem(StatusCodes.Status400BadRequest)
+            .RequireManager();
+
+        builder.MapPost("bulk/delete", BulkDeleteContentAsync)
+            .WithName(nameof(BulkDeleteContentAsync))
+            .Produces<BulkResult>()
+            .ProducesProblem(StatusCodes.Status400BadRequest)
+            .RequireManager();
+
+        builder.MapPost("from-external-id", HydrateExternalContentAsync)
+            .WithName(nameof(HydrateExternalContentAsync))
+            .Produces<Guid>(StatusCodes.Status201Created)
+            .Produces<Guid>(StatusCodes.Status200OK)
+            .ProducesProblem(StatusCodes.Status400BadRequest)
+            .RequireRequester();
+
+        builder.MapPost("preview-by-external-id", PreviewByExternalIdAsync)
+            .WithName(nameof(PreviewByExternalIdAsync))
+            .Produces<ContentPreview>()
             .ProducesProblem(StatusCodes.Status404NotFound)
             .RequireRequester();
 
-        builder.MapPost("{id:guid}/search", SearchContent)
-            .WithName(nameof(SearchContent))
-            .Produces<Guid>(StatusCodes.Status202Accepted)
+        builder.MapDelete("{id:guid}/files/{mediaFileId:guid}", DeleteContentFileAsync)
+            .WithName(nameof(DeleteContentFileAsync))
+            .Produces(StatusCodes.Status204NoContent)
             .ProducesProblem(StatusCodes.Status404NotFound)
-            .RequireRequester();
+            .RequireManager();
+
+        builder.MapGet("{id:guid}/media-server-links", GetMediaServerLinksAsync)
+            .WithName(nameof(GetMediaServerLinksAsync))
+            .Produces<IReadOnlyList<MediaServerDeepLink>>()
+            .RequireViewer();
+
+        builder.MapGet("{id:guid}/metadata", GetContentMetadataAsync)
+            .WithName(nameof(GetContentMetadataAsync))
+            .Produces<MaterializedMetadata>()
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .RequireViewer();
+
+        builder.MapGet("{id:guid}/metadata/contributions", GetContentContributionsAsync)
+            .WithName(nameof(GetContentContributionsAsync))
+            .Produces<IReadOnlyList<MetadataContribution>>()
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .RequireViewer();
+
+        builder.MapPatch("{id:guid}/metadata", PatchContentMetadataAsync)
+            .WithName(nameof(PatchContentMetadataAsync))
+            .Produces(StatusCodes.Status204NoContent)
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .RequireManager();
+
+        builder.MapGet("{id:guid}/releases", GetContentReleasesAsync)
+            .WithName(nameof(GetContentReleasesAsync))
+            .Produces<IReadOnlyList<ContentRelease>>()
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .RequireViewer();
     }
 
-    private async Task<IResult> QueryContent(
+    [MagpieCommand("list", "GET", "", "List library content")]
+    internal async Task<IResult> QueryContentAsync(
+        [FromServices] IFilterService filterService,
+        [FromServices] IContentService contentService,
         string? filter,
         string? contentType,
         string? level,
         Guid? parentId,
+        bool? topLevelOnly,
         Guid? rootFolderId,
-        MonitoringIntent? monitoring,
+        bool? monitoring,
+        FulfillmentStatus? fulfillment,
         string? search,
         string? tag,
-        int? page,
+        int? pageNumber,
         int? pageSize,
         string? sortBy,
         SortDirection? sortDirection,
         CancellationToken cancellationToken)
     {
-        var criteria = new ContentHierarchyItemCriteria();
-
-        if (!string.IsNullOrWhiteSpace(filter))
+        var (parsed, error) = ParseFilter(filterService, filter);
+        if (error is not null)
         {
-            var parseResult = FilterQuery.ParseContentFilter(filter);
-            if (!parseResult.IsSuccess)
-            {
-                return Results.BadRequest(new { message = parseResult.Error!.Value.Message });
-            }
-
-            criteria = parseResult.Value!.ContentHierarchyItem?.And?.FirstOrDefault()
-                ?? criteria;
+            return Results.BadRequest(error);
         }
 
-        if (contentType is not null)
+        var query = new ContentQuery
         {
-            criteria = criteria with
-            {
-                ContentType = new() { And = [new() { Value = contentType }] }
-            };
-        }
-
-        if (level is not null)
-        {
-            criteria = criteria with
-            {
-                Level = new() { And = [new() { Value = level }] }
-            };
-        }
-
-        if (parentId is not null)
-        {
-            criteria = criteria with
-            {
-                ParentId = new() { And = [new() { Value = parentId.Value }] }
-            };
-        }
-
-        if (rootFolderId is not null)
-        {
-            criteria = criteria with
-            {
-                RootFolderId = new() { And = [new() { Value = rootFolderId.Value }] }
-            };
-        }
-
-        if (monitoring is not null)
-        {
-            criteria = criteria with
-            {
-                Monitoring = new() { And = [new() { Value = monitoring.Value }] }
-            };
-        }
-
-        if (!string.IsNullOrWhiteSpace(search))
-        {
-            criteria = criteria with
-            {
-                Name = new()
-                {
-                    And = [new() { Operator = CriteriaValueOperator.ContainsString, Value = search }]
-                }
-            };
-        }
-
-        if (tag is not null)
-        {
-            criteria = criteria with
-            {
-                Tags = new() { And = [new() { Value = tag }] }
-            };
-        }
+            Criteria = parsed,
+            ContentType = contentType,
+            Level = level,
+            ParentId = parentId,
+            TopLevelOnly = topLevelOnly,
+            RootFolderId = rootFolderId,
+            Monitoring = monitoring,
+            Fulfillment = fulfillment,
+            Search = search,
+            Tag = tag
+        };
 
         var paging = new PagingParameter
         {
-            PageNumber = page ?? 1,
+            PageNumber = pageNumber ?? 1,
             PageSize = pageSize ?? 25
         };
 
-        SortParameter? sort = sortBy is not null
+        var sort = sortBy is not null
             ? new SortParameter
             {
                 PropertyName = sortBy,
@@ -179,142 +179,281 @@ internal sealed class ContentEndpointGroup(
             }
             : null;
 
-        var result = await contentHierarchyItemRepository.QueryAsync(criteria, paging, sort, cancellationToken)
+        var result = await contentService.QueryAsync(query, paging, sort, cancellationToken)
             .ConfigureAwait(false);
 
         return Results.Ok(result);
     }
 
-    private async Task<IResult> GetContentStats(CancellationToken cancellationToken)
+    [MagpieCommand("stats", "GET", "stats", "Show library content statistics")]
+    internal async Task<IResult> GetContentStatsAsync(
+        [FromServices] IContentService contentService,
+        CancellationToken cancellationToken)
     {
-        var stats = await contentHierarchyItemRepository.GetStatsAsync(cancellationToken)
-            .ConfigureAwait(false);
+        var stats = await contentService.GetStatsAsync(cancellationToken).ConfigureAwait(false);
 
         return Results.Ok(stats);
     }
 
-    private async Task<IResult> GetContentById(Guid id, CancellationToken cancellationToken)
+    [MagpieCommand("get", "GET", "{id:guid}", "Show a content item")]
+    internal async Task<IResult> GetContentByIdAsync(
+        [FromServices] IContentService contentService,
+        Guid id,
+        CancellationToken cancellationToken)
     {
-        var item = await contentHierarchyItemRepository.GetByIdAsync(id, cancellationToken)
-            .ConfigureAwait(false);
+        var item = await contentService.GetAsync(id, cancellationToken).ConfigureAwait(false);
 
-        if (item is null)
-        {
-            return Results.NotFound();
-        }
-
-        return Results.Ok(item);
+        return item is null ? Results.NotFound() : Results.Ok(item);
     }
 
-    private async Task<IResult> GetContentChildren(
+    [MagpieCommand("children", "GET", "{id:guid}/children", "List children of a content item")]
+    internal async Task<IResult> GetContentChildrenAsync(
+        [FromServices] IContentService contentService,
         Guid id,
-        int? page,
+        int? pageNumber,
         int? pageSize,
         CancellationToken cancellationToken)
     {
-        var parent = await contentHierarchyItemRepository.GetByIdAsync(id, cancellationToken)
-            .ConfigureAwait(false);
-
-        if (parent is null)
-        {
-            return Results.NotFound();
-        }
-
-        var criteria = new ContentHierarchyItemCriteria
-        {
-            ParentId = new() { And = [new() { Value = id }] }
-        };
-
         var paging = new PagingParameter
         {
-            PageNumber = page ?? 1,
+            PageNumber = pageNumber ?? 1,
             PageSize = pageSize ?? 25
         };
 
-        var result = await contentHierarchyItemRepository.QueryAsync(criteria, paging, null, cancellationToken)
+        var result = await contentService.GetChildrenAsync(id, paging, cancellationToken)
+            .ConfigureAwait(false);
+
+        return result is null ? Results.NotFound() : Results.Ok(result);
+    }
+
+    [MagpieCommand("patch", "PATCH", "{id:guid}", "Update fields on a content item")]
+    internal async Task<IResult> PatchContentAsync(
+        [FromServices] IContentService contentService,
+        AuthenticatedUser user,
+        Guid id,
+        [FromBody] ContentHierarchyItemPatch patch,
+        CancellationToken cancellationToken)
+    {
+        var patched = await contentService.PatchAsync(id, patch, user.Id, cancellationToken)
+            .ConfigureAwait(false);
+
+        return patched ? Results.NoContent() : Results.NotFound();
+    }
+
+    internal async Task<IResult> DeleteContentAsync(
+        [FromServices] IContentService contentService,
+        AuthenticatedUser user,
+        Guid id,
+        bool? deleteFromLibrary,
+        CancellationToken cancellationToken)
+    {
+        var deleted = await contentService
+            .DeleteAsync(id, deleteFromLibrary ?? false, user.Id, cancellationToken)
+            .ConfigureAwait(false);
+
+        return deleted ? Results.NoContent() : Results.NotFound();
+    }
+
+    [MagpieCommand("bulk-patch", "PATCH", "bulk", "Update fields on multiple content items")]
+    internal async Task<IResult> BulkPatchContentAsync(
+        [FromServices] IFilterService filterService,
+        [FromServices] IContentService contentService,
+        AuthenticatedUser user,
+        [FromBody] BulkContentPatchRequest request,
+        CancellationToken cancellationToken)
+    {
+        var (filterCriteria, error) = ParseFilter(filterService, request.Filter);
+        if (error is not null)
+        {
+            return Results.BadRequest(error);
+        }
+
+        var patch = new BulkPatch<ContentFilterCriteria, ContentHierarchyItemPatch>
+        {
+            Ids = request.Ids,
+            Filter = filterCriteria,
+            Patch = request.Patch
+        };
+
+        var result = await contentService.BulkPatchAsync(patch, user.Id, cancellationToken)
             .ConfigureAwait(false);
 
         return Results.Ok(result);
     }
 
-    private async Task<IResult> PatchContent(
-        HttpContext httpContext,
-        Guid id,
-        ContentHierarchyItemPatch request,
+    [MagpieCommand("bulk-delete", "POST", "bulk/delete", "Delete multiple content items")]
+    internal async Task<IResult> BulkDeleteContentAsync(
+        [FromServices] IFilterService filterService,
+        [FromServices] IContentService contentService,
+        AuthenticatedUser user,
+        [FromBody] BulkContentDeleteRequest request,
         CancellationToken cancellationToken)
     {
-        var currentUserId = httpContext.User.GetUserId();
-        var patch = request with { Id = id };
+        var (filterCriteria, error) = ParseFilter(filterService, request.Filter);
+        if (error is not null)
+        {
+            return Results.BadRequest(error);
+        }
 
-        var patched = await contentHierarchyItemRepository.PatchAsync(patch, currentUserId, cancellationToken)
+        var action = new BulkAction<ContentFilterCriteria>
+        {
+            Ids = request.Ids,
+            Filter = filterCriteria
+        };
+
+        var result = await contentService.BulkDeleteAsync(action, user.Id, cancellationToken)
             .ConfigureAwait(false);
 
-        if (!patched)
+        return Results.Ok(result);
+    }
+
+    [MagpieCommand("from-external-id", "POST", "from-external-id", "Create content from an external metadata id")]
+    internal async Task<IResult> HydrateExternalContentAsync(
+        [FromServices] IContentService contentService,
+        AuthenticatedUser user,
+        [FromBody] PreviewByExternalIdRequest request,
+        Guid? rootFolderId,
+        bool? monitoring,
+        Guid? qualityTierListId,
+        Guid? requestedViaWishlistId,
+        [FromQuery] string[]? tags,
+        CancellationToken cancellationToken)
+    {
+        var result = await contentService.HydrateFromExternalIdAsync(
+            request.ProviderType,
+            request.ExternalIdKey,
+            request.ExternalId,
+            request.ContentType,
+            request.LevelSlug,
+            rootFolderId,
+            monitoring,
+            qualityTierListId,
+            requestedViaWishlistId,
+            tags,
+            user.Id,
+            cancellationToken)
+            .ConfigureAwait(false);
+
+        if (result is null)
         {
             return Results.NotFound();
         }
 
-        return Results.NoContent();
+        return Results.Ok(result.Id);
     }
 
-    private async Task<IResult> DeleteContent(
-        HttpContext httpContext,
+    internal async Task<IResult> PreviewByExternalIdAsync(
+        [FromServices] IMetadataSearchService metadataSearchService,
+        PreviewByExternalIdRequest request,
+        CancellationToken cancellationToken)
+    {
+        var preview = await metadataSearchService
+            .PreviewByExternalIdAsync(
+                request.ProviderType,
+                request.ExternalIdKey,
+                request.ExternalId,
+                request.ContentType,
+                request.LevelSlug,
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return preview is null ? Results.NotFound() : Results.Ok(preview);
+    }
+
+    internal async Task<IResult> DeleteContentFileAsync(
+        [FromServices] ILibraryImportService libraryImportService,
+        AuthenticatedUser user,
+        Guid id,
+        Guid mediaFileId,
+        CancellationToken cancellationToken)
+    {
+        var deleted = await libraryImportService.DeleteMediaFileAsync(id, mediaFileId, user.Id, cancellationToken)
+            .ConfigureAwait(false);
+
+        return deleted ? Results.NoContent() : Results.NotFound();
+    }
+
+    internal async Task<IResult> GetMediaServerLinksAsync(
+        [FromServices] IMediaServerService mediaServerService,
         Guid id,
         CancellationToken cancellationToken)
     {
-        var currentUserId = httpContext.User.GetUserId();
-        var deleted = await contentHierarchyItemRepository.DeleteAsync(id, currentUserId, cancellationToken)
+        var links = await mediaServerService.GetContentLinksAsync(id, cancellationToken)
             .ConfigureAwait(false);
 
-        if (!deleted)
-        {
-            return Results.NotFound();
-        }
-
-        return Results.NoContent();
+        return Results.Ok(links);
     }
 
-    private async Task<IResult> RefreshContent(HttpContext httpContext, Guid id, CancellationToken cancellationToken)
+    [MagpieCommand("metadata", "GET", "{id:guid}/metadata", "Show merged metadata for a content item")]
+    internal async Task<IResult> GetContentMetadataAsync(
+        [FromServices] IMetadataService metadataService,
+        Guid id,
+        CancellationToken cancellationToken)
     {
-        var item = await contentHierarchyItemRepository.GetByIdAsync(id, cancellationToken)
+        var metadata = await metadataService.GetContentMetadataAsync(id, cancellationToken)
             .ConfigureAwait(false);
 
-        if (item is null)
-        {
-            return Results.NotFound();
-        }
-
-        var userId = httpContext.User.GetUserId();
-        var executionId = await jobManager.ExecuteAsync(
-            "RefreshMetadata",
-            null,
-            new Dictionary<string, string> { ["contentHierarchyItemId"] = id.ToString() },
-            JobExecutionMode.Queue,
-            userId,
-            cancellationToken).ConfigureAwait(false);
-
-        return Results.Accepted($"api/{Name}/{id}/refresh", executionId);
+        return metadata is null ? Results.NotFound() : Results.Ok(metadata);
     }
 
-    private async Task<IResult> SearchContent(HttpContext httpContext, Guid id, CancellationToken cancellationToken)
+    [MagpieCommand(
+        "metadata-contributions",
+        "GET",
+        "{id:guid}/metadata/contributions",
+        "List metadata contributions for a content item")]
+    internal async Task<IResult> GetContentContributionsAsync(
+        [FromServices] IMetadataService metadataService,
+        Guid id,
+        CancellationToken cancellationToken)
     {
-        var item = await contentHierarchyItemRepository.GetByIdAsync(id, cancellationToken)
+        var contributions = await metadataService.GetContentContributionsAsync(id, cancellationToken)
             .ConfigureAwait(false);
 
-        if (item is null)
+        return contributions is null ? Results.NotFound() : Results.Ok(contributions);
+    }
+
+    internal async Task<IResult> PatchContentMetadataAsync(
+        [FromServices] IMetadataService metadataService,
+        AuthenticatedUser user,
+        Guid id,
+        MetadataContainerPatch patch,
+        CancellationToken cancellationToken)
+    {
+        var patched = await metadataService
+            .PatchContentContributionAsync(id, patch, user.Id, cancellationToken)
+            .ConfigureAwait(false);
+
+        return patched ? Results.NoContent() : Results.NotFound();
+    }
+
+    [MagpieCommand("releases", "GET", "{id:guid}/releases", "List releases for a content item")]
+    internal async Task<IResult> GetContentReleasesAsync(
+        [FromServices] IReleaseService releaseService,
+        Guid id,
+        CancellationToken cancellationToken)
+    {
+        var releases = await releaseService.GetReleaseViewAsync(id, cancellationToken)
+            .ConfigureAwait(false);
+
+        return releases is null ? Results.NotFound() : Results.Ok(releases);
+    }
+
+    private static (ContentFilterCriteria? Criteria, MagpieQlParseError? Error) ParseFilter(
+        IFilterService filterService,
+        string? filter)
+    {
+        if (string.IsNullOrWhiteSpace(filter))
         {
-            return Results.NotFound();
+            return (null, null);
         }
 
-        var userId = httpContext.User.GetUserId();
-        var executionId = await jobManager.ExecuteAsync(
-            "ReleaseSearch",
-            null,
-            new Dictionary<string, string> { ["contentHierarchyItemId"] = id.ToString() },
-            JobExecutionMode.Queue,
-            userId,
-            cancellationToken).ConfigureAwait(false);
+        var parseResult = filterService.ParseContentCriteria(filter);
+        if (!parseResult.IsSuccess)
+        {
+            return (null, parseResult.Error);
+        }
 
-        return Results.Accepted($"api/{Name}/{id}/search", executionId);
+        return (parseResult.Value, null);
     }
 }
+

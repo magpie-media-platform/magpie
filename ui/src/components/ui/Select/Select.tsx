@@ -35,7 +35,13 @@ export type SelectLabelProps = ComponentPropsWithoutRef<typeof SelectPrimitive.L
 
 export type SelectSeparatorProps = ComponentPropsWithoutRef<typeof SelectPrimitive.Separator>;
 
-const SelectRoot = SelectPrimitive.Root;
+function SelectRoot({ value, onValueChange, ...props }: SelectProps) {
+    const controlled = onValueChange !== undefined;
+    const resolvedValue = controlled ? (value ?? '') : value;
+    return <SelectPrimitive.Root value={resolvedValue} onValueChange={onValueChange} {...props} />;
+}
+
+SelectRoot.displayName = 'Select';
 
 const SelectTrigger = forwardRef<HTMLButtonElement, SelectTriggerProps>(
     (

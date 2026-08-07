@@ -2,7 +2,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { createElement } from 'react';
+import type { ReactNode } from 'react';
 
 vi.mock('@/lib/api', async (importOriginal) => ({
     ...(await importOriginal<typeof import('@/lib/api')>()),
@@ -12,6 +12,7 @@ vi.mock('@/lib/api', async (importOriginal) => ({
 import { AuthProvider } from '@/auth';
 import { Role } from '@/auth/types';
 import { apiPost } from '@/lib/api';
+import { testEffectivePermissions } from '@/test/permissions';
 import { PathInput } from './PathInput';
 
 function createWrapper(user = { id: '1', username: 'admin', role: Role.Admin as Role }) {
@@ -22,12 +23,13 @@ function createWrapper(user = { id: '1', username: 'admin', role: Role.Admin as 
         },
     });
 
-    return ({ children }: { children: React.ReactNode }) =>
-        createElement(
-            QueryClientProvider,
-            { client: queryClient },
-            createElement(AuthProvider, { initialUser: user, skipSessionInit: true }, children),
-        );
+    return ({ children }: { children: ReactNode }) => (
+        <QueryClientProvider client={queryClient}>
+            <AuthProvider initialUser={user} skipSessionInit={true} initialPermissions={testEffectivePermissions()}>
+                {children}
+            </AuthProvider>
+        </QueryClientProvider>
+    );
 }
 
 describe('PathInput', () => {
@@ -123,9 +125,40 @@ describe('PathInput', () => {
         expect(screen.getByText('Select Folder')).toBeInTheDocument();
     });
 
+    it('selects root when browsing from an empty value', async () => {
+        const user = userEvent.setup();
+        const handleChange = vi.fn();
+        render(<PathInput aria-label="Path" value="" onChange={handleChange} />, {
+            wrapper: createWrapper(),
+        });
+
+        await user.click(screen.getByRole('button', { name: /browse/i }));
+
+        await waitFor(() => {
+            expect(screen.getByRole('dialog')).toBeInTheDocument();
+        });
+
+        expect(screen.getByPlaceholderText('Enter path manually...')).toHaveValue('/');
+
+        await user.click(screen.getByRole('button', { name: /select$/i }));
+
+        expect(handleChange).toHaveBeenCalledWith('/');
+    });
+
     it('uses custom browse label', () => {
         render(<PathInput aria-label="Path" browseLabel="Open" />, { wrapper: createWrapper() });
         expect(screen.getByRole('button', { name: /open/i })).toBeInTheDocument();
+    });
+
+    it('opens the browser at a separate initial path', async () => {
+        const user = userEvent.setup();
+        render(<PathInput aria-label="Path" mode="file" value="/selected/movie.mkv" browserInitialPath="/library" />, {
+            wrapper: createWrapper(),
+        });
+
+        await user.click(screen.getByRole('button', { name: /browse/i }));
+
+        expect(await screen.findByPlaceholderText('Enter path manually...')).toHaveValue('/library');
     });
 
     it('has data-component attribute', () => {
@@ -168,10 +201,18 @@ describe('PathInput', () => {
             expect(screen.getByRole('button', { name: /browse/i })).not.toBeDisabled();
         });
 
-        it('disables browse button for Manager', () => {
+        it('disables unrestricted browse button for Manager', () => {
             const manager = { id: '1', username: 'manager', role: Role.Manager as Role };
             render(<PathInput aria-label="Path" />, { wrapper: createWrapper(manager) });
             expect(screen.getByRole('button', { name: /browse/i })).toBeDisabled();
+        });
+
+        it('enables scoped content browse button for Manager', () => {
+            const manager = { id: '1', username: 'manager', role: Role.Manager as Role };
+            render(<PathInput aria-label="Path" browsePermission="content.edit" />, {
+                wrapper: createWrapper(manager),
+            });
+            expect(screen.getByRole('button', { name: /browse/i })).not.toBeDisabled();
         });
     });
 });

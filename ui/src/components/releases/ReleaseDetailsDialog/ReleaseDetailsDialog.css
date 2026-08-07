@@ -1,0 +1,7 @@
+@layer components {
+    .release-details-dialog__body {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-lg);
+    }
+}

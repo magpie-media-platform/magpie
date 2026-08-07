@@ -8,22 +8,22 @@ namespace Magpie.Models.Data;
 public record Image
 {
     /// <summary>
-    /// The image id.
+    /// The unique id of the image.
     /// </summary>
     public Guid Id { get; set; }
 
     /// <summary>
-    /// The metadata contribution this image belongs to.
+    /// The id of the metadata contribution that contains this image.
     /// </summary>
     public Guid MetadataContributionId { get; set; }
 
     /// <summary>
-    /// The display order.
+    /// The position in the display order.
     /// </summary>
     public int Ordinal { get; set; }
 
     /// <summary>
-    /// The type of image (e.g., "poster", "backdrop", "logo").
+    /// The type of the image.
     /// </summary>
     public required string Type { get; set; }
 
@@ -33,12 +33,12 @@ public record Image
     public string? MimeType { get; set; }
 
     /// <summary>
-    /// The URL to the image.
+    /// The URL of the image.
     /// </summary>
     public required Uri Url { get; set; }
 
     /// <summary>
-    /// Attribution source for the image.
+    /// The name of the source that supplies the image.
     /// </summary>
     public string? Source { get; set; }
 
@@ -56,4 +56,9 @@ public record Image
     /// The image height in pixels.
     /// </summary>
     public int? Height { get; set; }
+
+    /// <summary>
+    /// Whether the image is the primary image of the container.
+    /// </summary>
+    public bool IsPrimary { get; set; }
 }

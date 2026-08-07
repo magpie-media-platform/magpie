@@ -1,12 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
 
-/**
- * Returns a debounced copy of `value`, updating `delay` ms after `value` stops changing.
- *
- * `onFlush`, if provided, fires once on unmount with the latest value when a debounce
- * timer was still pending. Use it for "debounce-then-submit" patterns where dropping
- * the trailing value would silently lose user input.
- */
 export function useDebouncedValue<T>(value: T, delay = 300, onFlush?: (value: T) => void): T {
     const [debouncedValue, setDebouncedValue] = useState<T>(value);
 

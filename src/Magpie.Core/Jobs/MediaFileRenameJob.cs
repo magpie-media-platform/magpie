@@ -1,0 +1,99 @@
+using System;
+using System.IO;
+using System.Threading;
+using System.Threading.Tasks;
+
+using Magpie.Abstractions.Content;
+using Magpie.Abstractions.Repositories;
+using Magpie.Models;
+using Magpie.Models.Enums;
+using Magpie.Models.Jobs;
+using Magpie.Sdk.Jobs;
+
+namespace Magpie.Core.Jobs;
+
+internal sealed class MediaFileRenameJob(
+    IMediaFileRepository mediaFileRepository,
+    IContentRepository contentRepository,
+    IContentFileService contentFileService,
+    IProgressReporter? progressReporter = null) : IJob
+{
+    public static readonly JobSpec Spec = new()
+    {
+        JobType = "MediaFileRename",
+        DisplayName = "Media file rename",
+        Description = "Renames one media file using its effective rename template.",
+        Category = "Content",
+        Scope = JobScope.Content,
+        Enabled = true,
+        OnDemand = true,
+        FailurePolicy = JobFailurePolicy.Retry,
+        SupportedTriggerModes = [JobTriggerMode.Manual, JobTriggerMode.Schedule, JobTriggerMode.Event],
+        ConcurrencyScope = ConcurrencyScope.PerTypeAndTarget,
+        LockPartitionFields = [MediaFileIdParameter],
+        Parameters = [new(MediaFileIdParameter, "The media file id to rename.", DataType.String, true, null)],
+    };
+
+    private const string MediaFileIdParameter = "mediaFileId";
+
+    public Task ExecuteAsync(JobContext context, CancellationToken cancellationToken = default)
+    {
+        if (!context.Parameters.TryGetValue(MediaFileIdParameter, out var raw) || string.IsNullOrWhiteSpace(raw))
+        {
+            throw new ArgumentException("A media file ID is required.");
+        }
+
+        if (!Guid.TryParse(raw, out var mediaFileId))
+        {
+            throw new ArgumentException("The media file ID has an invalid format.");
+        }
+
+        return RenameAsync(
+            mediaFileId,
+            context.ManualTriggerUserId,
+            context.CorrelationId,
+            progressReporter,
+            cancellationToken);
+    }
+
+    internal async Task RenameAsync(
+        Guid mediaFileId,
+        Guid? userId,
+        Guid? correlationId,
+        IProgressReporter? progress,
+        CancellationToken cancellationToken = default)
+    {
+        progress?.Report(0, "The rename job will load the media file.");
+
+        var mediaFile = await mediaFileRepository
+            .GetByIdAsync(mediaFileId, cancellationToken)
+            .ConfigureAwait(false);
+        if (mediaFile is null)
+        {
+            throw new InvalidOperationException($"Media file {mediaFileId} does not exist.");
+        }
+
+        var contentItem = await contentRepository
+            .GetByIdAsync(mediaFile.ContentItemId, cancellationToken)
+            .ConfigureAwait(false);
+        if (contentItem is null)
+        {
+            throw new InvalidOperationException(
+                $"Media file {mediaFileId} references missing content item {mediaFile.ContentItemId}.");
+        }
+
+        progress?.Report(null, "The rename job will get the target path.");
+        var preview = await contentFileService
+            .PreviewRenameAsync(
+                contentItem.ContentHierarchyItemId,
+                new FileInfo(mediaFile.FilePath),
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        progress?.Report(null, "The rename job will rename the file.");
+        await contentFileService
+            .ExecuteRenameAsync(preview, userId, correlationId, cancellationToken)
+            .ConfigureAwait(false);
+        progress?.Report(1, "The file rename completed.");
+    }
+}

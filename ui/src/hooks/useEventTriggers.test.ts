@@ -32,41 +32,43 @@ import { useEventTriggers, useEventTrigger, type ApiEventTrigger } from './useEv
 const mockApiTriggers: ApiEventTrigger[] = [
     {
         id: 'event-1',
-        jobType: 'RefreshMetadata',
-        scope: 2,
+        jobType: 'ContentMetadataRefreshItem',
+        scope: 'Content',
         name: 'Refresh on Download Complete',
         eventFilter: {
             eventName: { value: 'download.completed' },
         },
-        executionMode: 0,
         enabled: true,
+        delaySeconds: 0,
         createdAt: '2024-01-01T00:00:00Z',
     },
     {
         id: 'event-2',
         jobType: 'SearchMissing',
-        scope: 2,
+        scope: 'Content',
         name: 'Search on Content Added',
         eventFilter: {
             eventName: { value: 'content.added' },
             eventContext: {
-                contentType: { value: 'episode' },
+                items: {
+                    contentType: { value: 'episode' },
+                },
             },
         },
-        executionMode: 0,
         enabled: true,
+        delaySeconds: 0,
         createdAt: '2024-01-01T00:00:00Z',
     },
     {
         id: 'event-3',
         jobType: 'SyncPlex',
-        scope: 1,
+        scope: 'Administrative',
         name: 'Sync Plex on Import',
         eventFilter: {
             eventName: { value: 'file.imported' },
         },
-        executionMode: 1,
         enabled: false,
+        delaySeconds: 0,
         createdAt: '2024-01-01T00:00:00Z',
     },
 ];
@@ -194,7 +196,7 @@ describe('useEventTriggers', () => {
 
             const newTrigger = {
                 jobType: 'NotifyUser',
-                scope: 3 as const,
+                scope: 'User' as const,
                 name: 'Notify on Download',
                 eventFilter: {
                     eventName: { value: 'download.completed' },
@@ -226,9 +228,9 @@ describe('useEventTriggers', () => {
             });
 
             act(() => {
-                result.current.createTrigger({
+                void result.current.createTrigger({
                     jobType: 'NotifyUser',
-                    scope: 3,
+                    scope: 'User',
                     name: 'Notify on Download',
                     eventFilter: { eventName: { value: 'download.completed' } },
                 });
@@ -315,7 +317,7 @@ describe('useEventTriggers', () => {
             });
 
             act(() => {
-                result.current.updateTrigger({
+                void result.current.updateTrigger({
                     id: 'event-1',
                     patch: { enabled: { value: false } },
                 });
@@ -373,7 +375,7 @@ describe('useEventTriggers', () => {
             });
 
             act(() => {
-                result.current.deleteTrigger('event-1');
+                void result.current.deleteTrigger('event-1');
             });
 
             await waitFor(() => {
@@ -405,11 +407,10 @@ describe('useEventTriggers', () => {
             const trigger = result.current.triggers[0];
             expect(trigger.id).toBe('event-2');
             expect(trigger.jobType).toBe('SearchMissing');
-            expect(trigger.scope).toBe(2);
+            expect(trigger.scope).toBe('Content');
             expect(trigger.name).toBe('Search on Content Added');
             expect(trigger.eventFilter.eventName?.value).toBe('content.added');
-            expect(trigger.eventFilter.eventContext?.contentType?.value).toBe('episode');
-            expect(trigger.executionMode).toBe(0);
+            expect(trigger.eventFilter.eventContext?.items.contentType?.value).toBe('episode');
             expect(trigger.enabled).toBe(true);
             expect(trigger.createdAt).toBe('2024-01-01T00:00:00Z');
         });

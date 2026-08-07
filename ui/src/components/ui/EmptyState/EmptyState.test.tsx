@@ -1,7 +1,7 @@
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
-import { Folder, MagnifyingGlass } from '@phosphor-icons/react';
+import { FolderIcon, MagnifyingGlassIcon } from '@phosphor-icons/react';
 
 import { EmptyState } from './EmptyState';
 
@@ -13,7 +13,12 @@ describe('EmptyState', () => {
 
     it('renders title as heading', () => {
         render(<EmptyState title="Empty list" />);
-        expect(screen.getByRole('heading', { name: 'Empty list' })).toBeInTheDocument();
+        expect(screen.getByRole('heading', { name: 'Empty list', level: 3 })).toBeInTheDocument();
+    });
+
+    it('supports a page-level title', () => {
+        render(<EmptyState title="Missing page" titleLevel={1} />);
+        expect(screen.getByRole('heading', { name: 'Missing page', level: 1 })).toBeInTheDocument();
     });
 
     it('applies empty-state class', () => {
@@ -53,12 +58,12 @@ describe('EmptyState', () => {
     });
 
     it('renders icon when provided', () => {
-        render(<EmptyState title="Empty" icon={<Folder data-testid="icon" />} />);
+        render(<EmptyState title="Empty" icon={<FolderIcon data-testid="icon" />} />);
         expect(screen.getByTestId('icon')).toBeInTheDocument();
     });
 
     it('hides icon from screen readers', () => {
-        render(<EmptyState title="Empty" icon={<MagnifyingGlass data-testid="icon" />} />);
+        render(<EmptyState title="Empty" icon={<MagnifyingGlassIcon data-testid="icon" />} />);
         const iconContainer = screen.getByTestId('icon').parentElement;
         expect(iconContainer).toHaveAttribute('aria-hidden', 'true');
     });
@@ -97,7 +102,7 @@ describe('EmptyState', () => {
     it('renders all parts together', () => {
         render(
             <EmptyState
-                icon={<Folder data-testid="folder-icon" />}
+                icon={<FolderIcon data-testid="folder-icon" />}
                 title="No files"
                 description="Upload a file to get started"
                 action={<button type="button">Upload</button>}

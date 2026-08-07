@@ -2,7 +2,7 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
-import { House, MagnifyingGlass, DownloadSimple, Gear, List } from '@phosphor-icons/react';
+import { HouseIcon, MagnifyingGlassIcon, DownloadSimpleIcon, GearIcon, ListIcon } from '@phosphor-icons/react';
 
 import { BottomNav, BottomNavItem, BottomNavButton } from './BottomNav';
 
@@ -35,7 +35,7 @@ describe('BottomNav', () => {
     it('renders children', () => {
         renderWithRouter(
             <BottomNav>
-                <BottomNavItem icon={<House />} label="Home" to="/" />
+                <BottomNavItem icon={<HouseIcon />} label="Home" to="/" />
             </BottomNav>,
         );
         expect(screen.getByText('Home')).toBeInTheDocument();
@@ -49,7 +49,7 @@ describe('BottomNav', () => {
     it('renders children and slot content together', () => {
         renderWithRouter(
             <BottomNav slotContent={<div data-testid="slot">Extension</div>}>
-                <BottomNavItem icon={<House />} label="Home" to="/" />
+                <BottomNavItem icon={<HouseIcon />} label="Home" to="/" />
             </BottomNav>,
         );
         expect(screen.getByText('Home')).toBeInTheDocument();
@@ -77,85 +77,85 @@ describe('BottomNav', () => {
 
 describe('BottomNavItem', () => {
     it('renders as an anchor element', () => {
-        renderWithRouter(<BottomNavItem icon={<House />} label="Home" to="/" />);
+        renderWithRouter(<BottomNavItem icon={<HouseIcon />} label="Home" to="/" />);
         const link = screen.getByRole('link');
         expect(link.tagName).toBe('A');
     });
 
     it('applies bottom-nav-item class', () => {
-        renderWithRouter(<BottomNavItem icon={<House />} label="Home" to="/" />);
+        renderWithRouter(<BottomNavItem icon={<HouseIcon />} label="Home" to="/" />);
         expect(screen.getByRole('link')).toHaveClass('bottom-nav-item');
     });
 
     it('applies custom className', () => {
-        renderWithRouter(<BottomNavItem icon={<House />} label="Home" to="/" className="custom-item" />);
+        renderWithRouter(<BottomNavItem icon={<HouseIcon />} label="Home" to="/" className="custom-item" />);
         expect(screen.getByRole('link')).toHaveClass('bottom-nav-item', 'custom-item');
     });
 
     it('renders icon', () => {
-        renderWithRouter(<BottomNavItem icon={<House data-testid="icon" />} label="Home" to="/" />);
+        renderWithRouter(<BottomNavItem icon={<HouseIcon data-testid="icon" />} label="Home" to="/" />);
         expect(screen.getByTestId('icon')).toBeInTheDocument();
     });
 
     it('icon container has aria-hidden', () => {
-        renderWithRouter(<BottomNavItem icon={<House />} label="Home" data-testid="item" to="/" />);
+        renderWithRouter(<BottomNavItem icon={<HouseIcon />} label="Home" data-testid="item" to="/" />);
         const item = screen.getByTestId('item');
         const iconContainer = item.querySelector('.bottom-nav-item__icon');
         expect(iconContainer).toHaveAttribute('aria-hidden', 'true');
     });
 
     it('renders label for screen readers by default', () => {
-        renderWithRouter(<BottomNavItem icon={<House />} label="Home" to="/" />);
+        renderWithRouter(<BottomNavItem icon={<HouseIcon />} label="Home" to="/" />);
         expect(screen.getByText('Home')).toBeInTheDocument();
     });
 
     it('shows label visually by default', () => {
-        renderWithRouter(<BottomNavItem icon={<House />} label="Home" to="/" />);
+        renderWithRouter(<BottomNavItem icon={<HouseIcon />} label="Home" to="/" />);
         const label = screen.getByText('Home');
         expect(label).toHaveClass('bottom-nav-item__label');
         expect(screen.getByRole('link')).toHaveAttribute('data-show-label', 'true');
     });
 
     it('hides label visually when showLabel is false', () => {
-        renderWithRouter(<BottomNavItem icon={<House />} label="Home" to="/" showLabel={false} />);
+        renderWithRouter(<BottomNavItem icon={<HouseIcon />} label="Home" to="/" showLabel={false} />);
         screen.getByText('Home');
         expect(screen.getByRole('link')).toHaveAttribute('data-show-label', 'false');
     });
 
     it('applies active class when active', () => {
-        renderWithRouter(<BottomNavItem icon={<House />} label="Home" to="/" active />);
+        renderWithRouter(<BottomNavItem icon={<HouseIcon />} label="Home" to="/" active />);
         expect(screen.getByRole('link')).toHaveAttribute('data-active', 'true');
     });
 
     it('does not apply active class when not active', () => {
-        renderWithRouter(<BottomNavItem icon={<House />} label="Home" to="/" />);
+        renderWithRouter(<BottomNavItem icon={<HouseIcon />} label="Home" to="/" />);
         expect(screen.getByRole('link')).not.toHaveAttribute('data-active', 'true');
     });
 
     it('has aria-current="page" when active', () => {
-        renderWithRouter(<BottomNavItem icon={<House />} label="Home" to="/" active />);
+        renderWithRouter(<BottomNavItem icon={<HouseIcon />} label="Home" to="/" active />);
         expect(screen.getByRole('link')).toHaveAttribute('aria-current', 'page');
     });
 
     it('does not have aria-current when not active', () => {
-        renderWithRouter(<BottomNavItem icon={<House />} label="About" to="/about" />);
+        renderWithRouter(<BottomNavItem icon={<HouseIcon />} label="About" to="/about" />);
         expect(screen.getByRole('link')).not.toHaveAttribute('aria-current');
     });
 
     it('passes to prop as href to anchor', () => {
-        renderWithRouter(<BottomNavItem icon={<House />} label="Home" to="/home" />);
+        renderWithRouter(<BottomNavItem icon={<HouseIcon />} label="Home" to="/home" />);
         expect(screen.getByRole('link')).toHaveAttribute('href', '/home');
     });
 
     it('forwards ref', () => {
         const ref = vi.fn();
-        renderWithRouter(<BottomNavItem ref={ref} icon={<House />} label="Home" to="/" />);
+        renderWithRouter(<BottomNavItem ref={ref} icon={<HouseIcon />} label="Home" to="/" />);
         expect(ref).toHaveBeenCalledWith(expect.any(HTMLAnchorElement));
     });
 
     it('passes through additional props', () => {
         renderWithRouter(
-            <BottomNavItem icon={<House />} label="Home" to="/" data-testid="nav-item" title="Go to home" />,
+            <BottomNavItem icon={<HouseIcon />} label="Home" to="/" data-testid="nav-item" title="Go to home" />,
         );
         expect(screen.getByTestId('nav-item')).toHaveAttribute('title', 'Go to home');
     });
@@ -163,48 +163,48 @@ describe('BottomNavItem', () => {
 
 describe('BottomNavButton', () => {
     it('renders as a button element', () => {
-        render(<BottomNavButton icon={<List />} label="More" />);
+        render(<BottomNavButton icon={<ListIcon />} label="More" />);
         const btn = screen.getByRole('button');
         expect(btn.tagName).toBe('BUTTON');
     });
 
     it('applies bottom-nav-item class', () => {
-        render(<BottomNavButton icon={<List />} label="More" />);
+        render(<BottomNavButton icon={<ListIcon />} label="More" />);
         expect(screen.getByRole('button')).toHaveClass('bottom-nav-item');
     });
 
     it('applies active class when active', () => {
-        render(<BottomNavButton icon={<List />} label="More" active />);
+        render(<BottomNavButton icon={<ListIcon />} label="More" active />);
         expect(screen.getByRole('button')).toHaveClass('bottom-nav-item--active');
         expect(screen.getByRole('button')).toHaveAttribute('data-active', 'true');
     });
 
     it('sets aria-pressed when active', () => {
-        render(<BottomNavButton icon={<List />} label="More" active />);
+        render(<BottomNavButton icon={<ListIcon />} label="More" active />);
         expect(screen.getByRole('button')).toHaveAttribute('aria-pressed', 'true');
     });
 
     it('renders label visually by default', () => {
-        render(<BottomNavButton icon={<List />} label="More" />);
+        render(<BottomNavButton icon={<ListIcon />} label="More" />);
         expect(screen.getByText('More')).toHaveClass('bottom-nav-item__label');
     });
 
     it('calls onClick when clicked', async () => {
         const user = userEvent.setup();
         const onClick = vi.fn();
-        render(<BottomNavButton icon={<List />} label="More" onClick={onClick} />);
+        render(<BottomNavButton icon={<ListIcon />} label="More" onClick={onClick} />);
         await user.click(screen.getByRole('button'));
         expect(onClick).toHaveBeenCalledTimes(1);
     });
 
     it('forwards ref', () => {
         const ref = vi.fn();
-        render(<BottomNavButton ref={ref} icon={<List />} label="More" />);
+        render(<BottomNavButton ref={ref} icon={<ListIcon />} label="More" />);
         expect(ref).toHaveBeenCalledWith(expect.any(HTMLButtonElement));
     });
 
     it('passes through additional props', () => {
-        render(<BottomNavButton icon={<List />} label="More" aria-label="Open menu" />);
+        render(<BottomNavButton icon={<ListIcon />} label="More" aria-label="Open menu" />);
         expect(screen.getByRole('button')).toHaveAttribute('aria-label', 'Open menu');
     });
 });
@@ -213,10 +213,10 @@ describe('BottomNav with multiple items', () => {
     it('renders multiple navigation items', () => {
         renderWithRouter(
             <BottomNav>
-                <BottomNavItem icon={<House />} label="Home" to="/" active />
-                <BottomNavItem icon={<MagnifyingGlass />} label="Search" to="/search" />
-                <BottomNavItem icon={<DownloadSimple />} label="Downloads" to="/downloads" />
-                <BottomNavItem icon={<Gear />} label="Settings" to="/settings" />
+                <BottomNavItem icon={<HouseIcon />} label="Home" to="/" active />
+                <BottomNavItem icon={<MagnifyingGlassIcon />} label="Search" to="/search" />
+                <BottomNavItem icon={<DownloadSimpleIcon />} label="Downloads" to="/downloads" />
+                <BottomNavItem icon={<GearIcon />} label="Settings" to="/settings" />
             </BottomNav>,
         );
 
@@ -229,9 +229,9 @@ describe('BottomNav with multiple items', () => {
     it('only one item is active at a time', () => {
         renderWithRouter(
             <BottomNav>
-                <BottomNavItem icon={<House />} label="Home" to="/" active />
-                <BottomNavItem icon={<MagnifyingGlass />} label="Search" to="/search" />
-                <BottomNavItem icon={<DownloadSimple />} label="Downloads" to="/downloads" />
+                <BottomNavItem icon={<HouseIcon />} label="Home" to="/" active />
+                <BottomNavItem icon={<MagnifyingGlassIcon />} label="Search" to="/search" />
+                <BottomNavItem icon={<DownloadSimpleIcon />} label="Downloads" to="/downloads" />
             </BottomNav>,
         );
 
@@ -245,8 +245,8 @@ describe('BottomNav with multiple items', () => {
     it('renders all items with visible labels', () => {
         renderWithRouter(
             <BottomNav>
-                <BottomNavItem icon={<House />} label="Home" to="/" />
-                <BottomNavItem icon={<MagnifyingGlass />} label="Search" to="/search" />
+                <BottomNavItem icon={<HouseIcon />} label="Home" to="/" />
+                <BottomNavItem icon={<MagnifyingGlassIcon />} label="Search" to="/search" />
             </BottomNav>,
         );
 

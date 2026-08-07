@@ -19,6 +19,7 @@ describe('setupApi', () => {
             const mockStatus: SetupStatus = {
                 isRequired: true,
                 isComplete: false,
+                requiresAdminClaim: true,
             };
 
             mockFetch.mockResolvedValueOnce({

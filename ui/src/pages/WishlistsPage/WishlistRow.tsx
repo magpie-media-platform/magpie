@@ -1,18 +1,19 @@
 import { useCallback } from 'react';
 import {
-    Clock,
-    FunnelSimple,
-    LockSimple,
-    LockSimpleOpen,
-    PencilSimple,
-    Trash,
-    CircleNotch,
-    User,
+    ClockIcon,
+    FunnelSimpleIcon,
+    LockSimpleIcon,
+    LockSimpleOpenIcon,
+    PencilSimpleIcon,
+    TrashIcon,
+    CircleNotchIcon,
+    UserIcon,
 } from '@phosphor-icons/react';
 
-import { Badge } from '@/components/ui/Badge';
 import { Tooltip } from '@/components/ui/Tooltip';
+import { useFormattedCriteria, type ContentFilterCriteria } from '@/hooks/useFilters';
 import { formatRelativeTime } from '@/lib/formatTime';
+import { formatDateTime } from '@/lib/dateFormatting';
 
 import '@/styles/card-actions.css';
 
@@ -27,14 +28,15 @@ export interface WishlistItem {
     ownerLock: boolean;
     lastSyncedAt: string | null;
     createdAt: string;
+    contentFilterCriteria: ContentFilterCriteria | null;
 }
 
-export interface WishlistRowProps {
+interface WishlistRowProps {
     wishlist: WishlistItem;
     isLocking: boolean;
     isOwner: boolean;
     canEdit: boolean;
-    canManage: boolean;
+    canDelete: boolean;
     onEdit: (id: string) => void;
     onDelete: (id: string) => void;
     onLock: (id: string) => void;
@@ -47,13 +49,16 @@ export function WishlistRow({
     isLocking,
     isOwner,
     canEdit,
-    canManage,
+    canDelete,
     onEdit,
     onDelete,
     onLock,
     onUnlock,
     onClick,
 }: WishlistRowProps) {
+    const formattedCriteriaQuery = useFormattedCriteria(wishlist.contentFilterCriteria);
+    const criteriaQuery = formattedCriteriaQuery.data ?? '';
+
     const handleRowClick = useCallback(
         (e: React.MouseEvent) => {
             if ((e.target as HTMLElement | null)?.closest('.wishlists-page__item-actions')) {
@@ -96,56 +101,61 @@ export function WishlistRow({
                         <span className="wishlists-page__item-name">{wishlist.name}</span>
                         {wishlist.ownerLock && (
                             <Tooltip
-                                content={isOwner ? 'Locked - Only you can edit' : 'Locked - Only owner can edit'}
+                                content={isOwner ? 'Locked. Only you can edit.' : 'Locked. Only the owner can edit.'}
                                 side="top"
                             >
                                 <span
                                     className="wishlists-page__owner-lock wishlists-page__owner-lock--locked"
                                     data-owner-lock="true"
-                                    aria-label={isOwner ? 'Locked - Only you can edit' : 'Locked - Only owner can edit'}
+                                    aria-label={
+                                        isOwner ? 'Locked. Only you can edit.' : 'Locked. Only the owner can edit.'
+                                    }
                                 >
-                                    <LockSimple weight="fill" aria-hidden="true" />
+                                    <LockSimpleIcon weight="fill" aria-hidden="true" />
                                 </span>
                             </Tooltip>
                         )}
                         {!wishlist.ownerLock && !isOwner && (
-                            <Tooltip content="Unlocked - Anyone with permission can edit" side="top">
+                            <Tooltip content="Unlocked. Anyone with permission can edit." side="top">
                                 <span
                                     className="wishlists-page__owner-lock"
-                                    aria-label="Unlocked - Anyone with permission can edit"
+                                    aria-label="Unlocked. Anyone with permission can edit."
                                 >
-                                    <LockSimpleOpen weight="fill" aria-hidden="true" />
+                                    <LockSimpleOpenIcon weight="fill" aria-hidden="true" />
                                 </span>
                             </Tooltip>
-                        )}
-                        {wishlist.monitored ? (
-                            <Badge variant="fulfilled" size="sm">
-                                Monitored
-                            </Badge>
-                        ) : (
-                            <Badge variant="default" size="sm">
-                                Unmonitored
-                            </Badge>
                         )}
                     </div>
                     <div className="wishlists-page__item-meta">
                         {wishlist.ownerId && (
                             <span className="wishlists-page__item-owner" data-testid="wishlists-page__item-owner">
-                                <User weight="regular" aria-hidden="true" />
+                                <UserIcon weight="regular" aria-hidden="true" />
                                 {wishlist.ownerName ?? 'Unknown'}
                             </span>
                         )}
                         {wishlist.filterName && (
                             <span className="wishlists-page__item-filter">
-                                <FunnelSimple weight="regular" aria-hidden="true" />
+                                <FunnelSimpleIcon weight="regular" aria-hidden="true" />
                                 {wishlist.filterName}
                             </span>
                         )}
-                        <span className="wishlists-page__item-synced">
-                            <Clock weight="regular" aria-hidden="true" />
+                        <span
+                            className="wishlists-page__item-synced"
+                            title={wishlist.lastSyncedAt ? formatDateTime(wishlist.lastSyncedAt) : undefined}
+                        >
+                            <ClockIcon weight="regular" aria-hidden="true" />
                             {formatRelativeTime(wishlist.lastSyncedAt)}
                         </span>
                     </div>
+                    {criteriaQuery && (
+                        <span
+                            className="wishlists-page__item-query"
+                            title={criteriaQuery}
+                            data-testid="wishlists-page__item-query"
+                        >
+                            {criteriaQuery}
+                        </span>
+                    )}
                 </div>
                 <div className="card-actions wishlists-page__item-actions">
                     {isOwner && (
@@ -156,7 +166,7 @@ export function WishlistRow({
                             disabled={isLocking}
                             aria-label={
                                 isLocking
-                                    ? `Updating lock state for ${wishlist.name}`
+                                    ? `Updating access for "${wishlist.name}".`
                                     : wishlist.ownerLock
                                       ? `Unlock ${wishlist.name}`
                                       : `Lock ${wishlist.name}`
@@ -167,16 +177,16 @@ export function WishlistRow({
                                 isLocking
                                     ? 'Updating...'
                                     : wishlist.ownerLock
-                                      ? 'Unlock (allow others to edit)'
-                                      : 'Lock (only you can edit)'
+                                      ? 'Unlock so others can edit'
+                                      : 'Lock so only you can edit'
                             }
                         >
                             {isLocking ? (
-                                <CircleNotch weight="bold" className="card-actions__spinner" aria-hidden="true" />
+                                <CircleNotchIcon weight="bold" className="card-actions__spinner" aria-hidden="true" />
                             ) : wishlist.ownerLock ? (
-                                <LockSimple weight="bold" />
+                                <LockSimpleIcon weight="bold" />
                             ) : (
-                                <LockSimpleOpen weight="bold" />
+                                <LockSimpleOpenIcon weight="bold" />
                             )}
                         </button>
                     )}
@@ -190,10 +200,10 @@ export function WishlistRow({
                             data-target={wishlist.id}
                             title="Edit"
                         >
-                            <PencilSimple weight="bold" />
+                            <PencilSimpleIcon weight="bold" />
                         </button>
                     )}
-                    {canManage && (
+                    {canDelete && (
                         <button
                             type="button"
                             className="card-actions__btn card-actions__btn--danger"
@@ -203,7 +213,7 @@ export function WishlistRow({
                             data-target={wishlist.id}
                             title="Delete"
                         >
-                            <Trash weight="bold" />
+                            <TrashIcon weight="bold" />
                         </button>
                     )}
                 </div>

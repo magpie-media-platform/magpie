@@ -1,13 +1,13 @@
 import { forwardRef, type ComponentPropsWithoutRef, useCallback } from 'react';
 
 import { Select, SelectTrigger, SelectContent, SelectItem } from '../Select';
-import { Button } from '../Button';
+import { ClearFiltersButton } from '../ClearFiltersButton';
 
 import '@/styles/list-toolbar.css';
 
 const ALL_VALUE = '__all__';
 
-export type JobExecutionStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
+export type JobExecutionStatus = 'pending' | 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
 
 export interface TemplateOption {
     id: string;
@@ -125,15 +125,7 @@ export const JobExecutionFilters = forwardRef<HTMLDivElement, JobExecutionFilter
                     </Select>
 
                     {hasActiveFilters && (
-                        <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={handleClearAll}
-                            className="list-toolbar__clear-filters"
-                            data-action="clear-filters"
-                        >
-                            Clear
-                        </Button>
+                        <ClearFiltersButton onClick={handleClearAll} className="list-toolbar__clear-filters" />
                     )}
                 </div>
             </div>

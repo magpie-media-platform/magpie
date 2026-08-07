@@ -1,0 +1,54 @@
+@layer components {
+    .pager {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: var(--space-sm);
+        flex-wrap: wrap;
+        padding: var(--space-md) 0;
+        font-size: var(--text-sm);
+        color: var(--text-secondary);
+    }
+
+    .pager__button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: var(--space-xs) var(--space-sm);
+        font-family: var(--font-sans);
+        font-size: var(--text-sm);
+        font-weight: var(--weight-medium);
+        color: var(--text-primary);
+        background-color: var(--bg-tertiary);
+        border: 1px solid var(--border-default);
+        border-radius: var(--radius-sm);
+        cursor: pointer;
+        transition:
+            background-color var(--duration-fast) var(--easing-default),
+            border-color var(--duration-fast) var(--easing-default);
+
+        &:hover:not(:disabled) {
+            background-color: color-mix(in srgb, var(--bg-tertiary) 80%, white);
+            border-color: var(--border-accent);
+        }
+
+        &:focus-visible {
+            outline: var(--focus-ring-width) solid var(--focus-ring-color);
+            outline-offset: var(--focus-ring-offset);
+        }
+
+        &:disabled {
+            opacity: var(--opacity-disabled);
+            cursor: not-allowed;
+        }
+
+        & svg {
+            width: 1em;
+            height: 1em;
+        }
+    }
+
+    .pager__page {
+        white-space: nowrap;
+    }
+}

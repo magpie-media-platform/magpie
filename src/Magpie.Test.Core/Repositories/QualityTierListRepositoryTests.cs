@@ -1,5 +1,6 @@
 using System;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions.Repositories;
@@ -9,10 +10,13 @@ using Magpie.Data;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
-using Magpie.Test.Shared;
+using Magpie.Sdk.Services;
 
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
+
+using Moq;
 
 using NUnit.Framework;
 
@@ -23,6 +27,7 @@ public class QualityTierListRepositoryTests
 {
     private MagpieDbContext _context = null!;
     private IQualityTierListRepository _subject = null!;
+    private Mock<IContentHierarchyItemRepository> _contentHierarchyItems = null!;
     private Guid _userId;
     private Guid _qualityTierId;
 
@@ -62,18 +67,24 @@ public class QualityTierListRepositoryTests
 
         _qualityTierId = qualityTier.Id;
 
-        var loggerFactory = LoggerFactory.Create(builder => builder.AddTestLogger());
+        var loggerFactory = NullLoggerFactory.Instance;
 
         var auditRecordRepository = new AuditRecordRepository(
             _context,
-            loggerFactory.CreateLogger<AuditRecordRepository>());
+            Mock.Of<IEventBus>(),
+            loggerFactory.CreateLogger<AuditRecordRepository>(),
+            new TransactionManager(_context, NullLogger<TransactionManager>.Instance));
 
-        var transactionManager = new TransactionManager(_context);
+        var transactionManager = new TransactionManager(_context, NullLogger<TransactionManager>.Instance);
+
+        _contentHierarchyItems = new Mock<IContentHierarchyItemRepository>();
 
         _subject = new QualityTierListRepository(
             _context,
             auditRecordRepository,
             transactionManager,
+            _contentHierarchyItems.Object,
+            Mock.Of<IEventBus>(),
             loggerFactory.CreateLogger<QualityTierListRepository>());
     }
 
@@ -95,10 +106,10 @@ public class QualityTierListRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.QualityTierLists.Add(qualityTierList);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        var result = await _subject.GetByIdAsync(qualityTierList.Id);
+        var result = await _subject.GetByIdAsync(qualityTierList.Id).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -112,14 +123,14 @@ public class QualityTierListRepositoryTests
     public async Task GetByIdAsync_ReturnsNull_WhenNotExists()
     {
         // Act
-        var result = await _subject.GetByIdAsync(Guid.NewGuid());
+        var result = await _subject.GetByIdAsync(Guid.NewGuid()).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.Null);
     }
 
     [Test]
-    public async Task GetByIdAsync_IncludesQualityTierRanks()
+    public async Task GetByIdAsync_IncludesQualityTierRanks_WhenRanksExist()
     {
         // Arrange
         var qualityTierList = new QualityTierList
@@ -129,7 +140,7 @@ public class QualityTierListRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.QualityTierLists.Add(qualityTierList);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         var rank = new QualityTierListRank
         {
@@ -140,10 +151,10 @@ public class QualityTierListRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.QualityTierListRanks.Add(rank);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        var result = await _subject.GetByIdAsync(qualityTierList.Id);
+        var result = await _subject.GetByIdAsync(qualityTierList.Id).ConfigureAwait(false);
 
         // Assert
         var ranks = result!.QualityTierRanks.ToList();
@@ -156,7 +167,7 @@ public class QualityTierListRepositoryTests
     }
 
     [Test]
-    public async Task ListAllAsync_ReturnsAllQualityTierLists()
+    public async Task ListAllAsync_ReturnsAllQualityTierLists_WhenListsExist()
     {
         // Arrange
         var list1 = new QualityTierList
@@ -172,10 +183,10 @@ public class QualityTierListRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.QualityTierLists.AddRange(list1, list2);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        var result = await _subject.ListAllAsync(default);
+        var result = await _subject.ListAllAsync(default).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Has.Exactly(2).Items);
@@ -185,68 +196,14 @@ public class QualityTierListRepositoryTests
     public async Task ListAllAsync_ReturnsEmptyList_WhenNoQualityTierLists()
     {
         // Act
-        var result = await _subject.ListAllAsync(default);
+        var result = await _subject.ListAllAsync(default).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.Empty);
     }
 
     [Test]
-    public async Task ListByTagAsync_ReturnsMatchingQualityTierLists()
-    {
-        // Arrange
-        var list1 = new QualityTierList
-        {
-            Name = "TaggedList",
-            UpgradeAllowed = true,
-            CreatedAt = DateTime.UtcNow
-        };
-        var list2 = new QualityTierList
-        {
-            Name = "UntaggedList",
-            UpgradeAllowed = false,
-            CreatedAt = DateTime.UtcNow
-        };
-        var tag = new Tag { Name = "premium" };
-        tag.QualityTierLists.Add(list1);
-
-        _context.QualityTierLists.AddRange(list1, list2);
-        _context.Tags.Add(tag);
-        await _context.SaveChangesAsync();
-
-        // Act
-        var result = await _subject.ListByTagAsync("premium");
-
-        // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(result, Has.Exactly(1).Items);
-            Assert.That(result, Has.One.With.Property(nameof(QualityTierList.Name)).EqualTo("TaggedList"));
-        }
-    }
-
-    [Test]
-    public async Task ListByTagAsync_ReturnsEmptyList_WhenTagNotFound()
-    {
-        // Arrange
-        var list = new QualityTierList
-        {
-            Name = "TestList",
-            UpgradeAllowed = true,
-            CreatedAt = DateTime.UtcNow
-        };
-        _context.QualityTierLists.Add(list);
-        await _context.SaveChangesAsync();
-
-        // Act
-        var result = await _subject.ListByTagAsync("nonexistent");
-
-        // Assert
-        Assert.That(result, Is.Empty);
-    }
-
-    [Test]
-    public async Task CreateAsync_CreatesQualityTierList()
+    public async Task CreateAsync_CreatesQualityTierList_WhenRequestIsValid()
     {
         // Arrange
         var qualityTierList = new QualityTierList
@@ -256,7 +213,7 @@ public class QualityTierListRepositoryTests
         };
 
         // Act
-        var result = await _subject.CreateAsync(qualityTierList, _userId);
+        var result = await _subject.CreateAsync(qualityTierList, _userId).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -270,7 +227,44 @@ public class QualityTierListRepositoryTests
     }
 
     [Test]
-    public async Task CreateAsync_CreatesAuditRecord()
+    public async Task CreateAsync_PersistsMimeTypes_WhenMimeTypesAreProvided()
+    {
+        // Arrange
+        var qualityTierList = new QualityTierList
+        {
+            Name = "AudioList",
+            MimeTypes = ["audio/*"],
+            UpgradeAllowed = true
+        };
+
+        // Act
+        var created = await _subject.CreateAsync(qualityTierList, _userId).ConfigureAwait(false);
+
+        // Assert
+        var stored = await _subject.GetByIdAsync(created.Id).ConfigureAwait(false);
+        Assert.That(stored?.MimeTypes, Is.EqualTo(["audio/*"]));
+    }
+
+    [Test]
+    public async Task CreateAsync_DefaultsMimeTypesToEmpty_WhenNotProvided()
+    {
+        // Arrange
+        var qualityTierList = new QualityTierList
+        {
+            Name = "UnscopedList",
+            UpgradeAllowed = true
+        };
+
+        // Act
+        var created = await _subject.CreateAsync(qualityTierList, _userId).ConfigureAwait(false);
+
+        // Assert
+        var stored = await _subject.GetByIdAsync(created.Id).ConfigureAwait(false);
+        Assert.That(stored?.MimeTypes, Is.Empty);
+    }
+
+    [Test]
+    public async Task CreateAsync_CreatesAuditRecord_WhenListIsCreated()
     {
         // Arrange
         var qualityTierList = new QualityTierList
@@ -280,10 +274,10 @@ public class QualityTierListRepositoryTests
         };
 
         // Act
-        await _subject.CreateAsync(qualityTierList, _userId);
+        await _subject.CreateAsync(qualityTierList, _userId).ConfigureAwait(false);
 
         // Assert
-        var auditRecords = await _context.AuditRecords.ToListAsync();
+        var auditRecords = await _context.AuditRecords.ToListAsync().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(auditRecords, Has.Count.EqualTo(1));
@@ -304,18 +298,18 @@ public class QualityTierListRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.QualityTierLists.Add(qualityTierList);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         qualityTierList.Name = "UpdatedList";
         qualityTierList.UpgradeAllowed = false;
 
         // Act
-        var result = await _subject.UpdateAsync(qualityTierList, _userId);
+        var result = await _subject.UpdateAsync(qualityTierList, _userId).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.True);
 
-        var updated = await _subject.GetByIdAsync(qualityTierList.Id);
+        var updated = await _subject.GetByIdAsync(qualityTierList.Id).ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(updated, Has.Property(nameof(updated.Name)).EqualTo("UpdatedList"));
@@ -323,6 +317,10 @@ public class QualityTierListRepositoryTests
             Assert.That(updated, Has.Property(nameof(updated.ModifiedByUserId)).EqualTo(_userId));
             Assert.That(updated, Has.Property(nameof(updated.ModifiedAt)).Not.Null);
         }
+
+        _contentHierarchyItems.Verify(
+            items => items.RecomputeAllEffectiveValuesAsync(It.IsAny<CancellationToken>()),
+            Times.Once);
     }
 
     [Test]
@@ -337,14 +335,14 @@ public class QualityTierListRepositoryTests
         };
 
         // Act
-        var result = await _subject.UpdateAsync(qualityTierList, _userId);
+        var result = await _subject.UpdateAsync(qualityTierList, _userId).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.False);
     }
 
     [Test]
-    public async Task UpdateAsync_CreatesAuditRecord()
+    public async Task UpdateAsync_CreatesAuditRecord_WhenListExists()
     {
         // Arrange
         var qualityTierList = new QualityTierList
@@ -354,15 +352,15 @@ public class QualityTierListRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.QualityTierLists.Add(qualityTierList);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         qualityTierList.Name = "Updated";
 
         // Act
-        await _subject.UpdateAsync(qualityTierList, _userId);
+        await _subject.UpdateAsync(qualityTierList, _userId).ConfigureAwait(false);
 
         // Assert
-        var auditRecords = await _context.AuditRecords.ToListAsync();
+        var auditRecords = await _context.AuditRecords.ToListAsync().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(auditRecords, Has.Count.EqualTo(1));
@@ -382,30 +380,94 @@ public class QualityTierListRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.QualityTierLists.Add(qualityTierList);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        var result = await _subject.DeleteAsync(qualityTierList.Id, _userId);
+        var result = await _subject.DeleteAsync(qualityTierList.Id, _userId).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.True);
 
-        var deleted = await _subject.GetByIdAsync(qualityTierList.Id);
+        var deleted = await _subject.GetByIdAsync(qualityTierList.Id).ConfigureAwait(false);
         Assert.That(deleted, Is.Null);
+        _contentHierarchyItems.Verify(
+            items => items.RecomputeAllEffectiveValuesAsync(It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Test]
+    public async Task DeleteAsync_NullsReferences_WhenReferenced()
+    {
+        // Arrange
+        var qualityTierList = new QualityTierList
+        {
+            Name = "Referenced",
+            CreatedAt = DateTime.UtcNow,
+        };
+        _context.QualityTierLists.Add(qualityTierList);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var rootFolder = new RootFolder
+        {
+            Name = "Books",
+            Path = "/books",
+            ContentType = "book",
+            Defaults = new()
+            {
+                ["book"] = new() { QualityTierListId = qualityTierList.Id }
+            },
+            CreatedAt = DateTime.UtcNow,
+        };
+        var contentFilter = new ContentFilter
+        {
+            Name = "Wanted books",
+            Criteria = new ContentFilterCriteria(),
+            CreatedAt = DateTime.UtcNow,
+        };
+        var wishlist = new Wishlist
+        {
+            Name = "Books",
+            ContentFilter = contentFilter,
+            QualityTierList = qualityTierList,
+            CreatedAt = DateTime.UtcNow,
+        };
+        _context.RootFolders.Add(rootFolder);
+        _context.Wishlists.Add(wishlist);
+        rootFolder.Defaults = new()
+        {
+            ["book"] = new RootFolderDefault
+            {
+                QualityTierListId = qualityTierList.Id,
+            },
+        };
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        var result = await _subject.DeleteAsync(qualityTierList.Id, _userId).ConfigureAwait(false);
+
+        // Assert
+        var storedRootFolder = await _context.RootFolders.AsNoTracking().SingleAsync().ConfigureAwait(false);
+        var storedLevelDefault = storedRootFolder.Defaults["book"];
+        var storedWishlist = await _context.Wishlists.AsNoTracking().SingleAsync().ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Is.True);
+            Assert.That(storedLevelDefault.QualityTierListId, Is.Null);
+            Assert.That(storedWishlist.QualityTierListId, Is.Null);
+        }
     }
 
     [Test]
     public async Task DeleteAsync_ReturnsFalse_WhenNotExists()
     {
         // Act
-        var result = await _subject.DeleteAsync(Guid.NewGuid(), _userId);
+        var result = await _subject.DeleteAsync(Guid.NewGuid(), _userId).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.False);
     }
 
     [Test]
-    public async Task DeleteAsync_DeletesAssociatedRanks()
+    public async Task DeleteAsync_DeletesAssociatedRanks_WhenListExists()
     {
         // Arrange
         var qualityTierList = new QualityTierList
@@ -415,7 +477,7 @@ public class QualityTierListRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.QualityTierLists.Add(qualityTierList);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         var rank = new QualityTierListRank
         {
@@ -426,22 +488,22 @@ public class QualityTierListRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.QualityTierListRanks.Add(rank);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        var result = await _subject.DeleteAsync(qualityTierList.Id, _userId);
+        var result = await _subject.DeleteAsync(qualityTierList.Id, _userId).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.True);
 
         var remainingRanks = await _context.QualityTierListRanks
             .Where(r => r.QualityTierListId == qualityTierList.Id)
-            .ToListAsync();
+            .ToListAsync().ConfigureAwait(false);
         Assert.That(remainingRanks, Is.Empty);
     }
 
     [Test]
-    public async Task DeleteAsync_CreatesAuditRecord()
+    public async Task DeleteAsync_CreatesAuditRecord_WhenListExists()
     {
         // Arrange
         var qualityTierList = new QualityTierList
@@ -451,13 +513,13 @@ public class QualityTierListRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.QualityTierLists.Add(qualityTierList);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        await _subject.DeleteAsync(qualityTierList.Id, _userId);
+        await _subject.DeleteAsync(qualityTierList.Id, _userId).ConfigureAwait(false);
 
         // Assert
-        var auditRecords = await _context.AuditRecords.ToListAsync();
+        var auditRecords = await _context.AuditRecords.ToListAsync().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(auditRecords, Has.Count.EqualTo(1));
@@ -478,7 +540,7 @@ public class QualityTierListRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.QualityTierLists.Add(qualityTierList);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         var patch = new QualityTierListPatch
         {
@@ -487,17 +549,50 @@ public class QualityTierListRepositoryTests
         };
 
         // Act
-        var result = await _subject.PatchAsync(patch, _userId);
+        var result = await _subject.PatchAsync(patch, _userId).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.True);
 
-        var patched = await _subject.GetByIdAsync(qualityTierList.Id);
+        var patched = await _subject.GetByIdAsync(qualityTierList.Id).ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(patched, Has.Property(nameof(patched.Name)).EqualTo("PatchedName"));
             Assert.That(patched, Has.Property(nameof(patched.UpgradeAllowed)).True);
         }
+    }
+
+    [Test]
+    public async Task PatchAsync_UpdatesMimeTypes_WhenProvided()
+    {
+        // Arrange
+        var qualityTierList = new QualityTierList
+        {
+            Name = "TestList",
+            MimeTypes = ["video/*"],
+            UpgradeAllowed = true,
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.QualityTierLists.Add(qualityTierList);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        var patch = new QualityTierListPatch
+        {
+            Id = qualityTierList.Id,
+            MimeTypes = new() { Value = ["audio/*"] }
+        };
+
+        // Act
+        var result = await _subject.PatchAsync(patch, _userId).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(result, Is.True);
+
+        var patched = await _subject.GetByIdAsync(qualityTierList.Id).ConfigureAwait(false);
+        Assert.That(patched?.MimeTypes, Is.EqualTo(["audio/*"]));
+        _contentHierarchyItems.Verify(
+            items => items.RecomputeAllEffectiveValuesAsync(It.IsAny<CancellationToken>()),
+            Times.Once);
     }
 
     [Test]
@@ -511,7 +606,7 @@ public class QualityTierListRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.QualityTierLists.Add(qualityTierList);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         var patch = new QualityTierListPatch
         {
@@ -520,12 +615,12 @@ public class QualityTierListRepositoryTests
         };
 
         // Act
-        var result = await _subject.PatchAsync(patch, _userId);
+        var result = await _subject.PatchAsync(patch, _userId).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.True);
 
-        var patched = await _subject.GetByIdAsync(qualityTierList.Id);
+        var patched = await _subject.GetByIdAsync(qualityTierList.Id).ConfigureAwait(false);
         Assert.That(patched, Has.Property(nameof(patched.UpgradeAllowed)).False);
     }
 
@@ -540,7 +635,7 @@ public class QualityTierListRepositoryTests
         };
 
         // Act
-        var result = await _subject.PatchAsync(patch, _userId);
+        var result = await _subject.PatchAsync(patch, _userId).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.False);
@@ -557,7 +652,7 @@ public class QualityTierListRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.QualityTierLists.Add(qualityTierList);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         var patch = new QualityTierListPatch
         {
@@ -569,12 +664,12 @@ public class QualityTierListRepositoryTests
         };
 
         // Act
-        var result = await _subject.PatchAsync(patch, _userId);
+        var result = await _subject.PatchAsync(patch, _userId).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.True);
 
-        var patched = await _subject.GetByIdAsync(qualityTierList.Id);
+        var patched = await _subject.GetByIdAsync(qualityTierList.Id).ConfigureAwait(false);
         var patchedRanks = patched!.QualityTierRanks.ToList();
         using (Assert.EnterMultipleScope())
         {
@@ -595,7 +690,7 @@ public class QualityTierListRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.QualityTierLists.Add(qualityTierList);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         var rank = new QualityTierListRank
         {
@@ -606,7 +701,7 @@ public class QualityTierListRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.QualityTierListRanks.Add(rank);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         var patch = new QualityTierListPatch
         {
@@ -618,12 +713,12 @@ public class QualityTierListRepositoryTests
         };
 
         // Act
-        var result = await _subject.PatchAsync(patch, _userId);
+        var result = await _subject.PatchAsync(patch, _userId).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.True);
 
-        var patched = await _subject.GetByIdAsync(qualityTierList.Id);
+        var patched = await _subject.GetByIdAsync(qualityTierList.Id).ConfigureAwait(false);
         Assert.That(patched, Has.Property(nameof(patched.QualityTierRanks)).Empty);
     }
 
@@ -638,7 +733,7 @@ public class QualityTierListRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.QualityTierLists.Add(qualityTierList);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         var rank = new QualityTierListRank
         {
@@ -649,7 +744,7 @@ public class QualityTierListRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.QualityTierListRanks.Add(rank);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         var patch = new QualityTierListPatch
         {
@@ -666,12 +761,12 @@ public class QualityTierListRepositoryTests
         };
 
         // Act
-        var result = await _subject.PatchAsync(patch, _userId);
+        var result = await _subject.PatchAsync(patch, _userId).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.True);
 
-        var patched = await _subject.GetByIdAsync(qualityTierList.Id);
+        var patched = await _subject.GetByIdAsync(qualityTierList.Id).ConfigureAwait(false);
         var patchedRanks = patched!.QualityTierRanks.ToList();
         using (Assert.EnterMultipleScope())
         {
@@ -692,7 +787,7 @@ public class QualityTierListRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.QualityTierLists.Add(qualityTierList);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         var patch = new QualityTierListPatch
         {
@@ -701,12 +796,16 @@ public class QualityTierListRepositoryTests
         };
 
         // Act
-        var result = await _subject.PatchAsync(patch, _userId);
+        var result = await _subject.PatchAsync(patch, _userId).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.True);
 
-        var taggedLists = await _subject.ListByTagAsync("premium");
+        var taggedLists = await _context.Tags
+            .Where(tag => tag.Name == "premium")
+            .SelectMany(tag => tag.QualityTierLists)
+            .ToListAsync()
+            .ConfigureAwait(false);
         Assert.That(taggedLists, Has.Exactly(1).Items);
     }
 
@@ -725,7 +824,7 @@ public class QualityTierListRepositoryTests
 
         _context.QualityTierLists.Add(qualityTierList);
         _context.Tags.Add(tag);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         var patch = new QualityTierListPatch
         {
@@ -734,17 +833,21 @@ public class QualityTierListRepositoryTests
         };
 
         // Act
-        var result = await _subject.PatchAsync(patch, _userId);
+        var result = await _subject.PatchAsync(patch, _userId).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.True);
 
-        var taggedLists = await _subject.ListByTagAsync("toRemove");
+        var taggedLists = await _context.Tags
+            .Where(tag => tag.Name == "toRemove")
+            .SelectMany(tag => tag.QualityTierLists)
+            .ToListAsync()
+            .ConfigureAwait(false);
         Assert.That(taggedLists, Is.Empty);
     }
 
     [Test]
-    public async Task PatchAsync_CreatesAuditRecord()
+    public async Task PatchAsync_CreatesAuditRecord_WhenPatchSucceeds()
     {
         // Arrange
         var qualityTierList = new QualityTierList
@@ -754,7 +857,7 @@ public class QualityTierListRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.QualityTierLists.Add(qualityTierList);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         var patch = new QualityTierListPatch
         {
@@ -763,10 +866,10 @@ public class QualityTierListRepositoryTests
         };
 
         // Act
-        await _subject.PatchAsync(patch, _userId);
+        await _subject.PatchAsync(patch, _userId).ConfigureAwait(false);
 
         // Assert
-        var auditRecords = await _context.AuditRecords.ToListAsync();
+        var auditRecords = await _context.AuditRecords.ToListAsync().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(auditRecords, Has.Count.EqualTo(1));
@@ -787,7 +890,7 @@ public class QualityTierListRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.QualityTierLists.Add(qualityTierList);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         var patch = new QualityTierListPatch
         {
@@ -796,10 +899,10 @@ public class QualityTierListRepositoryTests
         };
 
         // Act
-        await _subject.PatchAsync(patch, _userId);
+        await _subject.PatchAsync(patch, _userId).ConfigureAwait(false);
 
         // Assert
-        var auditRecords = await _context.AuditRecords.ToListAsync();
+        var auditRecords = await _context.AuditRecords.ToListAsync().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(auditRecords, Has.Count.EqualTo(3));
@@ -819,7 +922,7 @@ public class QualityTierListRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.QualityTierLists.Add(qualityTierList);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         var patch = new QualityTierListPatch
         {
@@ -831,10 +934,10 @@ public class QualityTierListRepositoryTests
         };
 
         // Act
-        await _subject.PatchAsync(patch, _userId);
+        await _subject.PatchAsync(patch, _userId).ConfigureAwait(false);
 
         // Assert
-        var auditRecords = await _context.AuditRecords.ToListAsync();
+        var auditRecords = await _context.AuditRecords.ToListAsync().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(auditRecords, Has.Count.EqualTo(2));
@@ -844,7 +947,7 @@ public class QualityTierListRepositoryTests
     }
 
     [Test]
-    public async Task PatchAsync_SetsModifiedFields()
+    public async Task PatchAsync_SetsModifiedFields_WhenPatchSucceeds()
     {
         // Arrange
         var qualityTierList = new QualityTierList
@@ -854,7 +957,7 @@ public class QualityTierListRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.QualityTierLists.Add(qualityTierList);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         var patch = new QualityTierListPatch
         {
@@ -863,14 +966,29 @@ public class QualityTierListRepositoryTests
         };
 
         // Act
-        await _subject.PatchAsync(patch, _userId);
+        await _subject.PatchAsync(patch, _userId).ConfigureAwait(false);
 
         // Assert
-        var patched = await _subject.GetByIdAsync(qualityTierList.Id);
+        var patched = await _subject.GetByIdAsync(qualityTierList.Id).ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(patched, Has.Property(nameof(patched.ModifiedByUserId)).EqualTo(_userId));
             Assert.That(patched, Has.Property(nameof(patched.ModifiedAt)).Not.Null);
         }
+    }
+
+    [Test]
+    public async Task CreateAsync_TriggersEffectiveRecompute_WhenListIsAdded()
+    {
+        // Arrange
+        var qualityTierList = new QualityTierList { Name = "First" };
+
+        // Act
+        await _subject.CreateAsync(qualityTierList, _userId).ConfigureAwait(false);
+
+        // Assert
+        _contentHierarchyItems.Verify(
+            items => items.RecomputeAllEffectiveValuesAsync(It.IsAny<CancellationToken>()),
+            Times.Once);
     }
 }

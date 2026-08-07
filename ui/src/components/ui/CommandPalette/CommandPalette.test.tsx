@@ -1,9 +1,13 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
 
-import { AuthProvider, Role } from '@/auth';
+import { Role } from '@/auth';
+import { AuthTestProvider as AuthProvider } from '@/test/AuthTestProvider';
 
 import { CommandPalette } from './CommandPalette';
 
@@ -46,6 +50,20 @@ describe('CommandPalette', () => {
         });
     });
 
+    it('opens when uppercase Ctrl+K is pressed', async () => {
+        renderPalette();
+        fireEvent.keyDown(window, { key: 'K', ctrlKey: true });
+        await waitFor(() => {
+            expect(screen.getByRole('dialog')).toBeInTheDocument();
+        });
+    });
+
+    it('does not open for K without a shortcut modifier', () => {
+        renderPalette();
+        fireEvent.keyDown(window, { key: 'K' });
+        expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+
     it('opens when Meta+K is pressed', async () => {
         renderPalette();
         await userEvent.keyboard('{Meta>}k{/Meta}');
@@ -64,6 +82,24 @@ describe('CommandPalette', () => {
         await waitFor(() => {
             expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
         });
+    });
+
+    it('returns focus to the element that invoked it after Escape', async () => {
+        renderPalette();
+        const trigger = document.createElement('button');
+        trigger.textContent = 'Palette trigger';
+        document.body.appendChild(trigger);
+        trigger.focus();
+
+        await userEvent.keyboard('{Control>}k{/Control}');
+        expect(await screen.findByRole('dialog')).toBeInTheDocument();
+        expect(screen.getByRole('combobox', { name: 'Search commands' })).toHaveFocus();
+
+        await userEvent.keyboard('{Escape}');
+        await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+        expect(trigger).toHaveFocus();
+
+        trigger.remove();
     });
 
     it('renders the search input when open', async () => {
@@ -91,7 +127,7 @@ describe('CommandPalette', () => {
         await waitFor(() => {
             expect(screen.getByRole('dialog')).toBeInTheDocument();
         });
-        expect(screen.queryByText('General Settings')).not.toBeInTheDocument();
+        expect(screen.queryByText('Advanced Settings')).not.toBeInTheDocument();
         expect(screen.queryByText('Users')).not.toBeInTheDocument();
     });
 
@@ -99,7 +135,7 @@ describe('CommandPalette', () => {
         renderPalette(Role.Admin);
         await userEvent.keyboard('{Control>}k{/Control}');
         await waitFor(() => {
-            expect(screen.getByText('General Settings')).toBeInTheDocument();
+            expect(screen.getByText('Advanced Settings')).toBeInTheDocument();
         });
         expect(screen.getByText('Users')).toBeInTheDocument();
     });
@@ -274,5 +310,34 @@ describe('CommandPalette', () => {
         });
 
         expect(screen.getByText('Dashboard')).toBeInTheDocument();
+    });
+
+    it('keeps the mobile palette inside a 390px viewport throughout its animation', () => {
+        const css = readFileSync(resolve(process.cwd(), 'src/components/ui/CommandPalette/CommandPalette.css'), 'utf8');
+        const mobileRule = css.match(
+            /@media\s*\(max-width:\s*480px\)\s*{\s*\.command-palette\s*{(?<declarations>[\s\S]*?)}\s*}/,
+        )?.groups?.declarations;
+
+        expect(mobileRule).toContain('left: 50%;');
+        expect(mobileRule).toContain('width: 100%;');
+        expect(mobileRule).toContain('transform: translateX(-50%);');
+        expect(mobileRule).not.toContain('animation-name:');
+        expect(css).toContain('animation: command-palette-in');
+        expect(css).toMatch(/&\[data-state='closed'\]\s*{\s*animation-name: command-palette-out;/);
+        expect(css).toMatch(/@keyframes command-palette-in[\s\S]*?translateX\(-50%\) scale\(1\)/);
+        expect(css).toMatch(/@keyframes command-palette-out[\s\S]*?translateX\(-50%\) scale\(1\)/);
+
+        const viewportWidth = 390;
+        const dialogWidth = viewportWidth;
+        const centeredLeft = viewportWidth / 2 - dialogWidth / 2;
+        const animationScales = [1, 0.97];
+
+        for (const scale of animationScales) {
+            const animatedWidth = dialogWidth * scale;
+            const animatedLeft = centeredLeft + (dialogWidth - animatedWidth) / 2;
+
+            expect(animatedLeft).toBeGreaterThanOrEqual(0);
+            expect(animatedLeft + animatedWidth).toBeLessThanOrEqual(viewportWidth);
+        }
     });
 });

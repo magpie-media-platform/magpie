@@ -1,9 +1,6 @@
-import { CalendarBlank } from '@phosphor-icons/react';
-
-import { EmptyState } from '@/components/ui/EmptyState';
 import type { CalendarEvent } from '@/types/calendar';
 
-import { EventCard } from './EventCard';
+import { CalendarEventList } from './CalendarEventList';
 
 interface ListViewProps {
     viewEvents: CalendarEvent[];
@@ -12,20 +9,16 @@ interface ListViewProps {
 
 export function ListView({ viewEvents, onEventClick }: ListViewProps) {
     return (
-        <div className="calendar-page__list-view" data-component="list-view">
-            {viewEvents.length === 0 ? (
-                <EmptyState
-                    icon={<CalendarBlank weight="duotone" />}
-                    title="No upcoming events"
-                    description="Content will appear here as premiere dates approach"
-                />
-            ) : (
-                <div className="calendar-page__list-items" data-testid="calendar-page__list-items">
-                    {viewEvents.map((evt) => (
-                        <EventCard key={evt.id} event={evt} onClick={onEventClick} showDate />
-                    ))}
-                </div>
-            )}
-        </div>
+        <CalendarEventList
+            viewEvents={viewEvents}
+            onEventClick={onEventClick}
+            containerClassName="calendar-page__list-view"
+            dataComponent="list-view"
+            listClassName="calendar-page__list-items"
+            listTestId="calendar-page__list-items"
+            emptyTitle="No upcoming events"
+            emptyDescription="Content will appear here as premiere dates approach"
+            showDate
+        />
     );
 }

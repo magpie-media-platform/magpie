@@ -1,0 +1,155 @@
+@layer components {
+    .manual-match-dialog__body {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-md);
+        padding: 0 var(--space-lg) var(--space-lg);
+        overflow-y: auto;
+        min-height: 0;
+        flex: 1;
+    }
+
+    .manual-match-dialog__section {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-md);
+    }
+
+    .manual-match-dialog__field {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-xs);
+    }
+
+    .manual-match-dialog__description {
+        min-width: 0;
+        overflow-wrap: anywhere;
+        overflow-wrap: break-word;
+    }
+
+    .manual-match-dialog__search-row {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-sm);
+        align-items: stretch;
+        min-width: 0;
+    }
+
+    .manual-match-dialog__fields {
+        display: flex;
+        flex-wrap: wrap;
+        gap: var(--space-sm);
+        min-width: 0;
+    }
+
+    .manual-match-dialog__fields .manual-match-dialog__field {
+        min-width: 0;
+    }
+
+    .manual-match-dialog__field--title {
+        flex: 1 1 16rem;
+    }
+
+    .manual-match-dialog__field--year {
+        flex: 0 1 9rem;
+    }
+
+    .manual-match-dialog__field--content-type {
+        flex: 1 1 11rem;
+    }
+
+    .manual-match-dialog__fields .input-wrapper,
+    .manual-match-dialog__fields .select-trigger {
+        width: 100%;
+        min-width: 0;
+    }
+
+    .manual-match-dialog__search-row [data-action='search'] {
+        align-self: flex-start;
+    }
+
+    .manual-match-dialog__results {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-sm);
+        margin: 0;
+        padding: 0;
+        list-style: none;
+        max-height: min(42vh, 30rem);
+        overflow-y: auto;
+    }
+
+    .manual-match-dialog__candidate {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: var(--space-sm);
+        min-width: 0;
+        padding: var(--space-sm);
+        border: 1px solid var(--border-subtle);
+        border-radius: var(--radius-sm);
+        background: var(--bg-secondary);
+    }
+
+    .manual-match-dialog__candidate-info {
+        display: flex;
+        align-items: center;
+        gap: var(--space-sm);
+        min-width: 0;
+        flex: 1 1 auto;
+        flex-wrap: wrap;
+    }
+
+    .manual-match-dialog__candidate-title {
+        display: flex;
+        align-items: baseline;
+        flex-wrap: wrap;
+        gap: var(--space-xs);
+        min-width: 0;
+        max-width: 100%;
+        font-weight: var(--weight-medium);
+        color: var(--text-primary);
+        overflow-wrap: anywhere;
+        overflow-wrap: break-word;
+    }
+
+    .manual-match-dialog__candidate-year {
+        color: var(--text-muted);
+        font-size: var(--text-sm);
+        font-weight: var(--weight-normal);
+    }
+
+    .manual-match-dialog__candidate-actions {
+        display: flex;
+        align-items: center;
+        gap: var(--space-xs);
+        flex-shrink: 0;
+    }
+
+    .manual-match-dialog__pagination {
+        padding-top: 0;
+    }
+
+    @media (max-width: 640px) {
+        .manual-match-dialog__search-row {
+            align-items: stretch;
+            flex-direction: column;
+        }
+
+        .manual-match-dialog__candidate {
+            align-items: stretch;
+            flex-direction: column;
+        }
+
+        .manual-match-dialog__candidate-actions {
+            flex-wrap: wrap;
+            justify-content: flex-end;
+        }
+    }
+
+    @media (max-width: 480px) {
+        .manual-match-dialog__search-row [data-action='search'] {
+            align-self: stretch;
+        }
+    }
+}

@@ -3,11 +3,15 @@
         display: inline-flex;
         align-items: center;
         gap: var(--space-xs);
+        min-width: 0;
+        max-width: 100%;
         font-family: var(--font-sans);
         font-weight: var(--weight-semibold);
         text-transform: uppercase;
         letter-spacing: var(--tracking-wide);
         white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
         border-radius: var(--radius-full);
     }
 
@@ -114,6 +118,15 @@
 
         & .badge__dot {
             background-color: var(--fulfillment-external);
+        }
+    }
+
+    .badge--partial {
+        background-color: color-mix(in srgb, var(--fulfillment-partial) 20%, transparent);
+        color: var(--fulfillment-partial);
+
+        & .badge__dot {
+            background-color: var(--fulfillment-partial);
         }
     }
 
@@ -255,6 +268,16 @@
         }
     }
 
+    .badge--importing {
+        background-color: color-mix(in srgb, var(--accent-secondary) 20%, transparent);
+        color: var(--accent-secondary);
+
+        & .badge__dot {
+            background-color: var(--accent-secondary);
+            animation: pulse var(--duration-pulse) linear infinite;
+        }
+    }
+
     .badge--imported {
         background-color: color-mix(in srgb, var(--status-healthy) 20%, transparent);
         color: var(--status-healthy);
@@ -276,8 +299,9 @@
     .badge__dot {
         width: 6px;
         height: 6px;
+        flex-shrink: 0;
         border-radius: var(--radius-full);
-        background-color: currentColor;
+        background-color: currentcolor;
     }
 
     @media (max-width: 480px) {

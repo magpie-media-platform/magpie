@@ -1,16 +1,31 @@
-import { render, screen } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { render as rtlRender, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
-import { ContentList, type ContentItem } from './ContentList';
+import { ContentLineageProvider } from '@/components/content/ContentLineageTitle';
+
+import {
+    ContentList,
+    type ContentItem,
+    type ContentHeaderFilters,
+    type ContentHeaderFilterHandlers,
+} from './ContentList';
+
+function render(ui: React.ReactElement) {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    return rtlRender(<QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>);
+}
 
 const mockItems: ContentItem[] = [
     {
         id: '1',
         title: 'Breaking Bad',
         posterUrl: 'https://example.com/poster1.jpg',
-        kind: 'episode',
-        monitoring: 'active',
+        contentType: 'tv',
+        levelLabel: 'Episode',
+        monitoring: true,
+        effectiveMonitoring: true,
         fulfillment: 'fulfilled',
         year: 2008,
         dateAdded: '2024-01-15T10:00:00Z',
@@ -19,8 +34,10 @@ const mockItems: ContentItem[] = [
         id: '2',
         title: 'Dune: Part Two',
         posterUrl: 'https://example.com/poster2.jpg',
-        kind: 'movie',
-        monitoring: 'excluded',
+        contentType: 'movie',
+        levelLabel: 'Movie',
+        monitoring: false,
+        effectiveMonitoring: false,
         fulfillment: 'missing',
         year: 2024,
         dateAdded: '2024-06-01T12:00:00Z',
@@ -28,8 +45,10 @@ const mockItems: ContentItem[] = [
     {
         id: '3',
         title: 'The Office',
-        kind: 'episode',
-        monitoring: 'active',
+        contentType: 'tv',
+        levelLabel: 'Episode',
+        monitoring: true,
+        effectiveMonitoring: true,
         fulfillment: 'upgradable',
         year: 2005,
         dateAdded: '2023-03-01T08:00:00Z',
@@ -38,8 +57,10 @@ const mockItems: ContentItem[] = [
         id: '4',
         title: 'Poor Things',
         posterUrl: 'https://example.com/poster4.jpg',
-        kind: 'movie',
-        monitoring: 'excluded',
+        contentType: 'movie',
+        levelLabel: 'Movie',
+        monitoring: false,
+        effectiveMonitoring: false,
         fulfillment: 'fulfilledExternally',
         year: 2023,
     },
@@ -52,6 +73,13 @@ describe('ContentList', () => {
         expect(document.querySelector('[data-component="content-list"]')).toBeInTheDocument();
     });
 
+    it('renders extension slots for list actions and columns', () => {
+        render(<ContentList items={mockItems} />);
+
+        expect(document.querySelector('[data-slot="content.list.actions"]')).toBeInTheDocument();
+        expect(document.querySelector('[data-slot="content.list.columns"]')).toBeInTheDocument();
+    });
+
     it('renders content items with titles', () => {
         render(<ContentList items={mockItems} />);
 
@@ -61,44 +89,33 @@ describe('ContentList', () => {
         expect(screen.getByText('Poor Things')).toBeInTheDocument();
     });
 
-    it('renders year when provided', () => {
+    it('resolves a nested title in the desktop content table', async () => {
+        render(
+            <ContentLineageProvider
+                contentTypes={[]}
+                loadQualifiedName={async () => ({ id: 'season', title: 'Season 1' })}
+            >
+                <ContentList items={[{ ...mockItems[0], id: 'pilot', parentId: 'season', title: 'Pilot' }]} />
+            </ContentLineageProvider>,
+        );
+
+        expect(await screen.findByTitle('Season 1 > Pilot')).toBeInTheDocument();
+        expect(screen.getByText('Season 1')).toBeInTheDocument();
+        expect(screen.getByText('Pilot')).toBeInTheDocument();
+    });
+
+    it('exposes the full title as a tooltip so a clamped long title stays readable', () => {
+        const longTitle = 'A'.repeat(200);
+        render(<ContentList items={[{ ...mockItems[0], title: longTitle }]} />);
+
+        const titleSpan = document.querySelector('.content-list__title') as HTMLElement;
+        expect(titleSpan).not.toBeNull();
+        expect(titleSpan).toHaveTextContent(longTitle);
+        expect(titleSpan).toHaveAttribute('title', longTitle);
+    });
+
+    it('does not render the year under the title (Published column covers the date)', () => {
         render(<ContentList items={mockItems} />);
-
-        expect(screen.getByText('2008')).toBeInTheDocument();
-        expect(screen.getByText('2024')).toBeInTheDocument();
-        expect(screen.getByText('2005')).toBeInTheDocument();
-        expect(screen.getByText('2023')).toBeInTheDocument();
-    });
-
-    it('renders year 0 instead of suppressing it', () => {
-        const items: ContentItem[] = [
-            {
-                id: 'zero-year',
-                title: 'Zero Year Item',
-                kind: 'movie',
-                monitoring: 'active',
-                fulfillment: 'missing',
-                year: 0,
-            },
-        ];
-
-        render(<ContentList items={items} />);
-
-        expect(screen.getByText('0')).toBeInTheDocument();
-    });
-
-    it('does not render year span when year is undefined', () => {
-        const items: ContentItem[] = [
-            {
-                id: 'no-year',
-                title: 'No Year Item',
-                kind: 'movie',
-                monitoring: 'active',
-                fulfillment: 'missing',
-            },
-        ];
-
-        render(<ContentList items={items} />);
 
         const yearSpan = document.querySelector('.content-list__year');
         expect(yearSpan).not.toBeInTheDocument();
@@ -114,23 +131,88 @@ describe('ContentList', () => {
         expect(movieBadges).toHaveLength(2);
     });
 
-    it('renders fulfillment status badges', () => {
+    it('renders fulfillment status badges for monitored items', () => {
         render(<ContentList items={mockItems} />);
 
         expect(screen.getByText('Fulfilled')).toBeInTheDocument();
-        expect(screen.getByText('Missing')).toBeInTheDocument();
         expect(screen.getByText('Upgradable')).toBeInTheDocument();
-        expect(screen.getByText('External')).toBeInTheDocument();
     });
 
-    it('renders monitoring status badges', () => {
+    it('renders no fulfillment badge for an excluded item', () => {
         render(<ContentList items={mockItems} />);
 
-        const monitoredBadges = screen.getAllByText('Monitored');
-        const excludedBadges = screen.getAllByText('Excluded');
+        // Dune (excluded/missing) and Poor Things (excluded/external) are the only sources of those labels
+        expect(screen.queryByText('Missing')).not.toBeInTheDocument();
+        expect(screen.queryByText('External')).not.toBeInTheDocument();
+    });
 
-        expect(monitoredBadges).toHaveLength(2);
-        expect(excludedBadges).toHaveLength(2);
+    it('shows the in-flight acquisition as a second pill beside the fulfillment pill', () => {
+        render(
+            <ContentList
+                items={[
+                    {
+                        id: 'dl',
+                        title: 'Downloading Movie',
+                        contentType: 'movie',
+                        levelLabel: 'Movie',
+                        monitoring: true,
+                        effectiveMonitoring: true,
+                        fulfillment: 'missing',
+                        acquisitionStatus: 'downloading',
+                    },
+                ]}
+            />,
+        );
+
+        const cell = document.querySelector('.content-list__status-cell');
+        expect(cell).toBeInTheDocument();
+
+        expect(within(cell as HTMLElement).getByText('Missing')).toBeInTheDocument();
+
+        const badge = cell?.querySelector('[data-acquisition-status="downloading"]');
+        expect(badge).toBeInTheDocument();
+        expect(badge?.textContent).toBe('Downloading');
+
+        const pills = cell?.querySelectorAll('.badge');
+        expect(pills?.[0]).toHaveTextContent('Missing');
+        expect(pills?.[1]).toHaveTextContent('Downloading');
+    });
+
+    it('renders a single fulfillment pill with no placeholder when no acquisition is in flight', () => {
+        render(
+            <ContentList
+                items={[
+                    {
+                        id: 'one',
+                        title: 'Settled Movie',
+                        monitoring: true,
+                        effectiveMonitoring: true,
+                        fulfillment: 'fulfilled',
+                    },
+                ]}
+            />,
+        );
+
+        const cell = document.querySelector('.content-list__status-cell');
+        expect(cell?.querySelectorAll('.badge')).toHaveLength(1);
+        expect(cell).toHaveTextContent('Fulfilled');
+    });
+
+    it('renders monitoring as a labelled eye glyph instead of a named badge', () => {
+        render(<ContentList items={mockItems} />);
+
+        const monitored = screen.getAllByLabelText('Monitored');
+        const notMonitored = screen.getAllByLabelText('Not monitored');
+
+        expect(monitored).toHaveLength(2);
+        expect(notMonitored).toHaveLength(2);
+
+        const monitoredEye = monitored[0].closest('.content-list__monitor-eye');
+        const notMonitoredEye = notMonitored[0].closest('.content-list__monitor-eye');
+        expect(monitoredEye).toHaveAttribute('data-monitoring', 'true');
+        expect(notMonitoredEye).toHaveAttribute('data-monitoring', 'false');
+        expect(monitoredEye).toHaveClass('content-list__monitor-eye--on');
+        expect(notMonitoredEye).not.toHaveClass('content-list__monitor-eye--on');
     });
 
     describe('poster column', () => {
@@ -146,8 +228,8 @@ describe('ContentList', () => {
                 {
                     id: 'no-poster',
                     title: 'No Poster Show',
-                    kind: 'episode',
-                    monitoring: 'active',
+                    monitoring: true,
+                    effectiveMonitoring: true,
                     fulfillment: 'missing',
                 },
             ];
@@ -226,7 +308,7 @@ describe('ContentList', () => {
         it('does not show pagination by default', () => {
             render(<ContentList items={mockItems} />);
 
-            const pagination = document.querySelector('.data-table__pagination');
+            const pagination = document.querySelector('.data-table__pager');
             expect(pagination).not.toBeInTheDocument();
         });
 
@@ -235,13 +317,14 @@ describe('ContentList', () => {
                 id: String(i),
                 title: `Item ${i}`,
                 kind: 'movie' as const,
-                monitoring: 'active' as const,
+                monitoring: true,
+                effectiveMonitoring: true,
                 fulfillment: 'fulfilled' as const,
             }));
 
             render(<ContentList items={manyItems} enablePagination pageSize={10} />);
 
-            const pagination = document.querySelector('.data-table__pagination');
+            const pagination = document.querySelector('.data-table__pager');
             expect(pagination).toBeInTheDocument();
         });
     });
@@ -268,8 +351,92 @@ describe('ContentList', () => {
             const images = screen.getAllByRole('img');
             images.forEach((img) => {
                 expect(img).toHaveAttribute('alt');
-                expect(img.getAttribute('alt')).toMatch(/poster/i);
+                expect(img.getAttribute('alt')).toMatch(/artwork/i);
             });
+        });
+
+        it('renders the monitoring column header label with its filter control', () => {
+            const headerFilters: ContentHeaderFilters = {
+                contentTypeOptions: [{ value: 'tv', label: 'TV' }],
+                contentType: '',
+                monitoring: '',
+                fulfillment: '',
+                title: '',
+                publishDateFrom: '',
+                publishDateTo: '',
+            };
+            const headerFilterHandlers: ContentHeaderFilterHandlers = {
+                onContentTypeChange: vi.fn(),
+                onMonitoringChange: vi.fn(),
+                onFulfillmentChange: vi.fn(),
+                onTitleChange: vi.fn(),
+                onPublishDateChange: vi.fn(),
+            };
+
+            render(
+                <ContentList
+                    items={mockItems}
+                    headerFilters={headerFilters}
+                    headerFilterHandlers={headerFilterHandlers}
+                />,
+            );
+
+            const header = screen.getByRole('columnheader', { name: /monitoring/i });
+            const label = within(header).getByText('Monitoring');
+
+            expect(label).toHaveClass('column-header-filter__label');
+            expect(label).not.toHaveClass('sr-only');
+            expect(within(header).getByRole('button', { name: /filter by monitoring/i })).toBeInTheDocument();
+        });
+    });
+
+    describe('column visibility', () => {
+        it('hides the monitoring and date-added columns when marked not visible', () => {
+            render(<ContentList items={mockItems} columnVisibility={{ monitoring: false, dateAdded: false }} />);
+
+            expect(
+                document.querySelector('.data-table__header-cell[data-column="monitoring"]'),
+            ).not.toBeInTheDocument();
+            expect(document.querySelector('.data-table__header-cell[data-column="dateAdded"]')).not.toBeInTheDocument();
+            expect(document.querySelector('.data-table__header-cell[data-column="fulfillment"]')).toBeInTheDocument();
+            expect(document.querySelector('.data-table__header-cell[data-column="publishDate"]')).toBeInTheDocument();
+            expect(screen.queryByText('Added')).not.toBeInTheDocument();
+        });
+    });
+
+    describe('header filter columns', () => {
+        const headerFilters: ContentHeaderFilters = {
+            contentTypeOptions: [{ value: 'tv', label: 'TV' }],
+            contentType: '',
+            monitoring: '',
+            fulfillment: '',
+            title: '',
+            publishDateFrom: '',
+            publishDateTo: '',
+        };
+        const headerFilterHandlers: ContentHeaderFilterHandlers = {
+            onContentTypeChange: vi.fn(),
+            onMonitoringChange: vi.fn(),
+            onFulfillmentChange: vi.fn(),
+            onTitleChange: vi.fn(),
+            onPublishDateChange: vi.fn(),
+        };
+
+        it('renders filter controls only for the listed columns', () => {
+            render(
+                <ContentList
+                    items={mockItems}
+                    headerFilters={headerFilters}
+                    headerFilterHandlers={headerFilterHandlers}
+                    headerFilterColumns={['title', 'contentType', 'fulfillment']}
+                />,
+            );
+
+            expect(screen.getByRole('button', { name: /filter by title/i })).toBeInTheDocument();
+            expect(screen.getByRole('button', { name: /filter by type/i })).toBeInTheDocument();
+            expect(screen.getByRole('button', { name: /filter by status/i })).toBeInTheDocument();
+            expect(screen.queryByRole('button', { name: /filter by published/i })).not.toBeInTheDocument();
+            expect(screen.queryByRole('button', { name: /filter by monitoring/i })).not.toBeInTheDocument();
         });
     });
 
@@ -384,6 +551,54 @@ describe('ContentList', () => {
             expect(duneCheckbox).not.toBeChecked();
         });
 
+        it('select-all is unchecked when no rows are selected', () => {
+            render(<ContentList items={mockItems} enableSelection rowSelection={{}} onRowSelectionChange={vi.fn()} />);
+
+            const selectAllCheckbox = screen.getByLabelText('Select all');
+            expect(selectAllCheckbox).not.toBeChecked();
+            expect(selectAllCheckbox).not.toBePartiallyChecked();
+        });
+
+        it('select-all is indeterminate when only a partial subset is selected', () => {
+            render(
+                <ContentList
+                    items={mockItems}
+                    enableSelection
+                    rowSelection={{ '1': true, '3': true }}
+                    onRowSelectionChange={vi.fn()}
+                />,
+            );
+
+            const selectAllCheckbox = screen.getByLabelText('Select all');
+            expect(selectAllCheckbox).toBePartiallyChecked();
+            expect(selectAllCheckbox).not.toBeChecked();
+        });
+
+        it('select-all is checked when every row is selected', () => {
+            render(
+                <ContentList
+                    items={mockItems}
+                    enableSelection
+                    rowSelection={{ '1': true, '2': true, '3': true, '4': true }}
+                    onRowSelectionChange={vi.fn()}
+                />,
+            );
+
+            const selectAllCheckbox = screen.getByLabelText('Select all');
+            expect(selectAllCheckbox).toBeChecked();
+            expect(selectAllCheckbox).not.toBePartiallyChecked();
+        });
+
+        it('tags the select column cells so the mobile CSS rule can hide them', () => {
+            render(<ContentList items={mockItems} enableSelection />);
+
+            const header = document.querySelector('.data-table__header-cell[data-column="select"]');
+            expect(header).toBeInTheDocument();
+
+            const cells = document.querySelectorAll('.data-table__cell[data-column="select"]');
+            expect(cells).toHaveLength(mockItems.length);
+        });
+
         it('checkbox click does not trigger row click handler', async () => {
             const user = userEvent.setup();
             const handleClick = vi.fn();
@@ -412,6 +627,47 @@ describe('ContentList', () => {
             render(<ContentList items={mockItems} />);
             const header = screen.getByText('Added');
             expect(header).toBeInTheDocument();
+        });
+    });
+
+    describe('published column', () => {
+        it('renders Published column header', () => {
+            render(<ContentList items={mockItems} />);
+            expect(screen.getByText('Published')).toBeInTheDocument();
+        });
+
+        it('renders a formatted publish date when provided', () => {
+            const items: ContentItem[] = [
+                {
+                    id: 'pub-1',
+                    title: 'Dated Item',
+                    monitoring: true,
+                    effectiveMonitoring: true,
+                    fulfillment: 'missing',
+                    publishDate: '2008-01-20T00:00:00Z',
+                },
+            ];
+
+            render(<ContentList items={items} />);
+
+            expect(screen.getByText('Jan 20, 2008')).toBeInTheDocument();
+        });
+
+        it('renders a dash when the publish date is missing', () => {
+            const items: ContentItem[] = [
+                {
+                    id: 'no-pub',
+                    title: 'Undated Item',
+                    monitoring: true,
+                    effectiveMonitoring: true,
+                    fulfillment: 'missing',
+                },
+            ];
+
+            render(<ContentList items={items} />);
+
+            const cell = document.querySelector('.content-list__published');
+            expect(cell).toHaveTextContent('--');
         });
     });
 });

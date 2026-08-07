@@ -10,8 +10,10 @@ vi.mock('@/lib/api', () => ({
 import { apiPost } from '@/lib/api';
 import {
     useTestDownloadClient,
+    useTestDownloadClientSettings,
     useTestIndexer,
     useTestMediaServer,
+    useTestMediaServerSettings,
     type ConnectionTestResult,
 } from './useTestConnection';
 
@@ -101,6 +103,18 @@ describe('useTestConnection', () => {
 
             expect(mockApiPost).toHaveBeenCalledWith('/indexers/idx-1/test');
         });
+
+        it('posts to /indexers/{id}/connections/{connectionId}/test for a targeted connection', async () => {
+            mockApiPost.mockResolvedValue({ success: true, message: 'Connected' });
+
+            const { result } = renderHook(() => useTestIndexer(), { wrapper: createWrapper() });
+
+            await act(async () => {
+                await result.current.test({ indexerId: 'idx-1', connectionId: 'idx-conn-1' });
+            });
+
+            expect(mockApiPost).toHaveBeenCalledWith('/indexers/idx-1/connections/idx-conn-1/test');
+        });
     });
 
     describe('useTestMediaServer', () => {
@@ -114,6 +128,101 @@ describe('useTestConnection', () => {
             });
 
             expect(mockApiPost).toHaveBeenCalledWith('/media-servers/ms-1/test');
+        });
+    });
+
+    describe('useTestMediaServerSettings', () => {
+        it('posts the form payload to /media-servers/test', async () => {
+            const expected: ConnectionTestResult = { success: true, message: 'Connected' };
+            mockApiPost.mockResolvedValue(expected);
+
+            const { result } = renderHook(() => useTestMediaServerSettings(), { wrapper: createWrapper() });
+
+            const request = { providerType: 'plex', id: 'ms-1', settings: { host: 'localhost' } };
+            let returned: ConnectionTestResult | undefined;
+            await act(async () => {
+                returned = await result.current.test(request);
+            });
+
+            expect(mockApiPost).toHaveBeenCalledWith(
+                '/media-servers/test',
+                request,
+                expect.objectContaining({ signal: expect.any(AbortSignal) }),
+            );
+            expect(returned).toEqual(expected);
+        });
+    });
+
+    describe('useTestDownloadClientSettings', () => {
+        it('posts the form payload to /download-clients/test', async () => {
+            const expected: ConnectionTestResult = { success: false, message: 'Unreachable' };
+            mockApiPost.mockResolvedValue(expected);
+
+            const { result } = renderHook(() => useTestDownloadClientSettings(), { wrapper: createWrapper() });
+
+            const request = { providerType: 'sabnzbd', settings: { host: 'localhost' } };
+            let returned: ConnectionTestResult | undefined;
+            await act(async () => {
+                returned = await result.current.test(request);
+            });
+
+            expect(mockApiPost).toHaveBeenCalledWith(
+                '/download-clients/test',
+                request,
+                expect.objectContaining({ signal: expect.any(AbortSignal) }),
+            );
+            expect(returned).toEqual(expected);
+        });
+    });
+
+    describe('cancel (settings probe)', () => {
+        it('aborts the in-flight request and resets isPending when cancelled', async () => {
+            mockApiPost.mockReturnValue(new Promise<ConnectionTestResult>(() => {}));
+
+            const { result } = renderHook(() => useTestMediaServerSettings(), { wrapper: createWrapper() });
+
+            act(() => {
+                result.current.test({ providerType: 'plex', settings: {} }).catch(() => {});
+            });
+
+            await waitFor(() => expect(result.current.isPending).toBe(true));
+
+            const options = mockApiPost.mock.calls[0][2] as { signal?: AbortSignal };
+            expect(options.signal).toBeInstanceOf(AbortSignal);
+            expect(options.signal?.aborted).toBe(false);
+
+            act(() => {
+                result.current.cancel();
+            });
+
+            expect(options.signal?.aborted).toBe(true);
+            await waitFor(() => expect(result.current.isPending).toBe(false));
+        });
+
+        it('lets a subsequent test start after a cancel', async () => {
+            mockApiPost.mockReturnValueOnce(new Promise<ConnectionTestResult>(() => {}));
+
+            const { result } = renderHook(() => useTestDownloadClientSettings(), { wrapper: createWrapper() });
+
+            act(() => {
+                result.current.test({ providerType: 'sabnzbd', settings: {} }).catch(() => {});
+            });
+            await waitFor(() => expect(result.current.isPending).toBe(true));
+
+            act(() => {
+                result.current.cancel();
+            });
+            await waitFor(() => expect(result.current.isPending).toBe(false));
+
+            const expected: ConnectionTestResult = { success: true, message: 'Reachable' };
+            mockApiPost.mockResolvedValueOnce(expected);
+
+            let returned: ConnectionTestResult | undefined;
+            await act(async () => {
+                returned = await result.current.test({ providerType: 'sabnzbd', settings: {} });
+            });
+
+            expect(returned).toEqual(expected);
         });
     });
 });

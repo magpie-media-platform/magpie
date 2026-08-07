@@ -28,24 +28,25 @@ import { apiGet, apiPost } from '@/lib/api';
 import {
     useJobs,
     useJobExecution,
+    useJobSpecs,
     isTerminalJobExecutionStatus,
     jobExecutionStatusLabels,
     jobExecutionStatusVariants,
     jobScopeLabels,
     terminalJobExecutionStatuses,
     type ApiJobExecution,
+    type ApiJobSpec,
     type JobExecutionStatusValue,
     type PagedJobExecutions,
 } from './useJobs';
 import { jobQueryKeys } from './useJobs';
-import { POLLING_INTERVALS } from '@/lib/queryClient';
 
 const mockApiJobs: ApiJobExecution[] = [
     {
         id: 'job-1',
-        jobType: 'RefreshMetadata',
-        scope: 2,
-        status: 2,
+        jobType: 'ContentMetadataRefreshItem',
+        scope: 'Content',
+        status: 'Running',
         progress: 45,
         statusMessage: 'Processing items...',
         startedAt: '2024-01-15T10:30:00Z',
@@ -54,16 +55,16 @@ const mockApiJobs: ApiJobExecution[] = [
     {
         id: 'job-2',
         jobType: 'SearchMissing',
-        scope: 2,
-        status: 1,
+        scope: 'Content',
+        status: 'Queued',
         createdAt: '2024-01-15T10:32:00Z',
     },
     {
         id: 'job-3',
         scheduleTriggerId: 'trigger-1',
         jobType: 'RssSync',
-        scope: 1,
-        status: 3,
+        scope: 'Administrative',
+        status: 'Completed',
         progress: 100,
         statusMessage: 'Synced 50 items',
         startedAt: '2024-01-15T10:00:00Z',
@@ -78,6 +79,28 @@ const mockPagedResponse: PagedJobExecutions = {
     pageSize: 25,
     totalItems: 3,
 };
+
+const mockSpecs: ApiJobSpec[] = [
+    {
+        jobType: 'ContentMetadataRefreshItem',
+        displayName: 'Content metadata refresh item',
+        description: 'Refreshes metadata.',
+        category: 'Content',
+        scope: 'Content',
+        enabled: false,
+        onDemand: false,
+        supportedTriggerModes: ['Manual', 'Schedule', 'Event'],
+        parameters: [
+            {
+                name: 'contentHierarchyItemId',
+                description: 'The content item id.',
+                type: 0,
+                required: true,
+                defaultValue: null,
+            },
+        ],
+    },
+];
 
 function createWrapper() {
     const queryClient = new QueryClient({
@@ -115,10 +138,6 @@ function createWrapperWithClient() {
     return { queryClient, Wrapper };
 }
 
-// Read the refetchInterval option that React Query stores on the active query
-// observer. The hook passes a function (query) => 5000 | false; we invoke it
-// directly with a fake Query whose data carries the status under test, so the
-// gating logic is exercised without timers or real polling.
 function getRefetchIntervalForJob(queryClient: QueryClient, id: string) {
     const cache = queryClient.getQueryCache();
     const query = cache.find({ queryKey: jobQueryKeys.detail(id) });
@@ -173,7 +192,7 @@ describe('useJobs', () => {
             });
 
             expect(result.current.jobs).toHaveLength(3);
-            expect(result.current.jobs[0].jobType).toBe('RefreshMetadata');
+            expect(result.current.jobs[0].jobType).toBe('ContentMetadataRefreshItem');
             expect(result.current.jobs[1].jobType).toBe('SearchMissing');
             expect(result.current.jobs[2].jobType).toBe('RssSync');
         });
@@ -199,15 +218,18 @@ describe('useJobs', () => {
         it('should pass query parameters to the API', async () => {
             mockApiGet.mockResolvedValue({ ...mockPagedResponse, items: [mockApiJobs[0]] });
 
-            const { result } = renderHook(() => useJobs({ status: 2, jobType: 'RefreshMetadata' }), {
-                wrapper: createWrapper(),
-            });
+            const { result } = renderHook(
+                () => useJobs({ status: ['Running'], jobType: 'ContentMetadataRefreshItem' }),
+                {
+                    wrapper: createWrapper(),
+                },
+            );
 
             await waitFor(() => {
                 expect(result.current.isLoading).toBe(false);
             });
 
-            expect(mockApiGet).toHaveBeenCalledWith('/jobs?status=2&jobType=RefreshMetadata');
+            expect(mockApiGet).toHaveBeenCalledWith('/jobs?status=Running&jobType=ContentMetadataRefreshItem');
         });
 
         it('should return empty array on error', async () => {
@@ -255,10 +277,37 @@ describe('useJobs', () => {
             });
 
             await act(async () => {
-                await result.current.runJob({ jobType: 'RefreshMetadata' });
+                await result.current.runJob({ jobType: 'ContentMetadataRefreshItem' });
             });
 
-            expect(mockApiPost).toHaveBeenCalledWith('/jobs', { jobType: 'RefreshMetadata' });
+            expect(mockApiPost).toHaveBeenCalledWith('/jobs/enqueue', { jobType: 'ContentMetadataRefreshItem' });
+        });
+
+        it('should run immediate jobs via POST /jobs/execute-immediate', async () => {
+            mockApiGet.mockResolvedValue(mockPagedResponse);
+            mockApiPost.mockResolvedValue({ executionId: 'new-job-id', status: 'Completed' });
+
+            const { result } = renderHook(() => useJobs(), {
+                wrapper: createWrapper(),
+            });
+
+            await waitFor(() => {
+                expect(result.current.isLoading).toBe(false);
+            });
+
+            await act(async () => {
+                await result.current.runJob({
+                    jobType: 'IndexerFeedSyncScan',
+                    mode: 'Immediate',
+                    parameters: { dryRun: 'true' },
+                });
+            });
+
+            expect(mockApiPost).toHaveBeenCalledWith('/jobs/execute-immediate', {
+                extensionId: undefined,
+                jobType: 'IndexerFeedSyncScan',
+                parameters: { dryRun: 'true' },
+            });
         });
 
         it('should set isRunning while running', async () => {
@@ -279,7 +328,7 @@ describe('useJobs', () => {
             });
 
             act(() => {
-                result.current.runJob({ jobType: 'RefreshMetadata' });
+                void result.current.runJob({ jobType: 'ContentMetadataRefreshItem' });
             });
 
             await waitFor(() => {
@@ -334,7 +383,7 @@ describe('useJobs', () => {
             });
 
             act(() => {
-                result.current.cancelJob('job-1');
+                void result.current.cancelJob('job-1');
             });
 
             await waitFor(() => {
@@ -367,8 +416,8 @@ describe('useJobs', () => {
             expect(job.id).toBe('job-3');
             expect(job.scheduleTriggerId).toBe('trigger-1');
             expect(job.jobType).toBe('RssSync');
-            expect(job.scope).toBe(1);
-            expect(job.status).toBe(3);
+            expect(job.scope).toBe('Administrative');
+            expect(job.status).toBe('Completed');
             expect(job.progress).toBe(100);
             expect(job.statusMessage).toBe('Synced 50 items');
             expect(job.startedAt).toBe('2024-01-15T10:00:00Z');
@@ -394,31 +443,71 @@ describe('useJobs', () => {
 
     describe('status labels and variants', () => {
         it('should export status labels for all values', () => {
-            expect(jobExecutionStatusLabels[0]).toBe('Created');
-            expect(jobExecutionStatusLabels[1]).toBe('Queued');
-            expect(jobExecutionStatusLabels[2]).toBe('Running');
-            expect(jobExecutionStatusLabels[3]).toBe('Completed');
-            expect(jobExecutionStatusLabels[4]).toBe('Failed');
-            expect(jobExecutionStatusLabels[5]).toBe('Cancelled');
-            expect(jobExecutionStatusLabels[6]).toBe('Cancellation Requested');
+            expect(jobExecutionStatusLabels.Queued).toBe('Queued');
+            expect(jobExecutionStatusLabels.Running).toBe('Running');
+            expect(jobExecutionStatusLabels.Completed).toBe('Completed');
+            expect(jobExecutionStatusLabels.Failed).toBe('Failed');
+            expect(jobExecutionStatusLabels.Cancelled).toBe('Cancelled');
+            expect(jobExecutionStatusLabels.CancellationRequested).toBe('Cancellation Requested');
         });
 
         it('should export status variants for all values', () => {
-            expect(jobExecutionStatusVariants[0]).toBe('created');
-            expect(jobExecutionStatusVariants[1]).toBe('queued');
-            expect(jobExecutionStatusVariants[2]).toBe('running');
-            expect(jobExecutionStatusVariants[3]).toBe('completed');
-            expect(jobExecutionStatusVariants[4]).toBe('failed');
-            expect(jobExecutionStatusVariants[5]).toBe('cancelled');
-            expect(jobExecutionStatusVariants[6]).toBe('cancelling');
+            expect(jobExecutionStatusVariants.Queued).toBe('queued');
+            expect(jobExecutionStatusVariants.Running).toBe('running');
+            expect(jobExecutionStatusVariants.Completed).toBe('completed');
+            expect(jobExecutionStatusVariants.Failed).toBe('failed');
+            expect(jobExecutionStatusVariants.Cancelled).toBe('cancelled');
+            expect(jobExecutionStatusVariants.CancellationRequested).toBe('cancelling');
         });
 
         it('should export scope labels for all values', () => {
-            expect(jobScopeLabels[0]).toBe('System');
-            expect(jobScopeLabels[1]).toBe('Administrative');
-            expect(jobScopeLabels[2]).toBe('Content');
-            expect(jobScopeLabels[3]).toBe('User');
+            expect(jobScopeLabels.System).toBe('System');
+            expect(jobScopeLabels.Administrative).toBe('Administrative');
+            expect(jobScopeLabels.Content).toBe('Content');
+            expect(jobScopeLabels.User).toBe('User');
         });
+    });
+});
+
+describe('useJobSpecs', () => {
+    const mockApiGet = vi.mocked(apiGet);
+
+    beforeEach(() => {
+        vi.clearAllMocks();
+    });
+
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    it('should fetch job specs from the API', async () => {
+        mockApiGet.mockResolvedValue(mockSpecs);
+
+        const { result } = renderHook(() => useJobSpecs(), {
+            wrapper: createWrapper(),
+        });
+
+        await waitFor(() => {
+            expect(result.current.isLoading).toBe(false);
+        });
+
+        expect(mockApiGet).toHaveBeenCalledWith('/jobs/specs');
+        expect(result.current.specs).toEqual(mockSpecs);
+    });
+
+    it('should return empty specs on error', async () => {
+        mockApiGet.mockRejectedValue(new Error('Network error'));
+
+        const { result } = renderHook(() => useJobSpecs(), {
+            wrapper: createWrapper(),
+        });
+
+        await waitFor(() => {
+            expect(result.current.isLoading).toBe(false);
+        });
+
+        expect(result.current.specs).toEqual([]);
+        expect(result.current.error).toBeInstanceOf(Error);
     });
 });
 
@@ -446,7 +535,7 @@ describe('useJobExecution', () => {
 
         expect(mockApiGet).toHaveBeenCalledWith('/jobs/job-1');
         expect(result.current.job?.id).toBe('job-1');
-        expect(result.current.job?.jobType).toBe('RefreshMetadata');
+        expect(result.current.job?.jobType).toBe('ContentMetadataRefreshItem');
     });
 
     it('should not fetch when disabled', async () => {
@@ -490,19 +579,16 @@ describe('useJobExecution', () => {
 
     describe('polling gating', () => {
         it('exposes the terminal-status set drawn from the JobExecutionStatus enum', () => {
-            // Mirrors Magpie.Models.Enums.JobExecutionStatus terminal members:
-            // Completed (3), Failed (4), Cancelled (5).
-            expect(Array.from(terminalJobExecutionStatuses).sort()).toEqual([3, 4, 5]);
+            expect(Array.from(terminalJobExecutionStatuses).sort()).toEqual(['Cancelled', 'Completed', 'Failed']);
         });
 
         it.each<[string, JobExecutionStatusValue, boolean]>([
-            ['Created (0)', 0, false],
-            ['Queued (1)', 1, false],
-            ['Running (2)', 2, false],
-            ['Completed (3)', 3, true],
-            ['Failed (4)', 4, true],
-            ['Cancelled (5)', 5, true],
-            ['CancellationRequested (6)', 6, false],
+            ['Queued', 'Queued', false],
+            ['Running', 'Running', false],
+            ['Completed', 'Completed', true],
+            ['Failed', 'Failed', true],
+            ['Cancelled', 'Cancelled', true],
+            ['CancellationRequested', 'CancellationRequested', false],
         ])('isTerminalJobExecutionStatus(%s) === %s', (_label, status, expected) => {
             expect(isTerminalJobExecutionStatus(status)).toBe(expected);
         });
@@ -511,8 +597,8 @@ describe('useJobExecution', () => {
             expect(isTerminalJobExecutionStatus(undefined)).toBe(false);
         });
 
-        it('refetchInterval evaluates to fast polling for in-flight jobs', async () => {
-            const inflight: ApiJobExecution = { ...mockApiJobs[0], status: 2 };
+        it('does not poll in-flight jobs', async () => {
+            const inflight: ApiJobExecution = { ...mockApiJobs[0], status: 'Running' };
             mockApiGet.mockResolvedValue(inflight);
 
             const { queryClient, Wrapper } = createWrapperWithClient();
@@ -523,18 +609,14 @@ describe('useJobExecution', () => {
             });
 
             const refetchInterval = getRefetchIntervalForJob(queryClient, 'job-1');
-            expect(typeof refetchInterval).toBe('function');
-            const fakeQuery = { state: { data: inflight } } as unknown as Query<ApiJobExecution, Error>;
-            expect((refetchInterval as (q: Query<ApiJobExecution, Error>) => number | false)(fakeQuery)).toBe(
-                POLLING_INTERVALS.fast,
-            );
+            expect(refetchInterval).toBeUndefined();
         });
 
         it.each<[string, JobExecutionStatusValue]>([
-            ['Completed', 3],
-            ['Failed', 4],
-            ['Cancelled', 5],
-        ])('refetchInterval evaluates to false for terminal status %s', async (_label, status) => {
+            ['Completed', 'Completed'],
+            ['Failed', 'Failed'],
+            ['Cancelled', 'Cancelled'],
+        ])('does not poll terminal status %s', async (_label, status) => {
             const terminal: ApiJobExecution = { ...mockApiJobs[0], status };
             mockApiGet.mockResolvedValue(terminal);
 
@@ -546,9 +628,7 @@ describe('useJobExecution', () => {
             });
 
             const refetchInterval = getRefetchIntervalForJob(queryClient, 'job-1');
-            expect(typeof refetchInterval).toBe('function');
-            const fakeQuery = { state: { data: terminal } } as unknown as Query<ApiJobExecution, Error>;
-            expect((refetchInterval as (q: Query<ApiJobExecution, Error>) => number | false)(fakeQuery)).toBe(false);
+            expect(refetchInterval).toBeUndefined();
         });
     });
 });

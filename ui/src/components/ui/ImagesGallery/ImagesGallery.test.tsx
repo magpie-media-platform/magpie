@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import { ImagesGallery, type GalleryImage } from './ImagesGallery';
@@ -50,6 +50,12 @@ describe('ImagesGallery', () => {
         render(<ImagesGallery images={[mockImages[0]]} linkToOriginal={false} />);
         expect(screen.queryByRole('link')).not.toBeInTheDocument();
         expect(screen.getByRole('img')).toBeInTheDocument();
+    });
+
+    it('does not link unsafe image urls', () => {
+        render(<ImagesGallery images={[{ ...mockImages[0], url: 'javascript:alert(1)' }]} />);
+        expect(screen.queryByRole('link')).not.toBeInTheDocument();
+        expect(screen.getByRole('img', { name: /unavailable/i })).toBeInTheDocument();
     });
 
     it('applies type-specific class to images', () => {
@@ -145,5 +151,35 @@ describe('ImagesGallery', () => {
     it('preserves data-component on empty state', () => {
         render(<ImagesGallery images={[]} data-testid="gallery" />);
         expect(screen.getByTestId('gallery')).toHaveAttribute('data-component', 'images-gallery');
+    });
+
+    it('renders a Primary badge on the current primary image', () => {
+        const images: GalleryImage[] = [{ ...mockImages[0], isPrimary: true }, mockImages[1]];
+        render(<ImagesGallery images={images} />);
+        expect(screen.getByText('Primary')).toBeInTheDocument();
+    });
+
+    it('shows a set-primary action on non-primary images when onSetPrimary is provided', () => {
+        const onSetPrimary = vi.fn();
+        render(<ImagesGallery images={[mockImages[0]]} onSetPrimary={onSetPrimary} />);
+        const button = screen.getByRole('button', { name: /set as primary/i });
+        fireEvent.click(button);
+        expect(onSetPrimary).toHaveBeenCalledWith(mockImages[0]);
+    });
+
+    it('does not render a set-primary action on the primary image', () => {
+        const onSetPrimary = vi.fn();
+        render(<ImagesGallery images={[{ ...mockImages[0], isPrimary: true }]} onSetPrimary={onSetPrimary} />);
+        expect(screen.queryByRole('button', { name: /set as primary/i })).not.toBeInTheDocument();
+    });
+
+    it('omits the set-primary action when no onSetPrimary handler is provided', () => {
+        render(<ImagesGallery images={[mockImages[0]]} />);
+        expect(screen.queryByRole('button', { name: /set as primary/i })).not.toBeInTheDocument();
+    });
+
+    it('disables the set-primary action while a set is pending', () => {
+        render(<ImagesGallery images={[mockImages[0]]} onSetPrimary={vi.fn()} settingPrimary />);
+        expect(screen.getByRole('button', { name: /set as primary/i })).toBeDisabled();
     });
 });

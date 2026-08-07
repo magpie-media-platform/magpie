@@ -1,0 +1,31 @@
+@layer components {
+    .install-extension-dialog__fields {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(8rem, 12rem);
+        gap: var(--space-md);
+        align-items: end;
+    }
+
+    .install-extension-dialog__field {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-xs);
+        min-width: 0;
+    }
+
+    .install-extension-dialog__field .input-container,
+    .install-extension-dialog__field .input-wrapper {
+        width: 100%;
+    }
+
+    .install-extension-dialog__spinner {
+        animation: spin var(--duration-spinner) linear infinite;
+    }
+
+    @media (max-width: 480px) {
+        .install-extension-dialog__fields {
+            grid-template-columns: 1fr;
+            gap: var(--space-sm);
+        }
+    }
+}

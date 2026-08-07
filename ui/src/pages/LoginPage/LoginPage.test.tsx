@@ -1,9 +1,9 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 
-import { AuthProvider } from '@/auth/AuthContext';
+import { AuthTestProvider as AuthProvider } from '@/test/AuthTestProvider';
 import { Role } from '@/auth/types';
 import { ApiError } from '@/lib/api';
 import * as authApiModule from '@/lib/authApi';
@@ -27,11 +27,24 @@ function renderLoginPage(initialPath: string | { pathname: string; state?: unkno
                 <Routes>
                     <Route path="/login" element={<LoginPage />} />
                     <Route path="/" element={<div>Home page</div>} />
-                    <Route path="/library" element={<div>Library page</div>} />
+                    <Route
+                        path="/library"
+                        element={
+                            <>
+                                <div>Library page</div>
+                                <LocationProbe />
+                            </>
+                        }
+                    />
                 </Routes>
             </AuthProvider>
         </MemoryRouter>,
     );
+}
+
+function LocationProbe() {
+    const location = useLocation();
+    return <div data-testid="location-probe">{`${location.pathname}${location.search}${location.hash}`}</div>;
 }
 
 describe('LoginPage', () => {
@@ -78,6 +91,21 @@ describe('LoginPage', () => {
         });
     });
 
+    it('keeps an accessible name while sign in is loading', async () => {
+        const user = userEvent.setup();
+        vi.mocked(authApiModule.login).mockImplementation(() => new Promise(() => {}));
+
+        renderLoginPage();
+
+        await user.type(screen.getByLabelText(/username/i), 'admin');
+        await user.type(screen.getByLabelText(/password/i), 'secret123');
+        await user.click(screen.getByRole('button', { name: 'Sign in' }));
+
+        const submitButton = screen.getByRole('button', { name: 'Sign in' });
+        expect(submitButton).toHaveAttribute('aria-busy', 'true');
+        expect(submitButton).toBeDisabled();
+    });
+
     it('navigates to the dashboard on successful login by default', async () => {
         const user = userEvent.setup();
         vi.mocked(authApiModule.login).mockResolvedValue({
@@ -116,6 +144,28 @@ describe('LoginPage', () => {
 
         await waitFor(() => {
             expect(screen.getByText('Library page')).toBeInTheDocument();
+        });
+    });
+
+    it('preserves query string and hash from the from location on success', async () => {
+        const user = userEvent.setup();
+        vi.mocked(authApiModule.login).mockResolvedValue({
+            id: 'user-1',
+            username: 'admin',
+            role: Role.Admin,
+        });
+
+        renderLoginPage({
+            pathname: '/login',
+            state: { from: { pathname: '/library', search: '?filter=missing', hash: '#results' } },
+        });
+
+        await user.type(screen.getByLabelText(/username/i), 'admin');
+        await user.type(screen.getByLabelText(/password/i), 'secret123');
+        await user.click(screen.getByRole('button', { name: /sign in/i }));
+
+        await waitFor(() => {
+            expect(screen.getByTestId('location-probe')).toHaveTextContent('/library?filter=missing#results');
         });
     });
 

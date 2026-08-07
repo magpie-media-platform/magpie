@@ -12,6 +12,7 @@ vi.mock('@/extensions/useExtensions', () => ({
 }));
 
 import { AuthProvider, Role, RequireRole, type User } from '@/auth';
+import { testEffectivePermissions } from './permissions';
 import { routes } from './stubRoutes';
 import { AppShell, AppShellSidebar } from '@/components/ui/AppShell';
 import { TooltipProvider } from '@radix-ui/react-tooltip';
@@ -19,7 +20,7 @@ import { ToastProvider, ToastStateProvider, ToastList } from '@/components/ui/To
 
 import { Sidebar, SidebarContent, SidebarGroup, SidebarItem, SidebarSeparator } from '@/components/ui/Sidebar';
 import { BottomNav, BottomNavItem } from '@/components/ui/BottomNav';
-import { House, MagnifyingGlass, DownloadSimple, Users, PuzzlePiece } from '@phosphor-icons/react';
+import { HouseIcon, MagnifyingGlassIcon, DownloadSimpleIcon, UsersIcon, PuzzlePieceIcon } from '@phosphor-icons/react';
 
 function createUser(role: Role, username = 'testuser'): User {
     return {
@@ -36,23 +37,23 @@ function TestSidebar() {
                 <Sidebar collapsed={false}>
                     <SidebarContent>
                         <SidebarGroup>
-                            <SidebarItem to="/" icon={<House weight="duotone" />}>
+                            <SidebarItem to="/" icon={<HouseIcon weight="duotone" />}>
                                 Dashboard
                             </SidebarItem>
-                            <SidebarItem to="/library" icon={<MagnifyingGlass weight="duotone" />}>
+                            <SidebarItem to="/library" icon={<MagnifyingGlassIcon weight="duotone" />}>
                                 Library
                             </SidebarItem>
-                            <SidebarItem to="/downloads" icon={<DownloadSimple weight="duotone" />}>
+                            <SidebarItem to="/downloads" icon={<DownloadSimpleIcon weight="duotone" />}>
                                 Downloads
                             </SidebarItem>
                         </SidebarGroup>
                         <RequireRole min={Role.Admin}>
                             <SidebarSeparator />
                             <SidebarGroup label="Admin">
-                                <SidebarItem to="/admin/users" icon={<Users weight="duotone" />}>
+                                <SidebarItem to="/admin/users" icon={<UsersIcon weight="duotone" />}>
                                     Users
                                 </SidebarItem>
-                                <SidebarItem to="/admin/extensions" icon={<PuzzlePiece weight="duotone" />}>
+                                <SidebarItem to="/admin/extensions" icon={<PuzzlePieceIcon weight="duotone" />}>
                                     Extensions
                                 </SidebarItem>
                             </SidebarGroup>
@@ -67,9 +68,9 @@ function TestSidebar() {
 function TestBottomNav() {
     return (
         <BottomNav>
-            <BottomNavItem to="/" icon={<House weight="duotone" />} label="Dashboard" />
-            <BottomNavItem to="/library" icon={<MagnifyingGlass weight="duotone" />} label="Library" />
-            <BottomNavItem to="/downloads" icon={<DownloadSimple weight="duotone" />} label="Downloads" />
+            <BottomNavItem to="/" icon={<HouseIcon weight="duotone" />} label="Dashboard" />
+            <BottomNavItem to="/library" icon={<MagnifyingGlassIcon weight="duotone" />} label="Library" />
+            <BottomNavItem to="/downloads" icon={<DownloadSimpleIcon weight="duotone" />} label="Downloads" />
         </BottomNav>
     );
 }
@@ -92,7 +93,9 @@ function renderWithRole(ui: React.ReactNode, role: Role, { route = '/' }: { rout
     return render(
         <QueryClientProvider client={queryClient}>
             <MemoryRouter initialEntries={[route]}>
-                <AuthProvider initialUser={user}>{ui}</AuthProvider>
+                <AuthProvider initialUser={user} initialPermissions={testEffectivePermissions(role)}>
+                    {ui}
+                </AuthProvider>
             </MemoryRouter>
         </QueryClientProvider>,
     );
@@ -110,7 +113,7 @@ function renderRoutesWithRole(role: Role, initialRoute: string) {
         <QueryClientProvider client={queryClient}>
             <TooltipProvider>
                 <MemoryRouter initialEntries={[initialRoute]}>
-                    <AuthProvider initialUser={user}>
+                    <AuthProvider initialUser={user} initialPermissions={testEffectivePermissions(role)}>
                         <ToastProvider>
                             <ToastStateProvider>
                                 <AppRoutes />
@@ -264,8 +267,8 @@ describe('Route guards by role', () => {
             expect(await screen.findByText(/requires Admin role/i)).toBeInTheDocument();
         });
 
-        it('cannot access admin backups - redirected to forbidden', async () => {
-            renderRoutesWithRole(Role.Viewer, '/admin/backups');
+        it('cannot access admin database - redirected to forbidden', async () => {
+            renderRoutesWithRole(Role.Viewer, '/admin/database');
             expect(await screen.findByText('Access denied')).toBeInTheDocument();
             expect(await screen.findByText(/requires Admin role/i)).toBeInTheDocument();
         });
@@ -379,8 +382,8 @@ describe('Route guards by role', () => {
             expect(await screen.findByText(/requires Admin role/i)).toBeInTheDocument();
         });
 
-        it('cannot access admin backups - redirected to forbidden', async () => {
-            renderRoutesWithRole(Role.Manager, '/admin/backups');
+        it('cannot access admin database - redirected to forbidden', async () => {
+            renderRoutesWithRole(Role.Manager, '/admin/database');
             expect(await screen.findByText('Access denied')).toBeInTheDocument();
             expect(await screen.findByText(/requires Admin role/i)).toBeInTheDocument();
         });
@@ -460,9 +463,9 @@ describe('Route guards by role', () => {
             expect(await screen.findByRole('heading', { name: 'Extensions' })).toBeInTheDocument();
         });
 
-        it('can access admin backups', async () => {
-            renderRoutesWithRole(Role.Admin, '/admin/backups');
-            expect(await screen.findByRole('heading', { name: 'Backups' })).toBeInTheDocument();
+        it('can access admin database', async () => {
+            renderRoutesWithRole(Role.Admin, '/admin/database');
+            expect(await screen.findByRole('heading', { name: 'Database' })).toBeInTheDocument();
         });
 
         it('can access admin indexers', async () => {
@@ -487,7 +490,7 @@ describe('Route guards by role', () => {
 
         it('can access admin jobs', async () => {
             renderRoutesWithRole(Role.Admin, '/admin/jobs');
-            expect(await screen.findByRole('heading', { name: 'Jobs' })).toBeInTheDocument();
+            expect(await screen.findByRole('heading', { name: 'System Jobs' })).toBeInTheDocument();
         });
 
         it('can access admin quality tiers', async () => {

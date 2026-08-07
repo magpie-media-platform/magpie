@@ -7,39 +7,34 @@ using Magpie.Models.Enums;
 namespace Magpie.Models.Arguments;
 
 /// <summary>
-/// Arguments for creating an event trigger.
+/// The create arguments for an event trigger.
 /// </summary>
-public record EventTriggerCreate
+public sealed record EventTriggerCreate
 {
     /// <summary>
-    /// The extension that defines the job type.
+    /// The id of the extension that defines the job type.
     /// </summary>
     public Guid? ExtensionId { get; set; }
 
     /// <summary>
-    /// The job type to execute.
+    /// The type of job that the trigger runs.
     /// </summary>
     public required string JobType { get; set; }
 
     /// <summary>
-    /// The job scope.
+    /// The scope that the job runs in.
     /// </summary>
     public required JobScope Scope { get; set; }
 
     /// <summary>
-    /// The display name.
+    /// The display name of the trigger.
     /// </summary>
     public required string Name { get; set; }
 
     /// <summary>
-    /// The filter for triggering events.
+    /// The <see cref="EventFilter"/> that activates the trigger.
     /// </summary>
     public required EventFilter EventFilter { get; set; }
-
-    /// <summary>
-    /// The execution mode for this trigger.
-    /// </summary>
-    public JobExecutionMode ExecutionMode { get; set; }
 
     /// <summary>
     /// Whether the trigger is enabled.
@@ -47,7 +42,12 @@ public record EventTriggerCreate
     public bool Enabled { get; set; } = true;
 
     /// <summary>
-    /// Parameters to pass to the job.
+    /// The number of seconds to defer job eligibility after the event fires.
+    /// </summary>
+    public int DelaySeconds { get; set; }
+
+    /// <summary>
+    /// The parameters for the triggered job.
     /// </summary>
     public Dictionary<string, string> Parameters { get; set; } = [];
 }

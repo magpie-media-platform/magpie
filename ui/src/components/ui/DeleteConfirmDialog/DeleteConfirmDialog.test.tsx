@@ -35,6 +35,33 @@ describe('DeleteConfirmDialog', () => {
         ).toBeInTheDocument();
     });
 
+    it('renders a custom description in place of the default body', async () => {
+        render(<DeleteConfirmDialog {...defaultProps} description="Delete 3 items? This cannot be undone." />);
+
+        await waitFor(() => {
+            expect(screen.getByRole('dialog')).toBeInTheDocument();
+        });
+
+        expect(screen.getByText('Delete 3 items? This cannot be undone.')).toBeInTheDocument();
+        expect(screen.queryByText(/Are you sure you want to delete/)).not.toBeInTheDocument();
+    });
+
+    it('singularizes the count-bearing description for a single item', async () => {
+        const count = 1;
+        render(
+            <DeleteConfirmDialog
+                {...defaultProps}
+                description={`Delete ${count} item${count !== 1 ? 's' : ''}? This cannot be undone.`}
+            />,
+        );
+
+        await waitFor(() => {
+            expect(screen.getByRole('dialog')).toBeInTheDocument();
+        });
+
+        expect(screen.getByText('Delete 1 item? This cannot be undone.')).toBeInTheDocument();
+    });
+
     it('does not render when open is false', () => {
         render(<DeleteConfirmDialog {...defaultProps} open={false} />);
 
@@ -129,6 +156,55 @@ describe('DeleteConfirmDialog', () => {
         expect(
             screen.getByText(/Are you sure you want to delete "Action Movies"\? This action cannot be undone\./),
         ).toBeInTheDocument();
+    });
+
+    it('renders no extra toggle when extraToggle is not provided', async () => {
+        render(<DeleteConfirmDialog {...defaultProps} />);
+
+        await waitFor(() => {
+            expect(screen.getByRole('dialog')).toBeInTheDocument();
+        });
+
+        expect(screen.queryByRole('switch')).not.toBeInTheDocument();
+        expect(document.querySelector('[data-component="delete-confirm-toggle"]')).not.toBeInTheDocument();
+    });
+
+    it('renders the extra toggle off by default when extraToggle is provided', async () => {
+        render(
+            <DeleteConfirmDialog
+                {...defaultProps}
+                extraToggle={{ label: 'Also delete its filter "Action"', checked: false, onChange: vi.fn() }}
+            />,
+        );
+
+        await waitFor(() => {
+            expect(screen.getByRole('dialog')).toBeInTheDocument();
+        });
+
+        const toggle = screen.getByRole('switch');
+        expect(toggle).toBeInTheDocument();
+        expect(toggle).toHaveAttribute('data-state', 'unchecked');
+        expect(screen.getByText('Also delete its filter "Action"')).toBeInTheDocument();
+    });
+
+    it('invokes extraToggle.onChange when the extra toggle is flipped', async () => {
+        const onChange = vi.fn();
+        const user = userEvent.setup();
+
+        render(
+            <DeleteConfirmDialog
+                {...defaultProps}
+                extraToggle={{ label: 'Also delete its filter "Action"', checked: false, onChange }}
+            />,
+        );
+
+        await waitFor(() => {
+            expect(screen.getByRole('dialog')).toBeInTheDocument();
+        });
+
+        await user.click(screen.getByRole('switch'));
+
+        expect(onChange).toHaveBeenCalledWith(true);
     });
 
     it('calls onCancel when overlay is clicked', async () => {

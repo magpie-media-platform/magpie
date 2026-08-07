@@ -1,6 +1,6 @@
 import type { UIExtension } from '@/extensions/types';
 
-export interface BuildExtensionAttributesOptions {
+interface BuildExtensionAttributesOptions {
     extension: UIExtension;
     apiBaseUrl: string;
     userId: string | null;

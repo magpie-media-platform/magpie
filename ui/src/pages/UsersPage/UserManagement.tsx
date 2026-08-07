@@ -1,50 +1,69 @@
-import { useState, useMemo, useCallback, useRef } from 'react';
-import { useSearchParams } from 'react-router-dom';
-import { Users, Trash, PencilSimple, Clock, Plus, ShieldCheck, Warning } from '@phosphor-icons/react';
+import { useState, useCallback, useMemo, useRef } from 'react';
+import {
+    UsersIcon,
+    TrashIcon,
+    PencilSimpleIcon,
+    ClockIcon,
+    PlusIcon,
+    ShieldCheckIcon,
+    WarningIcon,
+    LockKeyOpenIcon,
+} from '@phosphor-icons/react';
 
 import { QuickActionsButton } from '@/components/ui/QuickActionsButton';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { Switch } from '@/components/ui/Switch';
-import { Select, SelectTrigger, SelectContent, SelectItem } from '@/components/ui/Select';
 import { useToast } from '@/components/ui/Toast';
-import { useAuth, Role, RoleName } from '@/auth';
+import { useAuth, RoleName } from '@/auth';
 import { Tooltip } from '@/components/ui/Tooltip';
 import { useToggle } from '@/hooks/useToggle';
 import { formatRelativeTime } from '@/lib/formatTime';
-import { useUsers } from '@/hooks/useUsers';
+import { parseUtcInstant } from '@/lib/dateParsing';
+import { getErrorMessage } from '@/lib/errors';
+import { useUsers, type UserQueryParams } from '@/hooks/useUsers';
 import type { UserItem } from '@/types';
 import { roleVariants } from '@/types';
 
 import { DeleteConfirmDialog } from '@/components/ui/DeleteConfirmDialog/DeleteConfirmDialog';
 import { EmptyState } from '@/components/ui/EmptyState';
+import { Pager } from '@/components/ui/Pager';
 import { UserForm, type UserFormValues } from './UserForm';
 
-interface UserFilterState {
-    role: string;
-    enabled: string;
+const SYSTEM_PROVIDER_TYPE = 'system';
+
+function isSystemUser(user: UserItem): boolean {
+    return user.providerType === SYSTEM_PROVIDER_TYPE;
 }
 
-const ALL_VALUE = '__all__';
+function isLocalProviderType(providerType: string): boolean {
+    return providerType === 'local' || providerType === SYSTEM_PROVIDER_TYPE;
+}
 
-const roleOptions = [
-    { value: 'all', label: 'All Roles' },
-    { value: String(Role.Viewer), label: 'Viewer' },
-    { value: String(Role.Requester), label: 'Requester' },
-    { value: String(Role.Manager), label: 'Manager' },
-    { value: String(Role.Admin), label: 'Admin' },
-];
+const SYSTEM_ACCOUNT_TOOLTIP = 'The system account cannot be modified';
 
-const enabledOptions = [
-    { value: 'all', label: 'All Enabled' },
-    { value: 'true', label: 'Enabled' },
-    { value: 'false', label: 'Disabled' },
-];
+function toUserFormValues(user: UserItem): UserFormValues {
+    return {
+        id: user.id,
+        username: user.username,
+        role: user.role,
+        enabled: user.enabled,
+        providerType: user.providerType,
+        externalId: user.externalId ?? undefined,
+        email: user.email ?? undefined,
+    };
+}
 
-export function UserManagement() {
+interface UserManagementProps {
+    queryParams?: UserQueryParams;
+    page?: number;
+    pageCount?: number;
+    onPageChange?: (page: number) => void;
+}
+
+export function UserManagement({ queryParams, page = 1, pageCount = 1, onPageChange }: UserManagementProps = {}) {
     const { user: authUser } = useAuth();
     const authUserId = authUser?.id;
-    const [searchParams, setSearchParams] = useSearchParams();
     const [userFormOpen, , openUserForm, closeUserForm] = useToggle();
     const [editingUser, setEditingUser] = useState<UserFormValues | null>(null);
     const returnFocusRef = useRef<HTMLElement | null>(null);
@@ -56,103 +75,25 @@ export function UserManagement() {
         users,
         isLoading: isLoadingUsers,
         isCreating,
+        isCreatingExternal,
         isUpdating,
         createUser,
+        createExternalUser,
         updateUser,
         toggleUserEnabled,
         deleteUser,
-    } = useUsers();
-
-    const filters: UserFilterState = useMemo(
-        () => ({
-            role: searchParams.get('role') || '',
-            enabled: searchParams.get('enabled') || '',
-        }),
-        [searchParams],
-    );
-
-    const filteredUsers = useMemo(() => {
-        let items = [...users];
-
-        if (filters.role) {
-            items = items.filter((u) => u.role === Number(filters.role));
+        unlockUser,
+        isUnlocking,
+    } = useUsers(queryParams);
+    const currentEditingUser = useMemo(() => {
+        if (!editingUser?.id) {
+            return editingUser;
         }
+        const user = users.find((candidate) => candidate.id === editingUser.id);
+        return user ? toUserFormValues(user) : editingUser;
+    }, [editingUser, users]);
 
-        if (filters.enabled) {
-            items = items.filter((u) => u.enabled === (filters.enabled === 'true'));
-        }
-
-        return items;
-    }, [users, filters]);
-
-    const roleCounts = useMemo(
-        () => ({
-            admin: users.filter((u) => u.role === Role.Admin).length,
-            manager: users.filter((u) => u.role === Role.Manager).length,
-            requester: users.filter((u) => u.role === Role.Requester).length,
-            viewer: users.filter((u) => u.role === Role.Viewer).length,
-        }),
-        [users],
-    );
-
-    const hasActiveFilters = filters.role !== '' || filters.enabled !== '';
-    const isSubmitting = isCreating || isUpdating;
-
-    const roleLabel = filters.role
-        ? (roleOptions.find((o) => o.value === filters.role)?.label ?? 'Unknown')
-        : 'All Roles';
-
-    const enabledLabel = filters.enabled
-        ? (enabledOptions.find((o) => o.value === filters.enabled)?.label ?? 'Unknown')
-        : 'All Enabled';
-
-    const handleRoleChange = useCallback(
-        (value: string) => {
-            setSearchParams(
-                (prev) => {
-                    const next = new URLSearchParams(prev);
-                    if (value === ALL_VALUE) {
-                        next.delete('role');
-                    } else {
-                        next.set('role', value);
-                    }
-                    return next;
-                },
-                { replace: true },
-            );
-        },
-        [setSearchParams],
-    );
-
-    const handleEnabledChange = useCallback(
-        (value: string) => {
-            setSearchParams(
-                (prev) => {
-                    const next = new URLSearchParams(prev);
-                    if (value === ALL_VALUE) {
-                        next.delete('enabled');
-                    } else {
-                        next.set('enabled', value);
-                    }
-                    return next;
-                },
-                { replace: true },
-            );
-        },
-        [setSearchParams],
-    );
-
-    const handleClearFilters = useCallback(() => {
-        setSearchParams(
-            (prev) => {
-                const next = new URLSearchParams(prev);
-                next.delete('role');
-                next.delete('enabled');
-                return next;
-            },
-            { replace: true },
-        );
-    }, [setSearchParams]);
+    const isSubmitting = isCreating || isCreatingExternal || isUpdating;
 
     const handleAddUser = useCallback(() => {
         returnFocusRef.current = document.activeElement as HTMLElement;
@@ -165,12 +106,7 @@ export function UserManagement() {
             const user = users.find((u) => u.id === id);
             if (user) {
                 returnFocusRef.current = document.activeElement as HTMLElement;
-                setEditingUser({
-                    id: user.id,
-                    username: user.username,
-                    role: user.role,
-                    enabled: user.enabled,
-                });
+                setEditingUser(toUserFormValues(user));
                 openUserForm();
             }
         },
@@ -193,6 +129,15 @@ export function UserManagement() {
                 return;
             }
 
+            if (isSystemUser(user)) {
+                toast({
+                    title: 'Cannot delete the system account',
+                    description: SYSTEM_ACCOUNT_TOOLTIP,
+                    variant: 'error',
+                });
+                return;
+            }
+
             setDeletingUser(user);
         },
         [users, authUserId, toast],
@@ -208,7 +153,7 @@ export function UserManagement() {
             await deleteUser(deletingUser.id);
             toast({
                 title: 'User deleted',
-                description: `${deletingUser.username} has been deleted.`,
+                description: `Magpie deleted ${deletingUser.username}.`,
                 variant: 'success',
             });
         } catch {
@@ -237,7 +182,20 @@ export function UserManagement() {
                     });
                     toast({
                         title: 'User updated',
-                        description: `${values.username} has been updated.`,
+                        description: `Magpie updated ${values.username}.`,
+                        variant: 'success',
+                    });
+                } else if (values.providerType && values.providerType !== 'local') {
+                    await createExternalUser({
+                        username: values.username,
+                        providerType: values.providerType,
+                        externalId: values.externalId ?? '',
+                        role: values.role,
+                        email: values.email ?? null,
+                    });
+                    toast({
+                        title: 'External user created',
+                        description: `Magpie created ${values.username}.`,
                         variant: 'success',
                     });
                 } else {
@@ -245,23 +203,25 @@ export function UserManagement() {
                         username: values.username,
                         password: values.password ?? '',
                         role: values.role,
+                        enabled: values.enabled,
                     });
                     toast({
                         title: 'User created',
-                        description: `${values.username} has been created.`,
+                        description: `Magpie created ${values.username}.`,
                         variant: 'success',
                     });
                 }
                 closeUserForm();
-            } catch {
+            } catch (error) {
                 toast({
                     title: values.id ? 'Failed to update user' : 'Failed to create user',
-                    description: 'An error occurred. Please try again.',
+                    description: getErrorMessage(error),
                     variant: 'error',
                 });
+                throw error;
             }
         },
-        [createUser, updateUser, toast, closeUserForm],
+        [createUser, createExternalUser, updateUser, toast, closeUserForm],
     );
 
     const handleToggleUserEnabled = useCallback(
@@ -283,103 +243,79 @@ export function UserManagement() {
         [toggleUserEnabled, toast],
     );
 
+    const handleUnlockUser = useCallback(
+        async (id: string) => {
+            const user = users.find((candidate) => candidate.id === id);
+            try {
+                await unlockUser(id);
+                toast({
+                    title: 'User unlocked',
+                    description: `${user?.username ?? 'The user'} can sign in again.`,
+                    variant: 'success',
+                });
+            } catch {
+                toast({
+                    title: 'Failed to unlock user',
+                    description: 'An error occurred while clearing the lockout.',
+                    variant: 'error',
+                });
+            }
+        },
+        [users, unlockUser, toast],
+    );
+
     return (
         <>
-            <div className="users-page__tab-header">
-                <div className="list-toolbar__summary" aria-label="Role summary">
-                    <Badge variant="primary" size="sm" badgeStyle="outline" dot count={roleCounts.admin}>
-                        Admin
-                    </Badge>
-                    <Badge variant="warning" size="sm" badgeStyle="outline" dot count={roleCounts.manager}>
-                        Manager
-                    </Badge>
-                    <Badge variant="info" size="sm" badgeStyle="outline" dot count={roleCounts.requester}>
-                        Requester
-                    </Badge>
-                    <Badge variant="default" size="sm" badgeStyle="outline" dot count={roleCounts.viewer}>
-                        Viewer
-                    </Badge>
-                </div>
-            </div>
-
-            <div className="list-toolbar__filters" data-component="user-filters">
-                <div className="list-toolbar__filters-controls">
-                    <Select value={filters.role || ALL_VALUE} onValueChange={handleRoleChange}>
-                        <SelectTrigger size="sm" placeholder="All Roles" aria-label="Filter by role" data-filter="role">
-                            {roleLabel}
-                        </SelectTrigger>
-                        <SelectContent>
-                            <SelectItem value={ALL_VALUE}>All Roles</SelectItem>
-                            {roleOptions
-                                .filter((o) => o.value !== 'all')
-                                .map((opt) => (
-                                    <SelectItem key={opt.value} value={opt.value}>
-                                        {opt.label}
-                                    </SelectItem>
-                                ))}
-                        </SelectContent>
-                    </Select>
-
-                    <Select value={filters.enabled || ALL_VALUE} onValueChange={handleEnabledChange}>
-                        <SelectTrigger
-                            size="sm"
-                            placeholder="All"
-                            aria-label="Filter by enabled state"
-                            data-filter="enabled"
-                        >
-                            {enabledLabel}
-                        </SelectTrigger>
-                        <SelectContent>
-                            <SelectItem value={ALL_VALUE}>All</SelectItem>
-                            {enabledOptions
-                                .filter((o) => o.value !== 'all')
-                                .map((opt) => (
-                                    <SelectItem key={opt.value} value={opt.value}>
-                                        {opt.label}
-                                    </SelectItem>
-                                ))}
-                        </SelectContent>
-                    </Select>
-
-                    {hasActiveFilters && (
-                        <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={handleClearFilters}
-                            className="list-toolbar__clear-filters"
-                            data-action="clear-filters"
-                        >
-                            Clear
-                        </Button>
-                    )}
-                </div>
+            <div className="users-page__user-actions" data-component="user-toolbar">
+                <Button variant="primary" size="sm" data-action="add-user" onClick={handleAddUser}>
+                    <PlusIcon weight="bold" aria-hidden="true" />
+                    <span className="users-page__add-label">Add User</span>
+                </Button>
             </div>
 
             <div className="users-page__list" role="list" aria-label="Users">
                 {isLoadingUsers ? (
                     <EmptyState title="Loading..." size="sm" />
-                ) : filteredUsers.length === 0 ? (
+                ) : users.length === 0 ? (
                     <EmptyState
-                        icon={<Users weight="duotone" />}
+                        icon={<UsersIcon weight="duotone" />}
                         title="No users found"
-                        description={hasActiveFilters ? 'Try adjusting your filters' : 'Add a user to get started'}
+                        description="Add a user to get started"
                     />
                 ) : (
-                    filteredUsers.map((user) => (
+                    users.map((user) => (
                         <UserRow
                             key={user.id}
                             user={user}
                             isCurrentUser={authUserId === user.id}
+                            isSystem={isSystemUser(user)}
                             onToggleEnabled={handleToggleUserEnabled}
                             onEdit={handleEditUser}
                             onDelete={handleDeleteUser}
+                            onUnlock={handleUnlockUser}
+                            isUnlocking={isUnlocking}
                         />
                     ))
                 )}
             </div>
 
+            {onPageChange && pageCount > 1 && (
+                <Pager
+                    className="users-page__pager"
+                    page={page}
+                    pageCount={pageCount}
+                    onFirst={() => onPageChange(1)}
+                    onPrevious={() => onPageChange(page - 1)}
+                    onNext={() => onPageChange(page + 1)}
+                    onLast={() => onPageChange(pageCount)}
+                    disabled={isLoadingUsers}
+                />
+            )}
+
             <QuickActionsButton
-                actions={[{ id: 'add-user', label: 'Add User', icon: <Plus weight="bold" />, onClick: handleAddUser }]}
+                actions={[
+                    { id: 'add-user', label: 'Add User', icon: <PlusIcon weight="bold" />, onClick: handleAddUser },
+                ]}
                 title="Add User"
             />
 
@@ -388,7 +324,7 @@ export function UserManagement() {
                 onOpenChange={(open) => {
                     if (!open) closeUserForm();
                 }}
-                initialValues={editingUser}
+                initialValues={currentEditingUser}
                 onSubmit={handleUserFormSubmit}
                 isSubmitting={isSubmitting}
                 returnFocusRef={returnFocusRef}
@@ -411,15 +347,30 @@ UserManagement.displayName = 'UserManagement';
 interface UserRowProps {
     user: UserItem;
     isCurrentUser: boolean;
+    isSystem: boolean;
     onToggleEnabled: (id: string, enabled: boolean) => void;
     onEdit: (id: string) => void;
     onDelete: (id: string) => void;
+    onUnlock: (id: string) => void;
+    isUnlocking: boolean;
 }
 
-function UserRow({ user, isCurrentUser, onToggleEnabled, onEdit, onDelete }: UserRowProps) {
+function UserRow({
+    user,
+    isCurrentUser,
+    isSystem,
+    onToggleEnabled,
+    onEdit,
+    onDelete,
+    onUnlock,
+    isUnlocking,
+}: UserRowProps) {
     const variant = roleVariants[user.role] ?? 'default';
     const roleLabelText = RoleName[user.role] ?? 'Unknown';
-    const isLocked = user.lockedUntil && new Date(user.lockedUntil) > new Date();
+    const lockedUntil = user.lockedUntil ? parseUtcInstant(user.lockedUntil) : null;
+    const isLocked = lockedUntil !== null && lockedUntil > new Date();
+
+    const isProtected = isCurrentUser || isSystem;
 
     return (
         <div
@@ -429,6 +380,7 @@ function UserRow({ user, isCurrentUser, onToggleEnabled, onEdit, onDelete }: Use
             data-user-id={user.id}
             data-role={variant}
             data-enabled={user.enabled}
+            data-locked={isLocked}
         >
             <div className="users-page__item-main">
                 <div className="users-page__item-info">
@@ -441,16 +393,26 @@ function UserRow({ user, isCurrentUser, onToggleEnabled, onEdit, onDelete }: Use
                                     data-testid="users-page__current-user-badge"
                                     title="This is you"
                                 >
-                                    <ShieldCheck weight="fill" aria-hidden="true" />
+                                    <ShieldCheckIcon weight="fill" aria-hidden="true" />
                                 </span>
                             )}
                         </span>
                         <Badge variant={variant} size="sm">
                             {roleLabelText}
                         </Badge>
+                        {!isLocalProviderType(user.providerType) && (
+                            <Badge
+                                variant="info"
+                                size="sm"
+                                badgeStyle="outline"
+                                data-testid="users-page__provider-badge"
+                            >
+                                {user.providerType}
+                            </Badge>
+                        )}
                         {isLocked && (
                             <Badge variant="unhealthy" size="sm">
-                                <Warning weight="bold" aria-hidden="true" />
+                                <WarningIcon weight="bold" aria-hidden="true" />
                                 Locked
                             </Badge>
                         )}
@@ -458,19 +420,52 @@ function UserRow({ user, isCurrentUser, onToggleEnabled, onEdit, onDelete }: Use
                     <div className="users-page__item-meta">
                         {user.email && <span className="users-page__item-email">{user.email}</span>}
                         <span className="users-page__item-login">
-                            <Clock weight="regular" aria-hidden="true" />
+                            <ClockIcon weight="regular" aria-hidden="true" />
                             Login {formatRelativeTime(user.lastLoginAt)}
                         </span>
+                        {isLocked && (
+                            <span className="users-page__item-expires" data-testid="users-page__lock-expiry">
+                                Locked until{' '}
+                                {lockedUntil.toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' })}
+                                {user.failedLoginAttempts > 0 && ` after ${user.failedLoginAttempts} failed sign-ins`}
+                            </span>
+                        )}
                     </div>
                 </div>
                 <div className="users-page__item-actions card-actions">
+                    {isLocked && (
+                        <Tooltip
+                            content={
+                                isSystem
+                                    ? SYSTEM_ACCOUNT_TOOLTIP
+                                    : isCurrentUser
+                                      ? 'Cannot modify your own account'
+                                      : 'Clear the lockout'
+                            }
+                        >
+                            <button
+                                type="button"
+                                className="users-page__action-btn card-actions__btn"
+                                data-testid="users-page__action-btn"
+                                onClick={() => onUnlock(user.id)}
+                                aria-label={`Unlock ${user.username}`}
+                                data-action="unlock"
+                                data-target={user.id}
+                                disabled={isProtected || isUnlocking}
+                            >
+                                <LockKeyOpenIcon weight="bold" />
+                            </button>
+                        </Tooltip>
+                    )}
                     <Tooltip
                         content={
-                            isCurrentUser
-                                ? 'Cannot modify your own account'
-                                : user.enabled
-                                  ? 'Disable user'
-                                  : 'Enable user'
+                            isSystem
+                                ? SYSTEM_ACCOUNT_TOOLTIP
+                                : isCurrentUser
+                                  ? 'Cannot modify your own account'
+                                  : user.enabled
+                                    ? 'Disable user'
+                                    : 'Enable user'
                         }
                     >
                         <div className="users-page__item-toggle">
@@ -481,11 +476,19 @@ function UserRow({ user, isCurrentUser, onToggleEnabled, onEdit, onDelete }: Use
                                 aria-label={`${user.enabled ? 'Disable' : 'Enable'} ${user.username}`}
                                 data-action="toggle-enabled"
                                 data-target={user.id}
-                                disabled={isCurrentUser}
+                                disabled={isProtected}
                             />
                         </div>
                     </Tooltip>
-                    <Tooltip content={isCurrentUser ? 'Cannot modify your own account' : 'Edit'}>
+                    <Tooltip
+                        content={
+                            isSystem
+                                ? SYSTEM_ACCOUNT_TOOLTIP
+                                : isCurrentUser
+                                  ? 'Cannot modify your own account'
+                                  : 'Edit'
+                        }
+                    >
                         <button
                             type="button"
                             className="users-page__action-btn card-actions__btn"
@@ -494,12 +497,20 @@ function UserRow({ user, isCurrentUser, onToggleEnabled, onEdit, onDelete }: Use
                             aria-label={`Edit ${user.username}`}
                             data-action="edit"
                             data-target={user.id}
-                            disabled={isCurrentUser}
+                            disabled={isProtected}
                         >
-                            <PencilSimple weight="bold" />
+                            <PencilSimpleIcon weight="bold" />
                         </button>
                     </Tooltip>
-                    <Tooltip content={isCurrentUser ? 'Cannot modify your own account' : 'Delete'}>
+                    <Tooltip
+                        content={
+                            isSystem
+                                ? SYSTEM_ACCOUNT_TOOLTIP
+                                : isCurrentUser
+                                  ? 'Cannot modify your own account'
+                                  : 'Delete'
+                        }
+                    >
                         <button
                             type="button"
                             className="users-page__action-btn users-page__action-btn--danger card-actions__btn card-actions__btn--danger"
@@ -508,9 +519,9 @@ function UserRow({ user, isCurrentUser, onToggleEnabled, onEdit, onDelete }: Use
                             aria-label={`Delete ${user.username}`}
                             data-action="delete"
                             data-target={user.id}
-                            disabled={isCurrentUser}
+                            disabled={isProtected}
                         >
-                            <Trash weight="bold" />
+                            <TrashIcon weight="bold" />
                         </button>
                     </Tooltip>
                 </div>

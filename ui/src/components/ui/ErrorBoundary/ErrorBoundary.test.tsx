@@ -32,7 +32,7 @@ describe('ErrorBoundary', () => {
             </ErrorBoundary>,
         );
         expect(screen.getByRole('alert')).toBeInTheDocument();
-        expect(screen.getByText('Something went wrong')).toBeInTheDocument();
+        expect(screen.getByText('Failed to render page')).toBeInTheDocument();
         expect(screen.getByText('Test error')).toBeInTheDocument();
     });
 
@@ -52,7 +52,7 @@ describe('ErrorBoundary', () => {
             </ErrorBoundary>,
         );
         expect(screen.getByText('Custom fallback')).toBeInTheDocument();
-        expect(screen.queryByText('Something went wrong')).not.toBeInTheDocument();
+        expect(screen.queryByText('Failed to render page')).not.toBeInTheDocument();
     });
 
     it('renders custom fallback function with error props', () => {
@@ -95,7 +95,7 @@ describe('ErrorBoundary', () => {
             </ErrorBoundary>,
         );
 
-        expect(screen.getByText('Something went wrong')).toBeInTheDocument();
+        expect(screen.getByText('Failed to render page')).toBeInTheDocument();
 
         shouldThrow = false;
 
@@ -166,7 +166,7 @@ describe('ErrorBoundary', () => {
             </ErrorBoundary>,
         );
 
-        expect(screen.getByText('Something went wrong')).toBeInTheDocument();
+        expect(screen.getByText('Failed to render page')).toBeInTheDocument();
 
         shouldThrow = false;
 
@@ -177,7 +177,7 @@ describe('ErrorBoundary', () => {
         );
 
         expect(screen.getByText('Recovered via resetKeys')).toBeInTheDocument();
-        expect(screen.queryByText('Something went wrong')).not.toBeInTheDocument();
+        expect(screen.queryByText('Failed to render page')).not.toBeInTheDocument();
     });
 
     it('does not reset when resetKeys are unchanged between renders', () => {
@@ -196,10 +196,8 @@ describe('ErrorBoundary', () => {
             </ErrorBoundary>,
         );
 
-        expect(screen.getByText('Something went wrong')).toBeInTheDocument();
+        expect(screen.getByText('Failed to render page')).toBeInTheDocument();
 
-        // Flip the throw flag, but keep resetKeys identical -- the boundary
-        // should NOT clear its error state on a re-render with the same keys.
         shouldThrow = false;
 
         rerender(
@@ -208,7 +206,7 @@ describe('ErrorBoundary', () => {
             </ErrorBoundary>,
         );
 
-        expect(screen.getByText('Something went wrong')).toBeInTheDocument();
+        expect(screen.getByText('Failed to render page')).toBeInTheDocument();
         expect(screen.queryByText('Should not appear')).not.toBeInTheDocument();
     });
 });
@@ -240,7 +238,7 @@ describe('ErrorFallback', () => {
     it('displays title', () => {
         const error = new Error('Title test');
         render(<ErrorFallback error={error} resetErrorBoundary={() => {}} />);
-        expect(screen.getByText('Something went wrong')).toBeInTheDocument();
+        expect(screen.getByText('Failed to render page')).toBeInTheDocument();
     });
 
     it('has data-component attribute', () => {

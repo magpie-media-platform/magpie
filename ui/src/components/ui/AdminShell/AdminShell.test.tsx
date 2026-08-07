@@ -25,6 +25,7 @@ import {
     AdminShellSidebar,
     AdminShellMain,
     AdminShellBottomNav,
+    AdminHeader,
     AdminSidebar,
 } from './AdminShell';
 
@@ -70,6 +71,19 @@ describe('AdminShell', () => {
 
         expect(screen.getByRole('navigation', { name: 'Admin navigation' })).toBeInTheDocument();
     });
+
+    it('announces the initially expanded desktop sidebar correctly', () => {
+        renderWithRouter(
+            <AdminShell>
+                <AdminShellHeader>
+                    <AdminHeader />
+                </AdminShellHeader>
+                <AdminShellSidebar>Navigation</AdminShellSidebar>
+            </AdminShell>,
+        );
+
+        expect(screen.getByRole('button', { name: 'Collapse sidebar' })).toHaveAttribute('aria-expanded', 'true');
+    });
 });
 
 describe('AdminSidebar', () => {
@@ -82,17 +96,20 @@ describe('AdminSidebar', () => {
             </AdminShell>,
         );
 
-        expect(screen.getByText('General')).toBeInTheDocument();
-        expect(screen.getByText('Users')).toBeInTheDocument();
-        expect(screen.getByText('Indexers')).toBeInTheDocument();
-        expect(screen.getByText('Download Clients')).toBeInTheDocument();
-        expect(screen.getByText('Media Servers')).toBeInTheDocument();
-        expect(screen.getByText('Root Folders')).toBeInTheDocument();
-        expect(screen.getByText('Quality Tiers')).toBeInTheDocument();
-        expect(screen.getByText('Jobs')).toBeInTheDocument();
-        expect(screen.getByText('Extensions')).toBeInTheDocument();
-        expect(screen.getByText('Backups')).toBeInTheDocument();
-        expect(screen.getByText('System Status')).toBeInTheDocument();
+        expect(screen.getByRole('link', { name: 'Advanced' })).toBeInTheDocument();
+        expect(screen.getByRole('link', { name: 'Users' })).toBeInTheDocument();
+        expect(screen.getByRole('link', { name: 'Indexers' })).toBeInTheDocument();
+        expect(screen.getByRole('link', { name: 'Download Clients' })).toBeInTheDocument();
+        expect(screen.getByRole('link', { name: 'Remote Path Mappings' })).toBeInTheDocument();
+        expect(screen.getByRole('link', { name: 'Media Servers' })).toBeInTheDocument();
+        expect(screen.getByRole('link', { name: 'Root Folders' })).toBeInTheDocument();
+        expect(screen.getByRole('link', { name: 'File Types' })).toBeInTheDocument();
+        expect(screen.getByRole('link', { name: 'Notifications' })).toBeInTheDocument();
+        expect(screen.getByRole('link', { name: 'Quality Tiers' })).toBeInTheDocument();
+        expect(screen.getByRole('link', { name: 'System Jobs' })).toBeInTheDocument();
+        expect(screen.getByRole('link', { name: 'Extensions' })).toBeInTheDocument();
+        expect(screen.getByRole('link', { name: 'Database' })).toBeInTheDocument();
+        expect(screen.getByRole('link', { name: 'System Status' })).toBeInTheDocument();
     });
 
     it('renders exit admin link', () => {
@@ -105,5 +122,38 @@ describe('AdminSidebar', () => {
         );
 
         expect(screen.getByText('Exit admin')).toBeInTheDocument();
+    });
+
+    it('places Advanced as the last item of the System group, not its own section', () => {
+        const { container } = renderWithRouter(
+            <AdminShell>
+                <AdminShellSidebar>
+                    <AdminSidebar />
+                </AdminShellSidebar>
+            </AdminShell>,
+        );
+
+        const groupLabels = Array.from(container.querySelectorAll('.sidebar-group-label')).map((el) => el.textContent);
+        expect(groupLabels).toContain('System');
+        expect(groupLabels).toContain('Extensions');
+        expect(groupLabels).not.toContain('Advanced');
+
+        const advancedLink = screen.getByRole('link', { name: 'Advanced' });
+        const systemGroup = advancedLink.closest('.sidebar-group');
+        expect(systemGroup?.querySelector('.sidebar-group-label')?.textContent).toBe('System');
+    });
+
+    it('places Extensions as the top item of the Extensions section', () => {
+        renderWithRouter(
+            <AdminShell>
+                <AdminShellSidebar>
+                    <AdminSidebar />
+                </AdminShellSidebar>
+            </AdminShell>,
+        );
+
+        const extensionsLink = screen.getByRole('link', { name: 'Extensions' });
+        const extensionsGroup = extensionsLink.closest('.sidebar-group');
+        expect(extensionsGroup?.querySelector('.sidebar-group-label')?.textContent).toBe('Extensions');
     });
 });

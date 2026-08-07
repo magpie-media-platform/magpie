@@ -1,20 +1,41 @@
 import { useState, useMemo, useCallback } from 'react';
-import { Rss, Trash, PencilSimple, Clock, Plus, CircleNotch, Power } from '@phosphor-icons/react';
+import { RssIcon, TrashIcon, PencilSimpleIcon, PlusIcon, PowerIcon, ArrowClockwiseIcon } from '@phosphor-icons/react';
+import { type ColumnDef, type SortingState } from '@tanstack/react-table';
 
 import { QuickActionsButton, type QuickAction } from '@/components/ui/QuickActionsButton';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
+import { DataTable } from '@/components/ui/DataTable';
+import { Pager } from '@/components/ui/Pager';
 import { Switch } from '@/components/ui/Switch';
 import { useToast } from '@/components/ui/Toast';
 import { Tooltip } from '@/components/ui/Tooltip';
 
 import { useIndexers, type IndexerFeedItem } from '@/hooks/useIndexers';
 import { useToggle } from '@/hooks/useToggle';
+import { useUrlTableState } from '@/hooks/useUrlTableState';
 import { formatRelativeTime } from '@/lib/formatTime';
 
 import { EmptyState } from '@/components/ui/EmptyState';
 import { DeleteConfirmDialog } from '@/components/ui/DeleteConfirmDialog/DeleteConfirmDialog';
 import { IndexerFeedForm, type IndexerFeedFormValues } from './IndexerFeedForm';
+
+const PAGE_SIZE = 25;
+
+const DEFAULT_SORTING: SortingState = [{ id: 'name', desc: false }];
+
+const SORT_KEYS = ['name', 'provider', 'enabled', 'lastSync'] as const;
+
+function toIndexerFeedFormValues(feed: IndexerFeedItem): IndexerFeedFormValues {
+    return {
+        id: feed.id,
+        name: feed.name,
+        description: feed.description ?? '',
+        provider: feed.provider,
+        enabled: feed.enabled,
+        settings: feed.settings,
+    };
+}
 
 export function FeedsManagement() {
     const [formOpen, , openForm, closeForm] = useToggle();
@@ -25,14 +46,31 @@ export function FeedsManagement() {
 
     const {
         feeds,
-        isLoading,
+        isLoadingFeeds,
         createFeed: apiCreateFeed,
         updateFeed: apiUpdateFeed,
         toggleFeedEnabled,
         deleteFeed: apiDeleteFeed,
+        syncFeed: apiSyncFeed,
+        syncingFeedId,
         isCreatingFeed,
         isUpdatingFeed,
     } = useIndexers();
+    const currentEditingFeed = useMemo(() => {
+        if (!editingFeed?.id) {
+            return editingFeed;
+        }
+        const feed = feeds.find((candidate) => candidate.id === editingFeed.id);
+        return feed ? toIndexerFeedFormValues(feed) : editingFeed;
+    }, [editingFeed, feeds]);
+
+    const { sorting, page, setSorting, setPage } = useUrlTableState({
+        defaultSort: DEFAULT_SORTING,
+        defaultFilters: {},
+        sortKeys: SORT_KEYS,
+        pageParam: 'fpage',
+        sortParam: 'fsort',
+    });
 
     const handleToggleEnabled = useCallback(
         async (id: string, enabled: boolean) => {
@@ -49,38 +87,37 @@ export function FeedsManagement() {
         [toggleFeedEnabled, toast],
     );
 
+    const handleSync = useCallback(
+        async (feed: IndexerFeedItem) => {
+            try {
+                await apiSyncFeed(feed.id);
+                toast({
+                    title: 'Sync started',
+                    description: `Magpie queued a sync for "${feed.name}".`,
+                    variant: 'success',
+                });
+            } catch (error) {
+                toast({
+                    title: 'Error',
+                    description: error instanceof Error ? error.message : 'Failed to start sync',
+                    variant: 'error',
+                });
+            }
+        },
+        [apiSyncFeed, toast],
+    );
+
     const handleAdd = useCallback(() => {
         setEditingFeed(null);
         openForm();
     }, [openForm]);
 
     const handleEdit = useCallback(
-        (id: string) => {
-            const feed = feeds.find((f) => f.id === id);
-            if (feed) {
-                setEditingFeed({
-                    id: feed.id,
-                    name: feed.name,
-                    description: feed.description ?? '',
-                    provider: feed.provider,
-                    enabled: feed.enabled,
-                    settings: feed.settings,
-                });
-                openForm();
-            }
+        (feed: IndexerFeedItem) => {
+            setEditingFeed(toIndexerFeedFormValues(feed));
+            openForm();
         },
-        [feeds, openForm],
-    );
-
-    const handleDelete = useCallback(
-        (id: string) => {
-            const feed = feeds.find((f) => f.id === id);
-            if (!feed) {
-                return;
-            }
-            setDeletingFeed(feed);
-        },
-        [feeds],
+        [openForm],
     );
 
     const handleConfirmDelete = useCallback(async () => {
@@ -93,7 +130,7 @@ export function FeedsManagement() {
             await apiDeleteFeed(deletingFeed.id);
             toast({
                 title: 'Feed deleted',
-                description: `"${deletingFeed.name}" has been removed`,
+                description: `Magpie removed "${deletingFeed.name}".`,
                 variant: 'success',
             });
         } catch (error) {
@@ -116,16 +153,17 @@ export function FeedsManagement() {
         async (values: IndexerFeedFormValues) => {
             try {
                 if (values.id) {
+                    const settings = Object.keys(values.settings).length > 0 ? values.settings : undefined;
                     await apiUpdateFeed(values.id, {
                         name: values.name,
                         description: values.description || undefined,
                         providerType: values.provider,
                         enabled: values.enabled,
-                        settings: values.settings,
+                        settings,
                     });
                     toast({
                         title: 'Feed updated',
-                        description: `${values.name} has been updated`,
+                        description: `Magpie updated ${values.name}.`,
                         variant: 'success',
                     });
                 } else {
@@ -138,7 +176,7 @@ export function FeedsManagement() {
                     });
                     toast({
                         title: 'Feed created',
-                        description: `${values.name} has been added`,
+                        description: `Magpie added ${values.name}.`,
                         variant: 'success',
                     });
                 }
@@ -149,50 +187,202 @@ export function FeedsManagement() {
                     description: error instanceof Error ? error.message : 'Failed to save feed',
                     variant: 'error',
                 });
+                throw error;
             }
         },
         [apiCreateFeed, apiUpdateFeed, toast, closeForm],
     );
 
     const addActions: QuickAction[] = useMemo(
-        () => [{ id: 'add-feed', label: 'Add Feed', icon: <Plus weight="bold" />, onClick: handleAdd }],
+        () => [{ id: 'add-feed', label: 'Add Feed', icon: <PlusIcon weight="bold" />, onClick: handleAdd }],
         [handleAdd],
+    );
+
+    const columns = useMemo<ColumnDef<IndexerFeedItem>[]>(
+        () => [
+            {
+                id: 'name',
+                accessorKey: 'name',
+                header: 'Name',
+                size: 220,
+                cell: ({ row }) => (
+                    <span className="indexers-table__name" title={row.original.name}>
+                        <span className="indexers-table__name-text">{row.original.name}</span>
+                    </span>
+                ),
+            },
+            {
+                id: 'provider',
+                accessorKey: 'provider',
+                header: 'Provider',
+                size: 150,
+                cell: ({ row }) => <span className="indexers-table__definition">{row.original.provider}</span>,
+            },
+            {
+                id: 'description',
+                accessorKey: 'description',
+                enableSorting: false,
+                header: 'Description',
+                size: 260,
+                cell: ({ row }) =>
+                    row.original.description ? (
+                        <span className="indexers-table__description" title={row.original.description}>
+                            {row.original.description}
+                        </span>
+                    ) : (
+                        <span className="indexers-table__empty-cell">-</span>
+                    ),
+            },
+            {
+                id: 'enabled',
+                accessorKey: 'enabled',
+                header: 'Enabled',
+                size: 110,
+                cell: ({ row }) => (
+                    <Badge variant={row.original.enabled ? 'healthy' : 'unknown'} size="sm">
+                        {row.original.enabled ? 'Enabled' : 'Disabled'}
+                    </Badge>
+                ),
+            },
+            {
+                id: 'lastSync',
+                accessorFn: (row) => {
+                    const time = row.lastSync ? new Date(row.lastSync).getTime() : NaN;
+                    return isNaN(time) ? undefined : time;
+                },
+                sortUndefined: 'last',
+                header: 'Synced',
+                size: 150,
+                cell: ({ row }) => (
+                    <span className="indexers-table__checked">{formatRelativeTime(row.original.lastSync)}</span>
+                ),
+            },
+            {
+                id: 'actions',
+                header: '',
+                enableSorting: false,
+                size: 160,
+                cell: ({ row }) => {
+                    const feed = row.original;
+                    const isSyncing = syncingFeedId === feed.id;
+                    return (
+                        <div className="indexers-page__item-actions card-actions">
+                            <Tooltip content={feed.enabled ? 'Disable' : 'Enable'}>
+                                <div className="indexers-page__item-toggle">
+                                    <PowerIcon
+                                        weight="bold"
+                                        className="indexers-page__toggle-icon"
+                                        aria-hidden="true"
+                                    />
+                                    <Switch
+                                        checked={feed.enabled}
+                                        onCheckedChange={(checked) => handleToggleEnabled(feed.id, checked)}
+                                        aria-label={`${feed.enabled ? 'Disable' : 'Enable'} ${feed.name}`}
+                                        data-action="toggle-enabled"
+                                        data-target={feed.id}
+                                    />
+                                </div>
+                            </Tooltip>
+                            <Tooltip content="Sync now">
+                                <button
+                                    type="button"
+                                    className="indexers-page__action-btn card-actions__btn"
+                                    data-testid="indexers-page__action-btn"
+                                    onClick={() => handleSync(feed)}
+                                    disabled={isSyncing}
+                                    aria-label={`Sync ${feed.name} now`}
+                                    data-action="sync"
+                                    data-target={feed.id}
+                                >
+                                    <ArrowClockwiseIcon weight="bold" />
+                                </button>
+                            </Tooltip>
+                            <Tooltip content="Edit">
+                                <button
+                                    type="button"
+                                    className="indexers-page__action-btn card-actions__btn"
+                                    data-testid="indexers-page__action-btn"
+                                    onClick={() => handleEdit(feed)}
+                                    aria-label={`Edit ${feed.name}`}
+                                    data-action="edit"
+                                    data-target={feed.id}
+                                >
+                                    <PencilSimpleIcon weight="bold" />
+                                </button>
+                            </Tooltip>
+                            <Tooltip content="Delete">
+                                <button
+                                    type="button"
+                                    className="indexers-page__action-btn indexers-page__action-btn--danger card-actions__btn card-actions__btn--danger"
+                                    data-testid="indexers-page__action-btn"
+                                    onClick={() => setDeletingFeed(feed)}
+                                    aria-label={`Delete ${feed.name}`}
+                                    data-action="delete"
+                                    data-target={feed.id}
+                                >
+                                    <TrashIcon weight="bold" />
+                                </button>
+                            </Tooltip>
+                        </div>
+                    );
+                },
+            },
+        ],
+        [handleToggleEnabled, handleEdit, handleSync, syncingFeedId],
+    );
+
+    const pageCount = Math.max(1, Math.ceil(feeds.length / PAGE_SIZE));
+    const currentPage = Math.min(page, pageCount);
+    const pagination = useMemo(() => ({ pageIndex: currentPage - 1, pageSize: PAGE_SIZE }), [currentPage]);
+
+    const getRowId = useCallback((row: IndexerFeedItem) => row.id, []);
+
+    const emptyState = (
+        <EmptyState
+            icon={<RssIcon weight="duotone" />}
+            title="No feeds configured"
+            description="Add a feed to automatically sync indexer definitions"
+            size="sm"
+        />
     );
 
     return (
         <>
-            <p className="indexers-page__feeds-description">
-                Feeds provide indexer definitions from external sources like Prowlarr or Jackett.
-            </p>
+            <div className="indexers-page__header-actions">
+                <Button variant="primary" size="sm" data-action="add-feed" onClick={handleAdd}>
+                    <PlusIcon weight="bold" aria-hidden="true" />
+                    <span>Add Feed</span>
+                </Button>
+            </div>
 
-            <div className="indexers-page__list" role="list" aria-label="Indexer feeds">
-                {isLoading ? (
-                    <div className="indexers-page__loading">
-                        <CircleNotch weight="bold" className="indexers-page__spinner" aria-hidden="true" />
-                        <p>Loading feeds...</p>
-                    </div>
-                ) : feeds.length === 0 ? (
-                    <EmptyState
-                        icon={<Rss weight="duotone" />}
-                        title="No feeds configured"
-                        description="Add a feed to automatically sync indexer definitions"
-                        action={
-                            <Button variant="primary" size="sm" onClick={handleAdd} data-action="add-feed-empty">
-                                <Plus weight="bold" aria-hidden="true" />
-                                <span>Add Feed</span>
-                            </Button>
-                        }
+            <div className="indexers-table" data-area="feeds">
+                <DataTable<IndexerFeedItem>
+                    columns={columns}
+                    data={feeds}
+                    enableSorting
+                    sorting={sorting}
+                    onSortingChange={(updater) =>
+                        setSorting(typeof updater === 'function' ? updater(sorting) : updater)
+                    }
+                    enablePagination={feeds.length > PAGE_SIZE}
+                    hidePagination
+                    pageSize={PAGE_SIZE}
+                    pagination={pagination}
+                    getRowId={getRowId}
+                    loading={isLoadingFeeds}
+                    emptyState={emptyState}
+                    aria-label="Indexer feeds"
+                />
+                {feeds.length > PAGE_SIZE && (
+                    <Pager
+                        className="indexers-table__pager"
+                        page={currentPage}
+                        pageCount={pageCount}
+                        onFirst={() => setPage(1)}
+                        onPrevious={() => setPage(Math.max(1, currentPage - 1))}
+                        onNext={() => setPage(Math.min(pageCount, currentPage + 1))}
+                        onLast={() => setPage(pageCount)}
                     />
-                ) : (
-                    feeds.map((feed) => (
-                        <FeedRow
-                            key={feed.id}
-                            feed={feed}
-                            onToggleEnabled={handleToggleEnabled}
-                            onEdit={handleEdit}
-                            onDelete={handleDelete}
-                        />
-                    ))
                 )}
             </div>
 
@@ -205,7 +395,7 @@ export function FeedsManagement() {
                         closeForm();
                     }
                 }}
-                initialValues={editingFeed}
+                initialValues={currentEditingFeed}
                 onSubmit={handleFormSubmit}
                 isSubmitting={isCreatingFeed || isUpdatingFeed}
             />
@@ -224,82 +414,4 @@ export function FeedsManagement() {
 
 FeedsManagement.displayName = 'FeedsManagement';
 
-interface FeedRowProps {
-    feed: IndexerFeedItem;
-    onToggleEnabled: (id: string, enabled: boolean) => void;
-    onEdit: (id: string) => void;
-    onDelete: (id: string) => void;
-}
-
-function FeedRow({ feed, onToggleEnabled, onEdit, onDelete }: FeedRowProps) {
-    return (
-        <div
-            className={`indexers-page__item${feed.enabled ? '' : ' indexers-page__item--disabled'}`}
-            role="listitem"
-            data-testid="indexers-page__item"
-            data-feed-id={feed.id}
-            data-enabled={feed.enabled}
-        >
-            <div className="indexers-page__item-main">
-                <div className="indexers-page__item-info">
-                    <div className="indexers-page__item-header">
-                        <span className="indexers-page__item-name">{feed.name}</span>
-                        <Badge variant={feed.enabled ? 'healthy' : 'unknown'} size="sm">
-                            {feed.enabled ? 'Enabled' : 'Disabled'}
-                        </Badge>
-                    </div>
-                    <div className="indexers-page__item-meta">
-                        <span className="indexers-page__item-definition">{feed.provider}</span>
-                        {feed.description && (
-                            <span className="indexers-page__item-description">{feed.description}</span>
-                        )}
-                        <span className="indexers-page__item-checked">
-                            <Clock weight="regular" aria-hidden="true" />
-                            Synced {formatRelativeTime(feed.lastSync)}
-                        </span>
-                    </div>
-                </div>
-                <div className="indexers-page__item-actions card-actions">
-                    <Tooltip content={feed.enabled ? 'Disable' : 'Enable'}>
-                        <div className="indexers-page__item-toggle">
-                            <Power weight="bold" className="indexers-page__toggle-icon" aria-hidden="true" />
-                            <Switch
-                                checked={feed.enabled}
-                                onCheckedChange={(checked) => onToggleEnabled(feed.id, checked)}
-                                aria-label={`${feed.enabled ? 'Disable' : 'Enable'} ${feed.name}`}
-                                data-action="toggle-enabled"
-                                data-target={feed.id}
-                            />
-                        </div>
-                    </Tooltip>
-                    <Tooltip content="Edit">
-                        <button
-                            type="button"
-                            className="indexers-page__action-btn card-actions__btn"
-                            data-testid="indexers-page__action-btn"
-                            onClick={() => onEdit(feed.id)}
-                            aria-label={`Edit ${feed.name}`}
-                            data-action="edit"
-                            data-target={feed.id}
-                        >
-                            <PencilSimple weight="bold" />
-                        </button>
-                    </Tooltip>
-                    <Tooltip content="Delete">
-                        <button
-                            type="button"
-                            className="indexers-page__action-btn indexers-page__action-btn--danger card-actions__btn card-actions__btn--danger"
-                            data-testid="indexers-page__action-btn"
-                            onClick={() => onDelete(feed.id)}
-                            aria-label={`Delete ${feed.name}`}
-                            data-action="delete"
-                            data-target={feed.id}
-                        >
-                            <Trash weight="bold" />
-                        </button>
-                    </Tooltip>
-                </div>
-            </div>
-        </div>
-    );
-}
+export default FeedsManagement;

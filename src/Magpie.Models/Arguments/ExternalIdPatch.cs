@@ -1,32 +1,31 @@
 using System;
 
-using Magpie.Models.Data;
 using Magpie.Models.Patch;
 
 namespace Magpie.Models.Arguments;
 
 /// <summary>
-/// Patch for <see cref="ExternalId"/>.
+/// The partial-update arguments for an external id.
 /// </summary>
 public sealed record ExternalIdPatch
 {
     /// <summary>
-    /// The <see cref="ExternalId.Id"/> of the item to patch.
+    /// The id of the external id to patch.
     /// </summary>
     public Guid Id { get; init; }
 
     /// <summary>
-    /// The <see cref="ExternalId.Ordinal"/> to patch.
+    /// The patch for the position in the display order.
     /// </summary>
     public ScalarPatch<int>? Ordinal { get; init; }
 
     /// <summary>
-    /// The <see cref="ExternalId.Value"/> to patch.
+    /// The patch for the external id value.
     /// </summary>
     public ScalarPatch<string>? Value { get; init; }
 
     /// <summary>
-    /// The <see cref="ExternalId.Source"/> to patch.
+    /// The patch for the name of the source.
     /// </summary>
     public ScalarPatch<string?>? Source { get; init; }
 }

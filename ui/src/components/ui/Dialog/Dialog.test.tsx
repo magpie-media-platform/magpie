@@ -1,12 +1,13 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
     Dialog,
     DialogTrigger,
     DialogContent,
     DialogHeader,
+    DialogBody,
     DialogFooter,
     DialogTitle,
     DialogDescription,
@@ -523,6 +524,59 @@ describe('Dialog', () => {
         expect(document.activeElement).toBe(trigger);
     });
 
+    it('renders body children with the padded dialog-body class', async () => {
+        const user = userEvent.setup();
+
+        render(
+            <Dialog>
+                <DialogTrigger asChild>
+                    <button>Open</button>
+                </DialogTrigger>
+                <DialogContent>
+                    <DialogHeader>
+                        <DialogTitle>Title</DialogTitle>
+                    </DialogHeader>
+                    <DialogBody>
+                        <p>Body content</p>
+                    </DialogBody>
+                </DialogContent>
+            </Dialog>,
+        );
+
+        await user.click(screen.getByRole('button', { name: 'Open' }));
+
+        await waitFor(() => {
+            const body = document.querySelector('.dialog-body');
+            expect(body).toBeInTheDocument();
+            expect(body).toHaveClass('dialog-body');
+            expect(body).toContainElement(screen.getByText('Body content'));
+        });
+    });
+
+    it('applies custom className to body', async () => {
+        const user = userEvent.setup();
+
+        render(
+            <Dialog>
+                <DialogTrigger asChild>
+                    <button>Open</button>
+                </DialogTrigger>
+                <DialogContent>
+                    <DialogTitle>Title</DialogTitle>
+                    <DialogBody className="custom-body">Content</DialogBody>
+                </DialogContent>
+            </Dialog>,
+        );
+
+        await user.click(screen.getByRole('button', { name: 'Open' }));
+
+        await waitFor(() => {
+            const body = document.querySelector('.dialog-body');
+            expect(body).toHaveClass('dialog-body');
+            expect(body).toHaveClass('custom-body');
+        });
+    });
+
     it('exports DialogOverlay for compound usage', () => {
         expect(DialogOverlay).toBeDefined();
     });
@@ -561,5 +615,31 @@ describe('DialogClose', () => {
         await waitFor(() => {
             expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
         });
+    });
+});
+
+describe('Dialog body pointer-events safety net', () => {
+    afterEach(() => {
+        document.body.style.pointerEvents = '';
+    });
+
+    const ControlledDialog = ({ open }: { open: boolean }) => (
+        <Dialog open={open}>
+            <DialogContent>
+                <DialogTitle>Title</DialogTitle>
+            </DialogContent>
+        </Dialog>
+    );
+
+    it('restores body pointer-events even when radix leaves a stale lock', async () => {
+        document.body.style.pointerEvents = 'none';
+
+        const { rerender } = render(<ControlledDialog open={true} />);
+        await waitFor(() => expect(screen.getByRole('dialog')).toBeInTheDocument());
+        expect(document.body.style.pointerEvents).toBe('none');
+
+        rerender(<ControlledDialog open={false} />);
+        await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+        await waitFor(() => expect(document.body.style.pointerEvents).toBe(''));
     });
 });

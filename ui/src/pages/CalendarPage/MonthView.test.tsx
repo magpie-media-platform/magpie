@@ -12,14 +12,16 @@ function makeEvent(id: string, title: string): CalendarEvent {
         contentId: `content-${id}`,
         title,
         date: '2024-01-15T20:00:00Z',
-        kind: 'episode',
+        contentType: 'tv',
+        level: 'episode',
         fulfillment: 'missing',
+        monitoring: true,
+        effectiveMonitoring: true,
     };
 }
 
 const defaultProps = {
-    currentDate: new Date(2024, 0, 15), // Jan 15 2024
-    viewEvents: [] as CalendarEvent[],
+    currentDate: new Date(2024, 0, 15),
     getEventsForDate: () => [] as CalendarEvent[],
     onDayClick: vi.fn(),
 };
@@ -33,19 +35,13 @@ describe('MonthView', () => {
 
     it('renders day cells for the month grid', () => {
         render(<MonthView {...defaultProps} />);
-        // January 2024 has 31 days + padding days; each cell has a data-date attribute
         const dayCells = document.querySelectorAll('[data-date]');
         expect(dayCells.length).toBeGreaterThanOrEqual(31);
     });
 
-    it('shows empty state when no events this month', () => {
-        render(<MonthView {...defaultProps} viewEvents={[]} />);
-        expect(screen.getByText('No events this month')).toBeInTheDocument();
-    });
-
     it('renders event indicators when events exist on a day', () => {
         const events = [makeEvent('1', 'Shogun')];
-        render(<MonthView {...defaultProps} viewEvents={events} getEventsForDate={() => events} />);
+        render(<MonthView {...defaultProps} getEventsForDate={() => events} />);
         expect(screen.getAllByTestId('calendar-page__day-event').length).toBeGreaterThan(0);
     });
 
@@ -56,17 +52,15 @@ describe('MonthView', () => {
             makeEvent('3', 'Event 3'),
             makeEvent('4', 'Event 4'),
         ];
-        render(<MonthView {...defaultProps} viewEvents={events} getEventsForDate={() => events} />);
-        // Should show "+1 more" on at least one day cell
+        render(<MonthView {...defaultProps} getEventsForDate={() => events} />);
         expect(screen.getAllByText('+1 more').length).toBeGreaterThan(0);
     });
 
     it('calls onDayClick when a day cell is clicked', async () => {
         const user = userEvent.setup();
         const onDayClick = vi.fn();
-        render(<MonthView {...defaultProps} viewEvents={[makeEvent('1', 'x')]} onDayClick={onDayClick} />);
+        render(<MonthView {...defaultProps} getEventsForDate={() => [makeEvent('1', 'x')]} onDayClick={onDayClick} />);
 
-        // Click a specific day cell by its data-date attribute
         const cell = document.querySelector('[data-date="2024-01-01"]');
         expect(cell).toBeInTheDocument();
         await user.click(cell!);
@@ -75,7 +69,6 @@ describe('MonthView', () => {
 
     it('includes padding days from outside the current month', () => {
         render(<MonthView {...defaultProps} />);
-        // Jan 2024 starts on Monday, so Dec 31 2023 should appear as padding
         const paddingCell = document.querySelector('[data-date="2023-12-31"]');
         expect(paddingCell).toBeInTheDocument();
     });
@@ -83,5 +76,18 @@ describe('MonthView', () => {
     it('has the correct data-component attribute', () => {
         const { container } = render(<MonthView {...defaultProps} />);
         expect(container.querySelector('[data-component="month-view"]')).toBeInTheDocument();
+    });
+
+    it('formats data-date in local terms under a positive UTC offset', () => {
+        vi.stubEnv('TZ', 'Asia/Tokyo');
+        try {
+            render(<MonthView {...defaultProps} currentDate={new Date(2024, 0, 15)} />);
+
+            expect(document.querySelector('[data-date="2023-12-31"]')).toBeInTheDocument();
+            expect(document.querySelector('[data-date="2023-12-30"]')).not.toBeInTheDocument();
+            expect(document.querySelector('[data-date="2024-01-15"]')).toBeInTheDocument();
+        } finally {
+            vi.unstubAllEnvs();
+        }
     });
 });

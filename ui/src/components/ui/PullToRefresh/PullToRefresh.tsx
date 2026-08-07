@@ -7,7 +7,9 @@ import {
     type HTMLAttributes,
     type ReactNode,
 } from 'react';
-import { ArrowClockwise } from '@phosphor-icons/react';
+import { ArrowClockwiseIcon } from '@phosphor-icons/react';
+
+import { useMediaQuery } from '@/hooks/ui/useMediaQuery';
 
 import './PullToRefresh.css';
 
@@ -57,11 +59,23 @@ export const PullToRefresh = forwardRef<PullToRefreshRef, PullToRefreshProps>(
         ref,
     ) => {
         const containerRef = useRef<HTMLDivElement>(null);
+        const isMobile = useMediaQuery('(max-width: 767px)');
         const [state, setState] = useState<PullToRefreshState>('idle');
         const [pullDistance, setPullDistance] = useState(0);
 
         const startYRef = useRef(0);
         const isPullingRef = useRef(false);
+
+        const getScrollOwner = useCallback(() => {
+            const container = containerRef.current;
+            if (!container) {
+                return null;
+            }
+
+            return isMobile
+                ? (container.closest<HTMLElement>('.app-shell__main, .admin-shell__main') ?? container)
+                : container;
+        }, [isMobile]);
 
         const refresh = useCallback(async () => {
             if (state === 'refreshing' || disabled) {
@@ -86,12 +100,12 @@ export const PullToRefresh = forwardRef<PullToRefreshRef, PullToRefreshProps>(
                     return;
                 }
 
-                const container = containerRef.current;
-                if (!container) {
+                const scrollOwner = getScrollOwner();
+                if (!scrollOwner) {
                     return;
                 }
 
-                const isAtTop = container.scrollTop <= 0;
+                const isAtTop = scrollOwner.scrollTop <= 0;
                 if (!isAtTop) {
                     return;
                 }
@@ -99,7 +113,7 @@ export const PullToRefresh = forwardRef<PullToRefreshRef, PullToRefreshProps>(
                 startYRef.current = e.touches[0].clientY;
                 isPullingRef.current = true;
             },
-            [disabled, state],
+            [disabled, getScrollOwner, state],
         );
 
         const handleTouchMove = useCallback(
@@ -108,12 +122,12 @@ export const PullToRefresh = forwardRef<PullToRefreshRef, PullToRefreshProps>(
                     return;
                 }
 
-                const container = containerRef.current;
-                if (!container) {
+                const scrollOwner = getScrollOwner();
+                if (!scrollOwner) {
                     return;
                 }
 
-                const isAtTop = container.scrollTop <= 0;
+                const isAtTop = scrollOwner.scrollTop <= 0;
                 if (!isAtTop) {
                     isPullingRef.current = false;
                     setState('idle');
@@ -141,7 +155,7 @@ export const PullToRefresh = forwardRef<PullToRefreshRef, PullToRefreshProps>(
                     setState('pulling');
                 }
             },
-            [disabled, state, threshold, maxPullDistance],
+            [disabled, getScrollOwner, state, threshold, maxPullDistance],
         );
 
         const handleTouchEnd = useCallback(() => {
@@ -152,12 +166,22 @@ export const PullToRefresh = forwardRef<PullToRefreshRef, PullToRefreshProps>(
             isPullingRef.current = false;
 
             if (state === 'ready') {
-                refresh();
+                void refresh();
             } else {
                 setState('idle');
                 setPullDistance(0);
             }
         }, [state, refresh]);
+
+        const handleTouchCancel = useCallback(() => {
+            if (!isPullingRef.current) {
+                return;
+            }
+
+            isPullingRef.current = false;
+            setState('idle');
+            setPullDistance(0);
+        }, []);
 
         const progress = Math.min(pullDistance / threshold, 1);
 
@@ -172,14 +196,14 @@ export const PullToRefresh = forwardRef<PullToRefreshRef, PullToRefreshProps>(
 
         const getLabel = () => {
             switch (state) {
+                case 'idle':
+                    return pullLabel;
                 case 'pulling':
                     return pullLabel;
                 case 'ready':
                     return releaseLabel;
                 case 'refreshing':
                     return refreshingLabel;
-                default:
-                    return pullLabel;
             }
         };
 
@@ -202,7 +226,7 @@ export const PullToRefresh = forwardRef<PullToRefreshRef, PullToRefreshProps>(
                                     transform: `rotate(${progress * 180}deg)`,
                                 }}
                             >
-                                <ArrowClockwise
+                                <ArrowClockwiseIcon
                                     size={24}
                                     weight="bold"
                                     className={state === 'refreshing' ? 'pull-to-refresh__icon--spinning' : ''}
@@ -218,6 +242,7 @@ export const PullToRefresh = forwardRef<PullToRefreshRef, PullToRefreshProps>(
                     onTouchStart={handleTouchStart}
                     onTouchMove={handleTouchMove}
                     onTouchEnd={handleTouchEnd}
+                    onTouchCancel={handleTouchCancel}
                 >
                     {children}
                 </div>

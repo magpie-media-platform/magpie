@@ -1,11 +1,8 @@
-/* eslint-disable react-refresh/only-export-components */
-import { useCallback, useContext, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
 
-import { LiveAnnouncerContext, type LiveAnnouncerContextValue } from './LiveAnnouncerContext';
+import { LiveAnnouncerContext, type Politeness } from '@/hooks/ui/useLiveAnnouncer';
 
 import './LiveAnnouncer.css';
-
-type Politeness = 'polite' | 'assertive';
 
 interface Announcement {
     id: string;
@@ -91,16 +88,6 @@ export function LiveAnnouncerProvider({ children }: LiveAnnouncerProps) {
             </div>
         </LiveAnnouncerContext.Provider>
     );
-}
-
-export function useLiveAnnouncer(): LiveAnnouncerContextValue {
-    const context = useContext(LiveAnnouncerContext);
-
-    if (!context) {
-        throw new Error('useLiveAnnouncer must be used within a LiveAnnouncerProvider');
-    }
-
-    return context;
 }
 
 export default LiveAnnouncerProvider;

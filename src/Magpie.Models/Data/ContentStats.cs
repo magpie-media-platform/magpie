@@ -29,4 +29,9 @@ public sealed record ContentStats
     /// The number of items fulfilled by an external source.
     /// </summary>
     public int FulfilledExternally { get; init; }
+
+    /// <summary>
+    /// The number of containers with some but not all descendant leaves covered.
+    /// </summary>
+    public int Partial { get; init; }
 }

@@ -1,39 +1,115 @@
 using System;
+using System.Reflection;
+using System.Runtime.InteropServices;
+using System.Threading;
+using System.Threading.Tasks;
 
-using Magpie.Abstractions.System;
+using Magpie.Abstractions;
+using Magpie.Abstractions.Repositories;
+using Magpie.Models;
+using Magpie.Sdk.Services;
+
+using Microsoft.Extensions.Hosting;
 
 namespace Magpie.Core;
 
-/// <summary>
-/// Default <see cref="IMagpieSystem"/> implementation backed by the host content root and
-/// the local machine name.
-/// </summary>
-/// <remarks>
-/// Registered as a singleton at host startup. <see cref="StartedAt"/> captures the moment
-/// the type is constructed, so it reflects host start when DI builds the service provider.
-/// </remarks>
-public sealed class MagpieSystem : IMagpieSystem
+internal sealed class MagpieSystem(
+    HostStatusInfo hostStatus,
+    MagpieHostEnvironment hostEnvironment,
+    IHostApplicationLifetime lifetime,
+    IAuditRecordRepository auditRecordRepository,
+    TimeProvider timeProvider) : IMagpieSystem
 {
-    /// <summary>
-    /// Initialize a new <see cref="MagpieSystem"/> rooted at the given path.
-    /// </summary>
-    /// <param name="systemRoot">The absolute path to the Magpie installation root.</param>
-    /// <param name="nodeId">Optional node id. Falls back to <see cref="Environment.MachineName"/>.</param>
-    public MagpieSystem(string systemRoot, string? nodeId = null)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(systemRoot);
+    private readonly StateManager<LifecycleState> _lifecycle = new(LifecycleState.Running);
 
-        SystemRoot = systemRoot;
-        NodeId = string.IsNullOrWhiteSpace(nodeId) ? Environment.MachineName : nodeId;
-        StartedAt = DateTime.UtcNow;
+    private enum LifecycleState
+    {
+        Running,
+        ShuttingDown,
     }
 
-    /// <inheritdoc />
-    public string SystemRoot { get; }
+    public string NodeId => hostEnvironment.NodeId;
 
-    /// <inheritdoc />
-    public string NodeId { get; }
+    public bool IsClustered => hostEnvironment.IsClustered;
 
-    /// <inheritdoc />
-    public DateTime StartedAt { get; }
+    public SystemInfo GetInfo()
+    {
+        return new SystemInfo
+        {
+            Version = Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "0.0.0",
+            Runtime = RuntimeInformation.FrameworkDescription,
+            OperatingSystem = RuntimeInformation.OSDescription,
+            Architecture = RuntimeInformation.ProcessArchitecture.ToString(),
+            SystemRoot = hostEnvironment.SystemRoot,
+            NodeId = hostEnvironment.NodeId,
+            StartedAt = hostEnvironment.StartedAt,
+            RestartSupported = hostEnvironment.IsSupervised
+        };
+    }
+
+    public Task<SystemHealth> CheckHealthAsync(CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(new SystemHealth { Status = "Healthy" });
+    }
+
+    public Task RequestShutdownAsync(Guid? actingUserId, CancellationToken cancellationToken = default)
+    {
+        return StopAsync(MagpieExitCodes.Shutdown, "Shutdown", actingUserId, cancellationToken);
+    }
+
+    public Task RequestRestartAsync(Guid? actingUserId, CancellationToken cancellationToken = default)
+    {
+        return StopAsync(MagpieExitCodes.Restart, "Restart", actingUserId, cancellationToken);
+    }
+
+    private async Task StopAsync(
+        int exitCode,
+        string operation,
+        Guid? actingUserId,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!hostEnvironment.IsSupervised)
+        {
+            throw new MagpieShutdownException("The host is not supervised.");
+        }
+
+        if (!_lifecycle.TryTransition(LifecycleState.ShuttingDown, LifecycleState.Running))
+        {
+            throw new MagpieShutdownException(
+                "A shutdown is already in progress.",
+                hostStatus.ShutdownRequestedByUserId,
+                hostStatus.ShutdownRequestedAtUtc);
+        }
+
+        try
+        {
+            lifetime.StopApplication();
+            hostStatus.IsShutdownRequested = true;
+            hostStatus.ShutdownRequestedByUserId = actingUserId;
+            hostStatus.ShutdownRequestedAtUtc = timeProvider.GetUtcNow().UtcDateTime;
+            if (hostStatus.Mode == HostMode.Sentinel)
+            {
+                hostStatus.ShutdownExitCode = exitCode;
+            }
+        }
+        catch
+        {
+            _lifecycle.TryTransition(LifecycleState.Running, LifecycleState.ShuttingDown);
+            throw;
+        }
+
+        await auditRecordRepository.CreateAsync(
+            new()
+            {
+                Category = AuditCategories.System,
+                Operation = operation,
+                EntityType = "Host",
+                Detail = $"Host {operation.ToLowerInvariant()} requested.",
+                Timestamp = timeProvider.GetUtcNow().UtcDateTime,
+                UserId = actingUserId
+            },
+            cancellationToken).ConfigureAwait(false);
+    }
 }

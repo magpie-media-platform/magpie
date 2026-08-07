@@ -40,6 +40,7 @@ describe('useSetup', () => {
             const mockStatus: SetupStatus = {
                 isRequired: false,
                 isComplete: true,
+                requiresAdminClaim: false,
             };
 
             mockFetch.mockResolvedValueOnce({

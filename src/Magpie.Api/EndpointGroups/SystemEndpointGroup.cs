@@ -1,347 +1,228 @@
-using System;
 using System.Collections.Generic;
-using System.Diagnostics;
-using System.IO;
-using System.Linq;
-using System.Reflection;
-using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 
-using Magpie.Abstractions.Api;
-using Magpie.Abstractions.Database;
-using Magpie.Abstractions.Repositories;
-using Magpie.Abstractions.Security;
-using Magpie.Abstractions.System;
-using Magpie.Api.Logging;
-using Magpie.Data;
+using Magpie.Models;
 using Magpie.Models.Api;
-using Magpie.Models.Arguments;
 using Magpie.Models.Data;
-using Magpie.Models.Enums;
-using Magpie.Models.Paging;
+using Magpie.Models.Storage;
+using Magpie.Sdk.Api;
+using Magpie.Sdk.Services;
 
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
-using Microsoft.Extensions.Logging;
 
 namespace Magpie.Api.EndpointGroups;
 
-internal sealed class SystemEndpointGroup(
-    IMagpieSystem magpieSystem,
-    IRootFolderRepository rootFolderRepository,
-    IScheduleTriggerRepository scheduleTriggerRepository,
-    IUserRepository userRepository,
-    IPasswordHasher passwordHasher,
-    MagpieDbContext dbContext,
-    IDatabaseManagementProvider databaseManagementProvider,
-    LogBuffer logBuffer,
-    ILogger<SystemEndpointGroup> logger) : IApiEndpointGroup
+[MagpieCommandGroup("system", "system", "Inspect and control the host")]
+internal sealed class SystemEndpointGroup : IApiEndpointGroup
 {
-    private sealed record CreateSetupAdminRequest
-    {
-        public required string Username { get; init; }
-        public required string Password { get; init; }
-    }
-
     public string Name => "system";
 
     public void MapEndpoints(IEndpointRouteBuilder builder)
     {
-        builder.MapGet("health", GetSystemHealth)
-            .WithName(nameof(GetSystemHealth))
-            .Produces<HealthResponse>()
-            .AllowAnonymous();
-
-        builder.MapGet("health/database", GetDatabaseHealth)
-            .WithName(nameof(GetDatabaseHealth))
-            .Produces<ServiceHealthResponse>()
-            .RequireViewer();
-
-        builder.MapGet("health/scheduler", GetSchedulerHealth)
-            .WithName(nameof(GetSchedulerHealth))
-            .Produces<ServiceHealthResponse>()
-            .RequireViewer();
-
-        builder.MapGet("info", GetSystemInfo)
+        builder.MapGet("", GetSystemInfo)
             .WithName(nameof(GetSystemInfo))
             .Produces<SystemInfo>()
             .RequireViewer();
 
-        builder.MapGet("disk-space", GetDiskSpace)
-            .WithName(nameof(GetDiskSpace))
-            .Produces<DiskSpaceInfo[]>()
+        builder.MapGet("disk-space", GetDiskSpaceAsync)
+            .WithName(nameof(GetDiskSpaceAsync))
+            .Produces<DiskSpaceResult>()
             .RequireViewer();
 
-        builder.MapGet("logs", GetLogs)
-            .WithName(nameof(GetLogs))
-            .Produces<LogEntry[]>()
-            .RequireViewer();
+        builder.MapGet("health", GetSystemHealthAsync)
+            .WithName(nameof(GetSystemHealthAsync))
+            .Produces<SystemHealth>()
+            .AllowAnonymous();
 
-        builder.MapGet("setup/status", GetSetupStatus)
-            .WithName(nameof(GetSetupStatus))
+        builder.MapGet("files", BrowseFilesAsync)
+            .WithName(nameof(BrowseFilesAsync))
+            .Produces<IReadOnlyList<FileSystemEntry>>()
+            .RequireAdmin();
+
+        builder.MapPost("restart", RestartHostAsync)
+            .WithName(nameof(RestartHostAsync))
+            .Produces(StatusCodes.Status202Accepted)
+            .RequireAdmin();
+
+        builder.MapGet("setup/status", GetSetupStatusAsync)
+            .WithName(nameof(GetSetupStatusAsync))
             .Produces<SetupStatusResponse>()
             .AllowAnonymous();
 
-        builder.MapPost("setup/admin", CreateSetupAdmin)
-            .WithName(nameof(CreateSetupAdmin))
-            .Produces<UserResponse>(StatusCodes.Status201Created)
-            .ProducesProblem(StatusCodes.Status400BadRequest)
-            .ProducesProblem(StatusCodes.Status409Conflict)
+        builder.MapPost("setup/admin", CreateSetupAdminAsync)
+            .WithName(nameof(CreateSetupAdminAsync))
+            .Produces<UserResponse>()
             .AllowAnonymous();
+
+        builder.MapGet("setup/db-status", GetDatabaseSetupStatusAsync)
+            .WithName(nameof(GetDatabaseSetupStatusAsync))
+            .Produces<SetupDatabaseStatusResponse>()
+            .AllowAnonymous();
+
+        builder.MapPost("setup/db", ConfigureDatabaseAsync)
+            .WithName(nameof(ConfigureDatabaseAsync))
+            .Produces<DatabaseSetupResult>()
+            .AllowAnonymous();
+
+        builder.MapPost("setup/complete", CompleteSetupAsync)
+            .WithName(nameof(CompleteSetupAsync))
+            .Produces<SetupStatusResponse>()
+            .AllowAnonymous();
+
+        builder.MapPost("shutdown", ShutdownHostAsync)
+            .WithName(nameof(ShutdownHostAsync))
+            .Produces(StatusCodes.Status202Accepted)
+            .RequireAdmin();
     }
 
-    private static IResult GetSystemHealth()
+    internal IResult GetSystemInfo([FromServices] IMagpieSystem magpieSystem)
     {
-        return Results.Ok(new HealthResponse
-        {
-            Status = "Healthy"
-        });
+        return Results.Ok(magpieSystem.GetInfo());
     }
 
-    private async Task<IResult> GetDatabaseHealth(CancellationToken cancellationToken)
-    {
-        var stopwatch = Stopwatch.StartNew();
-        try
-        {
-            var canConnect = await dbContext.Database.CanConnectAsync(cancellationToken).ConfigureAwait(false);
-            stopwatch.Stop();
-
-            if (canConnect)
-            {
-                return Results.Ok(new ServiceHealthResponse
-                {
-                    Name = databaseManagementProvider.Provider,
-                    Status = "healthy",
-                    Message = "Database connection successful",
-                    ResponseTimeMs = stopwatch.ElapsedMilliseconds
-                });
-            }
-            else
-            {
-                return Results.Ok(new ServiceHealthResponse
-                {
-                    Name = databaseManagementProvider.Provider,
-                    Status = "unhealthy",
-                    Message = "Database connection failed",
-                    ResponseTimeMs = stopwatch.ElapsedMilliseconds
-                });
-            }
-        }
-        catch (Exception ex)
-        {
-            stopwatch.Stop();
-            return Results.Ok(new ServiceHealthResponse
-            {
-                Name = databaseManagementProvider.Provider,
-                Status = "unhealthy",
-                Message = ex.Message,
-                ResponseTimeMs = stopwatch.ElapsedMilliseconds
-            });
-        }
-    }
-
-    private async Task<IResult> GetSchedulerHealth(CancellationToken cancellationToken)
-    {
-        var stopwatch = Stopwatch.StartNew();
-        try
-        {
-            var triggers = await scheduleTriggerRepository.ListDueTriggersAsync(DateTime.UtcNow, cancellationToken)
-                .ConfigureAwait(false);
-            stopwatch.Stop();
-
-            var triggerCount = triggers.Count();
-            return Results.Ok(new ServiceHealthResponse
-            {
-                Name = "Scheduler",
-                Status = "healthy",
-                Message = $"Scheduler infrastructure accessible, {triggerCount} due trigger(s)",
-                ResponseTimeMs = stopwatch.ElapsedMilliseconds
-            });
-        }
-        catch (Exception ex)
-        {
-            stopwatch.Stop();
-            return Results.Ok(new ServiceHealthResponse
-            {
-                Name = "Scheduler",
-                Status = "unhealthy",
-                Message = ex.Message,
-                ResponseTimeMs = stopwatch.ElapsedMilliseconds
-            });
-        }
-    }
-
-    private IResult GetSystemInfo()
-    {
-        var assembly = Assembly.GetExecutingAssembly();
-        var version = assembly.GetName().Version?.ToString() ?? "0.0.0";
-
-        return Results.Ok(new SystemInfo()
-        {
-            Version = version,
-            Runtime = RuntimeInformation.FrameworkDescription,
-            OperatingSystem = RuntimeInformation.OSDescription,
-            Architecture = RuntimeInformation.ProcessArchitecture.ToString(),
-            SystemRoot = magpieSystem.SystemRoot,
-            NodeId = magpieSystem.NodeId,
-            StartedAt = magpieSystem.StartedAt
-        });
-    }
-
-    private async Task<IResult> GetDiskSpace(CancellationToken cancellationToken)
-    {
-        var rootFolders = await rootFolderRepository.ListAllAsync(cancellationToken).ConfigureAwait(false);
-        var diskSpaceInfos = new List<DiskSpaceInfo>();
-
-        foreach (var folder in rootFolders)
-        {
-            try
-            {
-                var driveInfo = GetDriveInfoForPath(folder.Path);
-                if (driveInfo is not null)
-                {
-                    diskSpaceInfos.Add(new DiskSpaceInfo
-                    {
-                        Id = folder.Id,
-                        Name = folder.Name,
-                        Path = folder.Path,
-                        TotalBytes = driveInfo.TotalSize,
-                        FreeBytes = driveInfo.AvailableFreeSpace,
-                        UsedBytes = driveInfo.TotalSize - driveInfo.AvailableFreeSpace
-                    });
-                }
-                else
-                {
-                    diskSpaceInfos.Add(new DiskSpaceInfo
-                    {
-                        Id = folder.Id,
-                        Name = folder.Name,
-                        Path = folder.Path,
-                        TotalBytes = 0,
-                        FreeBytes = 0,
-                        UsedBytes = 0
-                    });
-                }
-            }
-            catch (Exception ex)
-            {
-                logger.LogWarning(ex, "Failed to get disk space for path {Path}", folder.Path);
-                diskSpaceInfos.Add(new DiskSpaceInfo
-                {
-                    Id = folder.Id,
-                    Name = folder.Name,
-                    Path = folder.Path,
-                    TotalBytes = 0,
-                    FreeBytes = 0,
-                    UsedBytes = 0
-                });
-            }
-        }
-
-        return Results.Ok(diskSpaceInfos.ToArray());
-    }
-
-    private IResult GetLogs()
-    {
-        return Results.Ok(logBuffer.GetEntries());
-    }
-
-    private async Task<IResult> GetSetupStatus(CancellationToken cancellationToken)
-    {
-        var result = await userRepository.QueryAsync(
-            new UserQuery { Role = Role.Admin },
-            new PagingParameter { PageNumber = 1, PageSize = 1 },
-            null,
-            cancellationToken).ConfigureAwait(false);
-
-        var setupRequired = result.TotalItems == 0;
-        return Results.Ok(new SetupStatusResponse
-        {
-            IsRequired = setupRequired,
-            IsComplete = !setupRequired
-        });
-    }
-
-    private async Task<IResult> CreateSetupAdmin(
-        CreateSetupAdminRequest request,
+    internal async Task<IResult> GetDiskSpaceAsync(
+        [FromServices] IRootFolderService rootFolderService,
         CancellationToken cancellationToken)
     {
-        if (string.IsNullOrWhiteSpace(request.Username) || request.Username.Trim().Length < 3)
-        {
-            return Results.Problem(
-                detail: "Username must be at least 3 characters.",
-                statusCode: StatusCodes.Status400BadRequest);
-        }
+        var diskSpace = await rootFolderService.GetDiskSpaceAsync(cancellationToken).ConfigureAwait(false);
 
-        if (string.IsNullOrWhiteSpace(request.Password) || request.Password.Length < 8)
-        {
-            return Results.Problem(
-                detail: "Password must be at least 8 characters.",
-                statusCode: StatusCodes.Status400BadRequest);
-        }
-
-        var existing = await userRepository.QueryAsync(
-            new UserQuery { Role = Role.Admin },
-            new PagingParameter { PageNumber = 1, PageSize = 1 },
-            null,
-            cancellationToken).ConfigureAwait(false);
-
-        if (existing.TotalItems > 0)
-        {
-            return Results.Problem(
-                detail: "Setup is already complete. An admin account already exists.",
-                statusCode: StatusCodes.Status409Conflict);
-        }
-
-        var hashedPassword = await passwordHasher.HashPasswordAsync(request.Password, cancellationToken)
-            .ConfigureAwait(false);
-
-        var user = new User
-        {
-            Username = request.Username.Trim(),
-            PasswordHash = hashedPassword.Hash,
-            PasswordSalt = hashedPassword.Salt,
-            Role = Role.Admin,
-            ProviderType = "local",
-            Enabled = true,
-            CreatedAt = DateTime.UtcNow
-        };
-
-        var created = await userRepository.CreateAsync(user, null, cancellationToken).ConfigureAwait(false);
-
-        logger.LogInformation("Setup admin account created for user {Username}", created.Username);
-
-        return Results.Created($"api/users/{created.Id}", created.ToResponse());
+        return Results.Ok(diskSpace);
     }
 
-    private static DriveInfo? GetDriveInfoForPath(string path)
+    internal async Task<IResult> GetSystemHealthAsync(
+        [FromServices] IMagpieSystem magpieSystem,
+        CancellationToken cancellationToken)
     {
-        if (string.IsNullOrWhiteSpace(path))
-        {
-            return null;
-        }
+        var health = await magpieSystem.CheckHealthAsync(cancellationToken).ConfigureAwait(false);
 
-        try
-        {
-            var fullPath = Path.GetFullPath(path);
-            var root = Path.GetPathRoot(fullPath);
+        return Results.Ok(health);
+    }
 
-            if (string.IsNullOrEmpty(root))
-            {
-                return null;
-            }
+    internal async Task<IResult> BrowseFilesAsync(
+        [FromServices] IFileSystem fileSystem,
+        string? path,
+        CancellationToken cancellationToken)
+    {
+        var entries = await fileSystem.BrowseAsync(path, cancellationToken).ConfigureAwait(false);
 
-            return DriveInfo.GetDrives()
-                .FirstOrDefault(d => d.IsReady &&
-                    string.Equals(d.Name.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
-                        root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
-                        StringComparison.OrdinalIgnoreCase));
-        }
-        catch
+        return Results.Ok(entries);
+    }
+
+    internal async Task<IResult> RestartHostAsync(
+        [FromServices] IMagpieSystem magpieSystem,
+        AuthenticatedUser user,
+        CancellationToken cancellationToken)
+    {
+        await magpieSystem.RequestRestartAsync(user.Id, cancellationToken).ConfigureAwait(false);
+
+        return Results.Accepted();
+    }
+
+    internal async Task<IResult> GetSetupStatusAsync(
+        [FromServices] ISetupService setupService,
+        CancellationToken cancellationToken)
+    {
+        var isComplete = await setupService.IsCompleteAsync(cancellationToken).ConfigureAwait(false);
+        var hasLocalAdministrator = await setupService
+            .HasLocalAdministratorAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        return Results.Ok(new SetupStatusResponse
         {
-            return null;
-        }
+            IsRequired = !isComplete,
+            IsComplete = isComplete,
+            RequiresAdminClaim = !hasLocalAdministrator
+        });
+    }
+
+    internal async Task<IResult> CreateSetupAdminAsync(
+        [FromServices] ISetupService setupService,
+        [FromBody] SetupAdminCreateRequest request,
+        CancellationToken cancellationToken)
+    {
+        var created = await setupService
+            .CreateAdministratorAsync(request.Username, request.Password, cancellationToken)
+            .ConfigureAwait(false);
+
+        return Results.Ok(CreateUserResponse(created));
+    }
+
+    internal async Task<IResult> GetDatabaseSetupStatusAsync(
+        [FromServices] ISetupService setupService,
+        CancellationToken cancellationToken)
+    {
+        var canConnect = await setupService.CanConnectAsync(cancellationToken).ConfigureAwait(false);
+        var appliedMigrations = canConnect
+            ? await setupService.GetAppliedMigrationsAsync(cancellationToken).ConfigureAwait(false)
+            : [];
+
+        return Results.Ok(new SetupDatabaseStatusResponse
+        {
+            Initialized = appliedMigrations.Count > 0,
+            Provider = setupService.DatabaseProvider
+        });
+    }
+
+    internal async Task<IResult> ConfigureDatabaseAsync(
+        [FromServices] ISetupService setupService,
+        [FromBody] DatabaseSetupRequest request,
+        CancellationToken cancellationToken)
+    {
+        var result = await setupService
+            .ConfigureDatabaseAsync(request.Provider, request.ConnectionString, cancellationToken)
+            .ConfigureAwait(false);
+
+        return Results.Ok(result);
+    }
+
+    internal async Task<IResult> CompleteSetupAsync(
+        [FromServices] ISetupService setupService,
+        CancellationToken cancellationToken)
+    {
+        await setupService.CompleteAsync(cancellationToken).ConfigureAwait(false);
+
+        return Results.Ok(new SetupStatusResponse
+        {
+            IsRequired = false,
+            IsComplete = true,
+            RequiresAdminClaim = false
+        });
+    }
+
+    internal async Task<IResult> ShutdownHostAsync(
+        [FromServices] IMagpieSystem magpieSystem,
+        AuthenticatedUser user,
+        CancellationToken cancellationToken)
+    {
+        await magpieSystem.RequestShutdownAsync(user.Id, cancellationToken).ConfigureAwait(false);
+
+        return Results.Accepted();
+    }
+
+    private UserResponse CreateUserResponse(User user)
+    {
+        return new()
+        {
+            Id = user.Id,
+            Username = user.Username,
+            Email = user.Email,
+            ExtensionId = user.ExtensionId,
+            ProviderType = user.ProviderType,
+            ExternalId = user.ExternalId,
+            Settings = user.Settings,
+            Enabled = user.Enabled,
+            Role = user.Role,
+            FailedLoginAttempts = user.FailedLoginAttempts,
+            LockedUntil = user.LockedUntil,
+            LastLoginAt = user.LastLoginAt,
+            CreatedAt = user.CreatedAt,
+            CreatedByUserId = user.CreatedByUserId,
+            ModifiedAt = user.ModifiedAt,
+            ModifiedByUserId = user.ModifiedByUserId,
+        };
     }
 }

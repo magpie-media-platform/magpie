@@ -7,41 +7,40 @@ using Magpie.Models.Data;
 namespace Magpie.Abstractions.Repositories;
 
 /// <summary>
-/// Repository for managing refresh tokens.
+/// The repository contract for refresh tokens.
 /// </summary>
-public interface IRefreshTokenRepository
+public interface IRefreshTokenRepository : IRepository
 {
     /// <summary>
-    /// Create a new refresh token.
+    /// Creates a new refresh token.
     /// </summary>
-    /// <param name="token">The refresh token to create.</param>
-    /// <param name="cancellationToken">The cancellation token.</param>
+    /// <param name="token">The refresh token to create</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    /// <returns>The new refresh token</returns>
     Task<RefreshToken> CreateAsync(RefreshToken token, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Get a refresh token by its hash.
+    /// Gets a refresh token by its hash.
     /// </summary>
-    /// <param name="tokenHash">The token hash.</param>
-    /// <param name="cancellationToken">The cancellation token.</param>
+    /// <param name="tokenHash">The hash of the refresh token to find</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    /// <returns>The refresh token, or <c>null</c> when no token matches</returns>
     Task<RefreshToken?> GetByHashAsync(string tokenHash, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Delete a refresh token by its hash.
+    /// Redeems a single-use refresh token that is valid and not expired.
     /// </summary>
-    /// <param name="tokenHash">The token hash.</param>
-    /// <param name="cancellationToken">The cancellation token.</param>
+    /// <param name="tokenHash">The hash of the refresh token to redeem</param>
+    /// <param name="now">The current time that the expiry test uses</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    /// <returns>The redeemed token, or <c>null</c> when no token matches or the token is expired</returns>
+    Task<RefreshToken?> ConsumeAsync(string tokenHash, DateTime now, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Deletes a refresh token by its hash.
+    /// </summary>
+    /// <param name="tokenHash">The hash of the refresh token to delete</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    /// <returns><see langword="true"/> when the token exists, otherwise <see langword="false"/></returns>
     Task<bool> DeleteAsync(string tokenHash, CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Delete all refresh tokens for a user.
-    /// </summary>
-    /// <param name="userId">The user id.</param>
-    /// <param name="cancellationToken">The cancellation token.</param>
-    Task<int> DeleteByUserIdAsync(Guid userId, CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Delete all expired refresh tokens.
-    /// </summary>
-    /// <param name="cancellationToken">The cancellation token.</param>
-    Task<int> DeleteExpiredAsync(CancellationToken cancellationToken = default);
 }

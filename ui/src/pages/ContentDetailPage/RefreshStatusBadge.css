@@ -1,0 +1,37 @@
+@layer components {
+    .refresh-status-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: var(--space-xs);
+        padding: var(--space-xs) var(--space-sm);
+        font-size: var(--text-xs);
+        font-weight: var(--weight-medium);
+        border-radius: var(--radius-full);
+        border: 1px solid var(--border-default);
+        background-color: var(--bg-secondary);
+        color: var(--text-primary);
+
+        &[data-tone='queued'] {
+            border-color: var(--accent-secondary, var(--text-secondary));
+            color: var(--accent-secondary, var(--text-secondary));
+        }
+
+        &[data-tone='running'] {
+            border-color: var(--accent-primary);
+            color: var(--accent-primary);
+        }
+
+        &[data-tone='recently-completed'] {
+            border-color: var(--status-healthy);
+            color: var(--status-healthy);
+        }
+
+        & svg {
+            font-size: var(--text-base);
+        }
+    }
+
+    .refresh-status-badge__spinner {
+        animation: spin var(--duration-spinner) linear infinite;
+    }
+}

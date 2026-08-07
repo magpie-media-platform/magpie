@@ -1,235 +1,199 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
-using Magpie.Abstractions.Api;
-using Magpie.Abstractions.Integrations;
-using Magpie.Abstractions.Repositories;
-using Magpie.Abstractions.Security;
 using Magpie.Models;
+using Magpie.Models.Api;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
-using Magpie.Models.Enums;
+using Magpie.Sdk.Api;
+using Magpie.Sdk.Services;
 
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
 
 namespace Magpie.Api.EndpointGroups;
 
-internal sealed class MediaServersEndpointGroup(
-    IMediaServerRepository mediaServerRepository,
-    IEnumerable<IMediaServerIntegration> mediaServerIntegrations) : IApiEndpointGroup
+[MagpieCommandGroup("media-servers", "media-servers", "Manage media servers")]
+internal sealed class MediaServersEndpointGroup : IApiEndpointGroup
 {
     public string Name => "media-servers";
 
     public void MapEndpoints(IEndpointRouteBuilder builder)
     {
-        builder.MapGet("", GetAllMediaServers)
-            .WithName(nameof(GetAllMediaServers))
-            .Produces<MediaServer[]>()
+        builder.MapGet("", GetMediaServersAsync)
+            .WithName(nameof(GetMediaServersAsync))
+            .Produces<IReadOnlyList<MediaServer>>()
             .RequireViewer();
 
-        builder.MapGet("{id:guid}", GetMediaServerById)
-            .WithName(nameof(GetMediaServerById))
-            .Produces<MediaServer>()
-            .ProducesProblem(StatusCodes.Status404NotFound)
-            .RequireViewer();
-
-        builder.MapPost("", CreateMediaServer)
-            .WithName(nameof(CreateMediaServer))
+        builder.MapPost("", CreateMediaServerAsync)
+            .WithName(nameof(CreateMediaServerAsync))
             .Produces<MediaServer>(StatusCodes.Status201Created)
             .ProducesProblem(StatusCodes.Status400BadRequest)
-            .RequireManager();
+            .RequireAdmin();
 
-        builder.MapPatch("{id:guid}", PatchMediaServer)
-            .WithName(nameof(PatchMediaServer))
-            .Produces(StatusCodes.Status204NoContent)
+        builder.MapPost("test", TestMediaServerSettingsAsync)
+            .WithName(nameof(TestMediaServerSettingsAsync))
+            .Produces<ConfigurationTestResult>()
+            .RequireAdmin();
+
+        builder.MapGet("{id:guid}", GetMediaServerAsync)
+            .WithName(nameof(GetMediaServerAsync))
+            .Produces<MediaServer>()
             .ProducesProblem(StatusCodes.Status404NotFound)
+            .RequireViewer();
+
+        builder.MapPatch("{id:guid}", PatchMediaServerAsync)
+            .WithName(nameof(PatchMediaServerAsync))
+            .Produces(StatusCodes.Status204NoContent)
             .ProducesProblem(StatusCodes.Status400BadRequest)
-            .RequireManager();
-
-        builder.MapPost("{id:guid}/enable", EnableMediaServer)
-            .WithName(nameof(EnableMediaServer))
-            .Produces<MediaServer>()
             .ProducesProblem(StatusCodes.Status404NotFound)
-            .RequireManager();
+            .RequireAdmin();
 
-        builder.MapPost("{id:guid}/disable", DisableMediaServer)
-            .WithName(nameof(DisableMediaServer))
-            .Produces<MediaServer>()
-            .ProducesProblem(StatusCodes.Status404NotFound)
-            .RequireManager();
-
-        builder.MapPost("{id:guid}/test", TestMediaServer)
-            .WithName(nameof(TestMediaServer))
-            .Produces<ConnectionTestResult>()
-            .ProducesProblem(StatusCodes.Status404NotFound)
-            .RequireManager();
-
-        builder.MapDelete("{id:guid}", DeleteMediaServer)
-            .WithName(nameof(DeleteMediaServer))
+        builder.MapDelete("{id:guid}", DeleteMediaServerAsync)
+            .WithName(nameof(DeleteMediaServerAsync))
             .Produces(StatusCodes.Status204NoContent)
             .ProducesProblem(StatusCodes.Status404NotFound)
-            .RequireManager();
+            .RequireAdmin();
+
+        builder.MapPost("{id:guid}/test", TestMediaServerAsync)
+            .WithName(nameof(TestMediaServerAsync))
+            .Produces<ConfigurationTestResult>()
+            .RequireAdmin();
     }
 
-    private async Task<IResult> GetAllMediaServers(CancellationToken cancellationToken)
-    {
-        var mediaServers = await mediaServerRepository.ListAllAsync(cancellationToken).ConfigureAwait(false);
-
-        return Results.Ok(mediaServers);
-    }
-
-    private async Task<IResult> GetMediaServerById(Guid id, CancellationToken cancellationToken)
-    {
-        var mediaServer = await mediaServerRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
-
-        return mediaServer is null
-            ? Results.NotFound()
-            : Results.Ok(mediaServer);
-    }
-
-    private async Task<IResult> CreateMediaServer(
-        HttpContext httpContext,
-        MediaServer request,
+    [MagpieCommand("list", "GET", "", "List media servers")]
+    internal async Task<IResult> GetMediaServersAsync(
+        [FromServices] IMediaServerService mediaServerService,
         CancellationToken cancellationToken)
     {
-        var currentUserId = httpContext.User.GetUserId();
+        var servers = await mediaServerService.ListAsync(cancellationToken).ConfigureAwait(false);
 
-        var mediaServer = request with
-        {
-            Id = Guid.NewGuid(),
-            Status = MediaServerStatus.Unknown,
-            LastChecked = null,
-            CreatedAt = DateTime.UtcNow,
-            CreatedByUserId = currentUserId,
-            ModifiedAt = null,
-            ModifiedByUserId = null
-        };
+        var redacted = await RedactSecretsAsync(mediaServerService, servers, cancellationToken).ConfigureAwait(false);
 
-        var created = await mediaServerRepository.CreateAsync(mediaServer, currentUserId, cancellationToken)
-            .ConfigureAwait(false);
-
-        return Results.Created($"api/{Name}/{created.Id}", created);
+        return Results.Ok(redacted);
     }
 
-    private async Task<IResult> PatchMediaServer(
-        HttpContext httpContext,
-        Guid id,
-        MediaServerPatch request,
+    [MagpieCommand("create", "POST", "", "Create a media server")]
+    internal async Task<IResult> CreateMediaServerAsync(
+        [FromServices] IMediaServerService mediaServerService,
+        AuthenticatedUser user,
+        [FromBody] MediaServer server,
         CancellationToken cancellationToken)
     {
-        var currentUserId = httpContext.User.GetUserId();
-        var patch = request with { Id = id };
+        var created = await mediaServerService.CreateAsync(server, user.Id, cancellationToken).ConfigureAwait(false);
 
-        var updated = await mediaServerRepository.PatchAsync(patch, currentUserId, cancellationToken)
-            .ConfigureAwait(false);
+        var response = await RedactSecretsAsync(mediaServerService, created, cancellationToken).ConfigureAwait(false);
 
-        return updated
-            ? Results.NoContent()
-            : Results.NotFound();
+        return Results.Created($"api/{Name}/{created.Id}", response);
     }
 
-    private async Task<IResult> EnableMediaServer(
-        HttpContext httpContext,
-        Guid id,
+    [MagpieCommand("test-settings", "POST", "test", "Test media server settings")]
+    internal async Task<IResult> TestMediaServerSettingsAsync(
+        [FromServices] IMediaServerService mediaServerService,
+        [FromBody] IntegrationSettingsTestRequest request,
         CancellationToken cancellationToken)
     {
-        var existing = await mediaServerRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
-
-        if (existing is null)
-        {
-            return Results.NotFound();
-        }
-
-        var currentUserId = httpContext.User.GetUserId();
-
-        var mediaServer = existing with
-        {
-            Enabled = true,
-            ModifiedAt = DateTime.UtcNow,
-            ModifiedByUserId = currentUserId
-        };
-
-        await mediaServerRepository.UpdateAsync(mediaServer, currentUserId, cancellationToken)
-            .ConfigureAwait(false);
-
-        return Results.Ok(mediaServer);
-    }
-
-    private async Task<IResult> DisableMediaServer(
-        HttpContext httpContext,
-        Guid id,
-        CancellationToken cancellationToken)
-    {
-        var existing = await mediaServerRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
-
-        if (existing is null)
-        {
-            return Results.NotFound();
-        }
-
-        var currentUserId = httpContext.User.GetUserId();
-
-        var mediaServer = existing with
-        {
-            Enabled = false,
-            ModifiedAt = DateTime.UtcNow,
-            ModifiedByUserId = currentUserId
-        };
-
-        await mediaServerRepository.UpdateAsync(mediaServer, currentUserId, cancellationToken)
-            .ConfigureAwait(false);
-
-        return Results.Ok(mediaServer);
-    }
-
-    private async Task<IResult> TestMediaServer(Guid id, CancellationToken cancellationToken)
-    {
-        var mediaServer = await mediaServerRepository.GetByIdAsync(id, cancellationToken)
-            .ConfigureAwait(false);
-
-        if (mediaServer is null)
-        {
-            return Results.NotFound();
-        }
-
-        var integration = mediaServerIntegrations
-            .FirstOrDefault(i => string.Equals(
-                i.MediaServerType,
-                mediaServer.ProviderType,
-                StringComparison.OrdinalIgnoreCase));
-
-        if (integration is null)
-        {
-            return Results.Ok(new ConnectionTestResult
-            {
-                Success = false,
-                Message = $"No integration registered for type '{mediaServer.ProviderType}'."
-            });
-        }
-
-        var result = await integration.TestConnectionAsync(mediaServer.Settings, cancellationToken)
+        var result = await mediaServerService.TestSettingsAsync(
+            request.ProviderType,
+            request.Id,
+            request.Settings ?? new Dictionary<string, string>(),
+            cancellationToken)
             .ConfigureAwait(false);
 
         return Results.Ok(result);
     }
 
-    private async Task<IResult> DeleteMediaServer(
-        HttpContext httpContext,
+    [MagpieCommand("get", "GET", "{id:guid}", "Show a media server")]
+    internal async Task<IResult> GetMediaServerAsync(
+        [FromServices] IMediaServerService mediaServerService,
         Guid id,
         CancellationToken cancellationToken)
     {
-        var currentUserId = httpContext.User.GetUserId();
+        var server = await mediaServerService.GetAsync(id, cancellationToken).ConfigureAwait(false);
+        if (server is null)
+        {
+            return Results.NotFound();
+        }
 
-        var deleted = await mediaServerRepository.DeleteAsync(id, currentUserId, cancellationToken)
+        var response = await RedactSecretsAsync(mediaServerService, server, cancellationToken)
             .ConfigureAwait(false);
 
-        return deleted
-            ? Results.NoContent()
-            : Results.NotFound();
+        return Results.Ok(response);
+    }
+
+    [MagpieCommand("patch", "PATCH", "{id:guid}", "Update fields on a media server")]
+    internal async Task<IResult> PatchMediaServerAsync(
+        [FromServices] IMediaServerService mediaServerService,
+        AuthenticatedUser user,
+        Guid id,
+        [FromBody] MediaServerPatch patch,
+        CancellationToken cancellationToken)
+    {
+        var patched = await mediaServerService.PatchAsync(id, patch, user.Id, cancellationToken)
+            .ConfigureAwait(false);
+
+        return patched ? Results.NoContent() : Results.NotFound();
+    }
+
+    [MagpieCommand("delete", "DELETE", "{id:guid}", "Delete a media server")]
+    internal async Task<IResult> DeleteMediaServerAsync(
+        [FromServices] IMediaServerService mediaServerService,
+        AuthenticatedUser user,
+        Guid id,
+        CancellationToken cancellationToken)
+    {
+        var deleted = await mediaServerService.DeleteAsync(id, user.Id, cancellationToken).ConfigureAwait(false);
+
+        return deleted ? Results.NoContent() : Results.NotFound();
+    }
+
+    [MagpieCommand("test", "POST", "{id:guid}/test", "Test a media server")]
+    internal async Task<IResult> TestMediaServerAsync(
+        [FromServices] IMediaServerService mediaServerService,
+        Guid id,
+        CancellationToken cancellationToken)
+    {
+        var result = await mediaServerService.TestAsync(id, cancellationToken: cancellationToken)
+            .ConfigureAwait(false);
+
+        return Results.Ok(result);
+    }
+
+    private static async Task<IReadOnlyList<MediaServer>> RedactSecretsAsync(
+        IMediaServerService mediaServerService,
+        IReadOnlyList<MediaServer> servers,
+        CancellationToken cancellationToken)
+    {
+        var schemasByProviderType =
+            new Dictionary<string, IReadOnlyList<SettingSchemaDefinition>>(StringComparer.OrdinalIgnoreCase);
+        var redacted = new List<MediaServer>(servers.Count);
+        foreach (var server in servers)
+        {
+            if (!schemasByProviderType.TryGetValue(server.ProviderType, out var schema))
+            {
+                schema = await mediaServerService.GetSettingsSchemaAsync(server.ProviderType, cancellationToken)
+                    .ConfigureAwait(false);
+                schemasByProviderType[server.ProviderType] = schema;
+            }
+
+            redacted.Add(server with { Settings = server.Settings.RedactSecrets(schema) });
+        }
+
+        return redacted;
+    }
+
+    private static async Task<MediaServer> RedactSecretsAsync(
+        IMediaServerService mediaServerService,
+        MediaServer server,
+        CancellationToken cancellationToken)
+    {
+        var schema = await mediaServerService.GetSettingsSchemaAsync(server.ProviderType, cancellationToken)
+            .ConfigureAwait(false);
+
+        return server with { Settings = server.Settings.RedactSecrets(schema) };
     }
 }

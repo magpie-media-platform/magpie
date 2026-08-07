@@ -11,17 +11,17 @@ namespace Magpie.Models.Data;
 public record IndexerConnection
 {
     /// <summary>
-    /// The indexer connection id.
+    /// The unique id of the indexer connection.
     /// </summary>
     public Guid Id { get; set; }
 
     /// <summary>
-    /// The id of the indexer that this connection is for.
+    /// The id of the indexer.
     /// </summary>
     public Guid IndexerId { get; set; }
 
     /// <summary>
-    /// The display name.
+    /// The display name of the connection.
     /// </summary>
     public required string Name { get; set; }
 
@@ -31,40 +31,47 @@ public record IndexerConnection
     public bool Enabled { get; set; }
 
     /// <summary>
-    /// The current health status.
+    /// The status of the connection.
     /// </summary>
-    public IndexerStatus Status { get; set; }
+    public IntegrationHealthStatus Status { get; set; }
 
     /// <summary>
-    /// Serialized provider-specific settings.
+    /// The settings of the connection, keyed by name.
     /// </summary>
-    /// <remarks>
-    /// The settings are stored as serialized JSON.
-    /// </remarks>
     public Dictionary<string, string> Settings { get; set; } = [];
 
     /// <summary>
-    /// The date of the last health check.
+    /// The UTC time of the last check.
     /// </summary>
     public DateTime? LastChecked { get; set; }
 
     /// <summary>
-    /// When the record was created.
+    /// The message of the last error.
+    /// </summary>
+    public string? LastError { get; set; }
+
+    /// <summary>
+    /// The number of consecutive failures.
+    /// </summary>
+    public int ConsecutiveFailures { get; set; }
+
+    /// <summary>
+    /// The UTC time the record was created.
     /// </summary>
     public DateTime CreatedAt { get; set; }
 
     /// <summary>
-    /// The id of the user that created the record.
+    /// The id of the user who created the record.
     /// </summary>
     public Guid? CreatedByUserId { get; set; }
 
     /// <summary>
-    /// When the record was last modified.
+    /// The UTC time the record was last modified.
     /// </summary>
     public DateTime? ModifiedAt { get; set; }
 
     /// <summary>
-    /// The id of the user that last modified the record.
+    /// The id of the user who last modified the record.
     /// </summary>
     public Guid? ModifiedByUserId { get; set; }
 }

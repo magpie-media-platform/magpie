@@ -1,22 +1,22 @@
 namespace Magpie.Models.Enums;
 
 /// <summary>
-/// How an extension modifies a UI slot.
+/// The way an extension modifies a UI slot.
 /// </summary>
 public enum UISlotModifier
 {
     /// <summary>
-    /// Insert before the default content.
+    /// The extension content goes before the default content.
     /// </summary>
     Before = 0,
 
     /// <summary>
-    /// Insert after the default content.
+    /// The extension content goes after the default content.
     /// </summary>
     After,
 
     /// <summary>
-    /// Replace the default content entirely.
+    /// The extension content replaces the default content.
     /// </summary>
     Replace
 }

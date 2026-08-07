@@ -305,7 +305,7 @@ describe('DiskSpaceWidget interactions', () => {
 
         render(<DiskSpaceWidget folders={mockFolders} onFolderClick={handleClick} />);
 
-        const row = screen.getByText('TV Shows').closest('.disk-space-widget__row');
+        const row = screen.getByText('TV Shows').closest<HTMLElement>('.disk-space-widget__row');
         row?.focus();
 
         await user.keyboard('{Enter}');

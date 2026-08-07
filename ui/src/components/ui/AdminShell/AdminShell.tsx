@@ -2,24 +2,29 @@ import { forwardRef, type ComponentPropsWithoutRef } from 'react';
 import { Link } from 'react-router-dom';
 
 import {
-    ArrowLeft,
-    ClockCountdown,
-    Database,
-    FolderOpen,
-    Gauge,
-    Gear,
-    HardDrives,
-    PuzzlePiece,
-    SlidersHorizontal,
-    Television,
-    Users,
+    ArrowLeftIcon,
+    ArrowsLeftRightIcon,
+    BellIcon,
+    ClockCountdownIcon,
+    DatabaseIcon,
+    FolderOpenIcon,
+    GaugeIcon,
+    GearIcon,
+    HardDrivesIcon,
+    PuzzlePieceIcon,
+    ShieldWarningIcon,
+    ShapesIcon,
+    SlidersHorizontalIcon,
+    TelevisionIcon,
+    UsersIcon,
 } from '@phosphor-icons/react';
 
 import { Shell, ShellHeader, ShellSidebar, ShellMain, ShellBottomNav, useShell, type ShellProps } from '../Shell';
 import { Sidebar, SidebarContent, SidebarGroup, SidebarItem, SidebarSeparator } from '../Sidebar';
 import { Header } from '../Header';
-import { Badge } from '../Badge';
 import { UserMenu } from '../UserMenu';
+import { ExtensionAdminNavigation } from '../Slot';
+import { useMediaQuery } from '@/hooks/ui/useMediaQuery';
 import { useIsActive } from '@/lib/routes';
 
 export interface AdminShellProps extends Omit<ComponentPropsWithoutRef<'div'>, keyof ShellProps>, ShellProps {}
@@ -73,23 +78,20 @@ const AdminShellBottomNav = forwardRef<HTMLDivElement, AdminShellBottomNavProps>
 AdminShellBottomNav.displayName = 'AdminShellBottomNav';
 
 function AdminHeader() {
-    const { toggleSidebar, sidebarOpen } = useShell();
+    const { toggleSidebar, sidebarOpen, sidebarCollapsed } = useShell();
+    const isDesktopSidebar = useMediaQuery('(min-width: 768px)');
+    const sidebarExpanded = isDesktopSidebar ? !sidebarCollapsed : sidebarOpen;
 
     return (
         <Header
             brand={
                 <Link to="/admin">
-                    <Gear size={26} weight="duotone" aria-hidden="true" />
+                    <GearIcon size={26} weight="duotone" aria-hidden="true" />
                     <span>Admin</span>
                 </Link>
             }
-            status={
-                <Badge variant="info" dot>
-                    Admin Area
-                </Badge>
-            }
             onSidebarToggle={toggleSidebar}
-            sidebarOpen={sidebarOpen}
+            sidebarOpen={sidebarExpanded}
             sidebarNavId="admin-navigation-menu"
             actions={<UserMenu />}
         />
@@ -105,34 +107,69 @@ function AdminSidebar() {
         <Sidebar open={sidebarOpen} collapsed={sidebarCollapsed} onCollapsedChange={toggleSidebarCollapsed}>
             <SidebarContent>
                 <SidebarGroup>
-                    <SidebarItem to="/" icon={<ArrowLeft weight="duotone" />} onClick={closeSidebar}>
+                    <SidebarItem to="/" icon={<ArrowLeftIcon weight="duotone" />} onClick={closeSidebar}>
                         Exit admin
                     </SidebarItem>
                 </SidebarGroup>
 
                 <SidebarSeparator />
 
-                <SidebarGroup>
+                <SidebarGroup label="System">
                     <SidebarItem
-                        to="/admin/general"
-                        icon={<Gear weight="duotone" />}
-                        active={isActive('/admin/general')}
+                        to="/admin/system"
+                        icon={<GaugeIcon weight="duotone" />}
+                        active={isActive('/admin/system')}
                         onClick={closeSidebar}
                     >
-                        General
+                        System Status
                     </SidebarItem>
-                </SidebarGroup>
-
-                <SidebarSeparator />
-
-                <SidebarGroup label="Users">
+                    <SidebarItem
+                        to="/admin/jobs"
+                        icon={<ClockCountdownIcon weight="duotone" />}
+                        active={isActive('/admin/jobs')}
+                        onClick={closeSidebar}
+                    >
+                        System Jobs
+                    </SidebarItem>
                     <SidebarItem
                         to="/admin/users"
-                        icon={<Users weight="duotone" />}
+                        icon={<UsersIcon weight="duotone" />}
                         active={isActive('/admin/users')}
                         onClick={closeSidebar}
                     >
                         Users
+                    </SidebarItem>
+                    <SidebarItem
+                        to="/admin/quality-tiers"
+                        icon={<SlidersHorizontalIcon weight="duotone" />}
+                        active={isActive('/admin/quality-tiers')}
+                        onClick={closeSidebar}
+                    >
+                        Quality Tiers
+                    </SidebarItem>
+                    <SidebarItem
+                        to="/admin/content-types"
+                        icon={<ShapesIcon weight="duotone" />}
+                        active={isActive('/admin/content-types')}
+                        onClick={closeSidebar}
+                    >
+                        Content Types
+                    </SidebarItem>
+                    <SidebarItem
+                        to="/admin/database"
+                        icon={<DatabaseIcon weight="duotone" />}
+                        active={isActive('/admin/database')}
+                        onClick={closeSidebar}
+                    >
+                        Database
+                    </SidebarItem>
+                    <SidebarItem
+                        to="/admin/general"
+                        icon={<GearIcon weight="duotone" />}
+                        active={isActive('/admin/general')}
+                        onClick={closeSidebar}
+                    >
+                        Advanced
                     </SidebarItem>
                 </SidebarGroup>
 
@@ -141,7 +178,7 @@ function AdminSidebar() {
                 <SidebarGroup label="Integrations">
                     <SidebarItem
                         to="/admin/indexers"
-                        icon={<Database weight="duotone" />}
+                        icon={<DatabaseIcon weight="duotone" />}
                         active={isActive('/admin/indexers')}
                         onClick={closeSidebar}
                     >
@@ -149,7 +186,7 @@ function AdminSidebar() {
                     </SidebarItem>
                     <SidebarItem
                         to="/admin/download-clients"
-                        icon={<HardDrives weight="duotone" />}
+                        icon={<HardDrivesIcon weight="duotone" />}
                         active={isActive('/admin/download-clients')}
                         onClick={closeSidebar}
                     >
@@ -157,7 +194,7 @@ function AdminSidebar() {
                     </SidebarItem>
                     <SidebarItem
                         to="/admin/media-servers"
-                        icon={<Television weight="duotone" />}
+                        icon={<TelevisionIcon weight="duotone" />}
                         active={isActive('/admin/media-servers')}
                         onClick={closeSidebar}
                     >
@@ -165,63 +202,51 @@ function AdminSidebar() {
                     </SidebarItem>
                     <SidebarItem
                         to="/admin/root-folders"
-                        icon={<FolderOpen weight="duotone" />}
+                        icon={<FolderOpenIcon weight="duotone" />}
                         active={isActive('/admin/root-folders')}
                         onClick={closeSidebar}
                     >
                         Root Folders
                     </SidebarItem>
-                </SidebarGroup>
-
-                <SidebarSeparator />
-
-                <SidebarGroup label="Content">
                     <SidebarItem
-                        to="/admin/quality-tiers"
-                        icon={<SlidersHorizontal weight="duotone" />}
-                        active={isActive('/admin/quality-tiers')}
+                        to="/admin/remote-path-mappings"
+                        icon={<ArrowsLeftRightIcon weight="duotone" />}
+                        active={isActive('/admin/remote-path-mappings')}
                         onClick={closeSidebar}
                     >
-                        Quality Tiers
+                        Remote Path Mappings
+                    </SidebarItem>
+                    <SidebarItem
+                        to="/admin/file-types"
+                        icon={<ShieldWarningIcon weight="duotone" />}
+                        active={isActive('/admin/file-types')}
+                        onClick={closeSidebar}
+                    >
+                        File Types
+                    </SidebarItem>
+                    <SidebarItem
+                        to="/admin/notifications"
+                        icon={<BellIcon weight="duotone" />}
+                        active={isActive('/admin/notifications')}
+                        onClick={closeSidebar}
+                    >
+                        Notifications
                     </SidebarItem>
                 </SidebarGroup>
 
-                <SidebarSeparator />
-
-                <SidebarGroup label="System">
-                    <SidebarItem
-                        to="/admin/jobs"
-                        icon={<ClockCountdown weight="duotone" />}
-                        active={isActive('/admin/jobs')}
-                        onClick={closeSidebar}
-                    >
-                        Jobs
-                    </SidebarItem>
-                    <SidebarItem
-                        to="/admin/extensions"
-                        icon={<PuzzlePiece weight="duotone" />}
-                        active={isActive('/admin/extensions')}
-                        onClick={closeSidebar}
-                    >
-                        Extensions
-                    </SidebarItem>
-                    <SidebarItem
-                        to="/admin/backups"
-                        icon={<Database weight="duotone" />}
-                        active={isActive('/admin/backups')}
-                        onClick={closeSidebar}
-                    >
-                        Backups
-                    </SidebarItem>
-                    <SidebarItem
-                        to="/admin/system"
-                        icon={<Gauge weight="duotone" />}
-                        active={isActive('/admin/system')}
-                        onClick={closeSidebar}
-                    >
-                        System Status
-                    </SidebarItem>
-                </SidebarGroup>
+                <ExtensionAdminNavigation
+                    onNavigate={closeSidebar}
+                    leading={
+                        <SidebarItem
+                            to="/admin/extensions"
+                            icon={<PuzzlePieceIcon weight="duotone" />}
+                            active={isActive('/admin/extensions')}
+                            onClick={closeSidebar}
+                        >
+                            Extensions
+                        </SidebarItem>
+                    }
+                />
             </SidebarContent>
         </Sidebar>
     );

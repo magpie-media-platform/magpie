@@ -8,10 +8,12 @@ using Magpie.Core.Repositories;
 using Magpie.Data;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
-using Magpie.Test.Shared;
 
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
+
+using Moq;
 
 using NUnit.Framework;
 
@@ -48,13 +50,15 @@ public class RefreshTokenRepositoryTests
 
         _userId = user.Id;
 
-        var loggerFactory = LoggerFactory.Create(builder => builder.AddTestLogger());
+        var loggerFactory = NullLoggerFactory.Instance;
 
         var auditRecordRepository = new AuditRecordRepository(
             _context,
-            loggerFactory.CreateLogger<AuditRecordRepository>());
+            Mock.Of<Sdk.Services.IEventBus>(),
+            loggerFactory.CreateLogger<AuditRecordRepository>(),
+            new TransactionManager(_context, NullLogger<TransactionManager>.Instance));
 
-        var transactionManager = new TransactionManager(_context);
+        var transactionManager = new TransactionManager(_context, NullLogger<TransactionManager>.Instance);
 
         _subject = new RefreshTokenRepository(
             _context,
@@ -71,7 +75,7 @@ public class RefreshTokenRepositoryTests
     }
 
     [Test]
-    public async Task CreateAsync_CreatesRefreshToken()
+    public async Task CreateAsync_CreatesRefreshToken_WhenRequestIsValid()
     {
         // Arrange
         var token = new RefreshToken
@@ -82,7 +86,7 @@ public class RefreshTokenRepositoryTests
         };
 
         // Act
-        var result = await _subject.CreateAsync(token);
+        var result = await _subject.CreateAsync(token).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -95,7 +99,7 @@ public class RefreshTokenRepositoryTests
     }
 
     [Test]
-    public async Task CreateAsync_CreatesAuditRecord()
+    public async Task CreateAsync_CreatesAuditRecord_WhenTokenIsCreated()
     {
         // Arrange
         var token = new RefreshToken
@@ -106,10 +110,10 @@ public class RefreshTokenRepositoryTests
         };
 
         // Act
-        await _subject.CreateAsync(token);
+        await _subject.CreateAsync(token).ConfigureAwait(false);
 
         // Assert
-        var auditRecords = await _context.AuditRecords.ToListAsync();
+        var auditRecords = await _context.AuditRecords.ToListAsync().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(auditRecords, Has.Count.EqualTo(1));
@@ -131,10 +135,10 @@ public class RefreshTokenRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.RefreshTokens.Add(token);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        var result = await _subject.GetByHashAsync("uniquehash123");
+        var result = await _subject.GetByHashAsync("uniquehash123").ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -148,7 +152,7 @@ public class RefreshTokenRepositoryTests
     public async Task GetByHashAsync_ReturnsNull_WhenNotExists()
     {
         // Act
-        var result = await _subject.GetByHashAsync("nonexistenthash");
+        var result = await _subject.GetByHashAsync("nonexistenthash").ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.Null);
@@ -166,15 +170,15 @@ public class RefreshTokenRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.RefreshTokens.Add(token);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        var result = await _subject.DeleteAsync("deletehash");
+        var result = await _subject.DeleteAsync("deletehash").ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.True);
 
-        var deleted = await _subject.GetByHashAsync("deletehash");
+        var deleted = await _subject.GetByHashAsync("deletehash").ConfigureAwait(false);
         Assert.That(deleted, Is.Null);
     }
 
@@ -182,14 +186,14 @@ public class RefreshTokenRepositoryTests
     public async Task DeleteAsync_ReturnsFalse_WhenNotExists()
     {
         // Act
-        var result = await _subject.DeleteAsync("nonexistenthash");
+        var result = await _subject.DeleteAsync("nonexistenthash").ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.False);
     }
 
     [Test]
-    public async Task DeleteAsync_CreatesAuditRecord()
+    public async Task DeleteAsync_CreatesAuditRecord_WhenTokenExists()
     {
         // Arrange
         var token = new RefreshToken
@@ -200,13 +204,13 @@ public class RefreshTokenRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.RefreshTokens.Add(token);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        await _subject.DeleteAsync("deleteaudithash");
+        await _subject.DeleteAsync("deleteaudithash").ConfigureAwait(false);
 
         // Assert
-        var auditRecords = await _context.AuditRecords.ToListAsync();
+        var auditRecords = await _context.AuditRecords.ToListAsync().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(auditRecords, Has.Count.EqualTo(1));
@@ -217,211 +221,74 @@ public class RefreshTokenRepositoryTests
     }
 
     [Test]
-    public async Task DeleteByUserIdAsync_DeletesAllUserTokens()
-    {
-        // Arrange
-        var token1 = new RefreshToken
-        {
-            UserId = _userId,
-            TokenHash = "hash1",
-            ExpiresAt = DateTime.UtcNow.AddDays(7),
-            CreatedAt = DateTime.UtcNow
-        };
-        var token2 = new RefreshToken
-        {
-            UserId = _userId,
-            TokenHash = "hash2",
-            ExpiresAt = DateTime.UtcNow.AddDays(7),
-            CreatedAt = DateTime.UtcNow
-        };
-        _context.RefreshTokens.AddRange(token1, token2);
-        await _context.SaveChangesAsync();
-
-        // Act
-        var result = await _subject.DeleteByUserIdAsync(_userId);
-
-        // Assert
-        Assert.That(result, Is.EqualTo(2));
-
-        var remaining = await _context.RefreshTokens.Where(rt => rt.UserId == _userId).ToListAsync();
-        Assert.That(remaining, Is.Empty);
-    }
-
-    [Test]
-    public async Task DeleteByUserIdAsync_ReturnsZero_WhenNoTokens()
-    {
-        // Act
-        var result = await _subject.DeleteByUserIdAsync(_userId);
-
-        // Assert
-        Assert.That(result, Is.EqualTo(0));
-    }
-
-    [Test]
-    public async Task DeleteByUserIdAsync_DoesNotDeleteOtherUserTokens()
-    {
-        // Arrange
-        var otherUser = new User
-        {
-            Username = "OtherUser",
-            ProviderType = "local",
-            Enabled = true,
-            Role = Role.Viewer,
-            CreatedAt = DateTime.UtcNow
-        };
-        _context.Users.Add(otherUser);
-        await _context.SaveChangesAsync();
-
-        var token1 = new RefreshToken
-        {
-            UserId = _userId,
-            TokenHash = "hash1",
-            ExpiresAt = DateTime.UtcNow.AddDays(7),
-            CreatedAt = DateTime.UtcNow
-        };
-        var token2 = new RefreshToken
-        {
-            UserId = otherUser.Id,
-            TokenHash = "hash2",
-            ExpiresAt = DateTime.UtcNow.AddDays(7),
-            CreatedAt = DateTime.UtcNow
-        };
-        _context.RefreshTokens.AddRange(token1, token2);
-        await _context.SaveChangesAsync();
-
-        // Act
-        var result = await _subject.DeleteByUserIdAsync(_userId);
-
-        // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(result, Is.EqualTo(1));
-
-            var remaining = await _context.RefreshTokens.ToListAsync();
-            Assert.That(remaining, Has.Exactly(1).Items);
-            Assert.That(remaining, Has.One.With.Property(nameof(RefreshToken.UserId)).EqualTo(otherUser.Id));
-        }
-    }
-
-    [Test]
-    public async Task DeleteByUserIdAsync_CreatesAuditRecord()
+    public async Task ConsumeAsync_ReturnsAndDeletesToken_WhenTokenIsValid()
     {
         // Arrange
         var token = new RefreshToken
         {
             UserId = _userId,
-            TokenHash = "hash1",
+            TokenHash = "consumehash",
             ExpiresAt = DateTime.UtcNow.AddDays(7),
             CreatedAt = DateTime.UtcNow
         };
         _context.RefreshTokens.Add(token);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        await _subject.DeleteByUserIdAsync(_userId);
+        var result = await _subject.ConsumeAsync("consumehash", DateTime.UtcNow).ConfigureAwait(false);
 
         // Assert
-        var auditRecords = await _context.AuditRecords.ToListAsync();
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(auditRecords, Has.Count.EqualTo(1));
-            Assert.That(auditRecords, Has.One.With.Property(nameof(AuditRecord.Operation)).EqualTo("DeleteAll"));
-            Assert.That(auditRecords, Has.One.With.Property(nameof(AuditRecord.EntityType)).EqualTo("RefreshToken"));
-            Assert.That(auditRecords, Has.One.With.Property(nameof(AuditRecord.UserId)).EqualTo(_userId));
-        }
+        Assert.That(result, Has.Property(nameof(result.UserId)).EqualTo(_userId));
+        var deleted = await _subject.GetByHashAsync("consumehash").ConfigureAwait(false);
+        Assert.That(deleted, Is.Null);
     }
 
     [Test]
-    public async Task DeleteExpiredAsync_DeletesExpiredTokens()
+    public async Task ConsumeAsync_ReturnsNull_WhenTokenExpired()
     {
         // Arrange
-        var expiredToken = new RefreshToken
+        var token = new RefreshToken
         {
             UserId = _userId,
-            TokenHash = "expiredhash",
-            ExpiresAt = DateTime.UtcNow.AddDays(-1),
-            CreatedAt = DateTime.UtcNow.AddDays(-8)
+            TokenHash = "expiredconsumehash",
+            ExpiresAt = DateTime.UtcNow.AddMinutes(-1),
+            CreatedAt = DateTime.UtcNow.AddDays(-1)
         };
-        var validToken = new RefreshToken
+        _context.RefreshTokens.Add(token);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        var result = await _subject.ConsumeAsync("expiredconsumehash", DateTime.UtcNow).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(result, Is.Null);
+        var stored = await _subject.GetByHashAsync("expiredconsumehash").ConfigureAwait(false);
+        Assert.That(stored, Is.Not.Null);
+    }
+
+    [Test]
+    public async Task ConsumeAsync_ReturnsNull_WhenTokenAlreadyConsumed()
+    {
+        // Arrange
+        var token = new RefreshToken
         {
             UserId = _userId,
-            TokenHash = "validhash",
+            TokenHash = "consumeoncehash",
             ExpiresAt = DateTime.UtcNow.AddDays(7),
             CreatedAt = DateTime.UtcNow
         };
-        _context.RefreshTokens.AddRange(expiredToken, validToken);
-        await _context.SaveChangesAsync();
+        _context.RefreshTokens.Add(token);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        var result = await _subject.DeleteExpiredAsync();
+        var first = await _subject.ConsumeAsync("consumeoncehash", DateTime.UtcNow).ConfigureAwait(false);
+        var second = await _subject.ConsumeAsync("consumeoncehash", DateTime.UtcNow).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(result, Is.EqualTo(1));
-
-            var remaining = await _context.RefreshTokens.ToListAsync();
-            Assert.That(remaining, Has.Exactly(1).Items);
-            Assert.That(remaining, Has.One.With.Property(nameof(RefreshToken.TokenHash)).EqualTo("validhash"));
+            Assert.That(first, Is.Not.Null);
+            Assert.That(second, Is.Null);
         }
-    }
-
-    [Test]
-    public async Task DeleteExpiredAsync_ReturnsZero_WhenNoExpiredTokens()
-    {
-        // Arrange
-        var validToken = new RefreshToken
-        {
-            UserId = _userId,
-            TokenHash = "validhash",
-            ExpiresAt = DateTime.UtcNow.AddDays(7),
-            CreatedAt = DateTime.UtcNow
-        };
-        _context.RefreshTokens.Add(validToken);
-        await _context.SaveChangesAsync();
-
-        // Act
-        var result = await _subject.DeleteExpiredAsync();
-
-        // Assert
-        Assert.That(result, Is.EqualTo(0));
-    }
-
-    [Test]
-    public async Task DeleteExpiredAsync_CreatesAuditRecord_WhenTokensDeleted()
-    {
-        // Arrange
-        var expiredToken = new RefreshToken
-        {
-            UserId = _userId,
-            TokenHash = "expiredhash",
-            ExpiresAt = DateTime.UtcNow.AddDays(-1),
-            CreatedAt = DateTime.UtcNow.AddDays(-8)
-        };
-        _context.RefreshTokens.Add(expiredToken);
-        await _context.SaveChangesAsync();
-
-        // Act
-        await _subject.DeleteExpiredAsync();
-
-        // Assert
-        var auditRecords = await _context.AuditRecords.ToListAsync();
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(auditRecords, Has.Count.EqualTo(1));
-            Assert.That(auditRecords, Has.One.With.Property(nameof(AuditRecord.Operation)).EqualTo("DeleteExpired"));
-            Assert.That(auditRecords, Has.One.With.Property(nameof(AuditRecord.EntityType)).EqualTo("RefreshToken"));
-        }
-    }
-
-    [Test]
-    public async Task DeleteExpiredAsync_DoesNotCreateAuditRecord_WhenNoTokensDeleted()
-    {
-        // Act
-        await _subject.DeleteExpiredAsync();
-
-        // Assert
-        var auditRecords = await _context.AuditRecords.ToListAsync();
-        Assert.That(auditRecords, Is.Empty);
     }
 }

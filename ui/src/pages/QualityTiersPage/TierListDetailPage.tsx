@@ -1,185 +1,54 @@
-import { useMemo, useCallback, useState, useRef } from 'react';
-import { useParams, Link } from 'react-router-dom';
-import {
-    ArrowLeft,
-    SlidersHorizontal,
-    Plus,
-    Trash,
-    PencilSimple,
-    CheckFat,
-    DotsSixVertical,
-    DotsThreeVertical,
-    ListNumbers,
-    CircleNotch,
-    WarningCircle,
-} from '@phosphor-icons/react';
+import { useMemo, useCallback, useEffect, useState, useRef } from 'react';
+import { useParams } from 'react-router-dom';
+import { PlusIcon, SlidersHorizontalIcon, WarningCircleIcon } from '@phosphor-icons/react';
 
-import { Badge } from '@/components/ui/Badge';
+import { useAuth, Role } from '@/auth';
 import { Breadcrumb, type BreadcrumbItem } from '@/components/ui/Breadcrumb';
-import { Button } from '@/components/ui/Button';
 import { DeleteConfirmDialog } from '@/components/ui/DeleteConfirmDialog/DeleteConfirmDialog';
-import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent } from '@/components/ui/DropdownMenu';
 import { PullToRefresh } from '@/components/ui/PullToRefresh';
 import { QuickActionsButton, type QuickAction } from '@/components/ui/QuickActionsButton';
-import { Skeleton } from '@/components/ui/Skeleton';
-import { Tooltip } from '@/components/ui/Tooltip';
 import { useToast } from '@/components/ui/Toast';
+import { UnsavedChangesDialog } from '@/components/ui/UnsavedChangesDialog';
+import { useDocumentTitle } from '@/hooks/useDocumentTitle';
+import { useExternalChangeConflict } from '@/hooks/useExternalChangeConflict';
+import { stripBlankRows, useFormDirty } from '@/hooks/useFormDirty';
 import {
     useQualityTierList,
     useQualityTierLists,
     useQualityTiers,
-    type ApiQualityTierList,
-    type ApiQualityTierListRank,
-    type QualityTierCriteria,
+    type ApiQualityTierRule,
     type QualityTierListPatch,
     type QualityTierListRankPatch,
-    type CriteriaValueOperator,
 } from '@/hooks/useQualityTierLists';
-import { useAuth, Role } from '@/auth';
-import { useDocumentTitle } from '@/hooks/useDocumentTitle';
-import { getErrorMessage } from '@/lib/errors';
-import { TierForm, type TierFormValues, type Criterion } from './TierForm';
+import { useUnsavedChangesGuard } from '@/hooks/useUnsavedChangesGuard';
+import { getErrorMessage, isNotFoundError } from '@/lib/errors';
+
+import { isBlankCriterion } from './criteriaEditorUtils';
+import { ListRulesSheet } from './ListRulesSheet';
+import { type ExclusionDraft } from './RulesEditor';
+import { normalizeExclusions } from './rulesEditorUtils';
+import { TierForm, type Criterion, type TierFormValues } from './TierForm';
+import { TierListDetailFallback } from './TierListDetailFallback';
+import { TierListDetailHeader } from './TierListDetailHeader';
+import { TierListDetailSkeleton } from './TierListDetailSkeleton';
+import {
+    mapCriteriaToApi,
+    mapListRulesToApi,
+    mapTierListToDisplay,
+    mapTierRulesToApi,
+    type TierWithCriteria,
+} from './tierListDetailMappers';
+import { TierListTiersSection } from './TierListTiersSection';
 
 import '@/styles/card-actions.css';
 import './TierListDetailPage.css';
 
-export type TierCriterion = Criterion;
+const BASE_BREADCRUMBS: BreadcrumbItem[] = [
+    { id: 'quality-tiers', label: 'Quality Tiers', to: '/admin/quality-tiers' },
+];
 
-export interface TierWithCriteria {
-    id: string;
-    name: string;
-    isCutoff: boolean;
-    criteriaCount: number;
-    criteria: TierCriterion[];
-}
-
-export interface TierListDetail {
-    id: string;
-    name: string;
-    upgradeAllowed: boolean;
-    tiers: TierWithCriteria[];
-    createdAt: string;
-}
-
-const operatorNames: Record<number, TierCriterion['operator']> = {
-    0: 'Equals',
-    1: 'NotEquals',
-    10: 'Contains',
-    11: 'NotContains',
-    12: 'StartsWith',
-    13: 'NotStartsWith',
-};
-
-function mapOperator(op: CriteriaValueOperator | undefined): TierCriterion['operator'] {
-    return operatorNames[op ?? 0] ?? 'Equals';
-}
-
-const operatorValues: Record<string, CriteriaValueOperator> = {
-    Equals: 0,
-    NotEquals: 1,
-    Contains: 10,
-    NotContains: 11,
-    StartsWith: 12,
-    NotStartsWith: 13,
-};
-
-function mapCriteriaToApi(criteria: Criterion[]): QualityTierCriteria {
-    if (criteria.length === 0) {
-        return { and: [] };
-    }
-
-    const items: Record<string, { operator: CriteriaValueOperator; value: string }> = {};
-    for (const c of criteria) {
-        items[c.field] = {
-            operator: operatorValues[c.operator] ?? 0,
-            value: c.value,
-        };
-    }
-
-    return { and: [{ items }] };
-}
-
-function mapCriteriaToDisplay(criteria: QualityTierCriteria, tierId: string): TierCriterion[] {
-    const result: TierCriterion[] = [];
-    let index = 0;
-
-    if (!criteria.and) {
-        return result;
-    }
-
-    for (const dict of criteria.and) {
-        if (!dict.items) {
-            continue;
-        }
-
-        for (const [field, criterion] of Object.entries(dict.items)) {
-            const op = mapOperator(criterion.operator);
-
-            if (criterion.values && criterion.values.length > 0) {
-                for (const v of criterion.values) {
-                    result.push({
-                        id: `${tierId}-c-${index++}`,
-                        field,
-                        operator: op,
-                        value: v,
-                    });
-                }
-            } else {
-                result.push({
-                    id: `${tierId}-c-${index++}`,
-                    field,
-                    operator: op,
-                    value: criterion.value ?? '',
-                });
-            }
-        }
-    }
-
-    return result;
-}
-
-function mapTierRankToDisplay(rank: ApiQualityTierListRank): TierWithCriteria {
-    const tier = rank.qualityTier;
-    const criteria = tier?.criteria ? mapCriteriaToDisplay(tier.criteria, rank.qualityTierId) : [];
-
-    return {
-        id: rank.qualityTierId,
-        name: tier?.name ?? 'Unknown Tier',
-        isCutoff: rank.isCutoff,
-        criteriaCount: criteria.length,
-        criteria,
-    };
-}
-
-function mapTierListToDisplay(apiTierList: ApiQualityTierList): TierListDetail {
-    const sortedRanks = [...apiTierList.qualityTierRanks].sort((a, b) => a.ordinal - b.ordinal);
-
-    return {
-        id: apiTierList.id,
-        name: apiTierList.name,
-        upgradeAllowed: apiTierList.upgradeAllowed,
-        tiers: sortedRanks.map(mapTierRankToDisplay),
-        createdAt: apiTierList.createdAt,
-    };
-}
-
-function formatOperator(operator: TierCriterion['operator']): string {
-    switch (operator) {
-        case 'Equals':
-            return '=';
-        case 'NotEquals':
-            return '≠';
-        case 'Contains':
-            return 'contains';
-        case 'NotContains':
-            return 'not contains';
-        case 'StartsWith':
-            return 'starts with';
-        case 'NotStartsWith':
-            return 'not starts with';
-        default:
-            return operator;
-    }
+function normalizeCriteria(criteria: readonly Criterion[]): Criterion[] {
+    return stripBlankRows(criteria, isBlankCriterion);
 }
 
 export function TierListDetailPage() {
@@ -194,6 +63,17 @@ export function TierListDetailPage() {
     const [formOpen, setFormOpen] = useState(false);
     const [editingTier, setEditingTier] = useState<TierFormValues | null>(null);
     const [isSubmitting, setIsSubmitting] = useState(false);
+    const [cloningTierId, setCloningTierId] = useState<string | null>(null);
+
+    const [listRulesOpen, setListRulesOpen] = useState(false);
+    const [listCriteriaDraft, setListCriteriaDraft] = useState<Criterion[]>([]);
+    const [listExclusionsDraft, setListExclusionsDraft] = useState<ExclusionDraft[]>([]);
+    const [isSubmittingListRules, setIsSubmittingListRules] = useState(false);
+    const [showListRulesUnsaved, setShowListRulesUnsaved] = useState(false);
+    const [showListRulesStaleSave, setShowListRulesStaleSave] = useState(false);
+    const cleanListCriteriaRef = useRef<Criterion[]>([]);
+    const cleanListExclusionsRef = useRef<ExclusionDraft[]>([]);
+    const cleanListSourceRulesRef = useRef<ApiQualityTierRule[]>([]);
 
     const [draggedTierId, setDraggedTierId] = useState<string | null>(null);
     const [dropTargetId, setDropTargetId] = useState<string | null>(null);
@@ -211,6 +91,23 @@ export function TierListDetailPage() {
         }
         return mapTierListToDisplay(apiTierList);
     }, [apiTierList]);
+    const currentEditingTier = useMemo(() => {
+        if (!editingTier?.id) {
+            return editingTier;
+        }
+        const tier = tierList?.tiers.find((candidate) => candidate.id === editingTier.id);
+        if (!tier) {
+            return editingTier;
+        }
+        return {
+            id: tier.id,
+            name: tier.name,
+            isCutoff: tier.isCutoff,
+            criteria: tier.criteria,
+            exclusions: tier.exclusions,
+            sourceRules: tier.sourceRules,
+        };
+    }, [editingTier, tierList]);
 
     const breadcrumbs: BreadcrumbItem[] = useMemo(() => {
         const items: BreadcrumbItem[] = [{ id: 'quality-tiers', label: 'Quality Tiers', to: '/admin/quality-tiers' }];
@@ -230,13 +127,24 @@ export function TierListDetailPage() {
         await refetch();
     }, [refetch]);
 
+    const handleSaveMimeTypes = useCallback(
+        async (mimeTypes: string[]) => {
+            if (!tierListId) {
+                throw new Error('Tier list is unavailable');
+            }
+            await updateTierList(tierListId, { mimeTypes: { value: mimeTypes } });
+            await refetch();
+        },
+        [refetch, tierListId, updateTierList],
+    );
+
     const handleAddTier = useCallback(() => {
         setEditingTier(null);
         setFormOpen(true);
     }, []);
 
     const addTierActions: QuickAction[] = useMemo(
-        () => [{ id: 'add-tier', label: 'Add Tier', icon: <Plus weight="bold" />, onClick: handleAddTier }],
+        () => [{ id: 'add-tier', label: 'Add Tier', icon: <PlusIcon weight="bold" />, onClick: handleAddTier }],
         [handleAddTier],
     );
 
@@ -252,6 +160,8 @@ export function TierListDetailPage() {
                     name: tier.name,
                     isCutoff: tier.isCutoff,
                     criteria: tier.criteria,
+                    exclusions: tier.exclusions,
+                    sourceRules: tier.sourceRules,
                 });
                 setFormOpen(true);
             }
@@ -269,36 +179,28 @@ export function TierListDetailPage() {
     const handleFormSubmit = useCallback(
         async (values: TierFormValues) => {
             if (!tierListId || !tierList) {
-                return;
+                throw new Error('Tier list is unavailable');
             }
 
             setIsSubmitting(true);
             const criteria = mapCriteriaToApi(values.criteria);
+            const rules = mapTierRulesToApi(values.exclusions ?? [], values.sourceRules ?? []);
 
             try {
                 if (values.id) {
                     await updateTier(values.id, {
                         name: { value: values.name },
                         criteria: { value: criteria },
+                        rules: { value: rules },
                     });
 
                     const existing = tierList.tiers.find((t) => t.id === values.id);
                     if (existing && existing.isCutoff !== values.isCutoff) {
-                        const update: QualityTierListRankPatch[] = [];
-                        if (values.isCutoff) {
-                            for (const t of tierList.tiers) {
-                                if (t.id === values.id) {
-                                    update.push({ qualityTierId: { value: t.id }, isCutoff: { value: true } });
-                                } else if (t.isCutoff) {
-                                    update.push({ qualityTierId: { value: t.id }, isCutoff: { value: false } });
-                                }
-                            }
-                        } else {
-                            update.push({ qualityTierId: { value: values.id }, isCutoff: { value: false } });
-                        }
-                        if (update.length > 0) {
-                            await updateTierList(tierListId, { qualityTierRanks: { update } });
-                        }
+                        await updateTierList(tierListId, {
+                            qualityTierRanks: {
+                                update: [{ qualityTierId: { value: values.id }, isCutoff: { value: values.isCutoff } }],
+                            },
+                        });
                     }
 
                     await refetch();
@@ -311,6 +213,7 @@ export function TierListDetailPage() {
                     const newTier = await createTier({
                         name: values.name,
                         criteria,
+                        rules,
                     });
 
                     const nextOrdinal = tierList.tiers.length;
@@ -326,18 +229,6 @@ export function TierListDetailPage() {
                         },
                     };
 
-                    if (values.isCutoff) {
-                        const update: QualityTierListRankPatch[] = [];
-                        for (const t of tierList.tiers) {
-                            if (t.isCutoff) {
-                                update.push({ qualityTierId: { value: t.id }, isCutoff: { value: false } });
-                            }
-                        }
-                        if (update.length > 0) {
-                            patch.qualityTierRanks!.update = update;
-                        }
-                    }
-
                     await updateTierList(tierListId, patch);
                     await refetch();
                     toast({
@@ -349,12 +240,13 @@ export function TierListDetailPage() {
 
                 setFormOpen(false);
                 setEditingTier(null);
-            } catch {
+            } catch (error) {
                 toast({
                     title: 'Error',
                     description: `Failed to ${values.id ? 'update' : 'create'} tier`,
                     variant: 'error',
                 });
+                throw error;
             } finally {
                 setIsSubmitting(false);
             }
@@ -390,7 +282,7 @@ export function TierListDetailPage() {
         } catch {
             toast({
                 title: 'Delete failed',
-                description: 'Could not delete tier',
+                description: 'Failed to delete the tier.',
                 variant: 'error',
             });
         } finally {
@@ -403,44 +295,228 @@ export function TierListDetailPage() {
         setDeletingTier(null);
     }, []);
 
-    const handleSetCutoff = useCallback(
+    const handleToggleCutoff = useCallback(
         async (tierId: string) => {
             if (!tierListId || !tierList) {
                 return;
             }
 
-            try {
-                const update: QualityTierListRankPatch[] = [];
-                for (const tier of tierList.tiers) {
-                    if (tier.id === tierId) {
-                        update.push({ qualityTierId: { value: tier.id }, isCutoff: { value: true } });
-                    } else if (tier.isCutoff) {
-                        update.push({ qualityTierId: { value: tier.id }, isCutoff: { value: false } });
-                    }
-                }
+            const tier = tierList.tiers.find((t) => t.id === tierId);
+            if (!tier) {
+                return;
+            }
+            const nextCutoff = !tier.isCutoff;
 
+            try {
                 const patch: QualityTierListPatch = {
-                    qualityTierRanks: { update },
+                    qualityTierRanks: {
+                        update: [{ qualityTierId: { value: tierId }, isCutoff: { value: nextCutoff } }],
+                    },
                 };
                 await updateTierList(tierListId, patch);
                 await refetch();
 
-                const tier = tierList.tiers.find((t) => t.id === tierId);
                 toast({
                     title: 'Cutoff Updated',
-                    description: `Set "${tier?.name ?? 'tier'}" as cutoff`,
+                    description: nextCutoff ? `Set "${tier.name}" as cutoff` : `Cleared cutoff on "${tier.name}"`,
                     variant: 'success',
                 });
             } catch {
                 toast({
                     title: 'Update failed',
-                    description: 'Could not update cutoff',
+                    description: 'Failed to update the cutoff.',
                     variant: 'error',
                 });
             }
         },
         [tierListId, tierList, updateTierList, refetch, toast],
     );
+
+    const handleCloneTier = useCallback(
+        async (tierId: string) => {
+            if (!tierListId || !tierList) {
+                return;
+            }
+
+            const source = tierList.tiers.find((t) => t.id === tierId);
+            if (!source) {
+                return;
+            }
+
+            setCloningTierId(tierId);
+            try {
+                const rules = mapTierRulesToApi(source.exclusions, source.sourceRules);
+                const newTier = await createTier({
+                    name: `${source.name} (Copy)`,
+                    criteria: mapCriteriaToApi(source.criteria),
+                    rules,
+                });
+
+                await updateTierList(tierListId, {
+                    qualityTierRanks: {
+                        add: [{ qualityTierId: newTier.id, ordinal: tierList.tiers.length, isCutoff: false }],
+                    },
+                });
+                await refetch();
+
+                toast({
+                    title: 'Cloned',
+                    description: `Cloned "${source.name}" - add a condition to refine it`,
+                    variant: 'success',
+                });
+
+                setEditingTier({
+                    id: newTier.id,
+                    name: newTier.name,
+                    isCutoff: false,
+                    criteria: source.criteria,
+                    exclusions: source.exclusions,
+                    sourceRules: rules,
+                });
+                setFormOpen(true);
+            } catch {
+                toast({
+                    title: 'Clone failed',
+                    description: 'Failed to clone the tier.',
+                    variant: 'error',
+                });
+            } finally {
+                setCloningTierId(null);
+            }
+        },
+        [tierListId, tierList, createTier, updateTierList, refetch, toast],
+    );
+
+    const handleOpenListRules = useCallback(() => {
+        const criteria = tierList?.criteria ?? [];
+        const exclusions = tierList?.exclusions ?? [];
+        const sourceRules = tierList?.sourceRules ?? [];
+        setListCriteriaDraft(criteria);
+        setListExclusionsDraft(exclusions);
+        cleanListCriteriaRef.current = criteria;
+        cleanListExclusionsRef.current = exclusions;
+        cleanListSourceRulesRef.current = sourceRules;
+        setShowListRulesUnsaved(false);
+        setListRulesOpen(true);
+    }, [tierList?.criteria, tierList?.exclusions, tierList?.sourceRules]);
+
+    const listCriteriaDirty = useFormDirty(listCriteriaDraft, cleanListCriteriaRef.current, normalizeCriteria);
+    const listExclusionsDirty = useFormDirty(listExclusionsDraft, cleanListExclusionsRef.current, normalizeExclusions);
+    const listRulesDirty = listCriteriaDirty || listExclusionsDirty;
+    useEffect(() => {
+        if (!listRulesOpen || listRulesDirty) {
+            return;
+        }
+        const criteria = tierList?.criteria ?? [];
+        const exclusions = tierList?.exclusions ?? [];
+        const sourceRules = tierList?.sourceRules ?? [];
+        setListCriteriaDraft(criteria);
+        setListExclusionsDraft(exclusions);
+        cleanListCriteriaRef.current = criteria;
+        cleanListExclusionsRef.current = exclusions;
+        cleanListSourceRulesRef.current = sourceRules;
+    }, [listRulesDirty, listRulesOpen, tierList?.criteria, tierList?.exclusions, tierList?.sourceRules]);
+    const listRulesConflict = useExternalChangeConflict({
+        dirty: listRulesDirty,
+        entityId: tierListId,
+        eventNames: ['qualityTierList.updated', 'qualityTierList.deleted'],
+        deletedEventNames: ['qualityTierList.deleted'],
+        contextKeys: ['qualityTierList.id'],
+        enabled: listRulesOpen && !!tierListId,
+    });
+
+    useUnsavedChangesGuard(listRulesOpen && listRulesDirty && !showListRulesUnsaved);
+
+    const handleCloseListRules = useCallback(() => {
+        if (listRulesDirty) {
+            setShowListRulesUnsaved(true);
+            return;
+        }
+        setListRulesOpen(false);
+    }, [listRulesDirty]);
+
+    const handleListRulesOpenChange = useCallback(
+        (nextOpen: boolean) => {
+            if (!nextOpen) {
+                handleCloseListRules();
+                return;
+            }
+            setListRulesOpen(nextOpen);
+        },
+        [handleCloseListRules],
+    );
+
+    const handleDiscardListRules = useCallback(() => {
+        setShowListRulesUnsaved(false);
+        setListRulesOpen(false);
+    }, []);
+
+    const handleKeepEditingListRules = useCallback(() => {
+        setShowListRulesUnsaved(false);
+    }, []);
+
+    const saveListRules = useCallback(async () => {
+        if (!tierListId) {
+            return;
+        }
+
+        listRulesConflict.beginOwnSave();
+        setIsSubmittingListRules(true);
+        try {
+            const rules = mapListRulesToApi({
+                criteria: listCriteriaDraft,
+                exclusions: listExclusionsDraft,
+                sourceRules: cleanListSourceRulesRef.current,
+                criteriaChanged: listCriteriaDirty,
+                exclusionsChanged: listExclusionsDirty,
+            });
+            await updateTierList(tierListId, { rules: { value: rules } });
+            listRulesConflict.endOwnSave(true);
+            await refetch();
+            toast({
+                title: 'Saved',
+                description: 'Updated criteria and exclusions for every tier in the list',
+                variant: 'success',
+            });
+            setShowListRulesUnsaved(false);
+            setListRulesOpen(false);
+        } catch {
+            listRulesConflict.endOwnSave(false);
+            toast({
+                title: 'Save failed',
+                description: 'Failed to save all tier criteria and exclusions.',
+                variant: 'error',
+            });
+        } finally {
+            setIsSubmittingListRules(false);
+        }
+    }, [
+        tierListId,
+        listCriteriaDraft,
+        listExclusionsDraft,
+        listCriteriaDirty,
+        listExclusionsDirty,
+        listRulesConflict,
+        updateTierList,
+        refetch,
+        toast,
+    ]);
+
+    const handleSaveListRules = useCallback(() => {
+        if (listRulesConflict.state === 'deleted') {
+            return;
+        }
+        if (listRulesConflict.state === 'stale') {
+            setShowListRulesStaleSave(true);
+            return;
+        }
+        void saveListRules();
+    }, [listRulesConflict.state, saveListRules]);
+
+    const handleConfirmStaleListRulesSave = useCallback(() => {
+        setShowListRulesStaleSave(false);
+        void saveListRules();
+    }, [saveListRules]);
 
     const displayTiers = useMemo(() => orderedTiers ?? tierList?.tiers ?? [], [orderedTiers, tierList?.tiers]);
 
@@ -553,7 +629,7 @@ export function TierListDetailPage() {
                 setOrderedTiers(null);
                 toast({
                     title: 'Reorder failed',
-                    description: 'Could not save new tier order',
+                    description: 'Failed to save the tier order.',
                     variant: 'error',
                 });
             }
@@ -562,105 +638,61 @@ export function TierListDetailPage() {
     );
 
     if (isLoading) {
-        return (
-            <div className="tier-list-detail-page" data-page="tier-list-detail">
-                <div className="tier-list-detail-page__loading">
-                    <Skeleton className="tier-list-detail-page__skeleton tier-list-detail-page__skeleton--breadcrumb" />
-                    <div className="tier-list-detail-page__loading-header">
-                        <Skeleton
-                            className="tier-list-detail-page__skeleton tier-list-detail-page__skeleton--icon"
-                            variant="circle"
-                        />
-                        <Skeleton className="tier-list-detail-page__skeleton tier-list-detail-page__skeleton--title" />
-                        <Skeleton className="tier-list-detail-page__skeleton tier-list-detail-page__skeleton--badge" />
-                    </div>
-                    <Skeleton className="tier-list-detail-page__skeleton tier-list-detail-page__skeleton--description" />
-                    <div className="tier-list-detail-page__loading-tiers">
-                        <Skeleton className="tier-list-detail-page__skeleton tier-list-detail-page__skeleton--tier-card" />
-                        <Skeleton className="tier-list-detail-page__skeleton tier-list-detail-page__skeleton--tier-card" />
-                        <Skeleton className="tier-list-detail-page__skeleton tier-list-detail-page__skeleton--tier-card" />
-                    </div>
-                </div>
-            </div>
-        );
+        return <TierListDetailSkeleton />;
     }
 
-    const baseBreadcrumbs: BreadcrumbItem[] = [
-        { id: 'quality-tiers', label: 'Quality Tiers', to: '/admin/quality-tiers' },
-    ];
-
     if (error && !tierList) {
-        return (
-            <div className="tier-list-detail-page" data-page="tier-list-detail">
-                <PullToRefresh onRefresh={handleRefresh} className="tier-list-detail-page__pull-to-refresh">
-                    <Breadcrumb items={baseBreadcrumbs} className="tier-list-detail-page__breadcrumb" />
-                    <header className="tier-list-detail-page__header" data-component="tier-list-detail-header">
-                        <div className="tier-list-detail-page__header-main">
-                            <SlidersHorizontal
-                                weight="duotone"
-                                className="tier-list-detail-page__icon"
-                                aria-hidden="true"
-                            />
-                            <div className="tier-list-detail-page__title-row">
-                                <h1 className="tier-list-detail-page__title">Quality Tier List</h1>
-                            </div>
-                        </div>
-                    </header>
-                    <div className="tier-list-detail-page__not-found">
-                        <WarningCircle
+        if (isNotFoundError(error)) {
+            return (
+                <TierListDetailFallback
+                    breadcrumbs={BASE_BREADCRUMBS}
+                    onRefresh={handleRefresh}
+                    icon={
+                        <SlidersHorizontalIcon
                             weight="duotone"
                             className="tier-list-detail-page__not-found-icon"
                             aria-hidden="true"
                         />
-                        <h2 className="tier-list-detail-page__not-found-title">Failed to Load Tier List</h2>
-                        <p>{getErrorMessage(error)}</p>
-                        <div className="tier-list-detail-page__error-actions">
-                            <Button variant="secondary" size="sm" onClick={() => refetch()}>
-                                Retry
-                            </Button>
-                            <Link to="/admin/quality-tiers" className="tier-list-detail-page__back-link">
-                                <ArrowLeft weight="bold" aria-hidden="true" />
-                                Back to Quality Tiers
-                            </Link>
-                        </div>
-                    </div>
-                </PullToRefresh>
-            </div>
+                    }
+                    title="Tier List Not Found"
+                    message="The tier list you are looking for does not exist."
+                />
+            );
+        }
+
+        return (
+            <TierListDetailFallback
+                breadcrumbs={BASE_BREADCRUMBS}
+                onRefresh={handleRefresh}
+                icon={
+                    <WarningCircleIcon
+                        weight="duotone"
+                        className="tier-list-detail-page__not-found-icon"
+                        aria-hidden="true"
+                    />
+                }
+                title="Failed to Load Tier List"
+                message={error ? getErrorMessage(error) : ''}
+                onRetry={() => refetch()}
+            />
         );
     }
 
     if (!tierList) {
         return (
-            <div className="tier-list-detail-page" data-page="tier-list-detail">
-                <PullToRefresh onRefresh={handleRefresh} className="tier-list-detail-page__pull-to-refresh">
-                    <Breadcrumb items={baseBreadcrumbs} className="tier-list-detail-page__breadcrumb" />
-                    <header className="tier-list-detail-page__header" data-component="tier-list-detail-header">
-                        <div className="tier-list-detail-page__header-main">
-                            <SlidersHorizontal
-                                weight="duotone"
-                                className="tier-list-detail-page__icon"
-                                aria-hidden="true"
-                            />
-                            <div className="tier-list-detail-page__title-row">
-                                <h1 className="tier-list-detail-page__title">Quality Tier List</h1>
-                            </div>
-                        </div>
-                    </header>
-                    <div className="tier-list-detail-page__not-found">
-                        <SlidersHorizontal
-                            weight="duotone"
-                            className="tier-list-detail-page__not-found-icon"
-                            aria-hidden="true"
-                        />
-                        <h2 className="tier-list-detail-page__not-found-title">Tier List Not Found</h2>
-                        <p>The tier list you are looking for does not exist.</p>
-                        <Link to="/admin/quality-tiers" className="tier-list-detail-page__back-link">
-                            <ArrowLeft weight="bold" aria-hidden="true" />
-                            Back to Quality Tiers
-                        </Link>
-                    </div>
-                </PullToRefresh>
-            </div>
+            <TierListDetailFallback
+                breadcrumbs={BASE_BREADCRUMBS}
+                onRefresh={handleRefresh}
+                icon={
+                    <SlidersHorizontalIcon
+                        weight="duotone"
+                        className="tier-list-detail-page__not-found-icon"
+                        aria-hidden="true"
+                    />
+                }
+                title="Tier List Not Found"
+                message="The tier list you are looking for does not exist."
+            />
         );
     }
 
@@ -669,112 +701,38 @@ export function TierListDetailPage() {
             <PullToRefresh onRefresh={handleRefresh} className="tier-list-detail-page__pull-to-refresh">
                 <Breadcrumb items={breadcrumbs} className="tier-list-detail-page__breadcrumb" />
 
-                <header
-                    className="tier-list-detail-page__header"
-                    data-component="tier-list-detail-header"
-                    data-tier-list-id={tierList.id}
-                >
-                    <div className="tier-list-detail-page__header-main">
-                        <SlidersHorizontal
-                            weight="duotone"
-                            className="tier-list-detail-page__icon"
-                            aria-hidden="true"
-                        />
-                        <div className="tier-list-detail-page__title-row">
-                            <h1 className="tier-list-detail-page__title">{tierList.name}</h1>
-                            {tierList.upgradeAllowed ? (
-                                <Badge variant="fulfilled" size="sm">
-                                    Upgrade
-                                </Badge>
-                            ) : (
-                                <Badge variant="default" size="sm">
-                                    No Upgrade
-                                </Badge>
-                            )}
-                        </div>
-                    </div>
-                    {canManage && (
-                        <div className="tier-list-detail-page__header-actions">
-                            <Button variant="primary" size="sm" onClick={handleAddTier} data-action="add-tier">
-                                <Plus weight="bold" aria-hidden="true" />
-                                <span className="tier-list-detail-page__add-label">Add Tier</span>
-                            </Button>
-                        </div>
-                    )}
-                    {canManage && (
-                        <div className="tier-list-detail-page__mobile-actions">
-                            <DropdownMenu>
-                                <DropdownMenuTrigger asChild>
-                                    <Button
-                                        variant="secondary"
-                                        size="sm"
-                                        aria-label="Actions"
-                                        data-testid="tier-list-detail-page__mobile-menu"
-                                    >
-                                        <DotsThreeVertical weight="bold" aria-hidden="true" />
-                                    </Button>
-                                </DropdownMenuTrigger>
-                                <DropdownMenuContent align="end" sideOffset={4}>
-                                    <div className="tier-list-detail-page__mobile-actions-content">
-                                        <Button
-                                            variant="primary"
-                                            size="sm"
-                                            onClick={handleAddTier}
-                                            data-action="add-tier"
-                                        >
-                                            <Plus weight="bold" aria-hidden="true" />
-                                            Add Tier
-                                        </Button>
-                                    </div>
-                                </DropdownMenuContent>
-                            </DropdownMenu>
-                        </div>
-                    )}
-                </header>
+                <TierListDetailHeader
+                    tierListId={tierList.id}
+                    name={tierList.name}
+                    mimeTypes={tierList.mimeTypes}
+                    criteriaCount={tierList.criteria.length}
+                    exclusionCount={tierList.exclusions.length}
+                    canManage={canManage}
+                    onOpenListRules={handleOpenListRules}
+                    onAddTier={handleAddTier}
+                    onSaveMimeTypes={handleSaveMimeTypes}
+                />
 
-                <p className="tier-list-detail-page__description">
-                    Tiers are listed in priority order. Higher priority tiers are preferred during quality selection.
-                    The cutoff tier is the minimum acceptable quality level.
-                    {canManage && ' Drag tiers to reorder.'}
-                </p>
-
-                <div className="tier-list-detail-page__tiers" role="list" aria-label="Quality tiers">
-                    {displayTiers.length === 0 ? (
-                        <div className="tier-list-detail-page__empty">
-                            <ListNumbers
-                                weight="duotone"
-                                className="tier-list-detail-page__empty-icon"
-                                aria-hidden="true"
-                            />
-                            <p className="tier-list-detail-page__empty-text">No tiers configured</p>
-                            <p className="tier-list-detail-page__empty-hint">Add tiers to define quality preferences</p>
-                        </div>
-                    ) : (
-                        displayTiers.map((tier, index) => (
-                            <TierCard
-                                key={tier.id}
-                                tier={tier}
-                                priority={index + 1}
-                                totalTiers={displayTiers.length}
-                                isDeleting={isDeleting && deletingTier?.id === tier.id}
-                                canManage={canManage}
-                                isDragging={draggedTierId === tier.id}
-                                isDropTarget={dropTargetId === tier.id}
-                                dropPosition={dropTargetId === tier.id ? dropPosition : null}
-                                onEdit={handleEditTier}
-                                onDelete={handleDeleteTier}
-                                onSetCutoff={handleSetCutoff}
-                                onDragStart={handleDragStart}
-                                onDragEnd={handleDragEnd}
-                                onDragOver={handleDragOver}
-                                onDragLeave={handleDragLeave}
-                                onDrop={handleDrop}
-                            />
-                        ))
-                    )}
-                </div>
-
-                <div ref={dragImageRef} className="tier-list-detail-page__drag-image" aria-hidden="true" />
+                <TierListTiersSection
+                    canManage={canManage}
+                    displayTiers={displayTiers}
+                    deletingTierId={deletingTier?.id ?? null}
+                    isDeleting={isDeleting}
+                    cloningTierId={cloningTierId}
+                    draggedTierId={draggedTierId}
+                    dropTargetId={dropTargetId}
+                    dropPosition={dropPosition}
+                    dragImageRef={dragImageRef}
+                    onEditTier={handleEditTier}
+                    onCloneTier={handleCloneTier}
+                    onDeleteTier={handleDeleteTier}
+                    onToggleCutoff={handleToggleCutoff}
+                    onDragStart={handleDragStart}
+                    onDragEnd={handleDragEnd}
+                    onDragOver={handleDragOver}
+                    onDragLeave={handleDragLeave}
+                    onDrop={handleDrop}
+                />
             </PullToRefresh>
 
             {canManage && <QuickActionsButton actions={addTierActions} title="Add Tier" />}
@@ -782,10 +740,34 @@ export function TierListDetailPage() {
             <TierForm
                 open={formOpen}
                 onOpenChange={handleFormOpenChange}
-                initialValues={editingTier}
+                initialValues={currentEditingTier}
                 tierListName={tierList.name}
+                tierListId={tierList.id}
                 onSubmit={handleFormSubmit}
                 isSubmitting={isSubmitting}
+            />
+
+            <ListRulesSheet
+                open={listRulesOpen}
+                onOpenChange={handleListRulesOpenChange}
+                tierListName={tierList.name}
+                criteria={listCriteriaDraft}
+                onCriteriaChange={setListCriteriaDraft}
+                exclusions={listExclusionsDraft}
+                onExclusionsChange={setListExclusionsDraft}
+                isSubmitting={isSubmittingListRules}
+                onClose={handleCloseListRules}
+                onSave={handleSaveListRules}
+                conflictState={listRulesConflict.state}
+                showStaleSaveConfirmation={showListRulesStaleSave}
+                onCancelStaleSave={() => setShowListRulesStaleSave(false)}
+                onConfirmStaleSave={handleConfirmStaleListRulesSave}
+            />
+
+            <UnsavedChangesDialog
+                open={showListRulesUnsaved}
+                onDiscard={handleDiscardListRules}
+                onCancel={handleKeepEditingListRules}
             />
 
             <DeleteConfirmDialog
@@ -801,172 +783,5 @@ export function TierListDetailPage() {
 }
 
 TierListDetailPage.displayName = 'TierListDetailPage';
-
-interface TierCardProps {
-    tier: TierWithCriteria;
-    priority: number;
-    totalTiers: number;
-    isDeleting: boolean;
-    canManage: boolean;
-    isDragging: boolean;
-    isDropTarget: boolean;
-    dropPosition: 'before' | 'after' | null;
-    onEdit: (tierId: string) => void;
-    onDelete: (tierId: string, tierName: string) => void;
-    onSetCutoff: (tierId: string) => void;
-    onDragStart: (tierId: string, event: React.DragEvent) => void;
-    onDragEnd: () => void;
-    onDragOver: (tierId: string, event: React.DragEvent) => void;
-    onDragLeave: () => void;
-    onDrop: (tierId: string, event: React.DragEvent) => void;
-}
-
-function TierCard({
-    tier,
-    priority,
-    totalTiers,
-    isDeleting,
-    canManage,
-    isDragging,
-    isDropTarget,
-    dropPosition,
-    onEdit,
-    onDelete,
-    onSetCutoff,
-    onDragStart,
-    onDragEnd,
-    onDragOver,
-    onDragLeave,
-    onDrop,
-}: TierCardProps) {
-    const tierClasses = [
-        'tier-list-detail-page__tier',
-        tier.isCutoff && 'tier-list-detail-page__tier--cutoff',
-        isDragging && 'tier-list-detail-page__tier--dragging',
-        isDropTarget && 'tier-list-detail-page__tier--drop-target',
-        isDropTarget && dropPosition === 'before' && 'tier-list-detail-page__tier--drop-before',
-        isDropTarget && dropPosition === 'after' && 'tier-list-detail-page__tier--drop-after',
-    ]
-        .filter(Boolean)
-        .join(' ');
-
-    return (
-        <div
-            className={tierClasses}
-            role="listitem"
-            data-tier-id={tier.id}
-            data-cutoff={tier.isCutoff || undefined}
-            data-deleting={isDeleting || undefined}
-            data-dragging={isDragging || undefined}
-            draggable={canManage}
-            onDragStart={(e) => onDragStart(tier.id, e)}
-            onDragEnd={onDragEnd}
-            onDragOver={(e) => onDragOver(tier.id, e)}
-            onDragLeave={onDragLeave}
-            onDrop={(e) => onDrop(tier.id, e)}
-        >
-            <div className="tier-list-detail-page__tier-header">
-                {canManage && (
-                    <div
-                        className="tier-list-detail-page__drag-handle"
-                        data-testid="tier-list-detail-page__drag-handle"
-                        aria-hidden="true"
-                    >
-                        <DotsSixVertical weight="bold" />
-                    </div>
-                )}
-                <div className="tier-list-detail-page__tier-priority">
-                    <span className="tier-list-detail-page__priority-number">{priority}</span>
-                    <span className="tier-list-detail-page__priority-of">of {totalTiers}</span>
-                </div>
-                <div className="tier-list-detail-page__tier-info">
-                    <div className="tier-list-detail-page__tier-title-row">
-                        <span className="tier-list-detail-page__tier-name">{tier.name}</span>
-                        {tier.isCutoff && (
-                            <Badge variant="healthy" size="sm">
-                                <CheckFat
-                                    weight="fill"
-                                    className="tier-list-detail-page__cutoff-icon"
-                                    aria-hidden="true"
-                                />
-                                Cutoff
-                            </Badge>
-                        )}
-                    </div>
-                    <div className="tier-list-detail-page__tier-meta">
-                        <span className="tier-list-detail-page__criteria-count">
-                            {tier.criteria.length} {tier.criteria.length === 1 ? 'criterion' : 'criteria'}
-                        </span>
-                    </div>
-                </div>
-                {canManage && (
-                    <div className="tier-list-detail-page__tier-actions card-actions">
-                        {!tier.isCutoff && (
-                            <Tooltip content="Set as cutoff">
-                                <button
-                                    type="button"
-                                    className="card-actions__btn"
-                                    onClick={() => onSetCutoff(tier.id)}
-                                    aria-label={`Set ${tier.name} as cutoff`}
-                                    data-action="set-cutoff"
-                                    data-target={tier.id}
-                                >
-                                    <CheckFat weight="bold" />
-                                </button>
-                            </Tooltip>
-                        )}
-                        <Tooltip content="Edit">
-                            <button
-                                type="button"
-                                className="card-actions__btn"
-                                onClick={() => onEdit(tier.id)}
-                                aria-label={`Edit ${tier.name}`}
-                                data-action="edit"
-                                data-target={tier.id}
-                            >
-                                <PencilSimple weight="bold" />
-                            </button>
-                        </Tooltip>
-                        <Tooltip content="Delete">
-                            <button
-                                type="button"
-                                className={`card-actions__btn card-actions__btn--danger${isDeleting ? ' card-actions__btn--loading-danger' : ''}`}
-                                onClick={() => onDelete(tier.id, tier.name)}
-                                disabled={isDeleting}
-                                aria-label={isDeleting ? `Deleting ${tier.name}` : `Delete ${tier.name}`}
-                                data-action="delete"
-                                data-target={tier.id}
-                            >
-                                {isDeleting ? (
-                                    <CircleNotch weight="bold" className="card-actions__spinner" aria-hidden="true" />
-                                ) : (
-                                    <Trash weight="bold" />
-                                )}
-                            </button>
-                        </Tooltip>
-                    </div>
-                )}
-            </div>
-
-            {tier.criteria.length > 0 && (
-                <div className="tier-list-detail-page__criteria">
-                    {tier.criteria.map((criterion) => (
-                        <span
-                            key={criterion.id}
-                            className="tier-list-detail-page__criterion"
-                            data-criterion-id={criterion.id}
-                        >
-                            <span className="tier-list-detail-page__criterion-field">{criterion.field}</span>
-                            <span className="tier-list-detail-page__criterion-operator">
-                                {formatOperator(criterion.operator)}
-                            </span>
-                            <span className="tier-list-detail-page__criterion-value">{criterion.value || '(any)'}</span>
-                        </span>
-                    ))}
-                </div>
-            )}
-        </div>
-    );
-}
 
 export default TierListDetailPage;

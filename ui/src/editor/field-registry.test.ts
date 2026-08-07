@@ -19,7 +19,7 @@ describe('Field Registry', () => {
             path: 'string',
             contentType: 'string',
             level: 'string',
-            monitoring: 'enum',
+            monitoring: 'boolean',
             rootFolderId: 'guid',
             parentId: 'guid',
             title: 'string',
@@ -55,9 +55,15 @@ describe('Field Registry', () => {
             expect(actualNames.sort()).toEqual(expectedNames.sort());
         });
 
-        it('monitoring enum has correct values', () => {
+        it('monitoring is a boolean field', () => {
             const field = getScalarField(contentFieldRegistry, 'monitoring');
-            expect(field?.enumValues).toEqual(['None', 'Active', 'Excluded']);
+            expect(field?.enumValues).toBeUndefined();
+        });
+
+        it('does NOT advertise fulfillment (file status owns a dedicated control, not the filter)', () => {
+            expect(getScalarField(contentFieldRegistry, 'fulfillment')).toBeUndefined();
+            expect(getScalarField(contentFieldRegistry, 'Fulfillment')).toBeUndefined();
+            expect(getAllFieldNames(contentFieldRegistry)).not.toContain('fulfillment');
         });
     });
 
@@ -127,6 +133,18 @@ describe('Field Registry', () => {
                     height: 'number',
                 },
             },
+            {
+                name: 'relationship',
+                aliases: ['relationships'],
+                primaryField: 'kind',
+                itemFieldNames: ['kind', 'qualifier', 'subject', 'name'],
+                itemFieldTypes: {
+                    kind: 'string',
+                    qualifier: 'string',
+                    subject: 'string',
+                    name: 'string',
+                },
+            },
         ];
 
         it('has all expected content collection fields', () => {
@@ -193,15 +211,7 @@ describe('Field Registry', () => {
     describe('Subject Scalar Fields', () => {
         const expectedSubjectScalarFields: Record<string, FieldType> = {
             kind: 'string',
-            dateLastRefreshed: 'date',
             title: 'string',
-            originalTitle: 'string',
-            overview: 'string',
-            language: 'string',
-            birthDate: 'date',
-            deathDate: 'date',
-            established: 'date',
-            dissolved: 'date',
         };
 
         it('has all expected subject scalar fields', () => {
@@ -234,41 +244,11 @@ describe('Field Registry', () => {
             itemFieldTypes: Record<string, FieldType>;
         }> = [
             {
-                name: 'award',
-                aliases: ['awards'],
+                name: 'tag',
+                aliases: ['tags'],
                 primaryField: 'name',
-                itemFieldNames: ['body', 'name', 'category', 'status', 'year', 'language', 'country'],
-                itemFieldTypes: {
-                    body: 'string',
-                    name: 'string',
-                    category: 'string',
-                    status: 'string',
-                    year: 'number',
-                    language: 'string',
-                    country: 'string',
-                },
-            },
-            {
-                name: 'externalId',
-                aliases: ['externalIds'],
-                primaryField: 'value',
-                itemFieldNames: ['source', 'value'],
-                itemFieldTypes: { source: 'string', value: 'string' },
-            },
-            {
-                name: 'image',
-                aliases: ['images'],
-                primaryField: 'type',
-                itemFieldNames: ['type', 'mimeType', 'url', 'source', 'language', 'width', 'height'],
-                itemFieldTypes: {
-                    type: 'string',
-                    mimeType: 'string',
-                    url: 'string',
-                    source: 'string',
-                    language: 'string',
-                    width: 'number',
-                    height: 'number',
-                },
+                itemFieldNames: ['name'],
+                itemFieldTypes: { name: 'string' },
             },
         ];
 
@@ -279,11 +259,11 @@ describe('Field Registry', () => {
             }
         });
 
-        it('subject does NOT have genre, tag, or contentRating collections', () => {
+        it('advertises tag but not genre or contentRating collections', () => {
+            expect(getCollectionField(subjectFieldRegistry, 'tag')).toBeDefined();
+            expect(getCollectionField(subjectFieldRegistry, 'tags')).toBeDefined();
             expect(getCollectionField(subjectFieldRegistry, 'genre')).toBeUndefined();
             expect(getCollectionField(subjectFieldRegistry, 'genres')).toBeUndefined();
-            expect(getCollectionField(subjectFieldRegistry, 'tag')).toBeUndefined();
-            expect(getCollectionField(subjectFieldRegistry, 'tags')).toBeUndefined();
             expect(getCollectionField(subjectFieldRegistry, 'contentRating')).toBeUndefined();
             expect(getCollectionField(subjectFieldRegistry, 'contentRatings')).toBeUndefined();
         });
@@ -367,6 +347,18 @@ describe('Field Registry', () => {
             expect(isCollectionField(contentFieldRegistry, 'unknown')).toBe(false);
             expect(isCollectionField(contentFieldRegistry, 'notAField')).toBe(false);
         });
+
+        it('recognizes relationship and its alias so they are no longer flagged', () => {
+            expect(isCollectionField(contentFieldRegistry, 'relationship')).toBe(true);
+            expect(isCollectionField(contentFieldRegistry, 'relationships')).toBe(true);
+            expect(isCollectionField(contentFieldRegistry, 'Relationship')).toBe(true);
+
+            const field = getCollectionField(contentFieldRegistry, 'relationship');
+            const subFieldNames = field?.itemFields.map((f) => f.name) ?? [];
+            expect(subFieldNames).toContain('kind');
+            expect(subFieldNames).toContain('qualifier');
+            expect(subFieldNames).toContain('subject');
+        });
     });
 
     describe('getAllFieldNames', () => {
@@ -381,29 +373,26 @@ describe('Field Registry', () => {
             expect(names).toContain('genres');
             expect(names).toContain('tags');
             expect(names).toContain('awards');
+            expect(names).toContain('relationship');
+            expect(names).toContain('relationships');
         });
 
         it('returns correct count for content registry', () => {
             const names = getAllFieldNames(contentFieldRegistry);
-            expect(names.length).toBe(31);
+            expect(names.length).toBe(33);
         });
 
         it('returns all scalar and collection field names for subject', () => {
             const names = getAllFieldNames(subjectFieldRegistry);
             expect(names).toContain('kind');
             expect(names).toContain('title');
-            expect(names).toContain('birthDate');
-            expect(names).toContain('award');
-            expect(names).toContain('externalId');
-            expect(names).toContain('image');
-            expect(names).toContain('awards');
-            expect(names).toContain('externalIds');
-            expect(names).toContain('images');
+            expect(names).toContain('tag');
+            expect(names).toContain('tags');
         });
 
         it('returns correct count for subject registry', () => {
             const names = getAllFieldNames(subjectFieldRegistry);
-            expect(names.length).toBe(16);
+            expect(names.length).toBe(4);
         });
     });
 
@@ -472,6 +461,10 @@ describe('Field Registry', () => {
             expect(ops).not.toContain('contains');
         });
 
+        it('returns equality and has-no-value operators for boolean fields', () => {
+            expect(getOperatorsForType('boolean')).toEqual(['=', '!=', 'null', '!null']);
+        });
+
         it('returns enum operators', () => {
             const ops = getOperatorsForType('enum');
             expect(ops).toContain('=');
@@ -521,19 +514,8 @@ describe('Field Registry', () => {
             }
         });
 
-        it('subject registry supports all fields used in grammar tests', () => {
-            const queriedSubjectFields = [
-                'kind',
-                'dateLastRefreshed',
-                'title',
-                'birthDate',
-                'award',
-                'awards',
-                'externalId',
-                'externalIds',
-                'image',
-                'images',
-            ];
+        it('subject registry supports all curated fields advertised on the people page', () => {
+            const queriedSubjectFields = ['kind', 'title', 'tag', 'tags'];
 
             for (const fieldName of queriedSubjectFields) {
                 const scalar = getScalarField(subjectFieldRegistry, fieldName);
@@ -548,7 +530,7 @@ describe('Field Registry', () => {
 
     describe('Type Mapping Validation', () => {
         it('all scalar fields have valid types', () => {
-            const validTypes: FieldType[] = ['string', 'number', 'long', 'date', 'timespan', 'guid', 'enum'];
+            const validTypes: FieldType[] = ['string', 'number', 'long', 'date', 'timespan', 'guid', 'boolean', 'enum'];
 
             for (const field of contentFieldRegistry.scalarFields) {
                 expect(validTypes, `Field ${field.name} has invalid type ${field.type}`).toContain(field.type);
@@ -560,7 +542,7 @@ describe('Field Registry', () => {
         });
 
         it('all collection item fields have valid types', () => {
-            const validTypes: FieldType[] = ['string', 'number', 'long', 'date', 'timespan', 'guid', 'enum'];
+            const validTypes: FieldType[] = ['string', 'number', 'long', 'date', 'timespan', 'guid', 'boolean', 'enum'];
 
             for (const collection of contentFieldRegistry.collectionFields) {
                 for (const field of collection.itemFields) {

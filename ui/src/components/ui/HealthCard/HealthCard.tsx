@@ -3,11 +3,13 @@ import { Link } from 'react-router-dom';
 
 import './HealthCard.css';
 
-export type HealthStatus = 'healthy' | 'unhealthy' | 'unknown' | 'stale';
+export type HealthStatus = 'healthy' | 'unhealthy' | 'degraded' | 'stabilizing' | 'unknown' | 'stale';
 
 export interface HealthStatusCounts {
     healthy: number;
     unhealthy: number;
+    degraded: number;
+    stabilizing: number;
     unknown: number;
     stale: number;
 }
@@ -26,16 +28,11 @@ export interface HealthCardProps extends HTMLAttributes<HTMLDivElement> {
     headingLevel?: 2 | 3;
 }
 
-const statusVariantMap: Record<HealthStatus, string> = {
-    healthy: 'healthy',
-    unhealthy: 'unhealthy',
-    unknown: 'unknown',
-    stale: 'degraded',
-};
-
 const statusLabelMap: Record<HealthStatus, string> = {
     healthy: 'Healthy',
     unhealthy: 'Unhealthy',
+    degraded: 'Degraded',
+    stabilizing: 'Stabilizing',
     unknown: 'Unknown',
     stale: 'Stale',
 };
@@ -51,7 +48,7 @@ const StatusRow = ({ status, count, url }: StatusRowProps) => {
         return null;
     }
 
-    const variant = statusVariantMap[status];
+    const variant = status;
     const label = statusLabelMap[status];
     const isClickable = url !== undefined;
 
@@ -96,7 +93,8 @@ const SkeletonRow = () => (
 export const HealthCard = forwardRef<HTMLDivElement, HealthCardProps>(
     ({ heading, icon, counts, loading = false, getStatusUrl, headingLevel = 2, className, ...props }, ref) => {
         const classes = ['health-card', className].filter(Boolean).join(' ');
-        const total = counts.healthy + counts.unhealthy + counts.unknown + counts.stale;
+        const total =
+            counts.healthy + counts.unhealthy + counts.degraded + counts.stabilizing + counts.unknown + counts.stale;
         const HeadingTag = `h${headingLevel}` as const;
 
         return (
@@ -122,6 +120,12 @@ export const HealthCard = forwardRef<HTMLDivElement, HealthCardProps>(
                         <>
                             <StatusRow status="healthy" count={counts.healthy} url={getStatusUrl?.('healthy')} />
                             <StatusRow status="unhealthy" count={counts.unhealthy} url={getStatusUrl?.('unhealthy')} />
+                            <StatusRow status="degraded" count={counts.degraded} url={getStatusUrl?.('degraded')} />
+                            <StatusRow
+                                status="stabilizing"
+                                count={counts.stabilizing}
+                                url={getStatusUrl?.('stabilizing')}
+                            />
                             <StatusRow status="stale" count={counts.stale} url={getStatusUrl?.('stale')} />
                             <StatusRow status="unknown" count={counts.unknown} url={getStatusUrl?.('unknown')} />
                         </>

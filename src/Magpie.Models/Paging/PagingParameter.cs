@@ -1,17 +1,27 @@
+using System;
+
 namespace Magpie.Models.Paging;
 
 /// <summary>
-/// Pagination parameters for a query.
+/// Pagination parameters for a query, with a positive page number and page size.
 /// </summary>
 public sealed record PagingParameter
 {
     /// <summary>
-    /// The page number.
+    /// One-based page number, clamped to at least one.
     /// </summary>
-    public required int PageNumber { get; init; }
+    public required int PageNumber
+    {
+        get;
+        init => field = Math.Max(1, value);
+    }
 
     /// <summary>
-    /// The number of items per page.
+    /// Number of items per page, clamped to at least one.
     /// </summary>
-    public required int PageSize { get; init; }
+    public required int PageSize
+    {
+        get;
+        init => field = Math.Max(1, value);
+    }
 }

@@ -6,10 +6,9 @@ using Magpie.Models.Data;
 namespace Magpie.Abstractions.Repositories;
 
 /// <summary>
-/// Repository for managing extensions.
+/// The repository contract for extensions.
 /// </summary>
 public interface IExtensionRepository :
     ICrudRepository<Guid, Extension>,
-    IPatchRepository<Guid, Extension, ExtensionPatch>
-{
-}
+    IPatchRepository<Guid, Extension, ExtensionPatch>,
+    IQueryRepository<Extension, ExtensionQuery>;

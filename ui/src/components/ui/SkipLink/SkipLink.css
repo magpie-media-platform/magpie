@@ -12,7 +12,6 @@
         text-decoration: none;
         border-radius: var(--radius-sm);
         box-shadow: var(--shadow-lg);
-
         transform: translateY(-200%);
         opacity: 0;
         transition:

@@ -2,7 +2,14 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 
 import { apiGet, apiPost, apiPatch, apiDelete } from '@/lib/api';
 import { POLLING_INTERVALS } from '@/lib/queryClient';
+import { useInvalidateQueriesOnEvents } from './useInvalidateQueriesOnEvents';
 import { queryErrorOrNull } from '@/lib/utils';
+
+export type UpgradeFileHandling = 'Replace' | 'KeepBoth';
+
+export interface RootFolderDefault {
+    qualityTierListId: string | null;
+}
 
 export interface ApiRootFolder {
     id: string;
@@ -11,7 +18,17 @@ export interface ApiRootFolder {
 
     path: string;
 
-    contentTypeId: string;
+    contentType: string;
+
+    isDefault: boolean;
+
+    defaultMonitoring: boolean | null;
+
+    renameTemplate?: string | null;
+
+    upgradeFileHandling: UpgradeFileHandling;
+
+    defaults: Record<string, RootFolderDefault>;
 
     createdAt: string;
 
@@ -22,20 +39,40 @@ export interface ApiRootFolder {
     modifiedByUserId?: string | null;
 }
 
-export interface RootFolderCreate {
+interface RootFolderCreate {
     name: string;
 
     path: string;
 
-    contentTypeId: string;
+    contentType: string;
+
+    isDefault?: boolean;
+
+    defaultMonitoring?: boolean | null;
+
+    renameTemplate?: string | null;
+
+    upgradeFileHandling?: UpgradeFileHandling;
+
+    defaults: Record<string, RootFolderDefault>;
 }
 
-export interface RootFolderPatch {
+interface RootFolderPatch {
     name?: string;
 
     path?: string;
 
-    contentTypeId?: string;
+    contentType?: string;
+
+    isDefault?: boolean;
+
+    defaultMonitoring?: { value: boolean | null };
+
+    renameTemplate?: { value: string | null };
+
+    upgradeFileHandling?: UpgradeFileHandling;
+
+    defaults?: Record<string, RootFolderDefault>;
 }
 
 export const rootFolderQueryKeys = {
@@ -61,33 +98,37 @@ async function deleteRootFolder(id: string): Promise<void> {
 }
 
 export function useRootFolders() {
+    useInvalidateQueriesOnEvents(
+        ['library.rootFolder.created', 'library.rootFolder.updated', 'library.rootFolder.deleted'],
+        [rootFolderQueryKeys.list()],
+        { exact: true, owner: 'root-folders' },
+    );
     const queryClient = useQueryClient();
 
     const foldersQuery = useQuery({
         queryKey: rootFolderQueryKeys.list(),
         queryFn: fetchRootFolders,
-        refetchInterval: POLLING_INTERVALS.slow,
         staleTime: POLLING_INTERVALS.slow / 2,
     });
 
     const createMutation = useMutation({
         mutationFn: createRootFolder,
         onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: rootFolderQueryKeys.list() });
+            void queryClient.invalidateQueries({ queryKey: rootFolderQueryKeys.list() });
         },
     });
 
     const updateMutation = useMutation({
         mutationFn: ({ id, data }: { id: string; data: RootFolderPatch }) => updateRootFolder(id, data),
         onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: rootFolderQueryKeys.list() });
+            void queryClient.invalidateQueries({ queryKey: rootFolderQueryKeys.list() });
         },
     });
 
     const deleteMutation = useMutation({
         mutationFn: deleteRootFolder,
         onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: rootFolderQueryKeys.list() });
+            void queryClient.invalidateQueries({ queryKey: rootFolderQueryKeys.list() });
         },
     });
 

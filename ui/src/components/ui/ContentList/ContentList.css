@@ -3,9 +3,25 @@
         width: 100%;
     }
 
+    .content-list__extension-actions.slot,
+    .content-list__extension-columns.slot {
+        display: flex;
+        flex-wrap: wrap;
+        gap: var(--space-sm);
+        margin-bottom: var(--space-sm);
+    }
+
+    .content-list__extension-actions.slot:empty,
+    .content-list__extension-columns.slot:empty {
+        display: none;
+    }
+
     .content-list__poster {
         width: 32px;
         height: 48px;
+        min-width: 32px;
+        flex-shrink: 0;
+        aspect-ratio: 2 / 3;
         object-fit: cover;
         border-radius: var(--radius-sm);
         background-color: var(--bg-tertiary);
@@ -19,10 +35,33 @@
         font-size: var(--text-lg);
     }
 
+    .content-list__monitor-eye {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        color: var(--text-muted);
+
+        & svg {
+            width: 1.125rem;
+            height: 1.125rem;
+        }
+    }
+
+    .content-list__monitor-eye--on {
+        color: var(--status-healthy);
+    }
+
+    .content-list__status-cell {
+        display: flex;
+        align-items: center;
+        gap: var(--space-xs);
+    }
+
     .content-list__title-cell {
         display: flex;
         flex-direction: column;
         gap: var(--space-2xs);
+        min-width: 0;
     }
 
     .content-list__title {
@@ -32,9 +71,27 @@
         line-height: 1.3;
     }
 
-    .content-list__year {
-        font-size: var(--text-sm);
-        color: var(--text-muted);
+    @media (min-width: 768px) {
+        .content-list .data-table__table {
+            table-layout: fixed;
+        }
+
+        .content-list .data-table__cell[data-column='title'] {
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .content-list__title {
+            display: block;
+            max-width: 100%;
+            overflow: hidden;
+            white-space: nowrap;
+            text-overflow: ellipsis;
+        }
+
+        .content-list .data-table__header-cell[data-column='title'] {
+            width: auto !important;
+        }
     }
 
     .content-list__empty {
@@ -63,7 +120,8 @@
         cursor: default;
     }
 
-    .content-list__date-added {
+    .content-list__date-added,
+    .content-list__published {
         font-size: var(--text-sm);
         color: var(--text-secondary);
         white-space: nowrap;
@@ -93,20 +151,21 @@
             flex: 0 0 auto;
         }
 
-        .content-list .data-table__cell[data-label='Title'] {
+        .content-list .data-table__cell[data-column='title'] {
             flex: 1 1 0%;
             min-width: 0;
         }
 
-        .content-list .data-table__cell[data-label='Kind'],
-        .content-list .data-table__cell[data-label='Monitoring'],
-        .content-list .data-table__cell[data-label='Status'] {
+        .content-list .data-table__cell[data-column='contentType'],
+        .content-list .data-table__cell[data-column='monitoring'],
+        .content-list .data-table__cell[data-column='fulfillment'] {
             flex: 0 0 auto;
         }
 
         .content-list__poster {
             width: 28px;
             height: 42px;
+            min-width: 28px;
         }
 
         .content-list__title-cell {
@@ -122,12 +181,56 @@
             white-space: nowrap;
         }
 
-        .content-list__year {
-            font-size: var(--text-xs);
+        .content-list .data-table__cell[data-column='dateAdded'],
+        .content-list .data-table__cell[data-column='publishDate'],
+        .content-list .data-table__cell[data-label='Tags'] {
+            display: none;
         }
 
-        .content-list .data-table__cell[data-label='Added'],
-        .content-list .data-table__cell[data-label='Tags'] {
+        .content-list .data-table__header-cell[data-column='select'],
+        .content-list .data-table__cell[data-column='select'] {
+            display: none;
+        }
+    }
+
+    @media (max-width: 480px) {
+        .content-list .data-table__cell:not([data-label]) {
+            order: 0;
+        }
+
+        .content-list .data-table__cell[data-column='monitoring'] {
+            order: 0;
+        }
+
+        .content-list .data-table__cell[data-column='title'] {
+            flex: 1 1 0%;
+            min-width: 0;
+            max-width: 100%;
+            order: 1;
+        }
+
+        .content-list .data-table__cell[data-column='contentType'] {
+            flex-basis: 100%;
+            order: 2;
+        }
+
+        .content-list .data-table__cell[data-column='fulfillment'] {
+            order: 3;
+        }
+
+        .content-list__title {
+            white-space: normal;
+            overflow: visible;
+            text-overflow: clip;
+            overflow-wrap: anywhere;
+        }
+    }
+
+    @media (min-width: 768px) and (max-width: 1279px) {
+        .content-list .data-table__header-cell[data-column='publishDate'],
+        .content-list .data-table__cell[data-column='publishDate'],
+        .content-list .data-table__header-cell[data-column='dateAdded'],
+        .content-list .data-table__cell[data-column='dateAdded'] {
             display: none;
         }
     }
@@ -136,6 +239,7 @@
         .content-list__poster {
             width: 36px;
             height: 54px;
+            min-width: 36px;
         }
 
         .content-list__title {

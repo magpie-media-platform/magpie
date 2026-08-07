@@ -1,13 +1,27 @@
 import { useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 
-import { apiGet, apiPatch, apiPost } from '@/lib/api';
+import { apiFetchResponse, apiGet, apiPatch, apiPost } from '@/lib/api';
 import { POLLING_INTERVALS } from '@/lib/queryClient';
 import { queryErrorOrNull } from '@/lib/utils';
-import { useRestartRequired } from '@/components/ui/RestartRequiredBanner';
+import { useRestartRequired } from '@/hooks/ui/useRestartRequired';
+import { useInvalidateQueriesOnEvents } from '@/hooks/useInvalidateQueriesOnEvents';
+
+const RESTART_REQUIRED_HEADER = 'X-Magpie-Restart-Required';
+
+const EXTENSION_CHANGE_EVENTS = [
+    'extension.installed',
+    'extension.updated',
+    'extension.enabled',
+    'extension.disabled',
+    'extension.uninstalled',
+    'extension.upgraded',
+] as const;
 
 export interface ApiExtension {
     id: string;
+
+    packageId: string;
 
     version: string;
 
@@ -53,6 +67,8 @@ export interface ApiExtension {
 export interface ExtensionItem {
     id: string;
 
+    packageId: string;
+
     name: string;
 
     version: string;
@@ -79,26 +95,21 @@ export interface ExtensionItem {
 
     lastUpdateCheck?: string | null;
 
-    builtIn: boolean;
-
     author?: string | null;
 
     description?: string | null;
 }
 
-export const extensionQueryKeys = {
+const extensionQueryKeys = {
     all: ['extensions'] as const,
     list: () => ['extensions', 'list'] as const,
     detail: (id: string) => ['extensions', 'detail', id] as const,
 };
 
-function isBuiltIn(ext: ApiExtension): boolean {
-    return !ext.managed && !ext.nuGetId && ext.loadOrder < 100;
-}
-
-export function transformExtension(ext: ApiExtension): ExtensionItem {
+function transformExtension(ext: ApiExtension): ExtensionItem {
     return {
         id: ext.id,
+        packageId: ext.packageId,
         name: ext.name,
         version: ext.version,
         enabled: ext.enabled,
@@ -113,14 +124,29 @@ export function transformExtension(ext: ApiExtension): ExtensionItem {
         createdAt: ext.createdAt,
         lastUpdateCheck: ext.lastChecked,
 
-        builtIn: isBuiltIn(ext),
         author: ext.author ?? null,
         description: ext.description ?? null,
     };
 }
 
-async function fetchExtensions(): Promise<ApiExtension[]> {
-    return apiGet<ApiExtension[]>('/extensions');
+interface ExtensionListItemDto {
+    extension: ApiExtension;
+
+    updateInfo: ExtensionUpdateInfo | null;
+}
+
+interface ExtensionListData {
+    extensions: ApiExtension[];
+
+    updateInfo: ExtensionUpdateInfo[];
+}
+
+async function fetchExtensions(): Promise<ExtensionListData> {
+    const items = await apiGet<ExtensionListItemDto[]>('/extensions');
+    return {
+        extensions: items.map((item) => item.extension),
+        updateInfo: items.flatMap((item) => (item.updateInfo ? [item.updateInfo] : [])),
+    };
 }
 
 async function enableExtension(id: string): Promise<ApiExtension> {
@@ -135,54 +161,85 @@ interface ExtensionPatch {
     autoUpgrade?: { value: boolean };
     nuGetId?: { value: string | null };
     packageRepository?: { value: string | null };
+    loadOrder?: { value: number };
 }
 
 async function patchExtension(id: string, patch: ExtensionPatch): Promise<void> {
     return apiPatch(`/extensions/${id}`, patch);
 }
 
+interface ExtensionLoadOrderUpdate {
+    id: string;
+    loadOrder: number;
+}
+
+async function persistExtensionOrder(updates: ExtensionLoadOrderUpdate[]): Promise<void> {
+    await Promise.all(updates.map(({ id, loadOrder }) => patchExtension(id, { loadOrder: { value: loadOrder } })));
+}
+
+function comparePackageIdDescending(left: string, right: string): number {
+    const normalizedLeft = left.toUpperCase();
+    const normalizedRight = right.toUpperCase();
+    if (normalizedLeft < normalizedRight) {
+        return 1;
+    }
+    if (normalizedLeft > normalizedRight) {
+        return -1;
+    }
+    return 0;
+}
+
+function compareExtensionOrder(left: ExtensionItem, right: ExtensionItem): number {
+    return right.loadOrder - left.loadOrder || comparePackageIdDescending(left.packageId, right.packageId);
+}
+
 export function useExtensionManagement() {
+    useInvalidateQueriesOnEvents(EXTENSION_CHANGE_EVENTS, [extensionQueryKeys.list()], {
+        exact: true,
+        owner: 'extensions:list',
+    });
     const queryClient = useQueryClient();
+    const { setRestartRequired } = useRestartRequired();
 
     const extensionsQuery = useQuery({
         queryKey: extensionQueryKeys.list(),
         queryFn: fetchExtensions,
-        refetchInterval: POLLING_INTERVALS.slow,
         staleTime: POLLING_INTERVALS.slow / 2,
     });
 
     const enableMutation = useMutation({
         mutationFn: enableExtension,
         onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: extensionQueryKeys.list() });
+            void queryClient.invalidateQueries({ queryKey: extensionQueryKeys.list() });
         },
     });
 
     const disableMutation = useMutation({
         mutationFn: disableExtension,
         onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: extensionQueryKeys.list() });
+            void queryClient.invalidateQueries({ queryKey: extensionQueryKeys.list() });
         },
     });
 
     const patchMutation = useMutation({
         mutationFn: ({ id, patch }: { id: string; patch: ExtensionPatch }) => patchExtension(id, patch),
         onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: extensionQueryKeys.list() });
+            void queryClient.invalidateQueries({ queryKey: extensionQueryKeys.list() });
         },
     });
 
-    const extensions: ExtensionItem[] = useMemo(() => {
-        if (!extensionsQuery.data) return [];
-        const byName = new Map<string, ApiExtension>();
-        for (const ext of extensionsQuery.data) {
-            const existing = byName.get(ext.name);
-            if (!existing || new Date(ext.createdAt) > new Date(existing.createdAt)) {
-                byName.set(ext.name, ext);
-            }
-        }
-        return [...byName.values()].map(transformExtension);
-    }, [extensionsQuery.data]);
+    const reorderMutation = useMutation({
+        mutationFn: persistExtensionOrder,
+        onSuccess: () => {
+            setRestartRequired(true);
+            void queryClient.invalidateQueries({ queryKey: extensionQueryKeys.list() });
+        },
+    });
+
+    const extensions: ExtensionItem[] = useMemo(
+        () => extensionsQuery.data?.extensions.map(transformExtension) ?? [],
+        [extensionsQuery.data],
+    );
 
     const toggleEnabled = async (id: string, enabled: boolean): Promise<ApiExtension> => {
         if (enabled) {
@@ -196,6 +253,42 @@ export function useExtensionManagement() {
         return patchMutation.mutateAsync({ id, patch: { autoUpgrade: { value: autoUpgrade } } });
     };
 
+    const reorderExtensions = async (orderedIds: string[]): Promise<void> => {
+        const currentOrder = [...extensions].sort(compareExtensionOrder);
+        if (
+            orderedIds.length !== currentOrder.length ||
+            new Set(orderedIds).size !== currentOrder.length ||
+            currentOrder.some((extension) => !orderedIds.includes(extension.id))
+        ) {
+            throw new Error('Extension order does not match the current extension list.');
+        }
+
+        let assignedLoadOrders = new Map(orderedIds.map((id, index) => [id, currentOrder[index].loadOrder]));
+        const assignedOrder = [...currentOrder]
+            .map((extension) => ({
+                ...extension,
+                loadOrder: assignedLoadOrders.get(extension.id) ?? extension.loadOrder,
+            }))
+            .sort(compareExtensionOrder)
+            .map((extension) => extension.id);
+
+        if (assignedOrder.some((id, index) => id !== orderedIds[index])) {
+            assignedLoadOrders = new Map(orderedIds.map((id, index) => [id, orderedIds.length - index]));
+        }
+
+        const updates = currentOrder.flatMap((extension) => {
+            const loadOrder = assignedLoadOrders.get(extension.id);
+            return loadOrder !== undefined && loadOrder !== extension.loadOrder
+                ? [{ id: extension.id, loadOrder }]
+                : [];
+        });
+        if (updates.length === 0) {
+            return;
+        }
+
+        await reorderMutation.mutateAsync(updates);
+    };
+
     return {
         extensions,
         isLoading: extensionsQuery.isLoading,
@@ -205,12 +298,19 @@ export function useExtensionManagement() {
         isToggling: enableMutation.isPending || disableMutation.isPending,
         setAutoUpgrade,
         isPatching: patchMutation.isPending,
+        reorderExtensions,
+        isMoving: reorderMutation.isPending,
 
         refetch: extensionsQuery.refetch,
     };
 }
 
 export function useExtension(id: string | undefined) {
+    useInvalidateQueriesOnEvents(EXTENSION_CHANGE_EVENTS, [extensionQueryKeys.list()], {
+        entityIds: id ? [id] : [],
+        exact: true,
+        owner: 'extensions:detail',
+    });
     const listQuery = useQuery({
         queryKey: extensionQueryKeys.list(),
         queryFn: fetchExtensions,
@@ -219,7 +319,7 @@ export function useExtension(id: string | undefined) {
 
     const extension = useMemo(() => {
         if (!id || !listQuery.data) return null;
-        const match = listQuery.data.find((ext) => ext.id === id);
+        const match = listQuery.data.extensions.find((ext) => ext.id === id);
         return match ? transformExtension(match) : null;
     }, [id, listQuery.data]);
 
@@ -231,13 +331,17 @@ export function useExtension(id: string | undefined) {
     };
 }
 
-export interface ExtensionVersion {
+interface ExtensionVersion {
     id: string;
     version: string;
     createdAt: string;
 }
 
 export function useExtensionVersions(extensionName: string | undefined) {
+    useInvalidateQueriesOnEvents(EXTENSION_CHANGE_EVENTS, [extensionQueryKeys.list()], {
+        exact: true,
+        owner: 'extensions:versions',
+    });
     const extensionsQuery = useQuery({
         queryKey: extensionQueryKeys.list(),
         queryFn: fetchExtensions,
@@ -246,7 +350,7 @@ export function useExtensionVersions(extensionName: string | undefined) {
 
     const versions: ExtensionVersion[] = useMemo(() => {
         if (!extensionName || !extensionsQuery.data) return [];
-        const sameNameExts = extensionsQuery.data
+        const sameNameExts = extensionsQuery.data.extensions
             .filter((ext) => ext.name === extensionName)
             .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
         return sameNameExts.slice(1).map((ext) => ({
@@ -259,13 +363,13 @@ export function useExtensionVersions(extensionName: string | undefined) {
     return { versions, isLoading: extensionsQuery.isLoading };
 }
 
-export interface InstallExtensionInput {
+interface InstallExtensionInput {
     packageId: string;
 
     version?: string;
 }
 
-export interface InstallExtensionResult {
+interface InstallExtensionResult {
     extension: ApiExtension;
 
     restartRequired: boolean;
@@ -290,25 +394,25 @@ interface InstallResponseDto {
 }
 
 async function installExtensionApi(body: InstallExtensionInput): Promise<InstallResponseDto> {
-    return apiPost<InstallResponseDto>('/extensions/install', body);
+    return apiPost<InstallResponseDto>('/extensions', body);
 }
 
 async function installExtensionFromFileApi(file: File): Promise<InstallResponseDto> {
     const form = new FormData();
     form.append('file', file, file.name);
-    return apiPost<InstallResponseDto>('/extensions/install-file', form);
+    return apiPost<InstallResponseDto>('/extensions/upload', form);
 }
 
-async function uninstallExtensionApi(id: string): Promise<void> {
-    return apiPost(`/extensions/${id}/uninstall`);
+async function uninstallExtensionApi(id: string): Promise<boolean> {
+    const response = await apiFetchResponse(`/extensions/${id}`, { method: 'DELETE' });
+    return response.headers.get(RESTART_REQUIRED_HEADER)?.trim().toLowerCase() === 'true';
 }
 
 async function updateExtensionApi(input: { id: string; version?: string }): Promise<InstallResponseDto> {
-    return apiPost<InstallResponseDto>(`/extensions/${input.id}/update`, { version: input.version });
-}
-
-async function checkUpdatesApi(): Promise<ExtensionUpdateInfo[]> {
-    return apiPost<ExtensionUpdateInfo[]>('/extensions/check-updates');
+    const path = input.version
+        ? `/extensions/${input.id}/upgrade/${encodeURIComponent(input.version)}`
+        : `/extensions/${input.id}/upgrade/latest`;
+    return apiPost<InstallResponseDto>(path);
 }
 
 export function useExtensionActions() {
@@ -316,7 +420,7 @@ export function useExtensionActions() {
     const { setRestartRequired } = useRestartRequired();
 
     const invalidateAll = () => {
-        queryClient.invalidateQueries({ queryKey: extensionQueryKeys.all });
+        void queryClient.invalidateQueries({ queryKey: extensionQueryKeys.all });
     };
 
     const installMutation = useMutation({
@@ -340,14 +444,20 @@ export function useExtensionActions() {
     });
 
     const checkUpdatesMutation = useMutation({
-        mutationFn: checkUpdatesApi,
-        onSuccess: invalidateAll,
+        mutationFn: async () => {
+            const result = await queryClient.fetchQuery({
+                queryKey: extensionQueryKeys.list(),
+                queryFn: fetchExtensions,
+                staleTime: 0,
+            });
+            return result.updateInfo;
+        },
     });
 
     const patchMutation = useMutation({
         mutationFn: ({ id, patch }: { id: string; patch: ExtensionPatch }) => patchExtension(id, patch),
         onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: extensionQueryKeys.list() });
+            void queryClient.invalidateQueries({ queryKey: extensionQueryKeys.list() });
         },
     });
 
@@ -376,9 +486,10 @@ export function useExtensionActions() {
     };
 
     const uninstallExtension = async (id: string): Promise<void> => {
-        await uninstallMutation.mutateAsync(id);
-        // Eagerly mark restart-required: backend always sets X-Magpie-Restart-Required on uninstall, but the API client doesn't surface response headers yet.
-        setRestartRequired(true);
+        const restartRequired = await uninstallMutation.mutateAsync(id);
+        if (restartRequired) {
+            setRestartRequired(true);
+        }
     };
 
     return {

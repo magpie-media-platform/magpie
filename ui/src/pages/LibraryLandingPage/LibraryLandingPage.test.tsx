@@ -1,31 +1,45 @@
-import { render, screen, within, fireEvent } from '@testing-library/react';
+import { render, screen, within, fireEvent, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 import { LibraryLandingPage } from './LibraryLandingPage';
 import { AuthProvider, Role } from '@/auth';
+import { testEffectivePermissions } from '@/test/permissions';
 import type { LibraryTypeDefinition } from '@/hooks/useLibraryTypes';
+import * as api from '@/lib/api';
 
 const mockContentTypes: LibraryTypeDefinition[] = [
-    { id: 'movies', name: 'Movies', slug: 'movies' },
-    { id: 'shows', name: 'TV Shows', slug: 'shows' },
+    { id: 'movies', name: 'Movie', pluralName: 'Movies', slug: 'movies', levels: [] },
+    { id: 'shows', name: 'TV Show', pluralName: 'TV Shows', slug: 'shows', levels: [] },
 ];
 
 const mockSubjectTypes: LibraryTypeDefinition[] = [
-    { id: 'actors', name: 'Actors', slug: 'actors' },
-    { id: 'studios', name: 'Studios', slug: 'studios' },
+    { id: 'actors', name: 'Actor', pluralName: 'Actors', slug: 'actors', levels: [] },
+    { id: 'studios', name: 'Studio', pluralName: 'Studios', slug: 'studios', levels: [] },
 ];
 
 const mockUseLibraryTypes = vi.fn();
 const mockUseLibraryCounts = vi.fn();
+const mockUseActualLibraryCounts = vi.fn(() => false);
+
+vi.mock('@/lib/api', async (importOriginal) => {
+    const original = await importOriginal<typeof import('@/lib/api')>();
+    return {
+        ...original,
+        apiGet: vi.fn(),
+    };
+});
 
 vi.mock('@/hooks/useLibraryTypes', async (importOriginal) => {
     const original = await importOriginal<typeof import('@/hooks/useLibraryTypes')>();
+
     return {
         ...original,
         useLibraryTypes: () => mockUseLibraryTypes(),
-        useLibraryCounts: (...args: unknown[]) => mockUseLibraryCounts(...args),
+        useLibraryCounts: (...args: Parameters<typeof original.useLibraryCounts>) =>
+            mockUseActualLibraryCounts() ? original.useLibraryCounts(...args) : mockUseLibraryCounts(...args),
+        useTypeIconName: () => () => undefined,
     };
 });
 
@@ -47,7 +61,7 @@ function renderLibraryLanding(role: Role = Role.Admin) {
     return render(
         <QueryClientProvider client={queryClient}>
             <MemoryRouter>
-                <AuthProvider initialUser={mockUser}>
+                <AuthProvider initialUser={mockUser} initialPermissions={testEffectivePermissions()}>
                     <LibraryLandingPage />
                 </AuthProvider>
             </MemoryRouter>
@@ -58,6 +72,8 @@ function renderLibraryLanding(role: Role = Role.Admin) {
 describe('LibraryLandingPage', () => {
     beforeEach(() => {
         vi.clearAllMocks();
+        vi.mocked(api.apiGet).mockReset();
+        mockUseActualLibraryCounts.mockReturnValue(false);
         mockUseLibraryTypes.mockReturnValue({
             contentTypes: mockContentTypes,
             subjectTypes: mockSubjectTypes,
@@ -136,11 +152,12 @@ describe('LibraryLandingPage', () => {
         it('creates correct links to subject type pages', () => {
             renderLibraryLanding();
 
-            const actorsLink = screen.getByRole('link', { name: /actors/i });
-            const studiosLink = screen.getByRole('link', { name: /studios/i });
+            const links = screen.getAllByRole('link');
+            const actorsLink = links.find((l) => l.getAttribute('href') === '/library/subjects/actors');
+            const studiosLink = links.find((l) => l.getAttribute('href') === '/library/subjects/studios');
 
-            expect(actorsLink).toHaveAttribute('href', '/library/subjects/actors');
-            expect(studiosLink).toHaveAttribute('href', '/library/subjects/studios');
+            expect(actorsLink).toBeDefined();
+            expect(studiosLink).toBeDefined();
         });
 
         it('has link to all subjects page', () => {
@@ -301,15 +318,29 @@ describe('LibraryLandingPage', () => {
             expect(items.length).toBe(2);
         });
 
-        it('displays "0 items" for empty types', () => {
+        it('displays "0 items" for an empty type card', () => {
             mockUseLibraryCounts.mockReturnValue({
-                counts: { movies: 0, shows: 0, actors: 0, studios: 0 },
+                counts: { movies: 5, shows: 0, actors: 0, studios: 0 },
             });
 
             renderLibraryLanding();
 
             const zeroItems = screen.getAllByText('0 items');
-            expect(zeroItems.length).toBe(4);
+            expect(zeroItems.length).toBe(3);
+        });
+
+        it('suppresses the zero-count content cards in favor of the onboarding hero when content is empty', () => {
+            mockUseLibraryCounts.mockReturnValue({
+                counts: { movies: 0, shows: 0, actors: 2, studios: 1 },
+            });
+
+            renderLibraryLanding();
+
+            expect(screen.queryByText('Movies')).not.toBeInTheDocument();
+            expect(screen.queryByText('TV Shows')).not.toBeInTheDocument();
+            expect(screen.queryByText('View all content')).not.toBeInTheDocument();
+            expect(document.querySelector('[data-component="onboarding-prompt"]')).toBeInTheDocument();
+            expect(screen.getByText('Actors')).toBeInTheDocument();
         });
 
         it('shows count skeletons while counts are loading', () => {
@@ -321,6 +352,49 @@ describe('LibraryLandingPage', () => {
 
             const countSkeletons = screen.getAllByTestId('library-landing__count-skeleton');
             expect(countSkeletons.length).toBe(4);
+        });
+
+        it('renders subject card counts from subject totalItems responses', async () => {
+            const subjectTypes: LibraryTypeDefinition[] = [
+                { id: 'person', name: 'Person', pluralName: 'People', slug: 'person', levels: [] },
+                { id: 'studio', name: 'Studio', pluralName: 'Studios', slug: 'studio', levels: [] },
+            ];
+
+            mockUseLibraryTypes.mockReturnValue({
+                contentTypes: mockContentTypes,
+                subjectTypes,
+                isLoading: false,
+                error: null,
+                refetch: vi.fn(),
+            });
+            mockUseActualLibraryCounts.mockReturnValue(true);
+            vi.mocked(api.apiGet).mockImplementation((url: string) => {
+                if (url.startsWith('/content')) {
+                    return Promise.resolve({ totalItems: 8 });
+                }
+                if (url.startsWith('/subjects') && url.includes('kind=person')) {
+                    return Promise.resolve({ items: [], pageNumber: 1, pageSize: 1, totalItems: 4053 });
+                }
+                if (url.startsWith('/subjects') && url.includes('kind=studio')) {
+                    return Promise.resolve({ items: [], pageNumber: 1, pageSize: 1, totalItems: 12 });
+                }
+                return Promise.reject(new Error(`Unexpected API call: ${url}`));
+            });
+
+            renderLibraryLanding();
+
+            const subjectSection = screen.getByRole('region', { name: 'Subjects' });
+            expect(within(subjectSection).getByText('People')).toBeInTheDocument();
+            expect(within(subjectSection).getAllByTestId('library-landing__count-skeleton')).toHaveLength(2);
+
+            await waitFor(() => {
+                expect(within(subjectSection).getByText('4,053 items')).toBeInTheDocument();
+                expect(within(subjectSection).getByText('12 items')).toBeInTheDocument();
+                expect(within(subjectSection).queryAllByTestId('library-landing__count-skeleton')).toHaveLength(0);
+            });
+
+            expect(api.apiGet).toHaveBeenCalledWith(expect.stringContaining('/subjects?kind=person'));
+            expect(api.apiGet).toHaveBeenCalledWith(expect.stringContaining('/subjects?kind=studio'));
         });
 
         it('passes content and subject types to useLibraryCounts', () => {
@@ -358,46 +432,48 @@ describe('LibraryLandingPage', () => {
             expect(document.querySelector('[data-component="onboarding-prompt"]')).not.toBeInTheDocument();
         });
 
-        it('shows Go to Wishlists button for Requester role', () => {
+        it('shows an Add content link (to the bare add page) for Requester role', () => {
             mockUseLibraryCounts.mockReturnValue({
                 counts: { movies: 0, shows: 0, actors: 0, studios: 0 },
             });
 
             renderLibraryLanding(Role.Requester);
 
-            expect(screen.getByRole('button', { name: /go to wishlists/i })).toBeInTheDocument();
+            const addLink = screen.getByRole('link', { name: /add content/i });
+            expect(addLink).toHaveAttribute('href', '/library/add');
+            expect(screen.queryByRole('button', { name: /wishlist/i })).not.toBeInTheDocument();
         });
 
-        it('shows both buttons for Admin role', () => {
+        it('shows both the Add content link and the media-server button for Admin role', () => {
             mockUseLibraryCounts.mockReturnValue({
                 counts: { movies: 0, shows: 0, actors: 0, studios: 0 },
             });
 
             renderLibraryLanding(Role.Admin);
 
-            expect(screen.getByRole('button', { name: /go to wishlists/i })).toBeInTheDocument();
+            expect(screen.getByRole('link', { name: /add content/i })).toHaveAttribute('href', '/library/add');
             expect(screen.getByRole('button', { name: /connect a media server/i })).toBeInTheDocument();
         });
 
-        it('shows only Go to Wishlists button for Manager role', () => {
+        it('shows only the Add content link for Manager role', () => {
             mockUseLibraryCounts.mockReturnValue({
                 counts: { movies: 0, shows: 0, actors: 0, studios: 0 },
             });
 
             renderLibraryLanding(Role.Manager);
 
-            expect(screen.getByRole('button', { name: /go to wishlists/i })).toBeInTheDocument();
+            expect(screen.getByRole('link', { name: /add content/i })).toBeInTheDocument();
             expect(screen.queryByRole('button', { name: /connect a media server/i })).not.toBeInTheDocument();
         });
 
-        it('shows no action buttons for Viewer role', () => {
+        it('shows no action controls for Viewer role', () => {
             mockUseLibraryCounts.mockReturnValue({
                 counts: { movies: 0, shows: 0, actors: 0, studios: 0 },
             });
 
             renderLibraryLanding(Role.Viewer);
 
-            expect(screen.queryByRole('button', { name: /go to wishlists/i })).not.toBeInTheDocument();
+            expect(screen.queryByRole('link', { name: /add content/i })).not.toBeInTheDocument();
             expect(screen.queryByRole('button', { name: /connect a media server/i })).not.toBeInTheDocument();
         });
     });
@@ -443,6 +519,7 @@ describe('LibraryLandingPage', () => {
                     {
                         id: 'ct-custom',
                         name: 'Custom',
+                        pluralName: 'Custom',
                         slug: 'custom',
                     },
                 ],
@@ -467,6 +544,7 @@ describe('LibraryLandingPage', () => {
                     {
                         id: 'st-custom',
                         name: 'Custom Subject',
+                        pluralName: 'Custom Subject',
                         slug: 'custom-subject',
                     },
                 ],

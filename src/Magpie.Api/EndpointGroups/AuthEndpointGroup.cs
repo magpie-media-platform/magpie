@@ -1,135 +1,236 @@
+using System;
 using System.Threading;
 using System.Threading.Tasks;
 
-using Magpie.Abstractions.Api;
-using Magpie.Abstractions.Auth;
-using Magpie.Abstractions.Repositories;
 using Magpie.Models.Api;
+using Magpie.Models.Security;
+using Magpie.Sdk.Api;
+using Magpie.Sdk.Services;
 
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
 
 namespace Magpie.Api.EndpointGroups;
 
-internal sealed class AuthEndpointGroup(
-    ICredentialAuthenticationProvider authProvider,
-    ITokenService tokenService,
-    IUserRepository userRepository) : IApiEndpointGroup
+internal sealed class AuthEndpointGroup : IApiEndpointGroup
 {
+    private const string RefreshCookieName = "magpie.refresh";
+    private const string RefreshCookiePath = "/api/auth";
+    private const string BearerSchemePrefix = "Bearer ";
+
     public string Name => "auth";
 
-    private static readonly LoginProviderResponse[] LocalProviders =
-    [
-        new LoginProviderResponse
+    private static void SetRefreshCookie(HttpContext httpContext, AuthSession session)
+    {
+        httpContext.Response.Cookies.Append(
+            RefreshCookieName,
+            session.RefreshToken,
+            new CookieOptions
+            {
+                HttpOnly = true,
+                Secure = httpContext.Request.IsHttps,
+                SameSite = SameSiteMode.Strict,
+                Path = RefreshCookiePath,
+                Expires = session.RefreshTokenExpiresAt,
+                IsEssential = true,
+            });
+    }
+
+    private static void ClearRefreshCookie(HttpContext httpContext)
+    {
+        httpContext.Response.Cookies.Delete(
+            RefreshCookieName,
+            new CookieOptions
+            {
+                HttpOnly = true,
+                Secure = httpContext.Request.IsHttps,
+                SameSite = SameSiteMode.Strict,
+                Path = RefreshCookiePath,
+            });
+    }
+
+    private static void SetStreamAuthCookie(HttpContext httpContext, AuthSession session)
+    {
+        SetStreamAuthCookie(httpContext, session.AccessToken, session.AccessTokenExpiresAt);
+    }
+
+    private static void SetStreamAuthCookie(HttpContext httpContext, string accessToken, DateTime? expires = null)
+    {
+        httpContext.Response.Cookies.Append(
+            StreamAuthentication.CookieName,
+            accessToken,
+            new CookieOptions
+            {
+                HttpOnly = true,
+                Secure = httpContext.Request.IsHttps,
+                SameSite = SameSiteMode.Lax,
+                Path = StreamAuthentication.Path,
+                Expires = expires,
+                IsEssential = true,
+            });
+    }
+
+    private static string? ExtractBearerToken(HttpContext httpContext)
+    {
+        if (!httpContext.Request.Headers.TryGetValue("Authorization", out var values))
         {
-            Id = "local",
-            Name = "Local",
-            Type = "local",
-            UsesCredentials = true,
+            return null;
         }
-    ];
+
+        foreach (var raw in values)
+        {
+            if (string.IsNullOrWhiteSpace(raw) ||
+                !raw.StartsWith(BearerSchemePrefix, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var token = raw.AsSpan(BearerSchemePrefix.Length).Trim();
+            if (token.Length > 0)
+            {
+                return token.ToString();
+            }
+        }
+
+        return null;
+    }
+
+    private static void ClearStreamAuthCookie(HttpContext httpContext)
+    {
+        httpContext.Response.Cookies.Delete(
+            StreamAuthentication.CookieName,
+            new CookieOptions
+            {
+                HttpOnly = true,
+                Secure = httpContext.Request.IsHttps,
+                SameSite = SameSiteMode.Lax,
+                Path = StreamAuthentication.Path,
+            });
+    }
 
     public void MapEndpoints(IEndpointRouteBuilder builder)
     {
-        builder.MapGet("login/providers", () => Results.Ok(LocalProviders))
-            .WithName("GetLoginProviders")
-            .Produces<LoginProviderResponse[]>()
-            .AllowAnonymous();
-
-        builder.MapPost("login", AuthLogin)
-            .WithName(nameof(AuthLogin))
+        builder.MapPost("login", AuthLoginAsync)
+            .WithName(nameof(AuthLoginAsync))
             .Produces<AuthTokenResponse>()
             .ProducesProblem(StatusCodes.Status401Unauthorized)
-            .ProducesProblem(StatusCodes.Status400BadRequest)
             .AllowAnonymous();
 
-        builder.MapPost("logout", AuthLogout)
-            .WithName(nameof(AuthLogout))
+        builder.MapPost("logout", AuthLogoutAsync)
+            .WithName(nameof(AuthLogoutAsync))
             .Produces(StatusCodes.Status204NoContent)
-            .ProducesProblem(StatusCodes.Status400BadRequest)
-            .RequireAuthorization();
+            .RequireViewer();
 
-        builder.MapPost("refresh", AuthRefresh)
-            .WithName(nameof(AuthRefresh))
+        builder.MapPost("refresh", AuthRefreshAsync)
+            .WithName(nameof(AuthRefreshAsync))
             .Produces<AuthTokenResponse>()
             .ProducesProblem(StatusCodes.Status401Unauthorized)
-            .ProducesProblem(StatusCodes.Status400BadRequest)
             .AllowAnonymous();
+
+        builder.MapGet("permissions", GetPermissions)
+            .WithName(nameof(GetPermissions))
+            .Produces<EffectivePermissions>()
+            .RequireViewer();
     }
 
-    private async Task<IResult> AuthLogin(LoginRequest request, CancellationToken cancellationToken)
+    internal async Task<IResult> AuthLoginAsync(
+        HttpContext httpContext,
+        [FromServices] IAuthService authService,
+        LoginRequest request,
+        CancellationToken cancellationToken)
     {
-        if (string.IsNullOrWhiteSpace(request.Username) || string.IsNullOrWhiteSpace(request.Password))
-        {
-            return Results.Problem(statusCode: StatusCodes.Status400BadRequest);
-        }
-
-        var user = await authProvider.VerifyCredentialsAsync(request.Username, request.Password, cancellationToken)
+        var session = await authService.LoginAsync(request.Username, request.Password, cancellationToken)
             .ConfigureAwait(false);
 
-        if (user is null)
+        if (session is null)
         {
-            return Results.Problem(statusCode: StatusCodes.Status401Unauthorized);
+            return Results.Problem(
+                title: "Invalid credentials",
+                detail: "The username or password is incorrect, or the account is disabled.",
+                statusCode: StatusCodes.Status401Unauthorized);
         }
 
-        var accessToken = await tokenService.GenerateAccessTokenAsync(user, cancellationToken).ConfigureAwait(false);
-        var refreshToken = await tokenService.GenerateRefreshTokenAsync(user.Id, cancellationToken)
-            .ConfigureAwait(false);
+        SetRefreshCookie(httpContext, session);
+        SetStreamAuthCookie(httpContext, session);
 
         return Results.Ok(new AuthTokenResponse
         {
-            AccessToken = accessToken.Token,
-            AccessTokenExpiresAt = accessToken.ExpiresAt,
-            RefreshToken = refreshToken
+            AccessToken = session.AccessToken,
+            AccessTokenExpiresAt = session.AccessTokenExpiresAt,
         });
     }
 
-    private async Task<IResult> AuthLogout(LogoutRequest request, CancellationToken cancellationToken)
+    internal async Task<IResult> AuthLogoutAsync(
+        HttpContext httpContext,
+        [FromServices] IAuthService authService,
+        CancellationToken cancellationToken)
     {
-        if (string.IsNullOrWhiteSpace(request.RefreshToken))
+        var refreshToken = httpContext.Request.Cookies[RefreshCookieName];
+
+        if (!string.IsNullOrWhiteSpace(refreshToken))
         {
-            return Results.Problem(statusCode: StatusCodes.Status400BadRequest);
+            await authService.LogoutAsync(refreshToken, cancellationToken).ConfigureAwait(false);
         }
 
-        await tokenService.RevokeRefreshTokenAsync(request.RefreshToken, cancellationToken).ConfigureAwait(false);
+        ClearRefreshCookie(httpContext);
+        ClearStreamAuthCookie(httpContext);
 
         return Results.NoContent();
     }
 
-    private async Task<IResult> AuthRefresh(RefreshTokenRequest request, CancellationToken cancellationToken)
+    internal async Task<IResult> AuthRefreshAsync(
+        HttpContext httpContext,
+        [FromServices] IAuthService authService,
+        CancellationToken cancellationToken)
     {
-        if (string.IsNullOrWhiteSpace(request.RefreshToken))
+        var refreshToken = httpContext.Request.Cookies[RefreshCookieName];
+
+        if (string.IsNullOrWhiteSpace(refreshToken))
         {
-            return Results.Problem(statusCode: StatusCodes.Status400BadRequest);
+            ClearRefreshCookie(httpContext);
+            ClearStreamAuthCookie(httpContext);
+            return Results.Problem(
+                title: "Missing refresh token",
+                detail: "The session expired. Sign in again.",
+                statusCode: StatusCodes.Status401Unauthorized);
         }
 
-        var userId = await tokenService.TryValidateRefreshTokenAsync(request.RefreshToken, cancellationToken)
-            .ConfigureAwait(false);
+        var session = await authService.RefreshAsync(refreshToken, cancellationToken).ConfigureAwait(false);
 
-        if (userId is null)
+        if (session is null)
         {
-            return Results.Problem(statusCode: StatusCodes.Status401Unauthorized);
+            ClearRefreshCookie(httpContext);
+            ClearStreamAuthCookie(httpContext);
+            return Results.Problem(
+                title: "Invalid refresh token",
+                detail: "The refresh token is missing, expired, or already used.",
+                statusCode: StatusCodes.Status401Unauthorized);
         }
 
-        var user = await userRepository.GetByIdAsync(userId.Value, cancellationToken).ConfigureAwait(false);
-
-        if (user is null)
-        {
-            return Results.Problem(statusCode: StatusCodes.Status401Unauthorized);
-        }
-
-        await tokenService.RevokeRefreshTokenAsync(request.RefreshToken, cancellationToken).ConfigureAwait(false);
-
-        var accessToken = await tokenService.GenerateAccessTokenAsync(user, cancellationToken).ConfigureAwait(false);
-        var refreshToken = await tokenService.GenerateRefreshTokenAsync(user.Id, cancellationToken)
-            .ConfigureAwait(false);
+        SetRefreshCookie(httpContext, session);
+        SetStreamAuthCookie(httpContext, session);
 
         return Results.Ok(new AuthTokenResponse
         {
-            AccessToken = accessToken.Token,
-            AccessTokenExpiresAt = accessToken.ExpiresAt,
-            RefreshToken = refreshToken
+            AccessToken = session.AccessToken,
+            AccessTokenExpiresAt = session.AccessTokenExpiresAt,
         });
+    }
+
+    internal IResult GetPermissions(
+        HttpContext httpContext,
+        [FromServices] IAuthService authService,
+        AuthenticatedUser user)
+    {
+        var effective = authService.GetEffectivePermissions(user.Role);
+        var accessToken = ExtractBearerToken(httpContext);
+        if (accessToken is not null)
+        {
+            SetStreamAuthCookie(httpContext, accessToken);
+        }
+
+        return Results.Ok(effective);
     }
 }

@@ -1,11 +1,14 @@
-import { useState, useEffect, useRef, useMemo } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMemo } from 'react';
+import { useQuery, useMutation, useQueries, useQueryClient, type UseQueryResult } from '@tanstack/react-query';
 
-import { apiGet, apiPost, apiPatch, apiDelete, buildUrl } from '@/lib/api';
-import { formatFilterCriteria } from '@/lib/filterQuery';
-import type { MetadataContainer } from '@/lib/metadata';
+import { apiGet, apiPost, apiPatch, apiDelete } from '@/lib/api';
+import { formatMagpieQlCriteria } from '@/lib/magpieQl';
 import { POLLING_INTERVALS } from '@/lib/queryClient';
+import { useInvalidateQueriesOnEvents } from './useInvalidateQueriesOnEvents';
 import { queryErrorOrNull } from '@/lib/utils';
+import type { ContentFilterCriteria, CriteriaSet } from '@/types/filters';
+
+export type { ContentFilterCriteria, CriteriaSet } from '@/types/filters';
 
 export interface ContentFilter {
     id: string;
@@ -19,24 +22,13 @@ export interface ContentFilter {
     modifiedByUserId: string | null;
 }
 
-export interface ContentFilterCriteria {
-    contentHierarchyItem?: CriteriaSet;
-    mediaFiles?: CriteriaSet;
-}
-
-export interface CriteriaSet {
-    and?: unknown[];
-    or?: unknown[];
-    not?: unknown;
-}
-
-export interface CreateContentFilterRequest {
+interface CreateContentFilterRequest {
     name: string;
     criteria: ContentFilterCriteria;
     ownerLock?: boolean | null;
 }
 
-export interface UpdateContentFilterRequest {
+interface UpdateContentFilterRequest {
     name?: { value: string };
     criteria?: { value: ContentFilterCriteria };
     ownerLock?: { value: boolean | null };
@@ -59,32 +51,10 @@ export const contentFilterQueryKeys = {
     shared: ['content-filters', 'shared'] as const,
     my: ['content-filters', 'my'] as const,
     detail: (id: string) => ['content-filters', 'detail', id] as const,
-    preview: (id: string, isShared: boolean, page?: number, pageSize?: number) =>
-        ['content-filters', 'preview', isShared ? 'shared' : 'my', id, { page, pageSize }] as const,
+    formattedCriteria: (fingerprint: string) => ['content-filters', 'formatted-criteria', fingerprint] as const,
+    filterFormattedCriteria: (id: string, fingerprint: string) =>
+        ['content-filters', 'formatted-criteria', id, fingerprint] as const,
 };
-
-export interface FilterPreviewResponse {
-    items: FilterPreviewItem[];
-    pageNumber?: number;
-    pageSize?: number;
-    totalItems: number;
-}
-
-export interface FilterPreviewItem {
-    id: string;
-    contentType: string;
-    level: string;
-    slug: string;
-    name: string;
-    monitoring: number;
-    contentItem?: {
-        id: string;
-        fulfillment: number;
-        createdAt: string;
-    } | null;
-    metadataContainer?: MetadataContainer | null;
-    createdAt: string;
-}
 
 async function fetchSharedContentFilters(): Promise<ContentFilter[]> {
     return apiGet<ContentFilter[]>('/content-filters');
@@ -118,6 +88,33 @@ function countCriteria(criteria: ContentFilterCriteria | null | undefined): numb
     return countTopLevelClauses(criteria.contentHierarchyItem) + countTopLevelClauses(criteria.mediaFiles);
 }
 
+export function isCriteriaEmpty(criteria: ContentFilterCriteria | null | undefined): boolean {
+    return countCriteria(criteria) === 0;
+}
+
+function createCriteriaFingerprint(criteria: ContentFilterCriteria | null | undefined): string {
+    return criteria ? JSON.stringify(criteria) : '';
+}
+
+async function formatContentCriteria(criteria: ContentFilterCriteria): Promise<string> {
+    const result = await formatMagpieQlCriteria(criteria, 'content');
+    return result.query ?? '';
+}
+
+export function useFormattedCriteria(
+    criteria: ContentFilterCriteria | null | undefined,
+): UseQueryResult<string, Error> {
+    const fingerprint = useMemo(() => createCriteriaFingerprint(criteria), [criteria]);
+    const enabled = !!criteria && !isCriteriaEmpty(criteria);
+
+    return useQuery<string, Error>({
+        queryKey: [...contentFilterQueryKeys.formattedCriteria(fingerprint), criteria],
+        queryFn: () => formatContentCriteria(criteria ?? {}),
+        enabled,
+        staleTime: POLLING_INTERVALS.normal / 2,
+    });
+}
+
 function transformContentFilter(filter: ContentFilter): ContentFilterItem {
     return {
         id: filter.id,
@@ -133,80 +130,71 @@ function transformContentFilter(filter: ContentFilter): ContentFilterItem {
 }
 
 export function useContentFilters() {
-    const [formattedQueries, setFormattedQueries] = useState<Record<string, string>>({});
-    // Stale-resolution guard: drop a formatter result whose criteria fingerprint no longer matches the latest in-flight request for that filter id.
-    const inFlightFingerprintsRef = useRef<Map<string, string>>(new Map());
-
+    useInvalidateQueriesOnEvents(
+        ['contentFilter.created', 'contentFilter.updated', 'contentFilter.deleted'],
+        [contentFilterQueryKeys.shared, contentFilterQueryKeys.my],
+        { exact: true, owner: 'content-filter-shell' },
+    );
     const sharedQuery = useQuery({
         queryKey: contentFilterQueryKeys.shared,
         queryFn: fetchSharedContentFilters,
-        refetchInterval: POLLING_INTERVALS.normal,
         staleTime: POLLING_INTERVALS.normal / 2,
     });
 
     const myQuery = useQuery({
         queryKey: contentFilterQueryKeys.my,
         queryFn: fetchMyContentFilters,
-        refetchInterval: POLLING_INTERVALS.normal,
         staleTime: POLLING_INTERVALS.normal / 2,
     });
 
     const isLoading = sharedQuery.isLoading || myQuery.isLoading;
     const error = sharedQuery.error || myQuery.error;
 
-    const allRawFilters = useMemo<ContentFilter[]>(
-        () => [...(sharedQuery.data ?? []), ...(myQuery.data ?? [])],
-        [sharedQuery.data, myQuery.data],
-    );
-
-    const criteriaFingerprints = useMemo(() => {
-        const map: Record<string, string> = {};
-        for (const filter of allRawFilters) {
-            map[filter.id] = JSON.stringify(filter.criteria);
-        }
-        return map;
-    }, [allRawFilters]);
-
-    useEffect(() => {
-        let cancelled = false;
-        const inFlight = inFlightFingerprintsRef.current;
-
-        for (const filter of allRawFilters) {
-            const count = countCriteria(filter.criteria);
-            const fingerprint = criteriaFingerprints[filter.id];
-            if (count > 0 && inFlight.get(filter.id) !== fingerprint) {
-                inFlight.set(filter.id, fingerprint);
-
-                formatFilterCriteria(filter.criteria, 'content')
-                    .then((result) => {
-                        if (cancelled) {
-                            return;
-                        }
-                        if (inFlight.get(filter.id) !== fingerprint) {
-                            return;
-                        }
-                        setFormattedQueries((prev) => ({ ...prev, [filter.id]: result.query ?? '' }));
-                    })
-                    .catch(() => {});
+    const allRawFilters = useMemo<ContentFilter[]>(() => {
+        const byId = new Map<string, ContentFilter>();
+        for (const filter of [...(sharedQuery.data ?? []), ...(myQuery.data ?? [])]) {
+            if (!byId.has(filter.id)) {
+                byId.set(filter.id, filter);
             }
         }
+        return [...byId.values()];
+    }, [sharedQuery.data, myQuery.data]);
 
-        return () => {
-            cancelled = true;
-        };
-    }, [allRawFilters, criteriaFingerprints]);
+    const formattedCriteriaInputs = useMemo(() => {
+        return allRawFilters.map((filter) => ({
+            id: filter.id,
+            criteria: filter.criteria,
+            criteriaCount: countCriteria(filter.criteria),
+            fingerprint: createCriteriaFingerprint(filter.criteria),
+        }));
+    }, [allRawFilters]);
 
-    const filters: ContentFilterItem[] = allRawFilters.map((filter) => ({
+    const formattedCriteriaQueries = useQueries({
+        queries: formattedCriteriaInputs.map((input) => ({
+            queryKey: contentFilterQueryKeys.filterFormattedCriteria(input.id, input.fingerprint),
+            queryFn: () => formatContentCriteria(input.criteria),
+            enabled: input.criteriaCount > 0,
+            staleTime: POLLING_INTERVALS.normal / 2,
+        })),
+    });
+
+    const formatterError = formattedCriteriaQueries.find((query) => query.error)?.error;
+
+    const filters: ContentFilterItem[] = allRawFilters.map((filter, index) => ({
         ...transformContentFilter(filter),
-        query: formattedQueries[filter.id] ?? '',
+        query: formattedCriteriaQueries[index]?.data ?? '',
     }));
 
     return {
         filters,
         isLoading,
-        error: queryErrorOrNull({ error }),
+        error: queryErrorOrNull({ error: error || formatterError }),
         refetch: async () => {
-            await Promise.all([sharedQuery.refetch(), myQuery.refetch()]);
+            await Promise.all([
+                sharedQuery.refetch(),
+                myQuery.refetch(),
+                ...formattedCriteriaQueries.filter((query) => query.isError).map((query) => query.refetch()),
+            ]);
         },
     };
 }
@@ -215,12 +203,11 @@ export function useCreateContentFilter() {
     const queryClient = useQueryClient();
 
     return useMutation({
-        mutationFn: async ({ isShared, ...request }: CreateContentFilterRequest & { isShared: boolean }) => {
-            const endpoint = isShared ? '/content-filters' : '/content-filters/my';
-            return apiPost<ContentFilter>(endpoint, request);
+        mutationFn: async ({ isShared: _isShared, ...request }: CreateContentFilterRequest & { isShared: boolean }) => {
+            return apiPost<ContentFilter>('/content-filters', request);
         },
         onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: contentFilterQueryKeys.all });
+            void queryClient.invalidateQueries({ queryKey: contentFilterQueryKeys.all });
         },
     });
 }
@@ -231,14 +218,13 @@ export function useUpdateContentFilter() {
     return useMutation({
         mutationFn: async ({
             id,
-            isShared,
+            isShared: _isShared,
             ...request
         }: UpdateContentFilterRequest & { id: string; isShared: boolean }) => {
-            const endpoint = isShared ? `/content-filters/${id}` : `/content-filters/my/${id}`;
-            return apiPatch<void>(endpoint, request);
+            return apiPatch<void>(`/content-filters/${id}`, request);
         },
         onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: contentFilterQueryKeys.all });
+            void queryClient.invalidateQueries({ queryKey: contentFilterQueryKeys.all });
         },
     });
 }
@@ -247,37 +233,11 @@ export function useDeleteContentFilter() {
     const queryClient = useQueryClient();
 
     return useMutation({
-        mutationFn: async ({ id, isShared }: { id: string; isShared: boolean }) => {
-            const endpoint = isShared ? `/content-filters/${id}` : `/content-filters/my/${id}`;
-            return apiDelete<void>(endpoint);
+        mutationFn: async ({ id, isShared: _isShared }: { id: string; isShared: boolean }) => {
+            return apiDelete<void>(`/content-filters/${id}`);
         },
         onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: contentFilterQueryKeys.all });
+            void queryClient.invalidateQueries({ queryKey: contentFilterQueryKeys.all });
         },
-    });
-}
-
-async function fetchFilterPreview(
-    filterId: string,
-    isShared: boolean,
-    page?: number,
-    pageSize?: number,
-): Promise<FilterPreviewResponse> {
-    const endpoint = isShared ? `/content-filters/${filterId}/preview` : `/content-filters/my/${filterId}/preview`;
-    return apiGet<FilterPreviewResponse>(buildUrl(endpoint, { page, pageSize }));
-}
-
-export function useFilterPreview(
-    filterId: string | null,
-    isShared: boolean = true,
-    page?: number,
-    pageSize: number = 10,
-    options?: { enabled?: boolean },
-) {
-    return useQuery({
-        queryKey: contentFilterQueryKeys.preview(filterId ?? '', isShared, page, pageSize),
-        queryFn: () => fetchFilterPreview(filterId!, isShared, page, pageSize),
-        enabled: (options?.enabled ?? true) && !!filterId,
-        staleTime: POLLING_INTERVALS.normal,
     });
 }

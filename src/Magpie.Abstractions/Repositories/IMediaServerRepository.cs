@@ -6,10 +6,8 @@ using Magpie.Models.Data;
 namespace Magpie.Abstractions.Repositories;
 
 /// <summary>
-/// Repository for managing media server configurations.
+/// The repository contract for media servers.
 /// </summary>
 public interface IMediaServerRepository :
     ICrudRepository<Guid, MediaServer>,
-    IPatchRepository<Guid, MediaServer, MediaServerPatch>
-{
-}
+    IPatchRepository<Guid, MediaServer, MediaServerPatch>;

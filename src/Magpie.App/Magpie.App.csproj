@@ -2,26 +2,52 @@
 
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
+    <IncludeSpa Condition="'$(IncludeSpa)' == ''">true</IncludeSpa>
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\Magpie.Abstractions\Magpie.Abstractions.csproj" />
+    <PackageReference Include="Microsoft.Bcl.TimeProvider" />
+    <PackageReference Include="System.CommandLine" />
+    <PackageReference Include="Microsoft.AspNetCore.TestHost" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.Systemd" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\Magpie.Api\Magpie.Api.csproj" />
+    <ProjectReference Include="..\Magpie.Auth\Magpie.Auth.csproj" />
+    <ProjectReference Include="..\Magpie.CommandLine\Magpie.CommandLine.csproj" />
     <ProjectReference Include="..\Magpie.Core\Magpie.Core.csproj" />
-    <ProjectReference Include="..\Magpie.Data\Magpie.Data.csproj" />
     <ProjectReference Include="..\Magpie.Data.SQLite\Magpie.Data.SQLite.csproj" />
     <ProjectReference Include="..\Magpie.Data.PostgreSQL\Magpie.Data.PostgreSQL.csproj" />
-    <ProjectReference Include="..\Magpie.Data.MySQL\Magpie.Data.MySQL.csproj" />
     <ProjectReference Include="..\Magpie.Data.SqlServer\Magpie.Data.SqlServer.csproj" />
-    <ProjectReference Include="..\Magpie.Auth\Magpie.Auth.csproj" />
   </ItemGroup>
 
-  <ItemGroup>
-    <PackageReference Include="System.CommandLine" />
+  <ItemGroup Condition="'$(IncludeSpa)' == 'true'">
+    <PackageReference Include="Microsoft.AspNetCore.SpaProxy" />
   </ItemGroup>
 
-  <ItemGroup>
-    <InternalsVisibleTo Include="Magpie.Test.App" />
-  </ItemGroup>
+  <PropertyGroup Condition="'$(IncludeSpa)' == 'true'">
+    <SpaRoot>$(MSBuildThisFileDirectory)..\..\ui\</SpaRoot>
+    <SpaProxyServerUrl>http://localhost:5173</SpaProxyServerUrl>
+    <SpaProxyLaunchCommand>pnpm run dev</SpaProxyLaunchCommand>
+  </PropertyGroup>
+
+  <Target Name="PublishSpa" AfterTargets="ComputeFilesToPublish" Condition="'$(IncludeSpa)' == 'true'">
+    <Exec Command="pnpm install --frozen-lockfile" WorkingDirectory="$(SpaRoot)" />
+    <Exec Command="pnpm run build:embedded" WorkingDirectory="$(SpaRoot)" />
+
+    <ItemGroup>
+      <_SpaDistFiles Include="$(SpaRoot)dist\**" />
+      <ResolvedFileToPublish Include="@(_SpaDistFiles)">
+        <RelativePath>wwwroot\%(RecursiveDir)%(Filename)%(Extension)</RelativePath>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      </ResolvedFileToPublish>
+    </ItemGroup>
+  </Target>
+
+  <Target Name="RemoveIntegrationTestShimsPublishOutput" AfterTargets="Publish">
+    <RemoveDir Directories="$(PublishDir)extensions\integrationtestshims" />
+  </Target>
 
 </Project>

@@ -1,0 +1,100 @@
+@layer components {
+    .restart-host-panel {
+        position: relative;
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-md);
+        padding: var(--space-lg);
+    }
+
+    .restart-host-panel__intro {
+        display: flex;
+        align-items: flex-start;
+        gap: var(--space-md);
+    }
+
+    .restart-host-panel__icon {
+        flex-shrink: 0;
+        font-size: var(--text-2xl);
+        color: var(--accent-primary);
+        line-height: 1;
+    }
+
+    .restart-host-panel__copy {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-2xs);
+    }
+
+    .restart-host-panel__title {
+        margin: 0;
+        font-size: var(--text-lg);
+        font-weight: var(--weight-semibold);
+        color: var(--text-primary);
+    }
+
+    .restart-host-panel__actions {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: var(--space-md);
+    }
+
+    .restart-host-panel__overlay {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: var(--space-lg);
+        background: color-mix(in srgb, var(--bg-secondary) 88%, transparent);
+        backdrop-filter: blur(2px);
+        border-radius: inherit;
+        z-index: 1;
+    }
+
+    .restart-host-panel__overlay-card {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        text-align: center;
+        gap: var(--space-sm);
+        max-width: 22rem;
+    }
+
+    .restart-host-panel__overlay-icon {
+        font-size: var(--text-2xl);
+        color: var(--accent-primary);
+    }
+
+    .restart-host-panel__overlay-icon--spin {
+        animation: spin var(--duration-spinner) linear infinite;
+    }
+
+    .restart-host-panel__overlay-title {
+        margin: 0;
+        font-size: var(--text-base);
+        font-weight: var(--weight-semibold);
+        color: var(--text-primary);
+    }
+
+    .restart-host-panel__overlay-message {
+        margin: 0;
+        font-size: var(--text-sm);
+        color: var(--text-secondary);
+    }
+
+    .restart-host-panel__overlay-actions {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: center;
+        gap: var(--space-sm);
+        margin-top: var(--space-xs);
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+        .restart-host-panel__overlay-icon--spin {
+            animation: none;
+        }
+    }
+}

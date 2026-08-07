@@ -3,12 +3,12 @@ using Magpie.Models.Filtering;
 namespace Magpie.Models.Data;
 
 /// <summary>
-/// Filter criteria for <see cref="Tag"/>.
+/// The filter criteria for a <see cref="Tag"/>.
 /// </summary>
 public sealed record TagCriteria
 {
     /// <summary>
-    /// The criteria for <see cref="Tag.Name"/>.
+    /// The criteria on the name of the tag.
     /// </summary>
     public CriteriaSet<PropertyCriterion<string>> Name { get; init; } = new();
 }

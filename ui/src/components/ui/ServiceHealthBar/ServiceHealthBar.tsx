@@ -1,6 +1,6 @@
 import { type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
-import { ArrowCounterClockwise, WarningCircle } from '@phosphor-icons/react';
+import { ArrowCounterClockwiseIcon, WarningCircleIcon } from '@phosphor-icons/react';
 
 import { Alert } from '@/components/ui/Alert';
 import { Button } from '@/components/ui/Button';
@@ -39,10 +39,16 @@ function overallStatus(counts: HealthStatusCounts): HealthStatus {
     if (counts.stale > 0) {
         return 'stale';
     }
+    if (counts.degraded > 0) {
+        return 'degraded';
+    }
+    if (counts.stabilizing > 0) {
+        return 'stabilizing';
+    }
     if (counts.unknown > 0) {
         return 'unknown';
     }
-    return 'healthy';
+    return counts.healthy > 0 ? 'healthy' : 'unknown';
 }
 
 function primaryUrl(counts: HealthStatusCounts, getStatusUrl?: (status: HealthStatus) => string): string | undefined {
@@ -54,7 +60,7 @@ function primaryUrl(counts: HealthStatusCounts, getStatusUrl?: (status: HealthSt
 }
 
 function totalCount(counts: HealthStatusCounts): number {
-    return counts.healthy + counts.unhealthy + counts.unknown + counts.stale;
+    return counts.healthy + counts.unhealthy + counts.degraded + counts.stabilizing + counts.unknown + counts.stale;
 }
 
 function summaryLabel(counts: HealthStatusCounts): string {
@@ -65,18 +71,17 @@ function summaryLabel(counts: HealthStatusCounts): string {
     if (counts.stale > 0) {
         return `${counts.stale} stale`;
     }
+    if (counts.degraded > 0) {
+        return `${counts.degraded} degraded`;
+    }
+    if (counts.stabilizing > 0) {
+        return `${counts.stabilizing} stabilizing`;
+    }
     if (counts.unknown > 0) {
         return `${counts.unknown} unknown`;
     }
     return `${total} OK`;
 }
-
-const variantMap: Record<HealthStatus, string> = {
-    healthy: 'healthy',
-    unhealthy: 'unhealthy',
-    stale: 'degraded',
-    unknown: 'unknown',
-};
 
 const SkeletonSegment = () => (
     <div
@@ -111,10 +116,10 @@ export function ServiceHealthBar({
                         <SkeletonSegment />
                     </>
                 ) : error ? (
-                    <Alert variant="error" icon={<WarningCircle weight="duotone" />} title="Failed to load">
+                    <Alert variant="error" icon={<WarningCircleIcon weight="duotone" />} title="Failed to load">
                         {onRetry && (
                             <Button variant="ghost" size="sm" onClick={onRetry}>
-                                <ArrowCounterClockwise weight="bold" aria-hidden="true" />
+                                <ArrowCounterClockwiseIcon weight="bold" aria-hidden="true" />
                                 Try again
                             </Button>
                         )}
@@ -123,12 +128,16 @@ export function ServiceHealthBar({
                     services.map((service) => {
                         const isEmpty = totalCount(service.counts) === 0;
                         const status = overallStatus(service.counts);
-                        const variant = variantMap[status];
+                        const variant = status;
                         const url =
                             isEmpty && service.addUrl
                                 ? service.addUrl
                                 : primaryUrl(service.counts, service.getStatusUrl);
-                        const label = isEmpty && service.addUrl ? 'Add first' : summaryLabel(service.counts);
+                        const label = isEmpty
+                            ? service.addUrl
+                                ? 'Add first'
+                                : 'None configured'
+                            : summaryLabel(service.counts);
 
                         const content = (
                             <>
@@ -153,6 +162,7 @@ export function ServiceHealthBar({
                                     to={url}
                                     className={`service-health-bar__segment service-health-bar__segment--${variant}`}
                                     aria-label={`${service.name}: ${label}`}
+                                    data-status={variant}
                                 >
                                     {content}
                                 </Link>
@@ -164,6 +174,7 @@ export function ServiceHealthBar({
                                 key={service.name}
                                 className={`service-health-bar__segment service-health-bar__segment--${variant}`}
                                 aria-label={`${service.name}: ${label}`}
+                                data-status={variant}
                             >
                                 {content}
                             </div>

@@ -1,21 +1,29 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { renderHook, waitFor } from '@testing-library/react';
+import { act, renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 
 import {
     useContentList,
     useContentDetail,
-    useContentChildren,
     useContentTags,
     useRefreshContent,
     useSearchContentReleases,
     useUpdateContent,
     useDeleteContent,
-    useBulkUpdateContent,
+    useBulkDeleteContent,
+    useBulkPatchContent,
+    useContentRelationships,
+    useMetadataInspector,
+    usePatchMetadataInspector,
+    useReorderMetadataContributions,
+    useEffectiveQualityTierList,
+    useSetQualityTierList,
     contentQueryKeys,
-    BulkUpdateError,
 } from './useContent';
+import { contentReleaseQueryKeys } from './useContentReleases';
+import { useEventStream } from './useEventStream';
+import { tagQueryKeys } from './useTags';
 import * as api from '@/lib/api';
 
 vi.mock('@/lib/api', async (importOriginal) => {
@@ -28,6 +36,12 @@ vi.mock('@/lib/api', async (importOriginal) => {
         apiDelete: vi.fn(),
     };
 });
+
+vi.mock('./useEventStream', () => ({
+    useEventStream: vi.fn(),
+}));
+
+const mockedUseEventStream = vi.mocked(useEventStream);
 
 function createTestQueryClient() {
     return new QueryClient({
@@ -63,20 +77,8 @@ describe('useContent hooks', () => {
         it('generates correct query keys', () => {
             expect(contentQueryKeys.all).toEqual(['content']);
             expect(contentQueryKeys.list()).toEqual(['content', 'list']);
-            expect(contentQueryKeys.list({ page: 1 })).toEqual(['content', 'list', { page: 1 }]);
+            expect(contentQueryKeys.list({ pageNumber: 1 })).toEqual(['content', 'list', { pageNumber: 1 }]);
             expect(contentQueryKeys.detail('123')).toEqual(['content', 'detail', '123']);
-            expect(contentQueryKeys.children('123')).toEqual([
-                'content',
-                'children',
-                '123',
-                { page: undefined, pageSize: undefined },
-            ]);
-            expect(contentQueryKeys.children('123', 1, 25)).toEqual([
-                'content',
-                'children',
-                '123',
-                { page: 1, pageSize: 25 },
-            ]);
             expect(contentQueryKeys.tags()).toEqual(['content', 'tags']);
         });
     });
@@ -91,7 +93,8 @@ describe('useContent hooks', () => {
                     level: 'show',
                     slug: 'breaking-bad',
                     name: 'Breaking Bad',
-                    monitoring: 1,
+                    monitoring: true,
+                    effectiveMonitoring: true,
                     createdAt: '2024-01-01T00:00:00Z',
                     metadataContainer: {
                         id: '22222222-2222-2222-2222-222222222222',
@@ -107,7 +110,7 @@ describe('useContent hooks', () => {
                     contentItem: {
                         id: '33333333-3333-3333-3333-333333333333',
                         contentHierarchyItemId: '11111111-1111-1111-1111-111111111111',
-                        fulfillment: 2,
+                        fulfillment: 'Fulfilled',
                         createdAt: '2024-01-01T00:00:00Z',
                     },
                 },
@@ -133,13 +136,17 @@ describe('useContent hooks', () => {
                         id: '11111111-1111-1111-1111-111111111111',
                         title: 'Breaking Bad',
                         posterUrl: 'https://example.com/poster.jpg',
-                        kind: 'episode',
-                        monitoring: 'active',
+                        level: 'show',
+                        levelLabel: 'Show',
+                        contentType: 'episodes',
+                        monitoring: true,
+                        effectiveMonitoring: true,
                         fulfillment: 'fulfilled',
                         year: 2008,
+                        publishDate: '2008-01-20T00:00:00Z',
                         dateAdded: '2024-01-01T00:00:00Z',
                         lastSearched: undefined,
-                        tags: undefined,
+                        acquisitionStatus: undefined,
                     },
                 ],
                 pageNumber: 1,
@@ -155,9 +162,9 @@ describe('useContent hooks', () => {
                 () =>
                     useContentList({
                         contentType: 'episodes',
-                        monitoring: 1,
-                        search: 'breaking',
-                        page: 2,
+                        monitoring: true,
+                        filter: 'breaking',
+                        pageNumber: 2,
                         pageSize: 50,
                     }),
                 { wrapper: createWrapper(queryClient) },
@@ -166,8 +173,55 @@ describe('useContent hooks', () => {
             await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
             expect(api.apiGet).toHaveBeenCalledWith(
-                '/content?contentType=episodes&monitoring=1&search=breaking&page=2&pageSize=50',
+                '/content?contentType=episodes&monitoring=true&filter=breaking&pageNumber=2&pageSize=50',
             );
+        });
+
+        it('refetches a filtered list exactly once when matching content is created before metadata exists', async () => {
+            const newContentId = '44444444-4444-4444-4444-444444444444';
+            const emptyResponse = { items: [], pageNumber: 1, pageSize: 25, totalItems: 0 };
+            const matchingResponse = {
+                ...mockPagedResponse,
+                items: [
+                    {
+                        ...mockPagedResponse.items[0],
+                        id: newContentId,
+                        contentType: 'movies',
+                        level: 'movie',
+                    },
+                ],
+            };
+            let listRequestCount = 0;
+            vi.mocked(api.apiGet).mockImplementation(async (url: string) => {
+                if (url === '/content?contentType=movies') {
+                    listRequestCount += 1;
+                    return listRequestCount === 1 ? emptyResponse : matchingResponse;
+                }
+                if (url === `/content/${newContentId}`) {
+                    return { id: newContentId };
+                }
+                throw new Error(`Unexpected request: ${url}`);
+            });
+
+            const { result } = renderHook(() => useContentList({ contentType: 'movies' }), {
+                wrapper: createWrapper(queryClient),
+            });
+            await waitFor(() => expect(result.current.isSuccess).toBe(true));
+            const contentEventHandler = mockedUseEventStream.mock.calls.find(
+                ([, options]) =>
+                    Array.isArray(options?.eventName) && options.eventName.includes('content.hierarchyItem.created'),
+            )?.[0];
+
+            act(() => {
+                contentEventHandler?.({
+                    name: 'content.hierarchyItem.created',
+                    context: { 'content.hierarchyItemId': newContentId },
+                });
+            });
+
+            await waitFor(() => expect(result.current.data?.items[0]?.id).toBe(newContentId), { timeout: 2000 });
+            expect(listRequestCount).toBe(2);
+            expect(api.apiGet).not.toHaveBeenCalledWith(`/content/${newContentId}`);
         });
 
         it('can be disabled', () => {
@@ -200,7 +254,8 @@ describe('useContent hooks', () => {
             level: 'movie',
             slug: 'oppenheimer',
             name: 'Oppenheimer',
-            monitoring: 1,
+            monitoring: true,
+            effectiveMonitoring: true,
             path: '/movies/Oppenheimer',
             createdAt: '2024-01-01T00:00:00Z',
             metadataContainer: {
@@ -218,7 +273,7 @@ describe('useContent hooks', () => {
             contentItem: {
                 id: '33333333-3333-3333-3333-333333333333',
                 contentHierarchyItemId: '11111111-1111-1111-1111-111111111111',
-                fulfillment: 2,
+                fulfillment: 'Fulfilled',
                 dateLastSearched: '2024-01-15T00:00:00Z',
                 createdAt: '2024-01-01T00:00:00Z',
             },
@@ -238,18 +293,42 @@ describe('useContent hooks', () => {
                 id: '11111111-1111-1111-1111-111111111111',
                 title: 'Oppenheimer',
                 posterUrl: 'https://example.com/poster.jpg',
-                kind: 'movie',
-                monitoring: 'active',
+                level: 'movie',
+                levelLabel: 'Movie',
+                monitoring: true,
+                effectiveMonitoring: true,
                 fulfillment: 'fulfilled',
                 year: 2023,
+                publishDate: '2023-07-21T00:00:00Z',
                 overview: 'The story of J. Robert Oppenheimer.',
-                subjectId: '22222222-2222-2222-2222-222222222222',
-                subjectName: 'Oppenheimer',
                 parentId: undefined,
                 path: '/movies/Oppenheimer',
                 dateAdded: '2024-01-01T00:00:00Z',
                 lastSearched: '2024-01-15T00:00:00Z',
                 lastRefreshed: undefined,
+                externalIds: [],
+                references: [],
+                genres: [],
+                factValues: {},
+                sequenceNumber: undefined,
+                customValues: [],
+                previews: [],
+                images: [
+                    {
+                        id: '0-https://example.com/poster.jpg',
+                        url: 'https://example.com/poster.jpg',
+                        type: 'poster',
+                        width: undefined,
+                        height: undefined,
+                        isPrimary: undefined,
+                    },
+                ],
+                mediaFiles: undefined,
+                qualityTierListId: undefined,
+                contentType: 'movies',
+                rootFolderId: undefined,
+                contentItemId: '33333333-3333-3333-3333-333333333333',
+                acquisitionStatus: undefined,
             });
         });
 
@@ -277,69 +356,6 @@ describe('useContent hooks', () => {
         });
     });
 
-    describe('useContentChildren', () => {
-        const mockChildrenResponse = {
-            items: [
-                {
-                    id: 'season-1',
-                    metadataContainerId: 'meta-1',
-                    contentType: 'episodes',
-                    level: 'season',
-                    slug: 'season-1',
-                    name: 'Season 1',
-                    monitoring: 1,
-                    createdAt: '2024-01-01T00:00:00Z',
-                    metadataContainer: {
-                        id: 'meta-1',
-                        contributions: [{ ordinal: 0, title: 'Season 1' }],
-                    },
-                    contentItem: {
-                        id: 'content-1',
-                        contentHierarchyItemId: 'season-1',
-                        fulfillment: 2,
-                        createdAt: '2024-01-01T00:00:00Z',
-                    },
-                },
-            ],
-            pageNumber: 1,
-            pageSize: 25,
-            totalItems: 1,
-        };
-
-        it('fetches children and maps to UI model', async () => {
-            vi.mocked(api.apiGet).mockResolvedValue(mockChildrenResponse);
-
-            const { result } = renderHook(() => useContentChildren('parent-id'), {
-                wrapper: createWrapper(queryClient),
-            });
-
-            await waitFor(() => expect(result.current.isSuccess).toBe(true));
-
-            expect(api.apiGet).toHaveBeenCalledWith('/content/parent-id/children?page=1&pageSize=25');
-            expect(result.current.data?.items).toHaveLength(1);
-            expect(result.current.data?.items[0].title).toBe('Season 1');
-        });
-
-        it('supports pagination parameters', async () => {
-            vi.mocked(api.apiGet).mockResolvedValue(mockChildrenResponse);
-
-            const { result } = renderHook(() => useContentChildren('parent-id', 2, 50), {
-                wrapper: createWrapper(queryClient),
-            });
-
-            await waitFor(() => expect(result.current.isSuccess).toBe(true));
-
-            expect(api.apiGet).toHaveBeenCalledWith('/content/parent-id/children?page=2&pageSize=50');
-        });
-
-        it('does not fetch when parentId is undefined', () => {
-            const { result } = renderHook(() => useContentChildren(undefined), { wrapper: createWrapper(queryClient) });
-
-            expect(result.current.isFetching).toBe(false);
-            expect(api.apiGet).not.toHaveBeenCalled();
-        });
-    });
-
     describe('useContentTags', () => {
         const mockTags = [
             { id: 'tag-1', name: 'Favorites', color: '#f7768e' },
@@ -361,7 +377,7 @@ describe('useContent hooks', () => {
     });
 
     describe('useRefreshContent', () => {
-        it('calls POST to refresh endpoint', async () => {
+        it('starts a refresh metadata job', async () => {
             vi.mocked(api.apiPost).mockResolvedValue('22222222-2222-2222-2222-222222222222');
 
             const { result } = renderHook(() => useRefreshContent(), {
@@ -372,7 +388,12 @@ describe('useContent hooks', () => {
 
             await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
-            expect(api.apiPost).toHaveBeenCalledWith('/content/11111111-1111-1111-1111-111111111111/refresh');
+            expect(api.apiPost).toHaveBeenCalledWith('/jobs/execute-immediate', {
+                jobType: 'ContentMetadataRefreshItem',
+                parameters: {
+                    contentHierarchyItemId: '11111111-1111-1111-1111-111111111111',
+                },
+            });
         });
 
         it('handles errors', async () => {
@@ -412,18 +433,45 @@ describe('useContent hooks', () => {
     });
 
     describe('useSearchContentReleases', () => {
-        it('calls POST to search endpoint', async () => {
+        it('searches releases for the content item', async () => {
             vi.mocked(api.apiPost).mockResolvedValue('33333333-3333-3333-3333-333333333333');
 
             const { result } = renderHook(() => useSearchContentReleases(), {
                 wrapper: createWrapper(queryClient),
             });
 
-            result.current.mutate('11111111-1111-1111-1111-111111111111');
+            result.current.mutate({ id: '11111111-1111-1111-1111-111111111111' });
 
             await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
-            expect(api.apiPost).toHaveBeenCalledWith('/content/11111111-1111-1111-1111-111111111111/search');
+            expect(api.apiPost).toHaveBeenCalledWith('/jobs/execute-immediate', {
+                jobType: 'ReleaseSearchItem',
+                parameters: {
+                    contentHierarchyItemId: '11111111-1111-1111-1111-111111111111',
+                    force: 'true',
+                },
+            });
+        });
+
+        it('enqueues the search as a queued job in queue mode', async () => {
+            vi.mocked(api.apiPost).mockResolvedValue('33333333-3333-3333-3333-333333333333');
+
+            const { result } = renderHook(() => useSearchContentReleases(), {
+                wrapper: createWrapper(queryClient),
+            });
+
+            result.current.mutate({ id: '11111111-1111-1111-1111-111111111111', mode: 'Queue' });
+
+            await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+            expect(api.apiPost).toHaveBeenCalledWith('/jobs/enqueue', {
+                jobType: 'ReleaseSearchItem',
+                parameters: {
+                    contentHierarchyItemId: '11111111-1111-1111-1111-111111111111',
+                    force: 'true',
+                },
+                mode: 'Queue',
+            });
         });
 
         it('handles errors', async () => {
@@ -434,13 +482,13 @@ describe('useContent hooks', () => {
                 wrapper: createWrapper(queryClient),
             });
 
-            result.current.mutate('11111111-1111-1111-1111-111111111111');
+            result.current.mutate({ id: '11111111-1111-1111-1111-111111111111' });
 
             await waitFor(() => expect(result.current.isError).toBe(true));
             expect(result.current.error).toBe(error);
         });
 
-        it('invalidates both detail and list queries on success', async () => {
+        it('invalidates content and release queries on success', async () => {
             vi.mocked(api.apiPost).mockResolvedValue('33333333-3333-3333-3333-333333333333');
             const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
 
@@ -448,7 +496,7 @@ describe('useContent hooks', () => {
                 wrapper: createWrapper(queryClient),
             });
 
-            result.current.mutate('11111111-1111-1111-1111-111111111111');
+            result.current.mutate({ id: '11111111-1111-1111-1111-111111111111' });
 
             await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
@@ -457,6 +505,8 @@ describe('useContent hooks', () => {
                 expect.arrayContaining([
                     contentQueryKeys.detail('11111111-1111-1111-1111-111111111111'),
                     contentQueryKeys.list(),
+                    contentQueryKeys.acquisitionStatus('11111111-1111-1111-1111-111111111111'),
+                    contentReleaseQueryKeys.forContent('11111111-1111-1111-1111-111111111111'),
                 ]),
             );
         });
@@ -472,7 +522,7 @@ describe('useContent hooks', () => {
 
             result.current.mutate({
                 id: '11111111-1111-1111-1111-111111111111',
-                monitoring: 1,
+                monitoring: true,
                 qualityTierListId: 'tier-1',
                 rootFolderId: 'folder-1',
             });
@@ -480,10 +530,36 @@ describe('useContent hooks', () => {
             await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
             expect(api.apiPatch).toHaveBeenCalledWith('/content/11111111-1111-1111-1111-111111111111', {
-                monitoring: { value: 1 },
+                monitoring: { value: true },
                 qualityTierListId: { value: 'tier-1' },
                 rootFolderId: { value: 'folder-1' },
             });
+        });
+
+        it('invalidates the tag-by-entity and tags-all keys so an added chip appears immediately', async () => {
+            vi.mocked(api.apiPatch).mockResolvedValue(undefined);
+            const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+
+            const { result } = renderHook(() => useUpdateContent(), {
+                wrapper: createWrapper(queryClient),
+            });
+
+            result.current.mutate({
+                id: '11111111-1111-1111-1111-111111111111',
+                tagsToAdd: ['favourite'],
+            });
+
+            await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+            const calls = invalidateSpy.mock.calls.map((c) => c[0]?.queryKey);
+            expect(calls).toEqual(
+                expect.arrayContaining([
+                    contentQueryKeys.detail('11111111-1111-1111-1111-111111111111'),
+                    contentQueryKeys.list(),
+                    tagQueryKeys.byEntity('11111111-1111-1111-1111-111111111111'),
+                    tagQueryKeys.all,
+                ]),
+            );
         });
 
         it('sends partial updates with ScalarPatch wrapper', async () => {
@@ -495,13 +571,13 @@ describe('useContent hooks', () => {
 
             result.current.mutate({
                 id: '11111111-1111-1111-1111-111111111111',
-                monitoring: 0,
+                monitoring: false,
             });
 
             await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
             expect(api.apiPatch).toHaveBeenCalledWith('/content/11111111-1111-1111-1111-111111111111', {
-                monitoring: { value: 0 },
+                monitoring: { value: false },
             });
         });
 
@@ -515,139 +591,11 @@ describe('useContent hooks', () => {
 
             result.current.mutate({
                 id: '11111111-1111-1111-1111-111111111111',
-                monitoring: 1,
+                monitoring: true,
             });
 
             await waitFor(() => expect(result.current.isError).toBe(true));
             expect(result.current.error).toBe(error);
-        });
-    });
-
-    describe('useBulkUpdateContent', () => {
-        it('updates all items and returns success result', async () => {
-            vi.mocked(api.apiPatch).mockResolvedValue(undefined);
-
-            const { result } = renderHook(() => useBulkUpdateContent(), {
-                wrapper: createWrapper(queryClient),
-            });
-
-            result.current.mutate({
-                ids: ['id-1', 'id-2', 'id-3'],
-                monitoring: 1,
-            });
-
-            await waitFor(() => expect(result.current.isSuccess).toBe(true));
-
-            expect(api.apiPatch).toHaveBeenCalledTimes(3);
-            expect(result.current.data).toEqual({
-                total: 3,
-                succeeded: 3,
-                failed: 0,
-                failedIds: [],
-            });
-        });
-
-        it('continues after partial failures and reports them', async () => {
-            vi.mocked(api.apiPatch)
-                .mockResolvedValueOnce(undefined)
-                .mockRejectedValueOnce(new Error('fail'))
-                .mockResolvedValueOnce(undefined);
-
-            const { result } = renderHook(() => useBulkUpdateContent(), {
-                wrapper: createWrapper(queryClient),
-            });
-
-            result.current.mutate({
-                ids: ['id-1', 'id-2', 'id-3'],
-                monitoring: 1,
-            });
-
-            await waitFor(() => expect(result.current.isSuccess).toBe(true));
-
-            expect(api.apiPatch).toHaveBeenCalledTimes(3);
-            expect(result.current.data).toEqual({
-                total: 3,
-                succeeded: 2,
-                failed: 1,
-                failedIds: ['id-2'],
-            });
-        });
-
-        it('processes all batches even if one batch has failures', async () => {
-            vi.mocked(api.apiPatch)
-                .mockResolvedValueOnce(undefined)
-                .mockResolvedValueOnce(undefined)
-                .mockRejectedValueOnce(new Error('fail'))
-                .mockResolvedValueOnce(undefined)
-                .mockResolvedValueOnce(undefined)
-                .mockResolvedValueOnce(undefined)
-                .mockResolvedValueOnce(undefined);
-
-            const { result } = renderHook(() => useBulkUpdateContent(), {
-                wrapper: createWrapper(queryClient),
-            });
-
-            result.current.mutate({
-                ids: ['id-1', 'id-2', 'id-3', 'id-4', 'id-5', 'id-6', 'id-7'],
-                monitoring: 1,
-            });
-
-            await waitFor(() => expect(result.current.isSuccess).toBe(true));
-
-            expect(api.apiPatch).toHaveBeenCalledTimes(7);
-            expect(result.current.data).toEqual({
-                total: 7,
-                succeeded: 6,
-                failed: 1,
-                failedIds: ['id-3'],
-            });
-        });
-
-        it('throws BulkUpdateError when all items fail', async () => {
-            vi.mocked(api.apiPatch).mockRejectedValue(new Error('fail'));
-
-            const { result } = renderHook(() => useBulkUpdateContent(), {
-                wrapper: createWrapper(queryClient),
-            });
-
-            result.current.mutate({
-                ids: ['id-1', 'id-2'],
-                monitoring: 1,
-            });
-
-            await waitFor(() => expect(result.current.isError).toBe(true));
-
-            expect(result.current.error).toBeInstanceOf(BulkUpdateError);
-            expect(result.current.error).toBeInstanceOf(Error);
-            expect((result.current.error as BulkUpdateError).result).toEqual({
-                total: 2,
-                succeeded: 0,
-                failed: 2,
-                failedIds: ['id-1', 'id-2'],
-            });
-        });
-
-        it('returns an empty no-op result when ids array is empty (does not throw)', async () => {
-            const { result } = renderHook(() => useBulkUpdateContent(), {
-                wrapper: createWrapper(queryClient),
-            });
-
-            result.current.mutate({
-                ids: [],
-                monitoring: 1,
-            });
-
-            await waitFor(() => expect(result.current.isSuccess).toBe(true));
-
-            expect(api.apiPatch).not.toHaveBeenCalled();
-            expect(result.current.isError).toBe(false);
-            expect(result.current.error).toBeNull();
-            expect(result.current.data).toEqual({
-                total: 0,
-                succeeded: 0,
-                failed: 0,
-                failedIds: [],
-            });
         });
     });
 
@@ -678,6 +626,555 @@ describe('useContent hooks', () => {
 
             await waitFor(() => expect(result.current.isError).toBe(true));
             expect(result.current.error).toBe(error);
+        });
+    });
+
+    describe('useBulkPatchContent', () => {
+        it('PATCHes the consolidated bulk route with explicit ids and invalidates the content list', async () => {
+            vi.mocked(api.apiPatch).mockResolvedValue({ count: 2, error: null });
+            const invalidateQueries = vi.spyOn(queryClient, 'invalidateQueries');
+
+            const { result } = renderHook(() => useBulkPatchContent(), {
+                wrapper: createWrapper(queryClient),
+            });
+
+            result.current.mutate({
+                ids: ['11111111-1111-1111-1111-111111111111', '22222222-2222-2222-2222-222222222222'],
+                patch: { monitoring: { value: false } },
+            });
+
+            await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+            expect(api.apiPatch).toHaveBeenCalledWith('/content/bulk', {
+                ids: ['11111111-1111-1111-1111-111111111111', '22222222-2222-2222-2222-222222222222'],
+                patch: { monitoring: { value: false } },
+            });
+            expect(result.current.data).toEqual({ count: 2, error: null });
+            expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: contentQueryKeys.all });
+        });
+
+        it('PATCHes the consolidated bulk route with a magpieql filter for select-across-pages', async () => {
+            vi.mocked(api.apiPatch).mockResolvedValue({ count: 250, error: null });
+
+            const { result } = renderHook(() => useBulkPatchContent(), {
+                wrapper: createWrapper(queryClient),
+            });
+
+            result.current.mutate({
+                filter: 'ParentId null and ContentType = "kind-x"',
+                patch: { tags: { add: ['Favorites'] } },
+            });
+
+            await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+            expect(api.apiPatch).toHaveBeenCalledWith('/content/bulk', {
+                filter: 'ParentId null and ContentType = "kind-x"',
+                patch: { tags: { add: ['Favorites'] } },
+            });
+        });
+    });
+
+    describe('useBulkDeleteContent', () => {
+        it('posts the bulk delete request and invalidates the content list', async () => {
+            vi.mocked(api.apiPost).mockResolvedValue({ count: 2, error: null });
+            const invalidateQueries = vi.spyOn(queryClient, 'invalidateQueries');
+
+            const { result } = renderHook(() => useBulkDeleteContent(), {
+                wrapper: createWrapper(queryClient),
+            });
+
+            result.current.mutate({
+                ids: ['11111111-1111-1111-1111-111111111111', '22222222-2222-2222-2222-222222222222'],
+            });
+
+            await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+            expect(api.apiPost).toHaveBeenCalledWith('/content/bulk/delete', {
+                ids: ['11111111-1111-1111-1111-111111111111', '22222222-2222-2222-2222-222222222222'],
+            });
+            expect(result.current.data).toEqual({ count: 2, error: null });
+            expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: contentQueryKeys.all });
+        });
+    });
+
+    describe('usePatchMetadataInspector', () => {
+        const contentId = '11111111-1111-1111-1111-111111111111';
+
+        it('PATCHes the metadata route and invalidates the inspector after the 204 response', async () => {
+            vi.mocked(api.apiPatch).mockResolvedValue(undefined);
+            const invalidateQueries = vi.spyOn(queryClient, 'invalidateQueries');
+
+            const { result } = renderHook(() => usePatchMetadataInspector(contentId), {
+                wrapper: createWrapper(queryClient),
+            });
+
+            result.current.mutate({ title: { value: 'Operator Title' }, genres: { add: ['Action'] } });
+
+            await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+            expect(api.apiPatch).toHaveBeenCalledWith(`/content/${contentId}/metadata`, {
+                title: { value: 'Operator Title' },
+                genres: { add: ['Action'] },
+            });
+            expect(invalidateQueries).toHaveBeenCalledWith({
+                queryKey: contentQueryKeys.metadataInspector(contentId),
+            });
+            expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: contentQueryKeys.detail(contentId) });
+        });
+    });
+
+    describe('useReorderMetadataContributions', () => {
+        const contentId = '11111111-1111-1111-1111-111111111111';
+
+        it('PATCHes the complete provider order and invalidates materialized metadata', async () => {
+            vi.mocked(api.apiPatch).mockResolvedValue(undefined);
+            const invalidateQueries = vi.spyOn(queryClient, 'invalidateQueries');
+            const { result } = renderHook(() => useReorderMetadataContributions(contentId), {
+                wrapper: createWrapper(queryClient),
+            });
+
+            result.current.mutate(['contrib-b', 'contrib-a']);
+
+            await waitFor(() => expect(result.current.isSuccess).toBe(true));
+            expect(api.apiPatch).toHaveBeenCalledWith(`/content/${contentId}/metadata`, {
+                contributionIds: ['contrib-b', 'contrib-a'],
+            });
+            expect(invalidateQueries).toHaveBeenCalledWith({
+                queryKey: contentQueryKeys.metadataInspector(contentId),
+            });
+            expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: contentQueryKeys.detail(contentId) });
+        });
+    });
+
+    describe('useMetadataInspector', () => {
+        const contentId = '11111111-1111-1111-1111-111111111111';
+        const containerA = '44444444-4444-4444-4444-444444444444';
+        const containerB = '55555555-5555-5555-5555-555555555555';
+
+        it('resolves distinct materialized and contribution subjects through the contextual relatedContentId query', async () => {
+            const materialized = {
+                containerId: '22222222-2222-2222-2222-222222222222',
+                title: 'The Matrix',
+                relationships: [
+                    {
+                        id: '66666666-6666-6666-6666-666666666666',
+                        kind: 'cast',
+                        relatedMetadataContainerId: containerA,
+                    },
+                ],
+            };
+            const contributions = [
+                {
+                    id: '33333333-3333-3333-3333-333333333333',
+                    ordinal: 0,
+                    providerType: 'provider-c',
+                    title: 'The Matrix',
+                    relationships: [
+                        {
+                            id: '77777777-7777-7777-7777-777777777777',
+                            kind: 'director',
+                            relatedMetadataContainerId: containerB,
+                        },
+                        {
+                            id: '88888888-8888-8888-8888-888888888888',
+                            kind: 'writer',
+                            relatedMetadataContainerId: containerA,
+                        },
+                    ],
+                },
+            ];
+            const subjects = {
+                [containerA]: {
+                    subjectId: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+                    name: 'Keanu Reeves',
+                    imageUrl: null,
+                },
+                [containerB]: {
+                    subjectId: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
+                    name: 'Lana Wachowski',
+                    imageUrl: null,
+                },
+            };
+            vi.mocked(api.apiGet).mockImplementation(async (url) => {
+                if (url === `/content/${contentId}/metadata`) {
+                    return materialized;
+                }
+                if (url === `/content/${contentId}/metadata/contributions`) {
+                    return contributions;
+                }
+                if (url === `/subjects?relatedContentId=${contentId}&pageNumber=1&pageSize=100`) {
+                    return {
+                        items: [
+                            {
+                                id: subjects[containerA].subjectId,
+                                metadataContainerId: containerA,
+                                kind: 'person',
+                                createdAt: '2026-01-01T00:00:00Z',
+                                metadataContainer: {
+                                    id: containerA,
+                                    createdAt: '2026-01-01T00:00:00Z',
+                                    contributions: [{ id: 'c1', ordinal: 0, locked: false, title: 'Keanu Reeves' }],
+                                },
+                            },
+                            {
+                                id: subjects[containerB].subjectId,
+                                metadataContainerId: containerB,
+                                kind: 'person',
+                                createdAt: '2026-01-01T00:00:00Z',
+                                metadataContainer: {
+                                    id: containerB,
+                                    createdAt: '2026-01-01T00:00:00Z',
+                                    contributions: [{ id: 'c2', ordinal: 0, locked: false, title: 'Lana Wachowski' }],
+                                },
+                            },
+                        ],
+                        pageNumber: 1,
+                        pageSize: 100,
+                        totalItems: 2,
+                    };
+                }
+                throw new Error(`Unexpected URL: ${url}`);
+            });
+
+            const { result } = renderHook(() => useMetadataInspector(contentId), {
+                wrapper: createWrapper(queryClient),
+            });
+
+            await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+            expect(api.apiGet).toHaveBeenCalledWith(`/content/${contentId}/metadata`);
+            expect(api.apiGet).toHaveBeenCalledWith(`/content/${contentId}/metadata/contributions`);
+            expect(api.apiGet).toHaveBeenCalledWith(
+                `/subjects?relatedContentId=${contentId}&pageNumber=1&pageSize=100`,
+            );
+            expect(api.apiGet).not.toHaveBeenCalledWith('/subjects?pageNumber=1&pageSize=500');
+            const subjectCalls = vi
+                .mocked(api.apiGet)
+                .mock.calls.filter(([url]) => typeof url === 'string' && url.startsWith('/subjects?'));
+            expect(subjectCalls).toHaveLength(1);
+            expect(result.current.data).toEqual({ materialized, contributions, subjects });
+        });
+
+        it('continues paging the contextual result until a referenced subject is resolved', async () => {
+            vi.mocked(api.apiGet).mockImplementation(async (url) => {
+                if (url === `/content/${contentId}/metadata`) {
+                    return {
+                        containerId: '22222222-2222-2222-2222-222222222222',
+                        relationships: [
+                            {
+                                id: '66666666-6666-6666-6666-666666666666',
+                                kind: 'cast',
+                                relatedMetadataContainerId: containerB,
+                            },
+                        ],
+                    };
+                }
+                if (url === `/content/${contentId}/metadata/contributions`) {
+                    return [];
+                }
+                if (url === `/subjects?relatedContentId=${contentId}&pageNumber=1&pageSize=100`) {
+                    return {
+                        items: [
+                            {
+                                id: '77777777-7777-7777-7777-777777777777',
+                                metadataContainerId: containerA,
+                                kind: 'person',
+                                createdAt: '2026-01-01T00:00:00Z',
+                            },
+                        ],
+                        pageNumber: 1,
+                        pageSize: 100,
+                        totalItems: 2,
+                    };
+                }
+                if (url === `/subjects?relatedContentId=${contentId}&pageNumber=2&pageSize=100`) {
+                    return {
+                        items: [
+                            {
+                                id: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
+                                metadataContainerId: containerB,
+                                kind: 'person',
+                                createdAt: '2026-01-01T00:00:00Z',
+                                metadataContainer: {
+                                    id: containerB,
+                                    createdAt: '2026-01-01T00:00:00Z',
+                                    contributions: [{ id: 'c1', ordinal: 0, locked: false, title: 'Lana Wachowski' }],
+                                },
+                            },
+                        ],
+                        pageNumber: 2,
+                        pageSize: 100,
+                        totalItems: 2,
+                    };
+                }
+                throw new Error(`Unexpected URL: ${url}`);
+            });
+
+            const { result } = renderHook(() => useMetadataInspector(contentId), {
+                wrapper: createWrapper(queryClient),
+            });
+
+            await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+            expect(api.apiGet).toHaveBeenCalledWith(
+                `/subjects?relatedContentId=${contentId}&pageNumber=1&pageSize=100`,
+            );
+            expect(api.apiGet).toHaveBeenCalledWith(
+                `/subjects?relatedContentId=${contentId}&pageNumber=2&pageSize=100`,
+            );
+            expect(result.current.data?.subjects[containerB]).toEqual({
+                subjectId: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
+                name: 'Lana Wachowski',
+                imageUrl: null,
+            });
+        });
+
+        it('does not fall back to an unfiltered scan when a relationship target is missing', async () => {
+            const missingContainer = '99999999-9999-9999-9999-999999999999';
+            vi.mocked(api.apiGet).mockImplementation(async (url) => {
+                if (url === `/content/${contentId}/metadata`) {
+                    return {
+                        containerId: '22222222-2222-2222-2222-222222222222',
+                        relationships: [
+                            {
+                                id: '66666666-6666-6666-6666-666666666666',
+                                kind: 'cast',
+                                relatedMetadataContainerId: missingContainer,
+                            },
+                        ],
+                    };
+                }
+                if (url === `/content/${contentId}/metadata/contributions`) {
+                    return [];
+                }
+                if (url === `/subjects?relatedContentId=${contentId}&pageNumber=1&pageSize=100`) {
+                    return {
+                        items: [
+                            {
+                                id: '77777777-7777-7777-7777-777777777777',
+                                metadataContainerId: containerA,
+                                kind: 'person',
+                                createdAt: '2026-01-01T00:00:00Z',
+                            },
+                        ],
+                        pageNumber: 1,
+                        pageSize: 100,
+                        totalItems: 1,
+                    };
+                }
+                throw new Error(`Unexpected URL: ${url}`);
+            });
+
+            const { result } = renderHook(() => useMetadataInspector(contentId), {
+                wrapper: createWrapper(queryClient),
+            });
+
+            await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+            const subjectCalls = vi
+                .mocked(api.apiGet)
+                .mock.calls.filter(([url]) => typeof url === 'string' && url.startsWith('/subjects?'));
+            expect(subjectCalls).toEqual([[`/subjects?relatedContentId=${contentId}&pageNumber=1&pageSize=100`]]);
+            expect(result.current.data?.subjects).toEqual({});
+        });
+    });
+
+    describe('useContentRelationships', () => {
+        const contentId = '11111111-1111-1111-1111-111111111111';
+
+        it('derives one resolved relationship per credit when providers repeat it', async () => {
+            const relatedContainerId = '22222222-2222-2222-2222-222222222222';
+            vi.mocked(api.apiGet).mockImplementation(async (url) => {
+                if (url === `/content/${contentId}/metadata`) {
+                    return {
+                        containerId: '66666666-6666-6666-6666-666666666666',
+                        title: 'The Matrix',
+                        relationships: [
+                            {
+                                id: '88888888-8888-8888-8888-888888888888',
+                                kind: 'cast',
+                                qualifier: 'Neo',
+                                ordinal: 3,
+                                relatedMetadataContainerId: relatedContainerId,
+                            },
+                        ],
+                    };
+                }
+                if (url === `/content/${contentId}/metadata/contributions`) {
+                    return [
+                        {
+                            id: '77777777-7777-7777-7777-777777777777',
+                            ordinal: 0,
+                            providerType: 'provider-c',
+                            relationships: [
+                                {
+                                    id: '88888888-8888-8888-8888-888888888888',
+                                    kind: 'cast',
+                                    qualifier: 'Neo',
+                                    ordinal: 3,
+                                    relatedMetadataContainerId: relatedContainerId,
+                                },
+                            ],
+                        },
+                        {
+                            id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+                            ordinal: 1,
+                            providerType: 'provider-d',
+                            relationships: [
+                                {
+                                    id: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
+                                    kind: 'cast',
+                                    qualifier: 'Neo',
+                                    ordinal: 3,
+                                    relatedMetadataContainerId: relatedContainerId,
+                                },
+                            ],
+                        },
+                    ];
+                }
+                if (url.startsWith('/subjects?')) {
+                    return {
+                        items: [
+                            {
+                                id: '33333333-3333-3333-3333-333333333333',
+                                metadataContainerId: relatedContainerId,
+                                kind: 'person',
+                                createdAt: '2026-01-01T00:00:00Z',
+                                metadataContainer: {
+                                    id: relatedContainerId,
+                                    createdAt: '2026-01-01T00:00:00Z',
+                                    contributions: [
+                                        {
+                                            id: '99999999-9999-9999-9999-999999999999',
+                                            ordinal: 0,
+                                            locked: false,
+                                            title: 'Keanu Reeves',
+                                            images: [{ type: 'profile', url: 'https://example.com/keanu.jpg' }],
+                                        },
+                                    ],
+                                },
+                            },
+                        ],
+                        pageNumber: 1,
+                        pageSize: 100,
+                        totalItems: 1,
+                    };
+                }
+                throw new Error(`Unexpected URL: ${url}`);
+            });
+
+            const { result } = renderHook(() => useContentRelationships(contentId), {
+                wrapper: createWrapper(queryClient),
+            });
+
+            await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+            expect(api.apiGet).toHaveBeenCalledWith(`/content/${contentId}/metadata`);
+            expect(api.apiGet).toHaveBeenCalledWith(`/content/${contentId}/metadata/contributions`);
+            expect(api.apiGet).toHaveBeenCalledWith(
+                `/subjects?relatedContentId=${contentId}&pageNumber=1&pageSize=100`,
+            );
+            expect(result.current.data).toEqual([
+                {
+                    id: '88888888-8888-8888-8888-888888888888',
+                    kind: 'cast',
+                    qualifier: 'Neo',
+                    ordinal: 3,
+                    subjectId: '33333333-3333-3333-3333-333333333333',
+                    name: 'Keanu Reeves',
+                    imageUrl: 'https://example.com/keanu.jpg',
+                },
+            ]);
+        });
+    });
+
+    describe('useEffectiveQualityTierList', () => {
+        const itemId = '11111111-1111-1111-1111-111111111111';
+
+        it('resolves the inherited tier name from the item effective field and the tier lists', async () => {
+            vi.mocked(api.apiGet).mockImplementation((path: string) => {
+                if (path === `/content/${itemId}`) {
+                    return Promise.resolve({
+                        id: itemId,
+                        parentId: null,
+                        qualityTierListId: null,
+                        effectiveQualityTierListId: 'tier-video',
+                        name: 'The Matrix',
+                    });
+                }
+                if (path === '/quality-tier-lists') {
+                    return Promise.resolve([{ id: 'tier-video', name: 'Video' }]);
+                }
+                return Promise.reject(new Error(`unexpected path ${path}`));
+            });
+
+            const { result } = renderHook(() => useEffectiveQualityTierList(itemId), {
+                wrapper: createWrapper(queryClient),
+            });
+
+            await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+            expect(result.current.data).toEqual({
+                qualityTierListId: 'tier-video',
+                qualityTierListName: 'Video',
+                source: 'ContentTypeDefaultRootFolder',
+                resolvingHierarchyItemId: null,
+                resolvingHierarchyItemName: null,
+                ownQualityTierListId: null,
+            });
+        });
+
+        it('reports an explicit override set on the item', async () => {
+            vi.mocked(api.apiGet).mockImplementation((path: string) => {
+                if (path === `/content/${itemId}`) {
+                    return Promise.resolve({
+                        id: itemId,
+                        parentId: null,
+                        qualityTierListId: 'tier-video',
+                        effectiveQualityTierListId: 'tier-video',
+                        name: 'The Matrix',
+                    });
+                }
+                if (path === '/quality-tier-lists') {
+                    return Promise.resolve([{ id: 'tier-video', name: 'Video' }]);
+                }
+                return Promise.reject(new Error(`unexpected path ${path}`));
+            });
+
+            const { result } = renderHook(() => useEffectiveQualityTierList(itemId), {
+                wrapper: createWrapper(queryClient),
+            });
+
+            await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+            expect(result.current.data).toEqual({
+                qualityTierListId: 'tier-video',
+                qualityTierListName: 'Video',
+                source: 'ExplicitOnItem',
+                resolvingHierarchyItemId: itemId,
+                resolvingHierarchyItemName: 'The Matrix',
+                ownQualityTierListId: 'tier-video',
+            });
+        });
+    });
+
+    describe('useSetQualityTierList', () => {
+        const itemId = '11111111-1111-1111-1111-111111111111';
+
+        it('patches the content item with the ScalarPatch-wrapped tier list id', async () => {
+            vi.mocked(api.apiPatch).mockResolvedValue(undefined);
+
+            const { result } = renderHook(() => useSetQualityTierList(), {
+                wrapper: createWrapper(queryClient),
+            });
+
+            result.current.mutate({ contentHierarchyItemId: itemId, qualityTierListId: 'tier-video' });
+
+            await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+            expect(api.apiPatch).toHaveBeenCalledWith(`/content/${itemId}`, {
+                qualityTierListId: { value: 'tier-video' },
+            });
         });
     });
 });

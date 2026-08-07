@@ -1,75 +1,118 @@
 using System;
-using System.Collections.Generic;
-using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
-using Magpie.Abstractions.Api;
-using Magpie.Abstractions.Integrations;
-using Magpie.Abstractions.Repositories;
-using Magpie.Abstractions.Security;
 using Magpie.Models.Arguments;
+using Magpie.Models.Bulk;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Models.Paging;
+using Magpie.Sdk.Api;
+using Magpie.Sdk.Services;
 
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
 
 namespace Magpie.Api.EndpointGroups;
 
-internal sealed class DownloadsEndpointGroup(
-    IDownloadRepository downloadRepository,
-    IDownloadClientRepository downloadClientRepository,
-    IEnumerable<IDownloadClientIntegration> downloadClientIntegrations) : IApiEndpointGroup
+internal sealed class DownloadsEndpointGroup : IApiEndpointGroup
 {
     public string Name => "downloads";
 
     public void MapEndpoints(IEndpointRouteBuilder builder)
     {
-        builder.MapGet("", QueryDownloads)
-            .WithName(nameof(QueryDownloads))
-            .Produces<PagedList<Download>>()
+        builder.MapGet("", QueryDownloadsAsync)
+            .WithName(nameof(QueryDownloadsAsync))
+            .Produces<PagedList<DownloadQueueEntry>>()
             .RequireViewer();
 
-        builder.MapGet("{id:guid}", GetDownloadById)
-            .WithName(nameof(GetDownloadById))
-            .Produces<Download>()
+        builder.MapPost("bulk/cancel", BulkCancelDownloadsAsync)
+            .WithName(nameof(BulkCancelDownloadsAsync))
+            .Produces<BulkResult>()
+            .RequireManager();
+
+        builder.MapPost("bulk/delete", BulkDeleteDownloadsAsync)
+            .WithName(nameof(BulkDeleteDownloadsAsync))
+            .Produces<BulkResult>()
+            .RequireManager();
+
+        builder.MapPost("bulk/pause", BulkPauseDownloadsAsync)
+            .WithName(nameof(BulkPauseDownloadsAsync))
+            .Produces<BulkResult>()
+            .RequireRequester();
+
+        builder.MapPost("bulk/resume", BulkResumeDownloadsAsync)
+            .WithName(nameof(BulkResumeDownloadsAsync))
+            .Produces<BulkResult>()
+            .RequireRequester();
+
+        builder.MapPost("bulk/retry", BulkRetryDownloadsAsync)
+            .WithName(nameof(BulkRetryDownloadsAsync))
+            .Produces<BulkResult>()
+            .RequireManager();
+
+        builder.MapPost("bulk/stop", BulkStopDownloadsAsync)
+            .WithName(nameof(BulkStopDownloadsAsync))
+            .Produces<BulkResult>()
+            .RequireManager();
+
+        builder.MapGet("{id:guid}", GetDownloadAsync)
+            .WithName(nameof(GetDownloadAsync))
+            .Produces<DownloadQueueEntry>()
             .ProducesProblem(StatusCodes.Status404NotFound)
             .RequireViewer();
 
-        builder.MapPost("", CreateDownload)
-            .WithName(nameof(CreateDownload))
-            .Produces<Download>(StatusCodes.Status201Created)
-            .ProducesProblem(StatusCodes.Status400BadRequest)
-            .RequireRequester();
-
-        builder.MapDelete("{id:guid}", DeleteDownload)
-            .WithName(nameof(DeleteDownload))
+        builder.MapDelete("{id:guid}", DeleteDownloadAsync)
+            .WithName(nameof(DeleteDownloadAsync))
             .Produces(StatusCodes.Status204NoContent)
             .ProducesProblem(StatusCodes.Status404NotFound)
             .RequireManager();
 
-        builder.MapPost("{id:guid}/pause", PauseDownload)
-            .WithName(nameof(PauseDownload))
+        builder.MapDelete("{id:guid}/files", DeleteDownloadWithFilesAsync)
+            .WithName(nameof(DeleteDownloadWithFilesAsync))
             .Produces(StatusCodes.Status204NoContent)
             .ProducesProblem(StatusCodes.Status404NotFound)
-            .ProducesProblem(StatusCodes.Status502BadGateway)
+            .RequireManager();
+
+        builder.MapPost("{id:guid}/cancel", CancelDownloadAsync)
+            .WithName(nameof(CancelDownloadAsync))
+            .Produces(StatusCodes.Status204NoContent)
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .RequireManager();
+
+        builder.MapPost("{id:guid}/force-start", ForceStartDownloadAsync)
+            .WithName(nameof(ForceStartDownloadAsync))
+            .Produces(StatusCodes.Status204NoContent)
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .RequireManager();
+
+        builder.MapPost("{id:guid}/pause", PauseDownloadAsync)
+            .WithName(nameof(PauseDownloadAsync))
+            .Produces(StatusCodes.Status204NoContent)
+            .ProducesProblem(StatusCodes.Status404NotFound)
             .RequireRequester();
 
-        builder.MapPost("{id:guid}/resume", ResumeDownload)
-            .WithName(nameof(ResumeDownload))
+        builder.MapPost("{id:guid}/resume", ResumeDownloadAsync)
+            .WithName(nameof(ResumeDownloadAsync))
             .Produces(StatusCodes.Status204NoContent)
             .ProducesProblem(StatusCodes.Status404NotFound)
-            .ProducesProblem(StatusCodes.Status502BadGateway)
             .RequireRequester();
+
+        builder.MapPost("{id:guid}/retry", RetryDownloadAsync)
+            .WithName(nameof(RetryDownloadAsync))
+            .Produces(StatusCodes.Status204NoContent)
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .RequireManager();
     }
 
-    private async Task<IResult> QueryDownloads(
+    internal async Task<IResult> QueryDownloadsAsync(
+        [FromServices] IDownloadService downloadService,
         Guid? releaseId,
         Guid? downloadClientId,
         DownloadStatus? status,
+        DownloadStatus[]? statuses,
         int? pageNumber,
         int? pageSize,
         string? sortBy,
@@ -80,128 +123,164 @@ internal sealed class DownloadsEndpointGroup(
         {
             ReleaseId = releaseId,
             DownloadClientId = downloadClientId,
-            Status = status
+            Status = status,
+            Statuses = statuses is { Length: > 0 } ? statuses : null,
         };
 
-        var paging = pageNumber is not null && pageSize is not null
-            ? new PagingParameter { PageNumber = pageNumber.Value, PageSize = pageSize.Value }
-            : null;
+        var paging = new PagingParameter
+        {
+            PageNumber = pageNumber ?? 1,
+            PageSize = pageSize ?? 25,
+        };
 
-        var sort = !string.IsNullOrEmpty(sortBy)
-            ? new SortParameter { PropertyName = sortBy, Direction = sortDirection ?? SortDirection.Ascending }
-            : null;
+        var sort = string.IsNullOrEmpty(sortBy)
+            ? null
+            : new SortParameter { PropertyName = sortBy, Direction = sortDirection ?? SortDirection.Ascending };
 
-        var result = await downloadRepository.QueryAsync(query, paging, sort, cancellationToken)
+        var page = await downloadService.QueryAsync(query, paging, sort, cancellationToken).ConfigureAwait(false);
+
+        return Results.Ok(page);
+    }
+
+    internal async Task<IResult> GetDownloadAsync(
+        [FromServices] IDownloadService downloadService,
+        Guid id,
+        CancellationToken cancellationToken)
+    {
+        var download = await downloadService.GetAsync(id, cancellationToken).ConfigureAwait(false);
+
+        return download is null ? Results.NotFound() : Results.Ok(download);
+    }
+
+    internal async Task<IResult> DeleteDownloadAsync(
+        [FromServices] IDownloadService downloadService,
+        Guid id,
+        CancellationToken cancellationToken)
+    {
+        var deleted = await downloadService.DeleteAsync(id, cancellationToken: cancellationToken).ConfigureAwait(false);
+
+        return deleted ? Results.NoContent() : Results.NotFound();
+    }
+
+    internal async Task<IResult> DeleteDownloadWithFilesAsync(
+        [FromServices] IDownloadService downloadService,
+        Guid id,
+        CancellationToken cancellationToken)
+    {
+        var deleted = await downloadService
+            .DeleteAsync(id, deleteFiles: true, cancellationToken: cancellationToken)
             .ConfigureAwait(false);
+
+        return deleted ? Results.NoContent() : Results.NotFound();
+    }
+
+    internal async Task<IResult> CancelDownloadAsync(
+        [FromServices] IDownloadService downloadService,
+        Guid id,
+        CancellationToken cancellationToken)
+    {
+        var cancelled = await downloadService.CancelAsync(id, cancellationToken).ConfigureAwait(false);
+
+        return cancelled ? Results.NoContent() : Results.NotFound();
+    }
+
+    internal async Task<IResult> ForceStartDownloadAsync(
+        [FromServices] IDownloadService downloadService,
+        Guid id,
+        CancellationToken cancellationToken)
+    {
+        var started = await downloadService.ForceStartAsync(id, cancellationToken).ConfigureAwait(false);
+
+        return started ? Results.NoContent() : Results.NotFound();
+    }
+
+    internal async Task<IResult> PauseDownloadAsync(
+        [FromServices] IDownloadService downloadService,
+        Guid id,
+        CancellationToken cancellationToken)
+    {
+        var paused = await downloadService.PauseAsync(id, cancellationToken).ConfigureAwait(false);
+
+        return paused ? Results.NoContent() : Results.NotFound();
+    }
+
+    internal async Task<IResult> ResumeDownloadAsync(
+        [FromServices] IDownloadService downloadService,
+        Guid id,
+        CancellationToken cancellationToken)
+    {
+        var resumed = await downloadService.ResumeAsync(id, cancellationToken).ConfigureAwait(false);
+
+        return resumed ? Results.NoContent() : Results.NotFound();
+    }
+
+    internal async Task<IResult> RetryDownloadAsync(
+        [FromServices] IDownloadService downloadService,
+        Guid id,
+        CancellationToken cancellationToken)
+    {
+        var retried = await downloadService.RetryAsync(id, cancellationToken).ConfigureAwait(false);
+
+        return retried ? Results.NoContent() : Results.NotFound();
+    }
+
+    internal async Task<IResult> BulkCancelDownloadsAsync(
+        [FromServices] IDownloadService downloadService,
+        BulkAction<DownloadQuery> action,
+        CancellationToken cancellationToken)
+    {
+        var result = await downloadService.BulkCancelAsync(action, cancellationToken).ConfigureAwait(false);
 
         return Results.Ok(result);
     }
 
-    private async Task<IResult> GetDownloadById(Guid id, CancellationToken cancellationToken)
-    {
-        var download = await downloadRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
-
-        return download is null
-            ? Results.NotFound()
-            : Results.Ok(download);
-    }
-
-    private async Task<IResult> CreateDownload(
-        HttpContext httpContext,
-        Download request,
+    internal async Task<IResult> BulkDeleteDownloadsAsync(
+        [FromServices] IDownloadService downloadService,
+        BulkAction<DownloadQuery> action,
         CancellationToken cancellationToken)
     {
-        var currentUserId = httpContext.User.GetUserId();
+        var result = await downloadService.BulkDeleteAsync(action, cancellationToken).ConfigureAwait(false);
 
-        var download = request with
-        {
-            Id = Guid.NewGuid(),
-            Status = request.Status == default ? DownloadStatus.Grabbed : request.Status,
-            CreatedAt = DateTime.UtcNow,
-            CreatedByUserId = currentUserId,
-            ModifiedAt = null,
-            ModifiedByUserId = null
-        };
-
-        var created = await downloadRepository.CreateAsync(download, currentUserId, cancellationToken)
-            .ConfigureAwait(false);
-
-        return Results.Created($"api/{Name}/{created.Id}", created);
+        return Results.Ok(result);
     }
 
-    private async Task<IResult> DeleteDownload(
-        HttpContext httpContext,
-        Guid id,
+    internal async Task<IResult> BulkPauseDownloadsAsync(
+        [FromServices] IDownloadService downloadService,
+        BulkAction<DownloadQuery> action,
         CancellationToken cancellationToken)
     {
-        var currentUserId = httpContext.User.GetUserId();
+        var result = await downloadService.BulkPauseAsync(action, cancellationToken).ConfigureAwait(false);
 
-        var deleted = await downloadRepository.DeleteAsync(id, currentUserId, cancellationToken)
-            .ConfigureAwait(false);
-
-        return deleted
-            ? Results.NoContent()
-            : Results.NotFound();
+        return Results.Ok(result);
     }
 
-    private async Task<IResult> PauseDownload(Guid id, CancellationToken cancellationToken)
-    {
-        return await DispatchTransitionAsync(
-            id,
-            "pause",
-            (integration, externalId, settings, ct) => integration.PauseDownloadAsync(externalId, settings, ct),
-            cancellationToken).ConfigureAwait(false);
-    }
-
-    private async Task<IResult> ResumeDownload(Guid id, CancellationToken cancellationToken)
-    {
-        return await DispatchTransitionAsync(
-            id,
-            "resume",
-            (integration, externalId, settings, ct) => integration.ResumeDownloadAsync(externalId, settings, ct),
-            cancellationToken).ConfigureAwait(false);
-    }
-
-    private async Task<IResult> DispatchTransitionAsync(
-        Guid id,
-        string action,
-        Func<IDownloadClientIntegration, string, IReadOnlyDictionary<string, string>, CancellationToken, Task<bool>> dispatch,
+    internal async Task<IResult> BulkResumeDownloadsAsync(
+        [FromServices] IDownloadService downloadService,
+        BulkAction<DownloadQuery> action,
         CancellationToken cancellationToken)
     {
-        var download = await downloadRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
+        var result = await downloadService.BulkResumeAsync(action, cancellationToken).ConfigureAwait(false);
 
-        if (download is null)
-        {
-            return Results.NotFound();
-        }
+        return Results.Ok(result);
+    }
 
-        var downloadClient = await downloadClientRepository
-            .GetByIdAsync(download.DownloadClientId, cancellationToken)
-            .ConfigureAwait(false);
+    internal async Task<IResult> BulkRetryDownloadsAsync(
+        [FromServices] IDownloadService downloadService,
+        BulkAction<DownloadQuery> action,
+        CancellationToken cancellationToken)
+    {
+        var result = await downloadService.BulkRetryAsync(action, cancellationToken).ConfigureAwait(false);
 
-        if (downloadClient is null)
-        {
-            return Results.NotFound();
-        }
+        return Results.Ok(result);
+    }
 
-        var integration = downloadClientIntegrations
-            .FirstOrDefault(i => string.Equals(
-                i.ProviderType,
-                downloadClient.ProviderType,
-                StringComparison.OrdinalIgnoreCase));
+    internal async Task<IResult> BulkStopDownloadsAsync(
+        [FromServices] IDownloadService downloadService,
+        BulkAction<DownloadQuery> action,
+        CancellationToken cancellationToken)
+    {
+        var result = await downloadService.BulkStopAsync(action, cancellationToken).ConfigureAwait(false);
 
-        if (integration is null)
-        {
-            return Results.NotFound();
-        }
-
-        var success = await dispatch(integration, download.ExternalId, downloadClient.Settings, cancellationToken)
-            .ConfigureAwait(false);
-
-        return success
-            ? Results.NoContent()
-            : Results.Problem(
-                detail: $"Download client '{downloadClient.Name}' rejected the {action} request.",
-                statusCode: StatusCodes.Status502BadGateway);
+        return Results.Ok(result);
     }
 }

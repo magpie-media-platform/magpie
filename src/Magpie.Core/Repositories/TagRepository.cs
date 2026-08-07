@@ -6,19 +6,17 @@ using System.Threading.Tasks;
 
 using Magpie.Abstractions.Repositories;
 using Magpie.Data;
+using Magpie.Models.Arguments;
 using Magpie.Models.Data;
+using Magpie.Models.Paging;
 
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 
 namespace Magpie.Core.Repositories;
 
-/// <summary>
-/// Read-only repository for querying tags.
-/// </summary>
-public sealed class TagRepository(MagpieDbContext context, ILogger<TagRepository> logger) : ITagRepository
+internal sealed class TagRepository(MagpieDbContext context, ILogger<TagRepository> logger) : ITagRepository
 {
-    /// <inheritdoc />
     public async Task<IEnumerable<Tag>> ListAllAsync(CancellationToken cancellationToken)
     {
         try
@@ -30,52 +28,74 @@ public sealed class TagRepository(MagpieDbContext context, ILogger<TagRepository
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Error listing tags");
+            logger.LogError(ex, "The tag repository failed to list tags.");
             throw;
         }
     }
 
-    /// <inheritdoc />
-    public async Task<IEnumerable<Tag>> GetByPrefixAsync(string prefix, CancellationToken cancellationToken)
+    public async Task<Tag?> GetByIdAsync(string id, CancellationToken cancellationToken = default)
     {
         try
         {
             return await context.Tags
                 .AsNoTracking()
-                .Where(t => t.Name.StartsWith(prefix))
-                .ToListAsync(cancellationToken)
+                .FirstOrDefaultAsync(tag => tag.Name == id, cancellationToken)
                 .ConfigureAwait(false);
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Error getting tags by prefix {Prefix}", prefix);
+            logger.LogError(ex, "The tag repository failed to get tag {TagId}.", id);
             throw;
         }
     }
 
-    /// <inheritdoc />
-    public async Task<IEnumerable<Tag>> GetTagsByEntityAsync(Guid entityId, CancellationToken cancellationToken)
+    public async Task<PagedList<Tag>> QueryAsync(
+        TagQuery query,
+        PagingParameter paging,
+        SortParameter? sort,
+        CancellationToken cancellationToken = default)
     {
         try
         {
-            return await context.Tags
-                .AsNoTracking()
-                .Where(t =>
-                    t.DownloadClients.Any(e => e.Id == entityId) ||
-                    t.IndexerConnections.Any(e => e.Id == entityId) ||
-                    t.MediaServers.Any(e => e.Id == entityId) ||
-                    t.MetadataContainers.Any(e => e.Id == entityId) ||
-                    t.SubjectFilters.Any(e => e.Id == entityId) ||
-                    t.ContentFilters.Any(e => e.Id == entityId) ||
-                    t.QualityTierLists.Any(e => e.Id == entityId) ||
-                    t.Releases.Any(e => e.Id == entityId) ||
-                    t.Wishlists.Any(e => e.Id == entityId))
-                .ToListAsync(cancellationToken)
-                .ConfigureAwait(false);
+            var tags = context.Tags.AsNoTracking().AsQueryable();
+            if (query.Prefix is { } prefix)
+            {
+                tags = tags.Where(tag => tag.Name.StartsWith(prefix));
+            }
+
+            if (query.EntityId is { } entityId)
+            {
+                var contentContainerIds = context.ContentHierarchyItems
+                    .Where(item => item.Id == entityId)
+                    .Select(item => item.MetadataContainerId);
+                tags = tags.Where(tag =>
+                    tag.DownloadClients.Any(entity => entity.Id == entityId) ||
+                    tag.IndexerConnections.Any(entity => entity.Id == entityId) ||
+                    tag.MediaServers.Any(entity => entity.Id == entityId) ||
+                    tag.MetadataContainers.Any(entity => entity.Id == entityId) ||
+                    tag.MetadataContainers.Any(entity => contentContainerIds.Contains(entity.Id)) ||
+                    tag.SubjectFilters.Any(entity => entity.Id == entityId) ||
+                    tag.ContentFilters.Any(entity => entity.Id == entityId) ||
+                    tag.QualityTierLists.Any(entity => entity.Id == entityId) ||
+                    tag.Releases.Any(entity => entity.Id == entityId) ||
+                    tag.Wishlists.Any(entity => entity.Id == entityId));
+            }
+
+            tags = tags.OrderBy(tag => tag.Name);
+            var totalItems = await tags.CountAsync(cancellationToken).ConfigureAwait(false);
+            tags = tags.Skip((paging.PageNumber - 1) * paging.PageSize).Take(paging.PageSize);
+
+            return new PagedList<Tag>
+            {
+                Items = await tags.ToListAsync(cancellationToken).ConfigureAwait(false),
+                TotalItems = totalItems,
+                PageNumber = paging.PageNumber,
+                PageSize = paging.PageSize
+            };
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Error getting tags by entity {EntityId}", entityId);
+            logger.LogError(ex, "The tag repository failed to query tags.");
             throw;
         }
     }

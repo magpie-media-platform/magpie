@@ -14,6 +14,7 @@
     </PackageReference>
     <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" />
     <PackageReference Include="Microsoft.Extensions.Logging.Console" />
+    <PackageReference Include="Microsoft.Extensions.TimeProvider.Testing" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
     <PackageReference Include="Moq" />
     <PackageReference Include="NUnit" />
@@ -22,15 +23,12 @@
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
     <PackageReference Include="NUnit3TestAdapter" />
+    <PackageReference Include="RichardSzalay.MockHttp" />
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\Magpie.Abstractions.Auth\Magpie.Abstractions.Auth.csproj" />
     <ProjectReference Include="..\Magpie.Core\Magpie.Core.csproj" />
-    <ProjectReference Include="..\Magpie.QueryLanguage\Magpie.QueryLanguage.csproj" />
-    <ProjectReference Include="..\Magpie.Data\Magpie.Data.csproj" />
     <ProjectReference Include="..\Magpie.Data.SQLite\Magpie.Data.SQLite.csproj" />
-    <ProjectReference Include="..\Magpie.Test.Shared\Magpie.Test.Shared.csproj" />
   </ItemGroup>
 
 </Project>

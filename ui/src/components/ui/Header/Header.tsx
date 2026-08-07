@@ -1,5 +1,5 @@
 import { forwardRef, type ComponentPropsWithoutRef, type ReactNode } from 'react';
-import { SidebarSimple } from '@phosphor-icons/react';
+import { SidebarSimpleIcon } from '@phosphor-icons/react';
 
 import { Button } from '../Button';
 
@@ -58,7 +58,7 @@ const Header = forwardRef<HTMLElement, HeaderProps>(
                                 aria-expanded={sidebarOpen}
                                 aria-controls={sidebarNavId}
                             >
-                                <SidebarSimple size={22} weight="duotone" aria-hidden="true" />
+                                <SidebarSimpleIcon size={22} weight="duotone" aria-hidden="true" />
                             </Button>
                         )}
                         {brand && <div className="header__brand">{brand}</div>}

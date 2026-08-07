@@ -1,17 +1,18 @@
-/* eslint-disable react-refresh/only-export-components */
 import {
     createContext,
     forwardRef,
+    useCallback,
     useContext,
     useEffect,
+    useMemo,
     useState,
     type ComponentPropsWithoutRef,
-    type ElementRef,
+    type ComponentRef,
     type ReactNode,
 } from 'react';
 import { NavLink, type NavLinkProps } from 'react-router-dom';
 import * as Collapsible from '@radix-ui/react-collapsible';
-import { CaretDown, CaretRight } from '@phosphor-icons/react';
+import { CaretDownIcon, CaretRightIcon } from '@phosphor-icons/react';
 
 import './Sidebar.css';
 
@@ -76,15 +77,22 @@ const Sidebar = forwardRef<HTMLElement, SidebarProps>(
         }, []);
 
         const collapsed = isDesktop ? (controlledCollapsed ?? internalCollapsed) : false;
-        const setCollapsed = (value: boolean) => {
-            setInternalCollapsed(value);
-            onCollapsedChange?.(value);
-        };
+        const setCollapsed = useCallback(
+            (value: boolean) => {
+                setInternalCollapsed(value);
+                onCollapsedChange?.(value);
+            },
+            [onCollapsedChange],
+        );
 
         const classes = ['sidebar', collapsed && 'sidebar--collapsed', className].filter(Boolean).join(' ');
+        const contextValue = useMemo<SidebarContextValue>(
+            () => ({ collapsed, setCollapsed }),
+            [collapsed, setCollapsed],
+        );
 
         return (
-            <SidebarContext.Provider value={{ collapsed, setCollapsed }}>
+            <SidebarContext.Provider value={contextValue}>
                 <aside ref={ref} className={classes} data-open={open} data-collapsed={collapsed} {...props}>
                     {children}
                 </aside>
@@ -119,7 +127,7 @@ export interface SidebarGroupProps extends ComponentPropsWithoutRef<typeof Colla
     label?: string;
 }
 
-const SidebarGroup = forwardRef<ElementRef<typeof Collapsible.Root>, SidebarGroupProps>(
+const SidebarGroup = forwardRef<ComponentRef<typeof Collapsible.Root>, SidebarGroupProps>(
     ({ className, label, children, defaultOpen = true, open: controlledOpen, onOpenChange, ...props }, ref) => {
         const [internalOpen, setInternalOpen] = useState(defaultOpen);
         const isOpen = controlledOpen ?? internalOpen;
@@ -134,9 +142,9 @@ const SidebarGroup = forwardRef<ElementRef<typeof Collapsible.Root>, SidebarGrou
             <Collapsible.Root ref={ref} className={classes} open={isOpen} onOpenChange={setOpen} {...props}>
                 {label && (
                     <Collapsible.Trigger asChild>
-                        <button type="button" className="sidebar-group-trigger">
+                        <button type="button" className="sidebar-group-trigger" aria-label={label}>
                             <span className="sidebar-group-label">{label}</span>
-                            <CaretDown className="sidebar-group-icon" weight="bold" aria-hidden />
+                            <CaretDownIcon className="sidebar-group-icon" weight="bold" aria-hidden />
                         </button>
                     </Collapsible.Trigger>
                 )}
@@ -190,19 +198,36 @@ export interface SidebarSubMenuProps extends ComponentPropsWithoutRef<typeof Col
     label: string;
 
     active?: boolean;
+
+    collapsedTo?: NavLinkProps['to'];
 }
 
-const SidebarSubMenu = forwardRef<ElementRef<typeof Collapsible.Root>, SidebarSubMenuProps>(
-    ({ className, icon, label, active, children, defaultOpen, ...props }, ref) => {
+const SidebarSubMenu = forwardRef<ComponentRef<typeof Collapsible.Root>, SidebarSubMenuProps>(
+    ({ className, icon, label, active, children, defaultOpen, collapsedTo, ...props }, ref) => {
         const { collapsed } = useSidebarContext();
         const classes = ['sidebar-submenu', active && 'sidebar-submenu--active', className].filter(Boolean).join(' ');
 
         if (collapsed) {
+            const content = icon && <span className="sidebar-item-icon">{icon}</span>;
+            const triggerClassName = 'sidebar-submenu-trigger sidebar-submenu-trigger--collapsed';
+
             return (
                 <div ref={ref as React.Ref<HTMLDivElement>} className={classes} data-active={active || undefined}>
-                    <span className="sidebar-submenu-trigger sidebar-submenu-trigger--collapsed" aria-label={label}>
-                        {icon && <span className="sidebar-item-icon">{icon}</span>}
-                    </span>
+                    {collapsedTo ? (
+                        <NavLink
+                            to={collapsedTo}
+                            end
+                            className={triggerClassName}
+                            aria-label={label}
+                            data-active={active || undefined}
+                        >
+                            {content}
+                        </NavLink>
+                    ) : (
+                        <span className={triggerClassName} aria-label={label}>
+                            {content}
+                        </span>
+                    )}
                 </div>
             );
         }
@@ -213,7 +238,7 @@ const SidebarSubMenu = forwardRef<ElementRef<typeof Collapsible.Root>, SidebarSu
                     <button type="button" className="sidebar-submenu-trigger" data-active={active || undefined}>
                         {icon && <span className="sidebar-item-icon">{icon}</span>}
                         <span className="sidebar-item-label">{label}</span>
-                        <CaretRight className="sidebar-submenu-caret" weight="bold" aria-hidden />
+                        <CaretRightIcon className="sidebar-submenu-caret" weight="bold" aria-hidden />
                     </button>
                 </Collapsible.Trigger>
                 <Collapsible.Content className="sidebar-submenu-content">{children}</Collapsible.Content>

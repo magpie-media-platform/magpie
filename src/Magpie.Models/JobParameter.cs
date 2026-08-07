@@ -3,13 +3,13 @@ using Magpie.Models.Enums;
 namespace Magpie.Models;
 
 /// <summary>
-/// A parameter accepted by a job.
+/// The declaration of one job parameter.
 /// </summary>
-/// <param name="Name">The parameter name.</param>
-/// <param name="Description">A description of the parameter.</param>
-/// <param name="Type">The parameter data type.</param>
-/// <param name="Required">Whether the parameter is required.</param>
-/// <param name="DefaultValue">The default value to use if no value is specified.</param>
+/// <param name="Name">The name of the parameter</param>
+/// <param name="Description">The description shown for the parameter</param>
+/// <param name="Type">The data type of the parameter value</param>
+/// <param name="Required">Whether the parameter is mandatory</param>
+/// <param name="DefaultValue">The value that applies when the caller omits the parameter</param>
 public sealed record JobParameter(
     string Name,
     string? Description,

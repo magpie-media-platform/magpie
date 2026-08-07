@@ -1,5 +1,3 @@
-/* eslint-disable react-refresh/only-export-components */
-
 import { Navigate, Outlet, useLocation, type RouteObject } from 'react-router-dom';
 
 import { RequireAuth, RoleGuard, Role, RoleName, useAuth } from '@/auth';
@@ -64,9 +62,9 @@ export const routes: RouteObject[] = [
             { path: 'media-servers', element: <Stub name="Media Servers" page="media-servers" /> },
             { path: 'root-folders', element: <Stub name="Root Folders" page="root-folders" /> },
             { path: 'quality-tiers', element: <Stub name="Quality Tiers" page="quality-tiers" /> },
-            { path: 'jobs', element: <Stub name="Jobs" page="jobs" /> },
+            { path: 'jobs', element: <Stub name="System Jobs" page="jobs" /> },
             { path: 'extensions', element: <Stub name="Extensions" page="extensions" /> },
-            { path: 'backups', element: <Stub name="Backups" page="backups" /> },
+            { path: 'database', element: <Stub name="Database" page="backups" /> },
             { path: 'system', element: <Stub name="System Status" page="system" /> },
         ],
     },
@@ -82,6 +80,7 @@ export const routes: RouteObject[] = [
             { path: '/library', element: <Stub name="Library" /> },
             { path: '/library/all', element: <Stub name="Library" /> },
             { path: '/library/content/:contentType', element: <Stub name="Library" /> },
+            { path: '/library/content/:contentType/:levelSlug', element: <Stub name="Library" /> },
             { path: '/library/:contentId', element: <Stub name="Content" page="content-detail" /> },
             { path: '/library/:contentId/:childId', element: <Stub name="Content" page="content-detail" /> },
             {

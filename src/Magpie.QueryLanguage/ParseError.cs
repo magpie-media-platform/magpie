@@ -3,9 +3,9 @@ using System.Collections.Generic;
 namespace Magpie.QueryLanguage;
 
 /// <summary>
-/// Represents a parse error with position information.
+/// A parse error with its position in the input.
 /// </summary>
-/// <param name="Message">The error message.</param>
-/// <param name="Position">The position in the input where the error occurred.</param>
-/// <param name="Expected">The tokens that were expected at this position.</param>
+/// <param name="Message">The error message</param>
+/// <param name="Position">The position in the input of the error</param>
+/// <param name="Expected">The tokens that are valid at this position</param>
 public readonly record struct ParseError(string Message, int Position, IReadOnlyList<string> Expected);

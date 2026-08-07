@@ -10,11 +10,13 @@ export interface EmptyStateProps extends HTMLAttributes<HTMLDivElement> {
     description?: string;
     action?: ReactNode;
     size?: EmptyStateSize;
+    titleLevel?: 1 | 2 | 3;
 }
 
 export const EmptyState = forwardRef<HTMLDivElement, EmptyStateProps>(
-    ({ icon, title, description, action, size = 'md', className, ...props }, ref) => {
+    ({ icon, title, description, action, size = 'md', titleLevel = 3, className, ...props }, ref) => {
         const classes = ['empty-state', `empty-state--${size}`, className].filter(Boolean).join(' ');
+        const Title = `h${titleLevel}` as const;
 
         return (
             <div ref={ref} className={classes} data-component="empty-state" data-size={size} {...props}>
@@ -23,7 +25,7 @@ export const EmptyState = forwardRef<HTMLDivElement, EmptyStateProps>(
                         {icon}
                     </div>
                 )}
-                <h3 className="empty-state__title">{title}</h3>
+                <Title className="empty-state__title">{title}</Title>
                 {description && <p className="empty-state__description">{description}</p>}
                 {action && <div className="empty-state__action">{action}</div>}
             </div>

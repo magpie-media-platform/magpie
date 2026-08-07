@@ -243,32 +243,11 @@ describe('cache invalidation', () => {
             expect(spy).toHaveBeenCalledWith({ queryKey: apiKeyQueryKeys.all });
         });
 
-        it('should invalidate all api-keys after rotate', async () => {
-            const queryClient = createTestClient();
-            const spy = vi.spyOn(queryClient, 'invalidateQueries');
-            mockApiGet.mockResolvedValue(mockKeys);
-            mockApiPost.mockResolvedValue({ ...mockKeys[0], key: 'mp_rotated' });
-
-            const { result } = renderHook(() => useApiKeys(), {
-                wrapper: createWrapper(queryClient),
-            });
-
-            await waitFor(() => {
-                expect(result.current.isLoading).toBe(false);
-            });
-
-            await act(async () => {
-                await result.current.rotateApiKey('k1');
-            });
-
-            expect(spy).toHaveBeenCalledWith({ queryKey: apiKeyQueryKeys.all });
-        });
-
         it('should invalidate all api-keys after enable', async () => {
             const queryClient = createTestClient();
             const spy = vi.spyOn(queryClient, 'invalidateQueries');
             mockApiGet.mockResolvedValue(mockKeys);
-            mockApiPost.mockResolvedValue({ ...mockKeys[0], enabled: true });
+            mockApiPatch.mockResolvedValue(undefined);
 
             const { result } = renderHook(() => useApiKeys(), {
                 wrapper: createWrapper(queryClient),
@@ -289,7 +268,7 @@ describe('cache invalidation', () => {
             const queryClient = createTestClient();
             const spy = vi.spyOn(queryClient, 'invalidateQueries');
             mockApiGet.mockResolvedValue(mockKeys);
-            mockApiPost.mockResolvedValue({ ...mockKeys[0], enabled: false });
+            mockApiPatch.mockResolvedValue(undefined);
 
             const { result } = renderHook(() => useApiKeys(), {
                 wrapper: createWrapper(queryClient),
@@ -332,7 +311,7 @@ describe('cache invalidation', () => {
             });
 
             await act(async () => {
-                await result.current.createBackup();
+                await result.current.createBackup({});
             });
 
             expect(spy).toHaveBeenCalledWith({ queryKey: backupQueryKeys.list() });
@@ -412,7 +391,7 @@ describe('cache invalidation', () => {
             });
 
             await act(async () => {
-                await result.current.createIndexer({ providerType: 'torznab', name: 'New', enabled: true });
+                await result.current.createIndexer({ providerType: 'torznab', name: 'New' });
             });
 
             expect(spy).toHaveBeenCalledWith({ queryKey: indexerQueryKeys.list() });
@@ -668,7 +647,7 @@ describe('cache invalidation', () => {
             });
 
             await act(async () => {
-                await result.current.createUser({ username: 'newuser', password: 'pass', role: 0 });
+                await result.current.createUser({ username: 'newuser', password: 'pass', role: 0, enabled: true });
             });
 
             expect(spy).toHaveBeenCalledWith({ queryKey: userQueryKeys.all });

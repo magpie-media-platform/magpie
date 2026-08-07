@@ -1,5 +1,0 @@
-# Disable analysis for EF Core migrations (auto-generated)
-[*.cs]
-generated_code = true
-dotnet_analyzer_diagnostic.severity = none
-dotnet_diagnostic.CS8981.severity = none

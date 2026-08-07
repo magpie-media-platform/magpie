@@ -5,8 +5,6 @@ using Magpie.Models.Data;
 namespace Magpie.Abstractions.Repositories;
 
 /// <summary>
-/// Repository for managing root folder configurations.
+/// The repository contract for root folders.
 /// </summary>
-public interface IRootFolderRepository : ICrudRepository<Guid, RootFolder>
-{
-}
+public interface IRootFolderRepository : ICrudRepository<Guid, RootFolder>;

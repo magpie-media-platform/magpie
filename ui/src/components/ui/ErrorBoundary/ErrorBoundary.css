@@ -36,6 +36,6 @@
         line-height: var(--leading-normal);
         font-family: var(--font-mono);
         max-width: 400px;
-        word-break: break-word;
+        overflow-wrap: break-word;
     }
 }

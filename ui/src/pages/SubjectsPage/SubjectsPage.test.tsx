@@ -1,13 +1,33 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 import { SubjectsPage } from './SubjectsPage';
-import type { ApiSubject, ApiMetadataContainer } from '@/hooks/useSubjects';
+import type { ApiSubject, ApiMetadataContainer, SubjectQueryParams } from '@/hooks/useSubjects';
 
 const mockNavigate = vi.fn();
+
+function createMatchMedia(width: number) {
+    return vi.fn((query: string) => {
+        const minWidth = query.match(/\(min-width:\s*(\d+)px\)/);
+        const maxWidth = query.match(/\(max-width:\s*(\d+)px\)/);
+
+        return {
+            matches:
+                (minWidth === null || width >= Number(minWidth[1])) &&
+                (maxWidth === null || width <= Number(maxWidth[1])),
+            media: query,
+            onchange: null,
+            addListener: () => {},
+            removeListener: () => {},
+            addEventListener: () => {},
+            removeEventListener: () => {},
+            dispatchEvent: () => false,
+        };
+    });
+}
 
 vi.mock('react-router-dom', async () => {
     const actual = await vi.importActual('react-router-dom');
@@ -23,12 +43,6 @@ vi.mock('@/hooks/useSubjects', () => ({
     useSubject: vi.fn(),
 }));
 
-vi.mock('@/hooks/useTags', () => ({
-    useTags: vi.fn(),
-    useTagsByPrefix: vi.fn(),
-    useTagsByEntity: vi.fn(),
-}));
-
 const mockUseExtensions = vi.fn();
 const mockUseSlotExtensions = vi.fn();
 
@@ -37,8 +51,19 @@ vi.mock('@/extensions/useExtensions', () => ({
     useSlotExtensions: (slot: string) => mockUseSlotExtensions(slot),
 }));
 
+const mockUseLibraryTypes = vi.fn();
+const mockTypeIconName = vi.fn();
+
+vi.mock('@/hooks/useLibraryTypes', async (importOriginal) => {
+    const original = await importOriginal<typeof import('@/hooks/useLibraryTypes')>();
+    return {
+        ...original,
+        useLibraryTypes: () => mockUseLibraryTypes(),
+        useTypeIconName: () => mockTypeIconName,
+    };
+});
+
 import { useSubjects } from '@/hooks/useSubjects';
-import { useTags } from '@/hooks/useTags';
 
 function createMockMetadataContainer(title: string, imageUrl?: string): ApiMetadataContainer {
     return {
@@ -49,7 +74,7 @@ function createMockMetadataContainer(title: string, imageUrl?: string): ApiMetad
                 id: `contrib-${title.toLowerCase().replace(/\s+/g, '-')}`,
                 ordinal: 0,
                 locked: false,
-                providerType: 'tmdb',
+                providerType: 'provider-a',
                 title,
                 images: imageUrl ? [{ type: 'poster', url: imageUrl }] : [],
             },
@@ -61,86 +86,28 @@ const mockApiSubjects: ApiSubject[] = [
     {
         id: 'subject-1',
         metadataContainerId: 'mc-1',
-        kind: 'show',
+        kind: 'person',
         dateLastRefreshed: '2024-01-20T14:00:00Z',
         createdAt: '2024-01-01T00:00:00Z',
-        metadataContainer: createMockMetadataContainer('Breaking Bad', 'https://example.com/bb.jpg'),
+        metadataContainer: createMockMetadataContainer('Bryan Cranston'),
     },
     {
         id: 'subject-2',
         metadataContainerId: 'mc-2',
-        kind: 'show',
+        kind: 'person',
         dateLastRefreshed: '2024-01-18T09:30:00Z',
         createdAt: '2024-01-02T00:00:00Z',
-        metadataContainer: createMockMetadataContainer('The Office', 'https://example.com/office.jpg'),
+        metadataContainer: createMockMetadataContainer('Denis Villeneuve'),
     },
     {
         id: 'subject-3',
         metadataContainerId: 'mc-3',
-        kind: 'movie',
+        kind: 'studio',
         dateLastRefreshed: '2024-01-26T12:00:00Z',
         createdAt: '2024-01-03T00:00:00Z',
-        metadataContainer: createMockMetadataContainer('Dune: Part Two', 'https://example.com/dune.jpg'),
-    },
-    {
-        id: 'subject-4',
-        metadataContainerId: 'mc-4',
-        kind: 'person',
-        dateLastRefreshed: '2024-01-15T10:00:00Z',
-        createdAt: '2024-01-04T00:00:00Z',
-        metadataContainer: createMockMetadataContainer('Bryan Cranston'),
-    },
-    {
-        id: 'subject-5',
-        metadataContainerId: 'mc-5',
-        kind: 'movie',
-        dateLastRefreshed: '2024-01-15T10:00:00Z',
-        createdAt: '2024-01-05T00:00:00Z',
-        metadataContainer: createMockMetadataContainer('Oppenheimer', 'https://example.com/opp.jpg'),
-    },
-    {
-        id: 'subject-6',
-        metadataContainerId: 'mc-6',
-        kind: 'show',
-        dateLastRefreshed: '2024-01-24T15:30:00Z',
-        createdAt: '2024-01-06T00:00:00Z',
-        metadataContainer: createMockMetadataContainer('Shogun', 'https://example.com/shogun.jpg'),
-    },
-    {
-        id: 'subject-7',
-        metadataContainerId: 'mc-7',
-        kind: 'movie',
-        dateLastRefreshed: '2024-01-12T17:30:00Z',
-        createdAt: '2024-01-07T00:00:00Z',
-        metadataContainer: createMockMetadataContainer('Poor Things', 'https://example.com/poor.jpg'),
-    },
-    {
-        id: 'subject-8',
-        metadataContainerId: 'mc-8',
-        kind: 'show',
-        dateLastRefreshed: '2024-01-26T09:00:00Z',
-        createdAt: '2024-01-08T00:00:00Z',
-        metadataContainer: createMockMetadataContainer('Fallout'),
-    },
-    {
-        id: 'subject-9',
-        metadataContainerId: 'mc-9',
-        kind: 'show',
-        dateLastRefreshed: '2024-01-22T11:15:00Z',
-        createdAt: '2024-01-09T00:00:00Z',
-        metadataContainer: createMockMetadataContainer('The Bear', 'https://example.com/bear.jpg'),
-    },
-    {
-        id: 'subject-10',
-        metadataContainerId: 'mc-10',
-        kind: 'person',
-        dateLastRefreshed: '2024-01-20T14:00:00Z',
-        createdAt: '2024-01-10T00:00:00Z',
-        metadataContainer: createMockMetadataContainer('Denis Villeneuve'),
+        metadataContainer: createMockMetadataContainer('A24'),
     },
 ];
-
-const mockApiTags = [{ name: 'Favorites' }, { name: 'Watch Later' }, { name: 'Family' }, { name: 'Action' }];
 
 function createTestQueryClient() {
     return new QueryClient({
@@ -166,6 +133,21 @@ function renderSubjectsPage(initialSearchParams?: string) {
     );
 }
 
+function renderScopedSubjectsPage(subjectTypeSlug: string, initialSearchParams?: string) {
+    const queryClient = createTestQueryClient();
+    const search = initialSearchParams ? `?${initialSearchParams}` : '';
+
+    return render(
+        <QueryClientProvider client={queryClient}>
+            <MemoryRouter initialEntries={[`/library/subjects/${subjectTypeSlug}${search}`]}>
+                <Routes>
+                    <Route path="/library/subjects/:subjectType" element={<SubjectsPage />} />
+                </Routes>
+            </MemoryRouter>
+        </QueryClientProvider>,
+    );
+}
+
 describe('SubjectsPage', () => {
     const defaultContext = {
         apiBaseUrl: '/api',
@@ -183,133 +165,97 @@ describe('SubjectsPage', () => {
     beforeEach(() => {
         mockNavigate.mockClear();
         vi.clearAllMocks();
+        vi.stubGlobal('matchMedia', createMatchMedia(1024));
         mockUseExtensions.mockReturnValue(defaultContext);
         mockUseSlotExtensions.mockReturnValue(noExtensions);
+
+        mockUseLibraryTypes.mockReturnValue({
+            contentTypes: [],
+            subjectTypes: [
+                { id: 'person', name: 'Person', pluralName: 'People', slug: 'person', iconName: 'person', levels: [] },
+                {
+                    id: 'studio',
+                    name: 'Studio',
+                    pluralName: 'Studios',
+                    slug: 'studio',
+                    iconName: 'buildings',
+                    levels: [],
+                },
+            ],
+            isLoading: false,
+            error: null,
+            refetch: vi.fn(),
+        });
+        mockTypeIconName.mockImplementation(() => 'person');
 
         vi.mocked(useSubjects).mockReturnValue({
             subjects: mockApiSubjects,
             isLoading: false,
             error: null,
+            totalItems: 0,
+            pageNumber: 1,
+            pageSize: 50,
             updateSubjectTags: vi.fn(),
             isUpdating: false,
             deleteSubject: vi.fn(),
             isDeleting: false,
             refetch: mockRefetch,
         });
-
-        vi.mocked(useTags).mockReturnValue({
-            tags: mockApiTags,
-            isLoading: false,
-            error: null,
-            refetch: vi.fn(),
-        });
     });
 
     afterEach(() => {
+        vi.unstubAllGlobals();
         vi.restoreAllMocks();
     });
 
-    it('renders the subjects page with correct data-page attribute', () => {
+    it('renders the page with correct data-page attribute', () => {
         renderSubjectsPage();
 
         expect(document.querySelector('[data-page="subjects"]')).toBeInTheDocument();
     });
 
-    it('renders the page title', () => {
-        renderSubjectsPage();
-
-        expect(screen.getByRole('heading', { name: 'Subjects', level: 1 })).toBeInTheDocument();
-    });
-
-    it('renders the subject list component', () => {
-        renderSubjectsPage();
-
-        expect(document.querySelector('[data-component="subject-list"]')).toBeInTheDocument();
-    });
-
-    it('renders the subject filters component', () => {
-        renderSubjectsPage();
-
-        expect(document.querySelector('[data-component="subject-filters"]')).toBeInTheDocument();
-    });
-
-    it('renders the subject sorting component', () => {
-        renderSubjectsPage();
-
-        expect(document.querySelector('[data-component="subject-sorting"]')).toBeInTheDocument();
-    });
-
-    describe('subject items', () => {
-        it('renders subjects from API', () => {
+    describe('terminology', () => {
+        it('uses the generic umbrella title when unscoped', () => {
             renderSubjectsPage();
 
-            expect(screen.getByText('Breaking Bad')).toBeInTheDocument();
-            expect(screen.getByText('The Office')).toBeInTheDocument();
-            expect(screen.getByText('Dune: Part Two')).toBeInTheDocument();
-            expect(screen.getByText('Bryan Cranston')).toBeInTheDocument();
+            expect(screen.getByRole('heading', { name: 'Subjects', level: 1 })).toBeInTheDocument();
         });
 
-        it('renders subject kinds', () => {
+        it('shows the subject type friendly plural name when scoped', () => {
+            renderScopedSubjectsPage('person');
+
+            expect(screen.getByRole('heading', { name: 'People', level: 1 })).toBeInTheDocument();
+            expect(screen.queryByRole('heading', { name: 'Subjects', level: 1 })).not.toBeInTheDocument();
+        });
+
+        it('sets the browser tab title to the umbrella label when unscoped', () => {
             renderSubjectsPage();
 
-            expect(screen.getAllByText('Show').length).toBeGreaterThan(0);
-            expect(screen.getAllByText('Movie').length).toBeGreaterThan(0);
-            expect(screen.getAllByText('Person').length).toBeGreaterThan(0);
+            expect(document.title).toBe('Subjects - Magpie');
         });
 
-        it('shows loading state', () => {
-            vi.mocked(useSubjects).mockReturnValue({
-                subjects: [],
-                isLoading: true,
-                error: null,
-                updateSubjectTags: vi.fn(),
-                isUpdating: false,
-                deleteSubject: vi.fn(),
-                isDeleting: false,
-                refetch: mockRefetch,
-            });
+        it('sets the browser tab title to the scoped plural name when scoped', () => {
+            renderScopedSubjectsPage('studio');
 
-            renderSubjectsPage();
-
-            expect(document.querySelector('[data-component="subject-list"]')).toBeInTheDocument();
-        });
-    });
-
-    describe('navigation', () => {
-        it('navigates to subject details when row is clicked', async () => {
-            const user = userEvent.setup();
-            renderSubjectsPage();
-
-            const row = screen.getByText('Breaking Bad').closest('tr');
-            expect(row).toBeInTheDocument();
-
-            await user.click(row!);
-
-            expect(mockNavigate).toHaveBeenCalledWith('/subjects/subject-1');
-        });
-    });
-
-    describe('accessibility', () => {
-        it('has icon marked as decorative', () => {
-            renderSubjectsPage();
-
-            const icon = screen.getByTestId('subjects-page__icon');
-            expect(icon).toHaveAttribute('aria-hidden', 'true');
+            expect(screen.getByRole('heading', { name: 'Studios', level: 1 })).toBeInTheDocument();
+            expect(document.title).toBe('Studios - Magpie');
         });
 
-        it('renders a table with grid role', () => {
-            renderSubjectsPage();
+        it("resolves the scoped subject type's icon name", () => {
+            renderScopedSubjectsPage('person');
 
-            expect(screen.getByRole('grid')).toBeInTheDocument();
+            expect(mockTypeIconName).toHaveBeenCalledWith('person', { subject: true });
+            expect(screen.getByTestId('subjects-page__icon')).toBeInTheDocument();
         });
-    });
 
-    describe('error state', () => {
-        it('shows error with retry button when API fails and no data', () => {
+        it('surfaces an operator-facing error title', () => {
             vi.mocked(useSubjects).mockReturnValue({
                 subjects: [],
                 isLoading: false,
                 error: new Error('Network Error'),
+                totalItems: 0,
+                pageNumber: 1,
+                pageSize: 50,
                 updateSubjectTags: vi.fn(),
                 isUpdating: false,
                 deleteSubject: vi.fn(),
@@ -320,17 +266,387 @@ describe('SubjectsPage', () => {
             renderSubjectsPage();
 
             expect(screen.getByText('Failed to load subjects')).toBeInTheDocument();
-            expect(screen.getByText('Network Error')).toBeInTheDocument();
-            expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+            expect(screen.queryByText('Failed to load people')).not.toBeInTheDocument();
+        });
+    });
+
+    describe('advanced filter (FilterBar, like content)', () => {
+        it('starts expanded when the subjects table layout is visible at 1024px', () => {
+            const matchMedia = createMatchMedia(1024);
+            vi.spyOn(window, 'matchMedia').mockImplementation(matchMedia);
+
+            renderSubjectsPage();
+
+            const filterBar = document.querySelector('[data-component="filter-bar"]');
+            expect(document.querySelector('.subjects-page__table')).toBeInTheDocument();
+            expect(matchMedia).toHaveBeenCalledWith('(min-width: 1024px)');
+            expect(filterBar).toHaveAttribute('data-expanded', 'true');
         });
 
-        it('calls refetch when retry button is clicked', async () => {
-            const user = userEvent.setup();
+        it('starts collapsed in the card layout at 1023px', () => {
+            const matchMedia = createMatchMedia(1023);
+            vi.spyOn(window, 'matchMedia').mockImplementation(matchMedia);
 
+            renderSubjectsPage();
+
+            const filterBar = document.querySelector('[data-component="filter-bar"]');
+            expect(document.querySelector('.subjects-page__table')).not.toBeInTheDocument();
+            expect(matchMedia).toHaveBeenCalledWith('(min-width: 1024px)');
+            expect(filterBar).toHaveAttribute('data-expanded', 'false');
+        });
+
+        it('renders the shared FilterBar in subject context', () => {
+            renderSubjectsPage();
+
+            expect(document.querySelector('[data-component="filter-bar"]')).toBeInTheDocument();
+        });
+
+        it('no longer renders the one-off SubjectFilters control', () => {
+            renderSubjectsPage();
+
+            expect(document.querySelector('[data-component="subject-filters"]')).not.toBeInTheDocument();
+        });
+
+        it('does not render any saved-filter UI (no Saved picker, no Save button)', async () => {
+            const user = userEvent.setup();
+            renderSubjectsPage('filter=kind+%3D+%22person%22');
+
+            const toggle = document.querySelector('[data-action="toggle-filter"]') as HTMLElement | null;
+            if (toggle) {
+                await user.click(toggle);
+            }
+
+            expect(document.querySelector('[data-action="apply-saved-filter"]')).not.toBeInTheDocument();
+            expect(document.querySelector('[data-action="save-filter"]')).not.toBeInTheDocument();
+            expect(screen.queryByText('Saved')).not.toBeInTheDocument();
+        });
+
+        it('advertises only the curated field set (kind, title, tag) in the advanced editor hint', async () => {
+            const user = userEvent.setup();
+            renderSubjectsPage('filter=kind+%3D+%22person%22');
+
+            const advancedToggle = document.querySelector('[data-action="switch-to-advanced"]') as HTMLElement | null;
+            if (advancedToggle) {
+                await user.click(advancedToggle);
+            }
+
+            const hint = document.querySelector('.filter-bar__hint');
+            expect(hint).toBeInTheDocument();
+            const hintText = hint!.textContent ?? '';
+            expect(hintText).toContain('kind');
+            expect(hintText).toContain('title');
+            expect(hintText).toContain('tag');
+            expect(hintText).not.toContain('genre');
+            expect(hintText).not.toContain('monitoring');
+        });
+
+        it('sends the filter expression to the server as a query param', async () => {
+            const calls: (SubjectQueryParams | undefined)[] = [];
+            vi.mocked(useSubjects).mockImplementation((params) => {
+                calls.push(params);
+                return {
+                    subjects: params?.filter ? [mockApiSubjects[0]] : mockApiSubjects,
+                    isLoading: false,
+                    error: null,
+                    totalItems: 0,
+                    pageNumber: 1,
+                    pageSize: 50,
+                    updateSubjectTags: vi.fn(),
+                    isUpdating: false,
+                    deleteSubject: vi.fn(),
+                    isDeleting: false,
+                    refetch: mockRefetch,
+                };
+            });
+
+            renderSubjectsPage('filter=kind+%3D+%22person%22');
+
+            await waitFor(() => {
+                expect(calls.some((p) => p?.filter === 'kind = "person"')).toBe(true);
+            });
+        });
+
+        it('folds the scoped kind into the server filter', async () => {
+            const calls: (SubjectQueryParams | undefined)[] = [];
+            vi.mocked(useSubjects).mockImplementation((params) => {
+                calls.push(params);
+                return {
+                    subjects: mockApiSubjects.filter((s) => s.kind === 'person'),
+                    isLoading: false,
+                    error: null,
+                    totalItems: 0,
+                    pageNumber: 1,
+                    pageSize: 50,
+                    updateSubjectTags: vi.fn(),
+                    isUpdating: false,
+                    deleteSubject: vi.fn(),
+                    isDeleting: false,
+                    refetch: mockRefetch,
+                };
+            });
+
+            renderScopedSubjectsPage('person');
+
+            await waitFor(() => {
+                expect(calls.some((p) => p?.filter === 'kind = "person"')).toBe(true);
+            });
+        });
+
+        it('shows the scoped kind in the simple filter and prevents changing it', () => {
+            renderScopedSubjectsPage('person');
+
+            const kind = screen.getByRole('combobox', { name: 'Kind' });
+            expect(kind).toHaveTextContent('Person');
+            expect(kind).toHaveAttribute('data-disabled');
+        });
+
+        it('removes route-owned kind clauses while keeping other query filters', async () => {
+            const calls: (SubjectQueryParams | undefined)[] = [];
+            vi.mocked(useSubjects).mockImplementation((params) => {
+                calls.push(params);
+                return {
+                    subjects: mockApiSubjects.filter((s) => s.kind === 'person'),
+                    isLoading: false,
+                    error: null,
+                    totalItems: 0,
+                    pageNumber: 1,
+                    pageSize: 50,
+                    updateSubjectTags: vi.fn(),
+                    isUpdating: false,
+                    deleteSubject: vi.fn(),
+                    isDeleting: false,
+                    refetch: mockRefetch,
+                };
+            });
+
+            renderScopedSubjectsPage('person', 'filter=kind+%3D+%22studio%22+and+title+contains+%22Bryan%22');
+
+            await waitFor(() => {
+                expect(calls.some((p) => p?.filter === 'kind = "person" and (title contains "Bryan")')).toBe(true);
+            });
+        });
+
+        it('groups top-level OR filters under the scoped kind', async () => {
+            const calls: (SubjectQueryParams | undefined)[] = [];
+            vi.mocked(useSubjects).mockImplementation((params) => {
+                calls.push(params);
+                return {
+                    subjects: mockApiSubjects.filter((s) => s.kind === 'person'),
+                    isLoading: false,
+                    error: null,
+                    totalItems: 0,
+                    pageNumber: 1,
+                    pageSize: 50,
+                    updateSubjectTags: vi.fn(),
+                    isUpdating: false,
+                    deleteSubject: vi.fn(),
+                    isDeleting: false,
+                    refetch: mockRefetch,
+                };
+            });
+
+            renderScopedSubjectsPage('person', 'filter=title+contains+%22Bryan%22+or+tag+has+%22favorite%22');
+
+            await waitFor(() => {
+                expect(
+                    calls.some(
+                        (p) => p?.filter === 'kind = "person" and (title contains "Bryan" or tag has "favorite")',
+                    ),
+                ).toBe(true);
+            });
+        });
+
+        it('preserves opaque top-level OR filters that start with kind', async () => {
+            const calls: (SubjectQueryParams | undefined)[] = [];
+            vi.mocked(useSubjects).mockImplementation((params) => {
+                calls.push(params);
+                return {
+                    subjects: mockApiSubjects.filter((s) => s.kind === 'person'),
+                    isLoading: false,
+                    error: null,
+                    totalItems: 0,
+                    pageNumber: 1,
+                    pageSize: 50,
+                    updateSubjectTags: vi.fn(),
+                    isUpdating: false,
+                    deleteSubject: vi.fn(),
+                    isDeleting: false,
+                    refetch: mockRefetch,
+                };
+            });
+
+            renderScopedSubjectsPage('person', 'filter=kind+%3D+%22studio%22+or+title+contains+%22Bryan%22');
+
+            await waitFor(() => {
+                expect(
+                    calls.some((p) => p?.filter === 'kind = "person" and (kind = "studio" or title contains "Bryan")'),
+                ).toBe(true);
+            });
+        });
+    });
+
+    describe('list', () => {
+        it('renders the subject list with rows from the server', () => {
+            renderSubjectsPage();
+
+            const list = document.querySelector('[data-component="subject-list"]') as HTMLElement;
+            expect(list).toBeInTheDocument();
+            expect(within(list).getByText('Bryan Cranston')).toBeInTheDocument();
+            expect(within(list).getByText('A24')).toBeInTheDocument();
+        });
+
+        it('navigates to detail when a row is clicked', async () => {
+            const user = userEvent.setup();
+            renderSubjectsPage();
+
+            const list = document.querySelector('[data-component="subject-list"]') as HTMLElement;
+            const row = within(list).getByText('Bryan Cranston').closest('tr');
+            await user.click(row!);
+
+            expect(mockNavigate).toHaveBeenCalledWith('/subjects/subject-1');
+        });
+
+        it('requests title-ascending sort from the server by default', async () => {
+            const calls: (SubjectQueryParams | undefined)[] = [];
+            vi.mocked(useSubjects).mockImplementation((params) => {
+                calls.push(params);
+                return {
+                    subjects: mockApiSubjects,
+                    isLoading: false,
+                    error: null,
+                    totalItems: 0,
+                    pageNumber: 1,
+                    pageSize: 50,
+                    updateSubjectTags: vi.fn(),
+                    isUpdating: false,
+                    deleteSubject: vi.fn(),
+                    isDeleting: false,
+                    refetch: mockRefetch,
+                };
+            });
+
+            renderSubjectsPage();
+
+            await waitFor(() => {
+                expect(calls.some((p) => p?.sortBy === 'title' && p?.sortDirection === 'Ascending')).toBe(true);
+            });
+        });
+
+        it('renders rows in server order without re-sorting the page client-side', () => {
+            renderSubjectsPage();
+
+            const rows = screen.getAllByRole('row');
+            expect(rows[1]).toHaveTextContent('Bryan Cranston');
+        });
+
+        it('drives the server sort when a sortable column header is clicked', async () => {
+            const user = userEvent.setup();
+            const calls: (SubjectQueryParams | undefined)[] = [];
+            vi.mocked(useSubjects).mockImplementation((params) => {
+                calls.push(params);
+                return {
+                    subjects: mockApiSubjects,
+                    isLoading: false,
+                    error: null,
+                    totalItems: 0,
+                    pageNumber: 1,
+                    pageSize: 50,
+                    updateSubjectTags: vi.fn(),
+                    isUpdating: false,
+                    deleteSubject: vi.fn(),
+                    isDeleting: false,
+                    refetch: mockRefetch,
+                };
+            });
+
+            renderSubjectsPage();
+
+            await user.click(screen.getByRole('button', { name: /sort by kind/i }));
+
+            await waitFor(() => {
+                expect(calls.some((p) => p?.sortBy === 'kind')).toBe(true);
+            });
+        });
+
+        it('renders media-card router links without the desktop table in the card layout', () => {
+            vi.spyOn(window, 'matchMedia').mockImplementation(createMatchMedia(900));
+            renderSubjectsPage();
+
+            const mobileList = screen.getByTestId('subjects-page__mobile-list');
+            const card = within(mobileList).getByText('Bryan Cranston').closest('a');
+            expect(card).toHaveAttribute('href', '/subjects/subject-1');
+            expect(document.querySelector('.subjects-page__table')).not.toBeInTheDocument();
+        });
+    });
+
+    describe('empty states', () => {
+        function mockEmptySubjects() {
+            vi.mocked(useSubjects).mockReturnValue({
+                subjects: [],
+                isLoading: false,
+                error: null,
+                totalItems: 0,
+                pageNumber: 1,
+                pageSize: 50,
+                updateSubjectTags: vi.fn(),
+                isUpdating: false,
+                deleteSubject: vi.fn(),
+                isDeleting: false,
+                refetch: mockRefetch,
+            });
+        }
+
+        it('hides the sortable column headers on the cold-start empty (no filter active)', () => {
+            mockEmptySubjects();
+            renderSubjectsPage();
+
+            const list = document.querySelector('[data-component="subject-list"]') as HTMLElement;
+            expect(within(list).getByText(/no .* yet/i)).toBeInTheDocument();
+            expect(within(list).queryByRole('button', { name: /sort by title/i })).not.toBeInTheDocument();
+        });
+
+        it('keeps the sortable column headers live above the no-matches state when a filter matches nothing', () => {
+            mockEmptySubjects();
+            renderSubjectsPage('filter=kind+%3D+%22person%22');
+
+            const list = document.querySelector('[data-component="subject-list"]') as HTMLElement;
+            expect(within(list).getByText('No matches found')).toBeInTheDocument();
+            expect(within(list).getByRole('button', { name: /sort by title/i })).toBeInTheDocument();
+        });
+
+        it('shows the loading state, not the empty state, while the first query is still pending', () => {
+            vi.mocked(useSubjects).mockReturnValue({
+                subjects: [],
+                isLoading: true,
+                error: null,
+                totalItems: 0,
+                pageNumber: 1,
+                pageSize: 50,
+                updateSubjectTags: vi.fn(),
+                isUpdating: false,
+                deleteSubject: vi.fn(),
+                isDeleting: false,
+                refetch: mockRefetch,
+            });
+
+            renderScopedSubjectsPage('person');
+
+            const list = document.querySelector('[data-component="subject-list"]') as HTMLElement;
+            expect(within(list).getByTestId('subjects-page__loading')).toBeInTheDocument();
+            expect(within(list).queryByText(/no .* yet/i)).not.toBeInTheDocument();
+        });
+    });
+
+    describe('error state', () => {
+        it('shows retry button and calls refetch', async () => {
+            const user = userEvent.setup();
             vi.mocked(useSubjects).mockReturnValue({
                 subjects: [],
                 isLoading: false,
                 error: new Error('Network Error'),
+                totalItems: 0,
+                pageNumber: 1,
+                pageSize: 50,
                 updateSubjectTags: vi.fn(),
                 isUpdating: false,
                 deleteSubject: vi.fn(),
@@ -341,26 +657,7 @@ describe('SubjectsPage', () => {
             renderSubjectsPage();
 
             await user.click(screen.getByRole('button', { name: 'Retry' }));
-
             expect(mockRefetch).toHaveBeenCalledTimes(1);
-        });
-
-        it('shows subject list when error exists but data is available', () => {
-            vi.mocked(useSubjects).mockReturnValue({
-                subjects: mockApiSubjects,
-                isLoading: false,
-                error: new Error('Stale data warning'),
-                updateSubjectTags: vi.fn(),
-                isUpdating: false,
-                deleteSubject: vi.fn(),
-                isDeleting: false,
-                refetch: mockRefetch,
-            });
-
-            renderSubjectsPage();
-
-            expect(screen.queryByText('Failed to load subjects')).not.toBeInTheDocument();
-            expect(screen.getByText('Breaking Bad')).toBeInTheDocument();
         });
     });
 
@@ -373,258 +670,13 @@ describe('SubjectsPage', () => {
         });
     });
 
-    describe('subject sorting', () => {
-        it('sorts subjects by title ascending by default', () => {
-            renderSubjectsPage();
+    describe('URL persistence', () => {
+        it('restores the filter expression from URL params and expands the panel', () => {
+            renderSubjectsPage('filter=kind+%3D+%22person%22');
 
-            const rows = screen.getAllByRole('row');
-            expect(rows[1]).toHaveTextContent('Breaking Bad');
-        });
-
-        it('sorts subjects by title descending when direction is toggled', async () => {
-            const user = userEvent.setup();
-            renderSubjectsPage();
-
-            const directionButton = document.querySelector('[data-sort="direction"]') as HTMLElement;
-            await user.click(directionButton);
-
-            const rows = screen.getAllByRole('row');
-            expect(rows[1]).toHaveTextContent('The Office');
-        });
-
-        it('sorts subjects by date added', async () => {
-            const user = userEvent.setup();
-            renderSubjectsPage();
-
-            const fieldTrigger = document.querySelector('[data-sort="field"]') as HTMLElement;
-            await user.click(fieldTrigger);
-
-            const dateAddedOption = await screen.findByRole('option', { name: 'Date Added' });
-            await user.click(dateAddedOption);
-
-            const rows = screen.getAllByRole('row');
-            expect(rows[1]).toHaveTextContent('Breaking Bad');
-        });
-    });
-
-    describe('subject filters', () => {
-        it('renders the kind filter', () => {
-            renderSubjectsPage();
-
-            expect(document.querySelector('[data-filter="kind"]')).toBeInTheDocument();
-        });
-
-        it('renders the tags filter', () => {
-            renderSubjectsPage();
-
-            expect(document.querySelector('[data-filter="tags"]')).toBeInTheDocument();
-        });
-
-        it('filters subjects by movie kind via API', async () => {
-            const user = userEvent.setup();
-
-            const movieSubjects = mockApiSubjects.filter((s) => s.kind === 'movie');
-            vi.mocked(useSubjects).mockImplementation((params) => ({
-                subjects: params?.kind === 'movie' ? movieSubjects : mockApiSubjects,
-                isLoading: false,
-                error: null,
-                updateSubjectTags: vi.fn(),
-                isUpdating: false,
-                deleteSubject: vi.fn(),
-                isDeleting: false,
-                refetch: mockRefetch,
-            }));
-
-            renderSubjectsPage();
-
-            const kindTrigger = document.querySelector('[data-filter="kind"]') as HTMLElement;
-            await user.click(kindTrigger);
-
-            const movieOption = await screen.findByRole('option', { name: 'Movies' });
-            await user.click(movieOption);
-
-            await waitFor(() => {
-                expect(screen.getByText('Dune: Part Two')).toBeInTheDocument();
-                expect(screen.getByText('Oppenheimer')).toBeInTheDocument();
-                expect(screen.getByText('Poor Things')).toBeInTheDocument();
-            });
-        });
-
-        it('filters subjects by person kind via API', async () => {
-            const user = userEvent.setup();
-
-            const personSubjects = mockApiSubjects.filter((s) => s.kind === 'person');
-            vi.mocked(useSubjects).mockImplementation((params) => ({
-                subjects: params?.kind === 'person' ? personSubjects : mockApiSubjects,
-                isLoading: false,
-                error: null,
-                updateSubjectTags: vi.fn(),
-                isUpdating: false,
-                deleteSubject: vi.fn(),
-                isDeleting: false,
-                refetch: mockRefetch,
-            }));
-
-            renderSubjectsPage();
-
-            const kindTrigger = document.querySelector('[data-filter="kind"]') as HTMLElement;
-            await user.click(kindTrigger);
-
-            const personOption = await screen.findByRole('option', { name: 'People' });
-            await user.click(personOption);
-
-            await waitFor(() => {
-                expect(screen.getByText('Bryan Cranston')).toBeInTheDocument();
-                expect(screen.getByText('Denis Villeneuve')).toBeInTheDocument();
-            });
-        });
-
-        it('shows clear all button when filters are active', async () => {
-            const user = userEvent.setup();
-            renderSubjectsPage();
-
-            const kindTrigger = document.querySelector('[data-filter="kind"]') as HTMLElement;
-            await user.click(kindTrigger);
-
-            const movieOption = await screen.findByRole('option', { name: 'Movies' });
-            await user.click(movieOption);
-
-            expect(screen.getByText('Clear all')).toBeInTheDocument();
-        });
-    });
-
-    describe('subject search', () => {
-        it('renders the search input', () => {
-            renderSubjectsPage();
-
-            expect(screen.getByRole('searchbox', { name: 'Search content by title' })).toBeInTheDocument();
-        });
-
-        it('filters subjects by search query', async () => {
-            const user = userEvent.setup();
-            renderSubjectsPage();
-
-            const searchInput = screen.getByRole('searchbox');
-            await user.type(searchInput, 'Breaking');
-
-            await waitFor(() => {
-                expect(screen.queryByText('The Office')).not.toBeInTheDocument();
-            });
-
-            expect(screen.getByText('Breaking Bad')).toBeInTheDocument();
-            expect(screen.queryByText('Dune: Part Two')).not.toBeInTheDocument();
-        });
-
-        it('performs case-insensitive search', async () => {
-            const user = userEvent.setup();
-            renderSubjectsPage();
-
-            const searchInput = screen.getByRole('searchbox');
-            await user.type(searchInput, 'breaking');
-
-            await waitFor(() => {
-                expect(screen.queryByText('The Office')).not.toBeInTheDocument();
-            });
-
-            expect(screen.getByText('Breaking Bad')).toBeInTheDocument();
-        });
-
-        it('combines search with kind filter', async () => {
-            const user = userEvent.setup();
-
-            const movieSubjects = mockApiSubjects.filter((s) => s.kind === 'movie');
-            vi.mocked(useSubjects).mockImplementation((params) => ({
-                subjects: params?.kind === 'movie' ? movieSubjects : mockApiSubjects,
-                isLoading: false,
-                error: null,
-                updateSubjectTags: vi.fn(),
-                isUpdating: false,
-                deleteSubject: vi.fn(),
-                isDeleting: false,
-                refetch: mockRefetch,
-            }));
-
-            renderSubjectsPage();
-
-            const kindTrigger = document.querySelector('[data-filter="kind"]') as HTMLElement;
-            await user.click(kindTrigger);
-            const movieOption = await screen.findByRole('option', { name: 'Movies' });
-            await user.click(movieOption);
-
-            const searchInput = screen.getByRole('searchbox');
-            await user.type(searchInput, 'opp');
-
-            await waitFor(() => {
-                expect(screen.queryByText('Dune: Part Two')).not.toBeInTheDocument();
-            });
-
-            expect(screen.getByText('Oppenheimer')).toBeInTheDocument();
-        });
-
-        it('shows no subjects found when search has no matches', async () => {
-            const user = userEvent.setup();
-            renderSubjectsPage();
-
-            const searchInput = screen.getByRole('searchbox');
-            await user.type(searchInput, 'xyznonexistent');
-
-            await waitFor(() => {
-                expect(screen.getByText('No subjects found')).toBeInTheDocument();
-            });
-        });
-    });
-
-    describe('URL search params persistence', () => {
-        it('restores search from URL params', () => {
-            renderSubjectsPage('search=Breaking');
-
-            const searchInput = screen.getByRole('searchbox');
-            expect(searchInput).toHaveValue('Breaking');
-
-            expect(screen.getByText('Breaking Bad')).toBeInTheDocument();
-            expect(screen.queryByText('The Office')).not.toBeInTheDocument();
-        });
-
-        it('restores sort from URL params', () => {
-            renderSubjectsPage('sort=dateAdded&sortDir=desc');
-
-            const rows = screen.getAllByRole('row');
-            expect(rows[1]).toHaveTextContent('Denis Villeneuve');
-        });
-
-        it('restores kind filter from URL params', () => {
-            const movieSubjects = mockApiSubjects.filter((s) => s.kind === 'movie');
-            vi.mocked(useSubjects).mockImplementation((params) => ({
-                subjects: params?.kind === 'movie' ? movieSubjects : mockApiSubjects,
-                isLoading: false,
-                error: null,
-                updateSubjectTags: vi.fn(),
-                isUpdating: false,
-                deleteSubject: vi.fn(),
-                isDeleting: false,
-                refetch: mockRefetch,
-            }));
-
-            renderSubjectsPage('kind=movie');
-
-            expect(screen.getByText('Dune: Part Two')).toBeInTheDocument();
-            expect(screen.getByText('Oppenheimer')).toBeInTheDocument();
-            expect(screen.getByText('Poor Things')).toBeInTheDocument();
-            expect(screen.queryByText('Breaking Bad')).not.toBeInTheDocument();
-        });
-
-        it('ignores invalid sort field in URL params', () => {
-            renderSubjectsPage('sort=invalid&sortDir=asc');
-
-            const rows = screen.getAllByRole('row');
-            expect(rows[1]).toHaveTextContent('Breaking Bad');
-        });
-
-        it('ignores invalid sort direction in URL params', () => {
-            renderSubjectsPage('sort=title&sortDir=invalid');
-
-            const rows = screen.getAllByRole('row');
-            expect(rows[1]).toHaveTextContent('Breaking Bad');
+            const filterBar = document.querySelector('[data-component="filter-bar"]') as HTMLElement;
+            expect(filterBar).toBeInTheDocument();
+            expect(within(filterBar).getByText('Active')).toBeInTheDocument();
         });
     });
 });

@@ -4,8 +4,32 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>disable</ImplicitUsings>
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+    <CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <MeziantouAnalysisMode>None</MeziantouAnalysisMode>
   </PropertyGroup>
+
+  <ItemGroup Condition="$(MSBuildProjectName.StartsWith('Magpie.Test'))">
+    <AssemblyAttribute Include="NUnit.Framework.ParallelizableAttribute">
+      <_Parameter1>NUnit.Framework.ParallelScope.Fixtures</_Parameter1>
+      <_Parameter1_IsLiteral>true</_Parameter1_IsLiteral>
+    </AssemblyAttribute>
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.CodeAnalysis.BannedApiAnalyzers" PrivateAssets="all" />
+    <PackageReference Include="Meziantou.Analyzer" PrivateAssets="all" />
+    <PackageReference Include="NewStyleCop.Analyzers" PrivateAssets="all" />
+    <PackageReference Include="Roslynator.Formatting.Analyzers" PrivateAssets="all" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(TargetFramework)' == 'netstandard2.1'">
+    <Compile Include="$(MSBuildThisFileDirectory)Shared\Polyfills\System.Runtime.CompilerServices\IsExternalInit.cs" Link="Polyfills\IsExternalInit.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Shared\Polyfills\System.Runtime.CompilerServices\RequiredMemberAttribute.cs" Link="Polyfills\RequiredMemberAttribute.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Shared\Polyfills\System.Runtime.CompilerServices\CompilerFeatureRequiredAttribute.cs" Link="Polyfills\CompilerFeatureRequiredAttribute.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Shared\Polyfills\System.Diagnostics.CodeAnalysis\SetsRequiredMembersAttribute.cs" Link="Polyfills\SetsRequiredMembersAttribute.cs" />
+  </ItemGroup>
+
 </Project>

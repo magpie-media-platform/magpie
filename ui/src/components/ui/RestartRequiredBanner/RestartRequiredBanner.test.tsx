@@ -78,7 +78,6 @@ describe('RestartRequiredBanner', () => {
             return null;
         }
 
-        // React logs error boundaries here; we just want the throw.
         expect(() => render(<Consumer />)).toThrow(/RestartRequiredProvider/);
     });
 });

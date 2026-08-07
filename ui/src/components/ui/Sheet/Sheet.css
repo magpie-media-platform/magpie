@@ -5,7 +5,6 @@
         z-index: var(--z-modal);
         background-color: var(--overlay-backdrop);
         backdrop-filter: blur(var(--blur-overlay));
-
         animation-duration: var(--duration-normal);
         animation-timing-function: var(--easing-default);
         animation-fill-mode: forwards;
@@ -28,7 +27,6 @@
         border: 1px solid var(--border-default);
         box-shadow: var(--shadow-lg);
         overflow: hidden;
-
         animation-duration: var(--duration-normal);
         animation-timing-function: var(--easing-default);
         animation-fill-mode: forwards;
@@ -62,10 +60,7 @@
         }
 
         @media (min-width: 1024px) {
-            top: 50%;
-            left: 50%;
-            right: auto;
-            bottom: auto;
+            inset: 50% auto auto 50%;
             transform: translate(-50%, -50%);
             max-height: 85vh;
             border-left: none;
@@ -105,10 +100,7 @@
         }
 
         @media (min-width: 1024px) {
-            top: 50%;
-            left: 50%;
-            right: auto;
-            bottom: auto;
+            inset: 50% auto auto 50%;
             transform: translate(-50%, -50%);
             max-height: 85vh;
             border-right: none;
@@ -174,6 +166,7 @@
         flex-direction: column-reverse;
         gap: var(--space-sm);
         padding: var(--space-lg);
+        padding-right: calc(var(--space-lg) + var(--touch-target-min) + var(--space-sm));
         border-top: 1px solid var(--border-default);
         margin-top: auto;
 

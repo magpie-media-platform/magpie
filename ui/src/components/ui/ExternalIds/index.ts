@@ -1,1 +1,8 @@
-export { ExternalIds, type ExternalIdsProps, type ExternalId } from './ExternalIds';
+export {
+    ExternalIds,
+    ExternalIdDetails,
+    type ExternalIdsProps,
+    type ExternalIdDetailsProps,
+    type ExternalId,
+    type ExternalIdsLeadingChip,
+} from './ExternalIds';

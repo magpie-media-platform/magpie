@@ -1,23 +1,25 @@
-import { useState, useMemo, useCallback } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
+import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import {
-    Funnel,
-    MagnifyingGlass,
-    Plus,
-    Trash,
-    PencilSimple,
-    User,
-    Clock,
-    LockSimple,
-    LockSimpleOpen,
-    CircleNotch,
-    Copy,
-    Star,
-    DotsThreeVertical,
+    FunnelIcon,
+    MagnifyingGlassIcon,
+    PlusIcon,
+    TrashIcon,
+    PencilSimpleIcon,
+    UserIcon,
+    ClockIcon,
+    LockSimpleIcon,
+    LockSimpleOpenIcon,
+    CircleNotchIcon,
+    CopyIcon,
+    StarIcon,
+    MagnifyingGlassPlusIcon,
+    DotsThreeVerticalIcon,
 } from '@phosphor-icons/react';
 
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
+import { PageHeader } from '@/components/ui/PageHeader';
 import { PullToRefresh } from '@/components/ui/PullToRefresh';
 import { QuickActionsButton, type QuickAction } from '@/components/ui/QuickActionsButton';
 import { Tooltip } from '@/components/ui/Tooltip';
@@ -29,7 +31,7 @@ import {
     DropdownMenuItem,
     DropdownMenuSeparator,
 } from '@/components/ui/DropdownMenu';
-import { Select, SelectTrigger, SelectContent, SelectItem } from '@/components/ui/Select';
+import { OwnershipToggle, type OwnershipScope } from '@/components/ui/OwnershipToggle';
 import { useToast } from '@/components/ui/Toast';
 import {
     useContentFilters,
@@ -39,58 +41,43 @@ import {
     type ContentFilterItem,
 } from '@/hooks/useFilters';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
-import { useFormOptions } from '@/hooks/useFormOptions';
 import { useToggle } from '@/hooks/useToggle';
+import { useUrlFilterState } from '@/hooks/useUrlFilterState';
 import { useUserMap } from '@/hooks/useUserMap';
 import { useWishlists } from '@/hooks/useWishlists';
 import { useAuth, Role } from '@/auth';
 import { formatRelativeTime } from '@/lib/formatTime';
 import { canEditOwned } from '@/lib/ownership';
-import type { WishlistFormValues } from '@/types';
 import { DeleteConfirmDialog } from '@/components/ui/DeleteConfirmDialog/DeleteConfirmDialog';
-import { WishlistForm } from '@/pages/WishlistsPage';
+import type { FiltersPageCreateState, LibraryAddPreloadState, WishlistsPageCreateState } from '@/types/navigation';
 import { FilterForm, type FilterFormValues } from './FilterForm';
 
 import './FiltersPage.css';
 import '@/styles/card-actions.css';
+import '@/styles/list-item-card.css';
 import '@/styles/list-toolbar.css';
 
 export type { ContentFilterItem } from '@/hooks/useFilters';
 
 interface EnrichedFilterItem extends ContentFilterItem {
     ownerName: string | null;
+    wishlistId: string | null;
+    wishlistName: string | null;
 }
 
-interface FilterPageFilterState {
-    owner: string;
-}
-
-const ALL_VALUE = '__all__';
-const SHARED_VALUE = '__shared__';
-
-const OWNER_PARAM = 'owner';
-
-interface OwnerOption {
-    id: string;
-    name: string;
-}
+const EDIT_PARAM = 'edit';
 
 export function FiltersPage() {
     useDocumentTitle('Filters');
     const [searchParams, setSearchParams] = useSearchParams();
+    const location = useLocation();
 
-    const filters: FilterPageFilterState = useMemo(
-        () => ({
-            owner: searchParams.get(OWNER_PARAM) || '',
-        }),
-        [searchParams],
-    );
+    const [filterState, setFilterState] = useUrlFilterState({ scope: '' });
+    const scope: OwnershipScope = filterState.scope === 'mine' ? 'mine' : 'all';
 
     const [lockingFilters, setLockingFilters] = useState<Set<string>>(new Set());
     const [formOpen, , openForm, closeForm] = useToggle();
-    const [editingFilter, setEditingFilter] = useState<ContentFilterItem | null>(null);
-    const [wishlistFormOpen, , openWishlistForm, closeWishlistForm] = useToggle();
-    const [convertingFilter, setConvertingFilter] = useState<ContentFilterItem | null>(null);
+    const [editingFilter, setEditingFilter] = useState<EnrichedFilterItem | null>(null);
     const [deletingFilter, setDeletingFilter] = useState<ContentFilterItem | null>(null);
     const [isDeleting, setIsDeleting] = useState(false);
     const { toast } = useToast();
@@ -99,10 +86,8 @@ export function FiltersPage() {
     const canManage = hasRole(Role.Manager);
 
     const { filters: contentFilters, refetch } = useContentFilters();
+    const { wishlists, refetch: refetchWishlists } = useWishlists();
 
-    const { createWishlist, isCreating: isWishlistSubmitting } = useWishlists();
-
-    const { qualityTierListOptions, tagOptions } = useFormOptions();
     const userMap = useUserMap();
 
     const createMutation = useCreateContentFilter();
@@ -113,74 +98,37 @@ export function FiltersPage() {
 
     const enrichedFilters = useMemo(
         () =>
-            contentFilters.map((f) => ({
-                ...f,
-                ownerName: f.ownerId ? (userMap.get(f.ownerId) ?? null) : null,
-            })),
-        [contentFilters, userMap],
+            contentFilters.map((filter) => {
+                const wishlist = wishlists.find((candidate) => candidate.contentFilterId === filter.id);
+                return {
+                    ...filter,
+                    ownerName: filter.ownerId ? (userMap.get(filter.ownerId) ?? null) : null,
+                    wishlistId: wishlist?.id ?? null,
+                    wishlistName: wishlist?.name ?? null,
+                };
+            }),
+        [contentFilters, userMap, wishlists],
     );
-
-    const totalFilters = enrichedFilters.length;
-
-    const ownerOptions: OwnerOption[] = useMemo(() => {
-        const owners = new Map<string, string>();
-        for (const f of enrichedFilters) {
-            if (f.ownerId && f.ownerName) {
-                owners.set(f.ownerId, f.ownerName);
-            }
+    const currentEditingFilter = useMemo(() => {
+        if (!editingFilter?.id) {
+            return editingFilter;
         }
-        return Array.from(owners.entries()).map(([id, name]) => ({ id, name }));
-    }, [enrichedFilters]);
+        return enrichedFilters.find((candidate) => candidate.id === editingFilter.id) ?? editingFilter;
+    }, [editingFilter, enrichedFilters]);
 
     const filteredFilters = useMemo(() => {
-        let items = [...enrichedFilters];
-
-        if (filters.owner === SHARED_VALUE) {
-            items = items.filter((f) => f.ownerId === null);
-        } else if (filters.owner) {
-            items = items.filter((f) => f.ownerId === filters.owner);
+        if (scope === 'mine') {
+            return enrichedFilters.filter((f) => f.ownerId === user?.id);
         }
+        return enrichedFilters;
+    }, [enrichedFilters, scope, user?.id]);
 
-        return items;
-    }, [enrichedFilters, filters]);
-
-    const typeCounts = useMemo(
-        () => ({
-            shared: enrichedFilters.filter((f) => f.ownerId === null).length,
-            personal: enrichedFilters.filter((f) => f.ownerId !== null).length,
-        }),
-        [enrichedFilters],
-    );
-
-    const handleOwnerChange = useCallback(
-        (value: string) => {
-            setSearchParams(
-                (prev) => {
-                    const next = new URLSearchParams(prev);
-                    const ownerValue = value === ALL_VALUE ? '' : value;
-                    if (ownerValue) {
-                        next.set(OWNER_PARAM, ownerValue);
-                    } else {
-                        next.delete(OWNER_PARAM);
-                    }
-                    return next;
-                },
-                { replace: true },
-            );
+    const handleScopeChange = useCallback(
+        (value: OwnershipScope) => {
+            setFilterState({ scope: value === 'mine' ? 'mine' : '' });
         },
-        [setSearchParams],
+        [setFilterState],
     );
-
-    const handleClearFilters = useCallback(() => {
-        setSearchParams(
-            (prev) => {
-                const next = new URLSearchParams(prev);
-                next.delete(OWNER_PARAM);
-                return next;
-            },
-            { replace: true },
-        );
-    }, [setSearchParams]);
 
     const handleAddFilter = useCallback(() => {
         setEditingFilter(null);
@@ -188,7 +136,7 @@ export function FiltersPage() {
     }, [openForm]);
 
     const addFilterActions: QuickAction[] = useMemo(
-        () => [{ id: 'add-filter', label: 'Add Filter', icon: <Plus weight="bold" />, onClick: handleAddFilter }],
+        () => [{ id: 'add-filter', label: 'Add Filter', icon: <PlusIcon weight="bold" />, onClick: handleAddFilter }],
         [handleAddFilter],
     );
 
@@ -202,6 +150,53 @@ export function FiltersPage() {
         },
         [enrichedFilters, openForm],
     );
+
+    const editLinkAppliedRef = useRef<string | null>(null);
+    useEffect(() => {
+        const editId = searchParams.get(EDIT_PARAM);
+        if (!editId || editLinkAppliedRef.current === editId) {
+            return;
+        }
+        const filter = enrichedFilters.find((f) => f.id === editId);
+        if (!filter) {
+            return;
+        }
+        editLinkAppliedRef.current = editId;
+        setEditingFilter(filter);
+        openForm();
+        setSearchParams(
+            (prev) => {
+                const next = new URLSearchParams(prev);
+                next.delete(EDIT_PARAM);
+                return next;
+            },
+            { replace: true },
+        );
+    }, [searchParams, enrichedFilters, openForm, setSearchParams]);
+
+    const createState = location.state as FiltersPageCreateState | null;
+    const createStateAppliedRef = useRef(false);
+    useEffect(() => {
+        if (!createState?.createQuery || createStateAppliedRef.current || !hasRole(Role.Requester)) {
+            return;
+        }
+        createStateAppliedRef.current = true;
+        setEditingFilter({
+            id: '',
+            name: createState.createName ?? '',
+            ownerId: user?.id ?? null,
+            ownerName: user?.username ?? null,
+            criteriaCount: 0,
+            ownerLock: false,
+            query: createState.createQuery,
+            criteria: {},
+            createdAt: '',
+            modifiedAt: null,
+            wishlistId: null,
+            wishlistName: null,
+        });
+        openForm();
+    }, [createState, hasRole, openForm, user?.id, user?.username]);
 
     const handleDuplicateFilter = useCallback(
         (id: string) => {
@@ -243,13 +238,13 @@ export function FiltersPage() {
             });
             toast({
                 title: 'Filter Deleted',
-                description: `"${deletingFilter.name}" has been deleted.`,
+                description: `Magpie deleted "${deletingFilter.name}".`,
                 variant: 'success',
             });
         } catch {
             toast({
                 title: 'Delete Failed',
-                description: `Could not delete "${deletingFilter.name}".`,
+                description: `Failed to delete "${deletingFilter.name}".`,
                 variant: 'error',
             });
         } finally {
@@ -348,88 +343,60 @@ export function FiltersPage() {
         [closeForm],
     );
 
-    const handleConvertToWishlist = useCallback(
-        (id: string) => {
-            const filter = enrichedFilters.find((f) => f.id === id);
-            if (filter) {
-                setConvertingFilter(filter);
-                openWishlistForm();
-            }
-        },
-        [enrichedFilters, openWishlistForm],
-    );
-
-    const handleApplyInLibrary = useCallback(
+    const handleViewInLibrary = useCallback(
         (id: string) => {
             const filter = enrichedFilters.find((f) => f.id === id);
             if (!filter?.query) {
                 return;
             }
-            navigate(`/library/all?filter=${encodeURIComponent(filter.query)}`);
+            const search = new URLSearchParams({ savedFilter: filter.id });
+            void navigate(`/library/all?${search}`);
         },
         [enrichedFilters, navigate],
     );
 
-    const handleWishlistFormOpenChange = useCallback(
-        (open: boolean) => {
-            if (!open) {
-                closeWishlistForm();
-                setConvertingFilter(null);
+    const handleSearchProviders = useCallback(
+        (id: string) => {
+            const filter = enrichedFilters.find((f) => f.id === id);
+            if (!filter?.query) {
+                return;
             }
+            const preload: LibraryAddPreloadState = {
+                filterQuery: filter.query,
+                savedFilterId: filter.id,
+            };
+            void navigate('/library/add', { state: preload });
         },
-        [closeWishlistForm],
+        [enrichedFilters, navigate],
     );
 
-    const handleWishlistSubmit = useCallback(
-        async (values: WishlistFormValues) => {
-            try {
-                await createWishlist({
-                    name: values.name,
-                    contentFilterId: values.filterId ?? '',
-                    qualityTierListId: values.qualityTierListId,
-                    enabled: values.monitored,
-                });
-
-                closeWishlistForm();
-                setConvertingFilter(null);
-
-                toast({
-                    title: 'Wishlist Created',
-                    description: `"${values.name}" has been created from filter "${convertingFilter?.name}".`,
-                    variant: 'success',
-                });
-            } catch {
-                toast({
-                    title: 'Create Failed',
-                    description: `Could not create wishlist "${values.name}".`,
-                    variant: 'error',
-                });
+    const handleConvertToWishlist = useCallback(
+        (id: string) => {
+            const filter = enrichedFilters.find((f) => f.id === id);
+            if (!filter) {
+                return;
             }
+            const createState: WishlistsPageCreateState = {
+                createCriteria: filter.criteria,
+                createName: filter.name,
+            };
+            void navigate('/wishlists', { state: createState });
         },
-        [convertingFilter, createWishlist, closeWishlistForm, toast],
+        [enrichedFilters, navigate],
     );
-
-    const enrichedFilterOptions = useMemo(() => {
-        return enrichedFilters.map((f) => ({ id: f.id, name: f.name }));
-    }, [enrichedFilters]);
-
-    const getWishlistFormInitialValues = useCallback((): WishlistFormValues | null => {
-        if (!convertingFilter) {
-            return null;
-        }
-
-        return {
-            name: `${convertingFilter.name} Wishlist`,
-            filterId: convertingFilter.id,
-            qualityTierListId: null,
-            monitored: true,
-            tagIds: [],
-        };
-    }, [convertingFilter]);
 
     const handleFormSubmit = useCallback(
         async (values: FilterFormValues) => {
-            const isNew = !editingFilter?.id;
+            const isNew = !currentEditingFilter?.id;
+
+            if (!isNew && !enrichedFilters.some((f) => f.id === currentEditingFilter.id)) {
+                toast({
+                    title: 'Filter Unavailable',
+                    description: 'This filter no longer exists. Reload and try again.',
+                    variant: 'error',
+                });
+                throw new Error('Filter is unavailable');
+            }
 
             try {
                 if (isNew) {
@@ -440,8 +407,8 @@ export function FiltersPage() {
                     });
                 } else {
                     await updateMutation.mutateAsync({
-                        id: editingFilter.id,
-                        isShared: editingFilter.ownerId === null,
+                        id: currentEditingFilter.id,
+                        isShared: currentEditingFilter.ownerId === null,
                         name: { value: values.name },
                         criteria: { value: values.criteria },
                     });
@@ -452,133 +419,81 @@ export function FiltersPage() {
 
                 toast({
                     title: isNew ? 'Filter Created' : 'Filter Updated',
-                    description: `${values.name} has been ${isNew ? 'created' : 'updated'} successfully.`,
+                    description: `Magpie ${isNew ? 'created' : 'updated'} "${values.name}".`,
                     variant: 'success',
                 });
-            } catch {
+            } catch (error) {
                 toast({
                     title: isNew ? 'Create Failed' : 'Update Failed',
-                    description: `Could not ${isNew ? 'create' : 'update'} filter.`,
+                    description: `Failed to ${isNew ? 'create' : 'update'} the filter.`,
                     variant: 'error',
                 });
+                throw error;
             }
         },
-        [editingFilter, createMutation, updateMutation, closeForm, toast],
+        [currentEditingFilter, enrichedFilters, createMutation, updateMutation, closeForm, toast],
     );
 
-    const isEditingOwner = editingFilter ? editingFilter.ownerId === user?.id : true;
+    const isEditingOwner = currentEditingFilter ? currentEditingFilter.ownerId === user?.id : true;
+
+    const existingFilterNames = useMemo(() => {
+        const editingId = currentEditingFilter?.id;
+        return enrichedFilters.filter((f) => f.id !== editingId).map((f) => f.name);
+    }, [enrichedFilters, currentEditingFilter?.id]);
 
     const canEditFilter = useCallback(
+        (filter: EnrichedFilterItem): boolean =>
+            !filter.wishlistName && canEditOwned(filter, user?.id, canManage, hasRole, Role.Requester),
+        [canManage, hasRole, user?.id],
+    );
+
+    const canEditIfUnbound = useCallback(
         (filter: ContentFilterItem): boolean => canEditOwned(filter, user?.id, canManage, hasRole, Role.Requester),
         [canManage, hasRole, user?.id],
     );
 
+    const canDeleteFilter = useCallback(
+        (filter: EnrichedFilterItem): boolean => canManage && canEditFilter(filter),
+        [canEditFilter, canManage],
+    );
+
     const handleRefresh = useCallback(async () => {
-        await refetch();
-    }, [refetch]);
+        await Promise.all([refetch(), refetchWishlists()]);
+    }, [refetch, refetchWishlists]);
 
-    const hasActiveFilters = filters.owner !== '';
-
-    const ownerLabel =
-        filters.owner === SHARED_VALUE
-            ? 'Shared'
-            : filters.owner
-              ? (ownerOptions.find((o) => o.id === filters.owner)?.name ?? 'Unknown')
-              : 'All Owners';
+    const hasActiveFilters = scope === 'mine';
 
     return (
         <div className="filters-page" data-page="filters">
             <PullToRefresh onRefresh={handleRefresh} className="filters-page__pull-to-refresh">
-                <header className="filters-page__header">
-                    <div className="filters-page__header-left">
-                        <Funnel
-                            weight="duotone"
-                            className="filters-page__icon"
-                            aria-hidden="true"
-                            data-testid="filters-page__icon"
-                        />
-                        <h1 className="filters-page__title">Filters</h1>
-                        <span className="page-count filters-page__count" data-testid="filters-page__count">
-                            {totalFilters}
-                        </span>
-                    </div>
-                    <div className="filters-page__header-actions">
-                        {hasRole(Role.Requester) && (
+                <PageHeader
+                    className="filters-page__header"
+                    title="Filters"
+                    description="Reusable filters for the library and wishlists."
+                    icon={<FunnelIcon weight="duotone" aria-hidden="true" data-testid="filters-page__icon" />}
+                    actions={
+                        hasRole(Role.Requester) && (
                             <Button variant="primary" size="sm" data-action="add-filter" onClick={handleAddFilter}>
-                                <Plus weight="bold" aria-hidden="true" />
+                                <PlusIcon weight="bold" aria-hidden="true" />
                                 <span className="filters-page__add-label">Add Filter</span>
                             </Button>
-                        )}
-                    </div>
-                </header>
+                        )
+                    }
+                />
 
-                <div className="list-toolbar__summary" aria-label="Filter summary">
-                    <Badge variant="info" size="sm" badgeStyle="outline" dot count={typeCounts.shared}>
-                        Shared
-                    </Badge>
-                    <Badge variant="stabilizing" size="sm" badgeStyle="outline" dot count={typeCounts.personal}>
-                        Personal
-                    </Badge>
-                </div>
-
-                <div className="list-toolbar__filters" data-component="filter-filters">
-                    <div className="list-toolbar__filters-controls">
-                        <Select value={filters.owner || ALL_VALUE} onValueChange={handleOwnerChange}>
-                            <SelectTrigger
-                                size="sm"
-                                placeholder="All Owners"
-                                aria-label="Filter by owner"
-                                data-filter="owner"
-                            >
-                                {ownerLabel}
-                            </SelectTrigger>
-                            <SelectContent>
-                                <SelectItem value={ALL_VALUE}>All Owners</SelectItem>
-                                <SelectItem value={SHARED_VALUE}>Shared</SelectItem>
-                                {ownerOptions.map((opt) => (
-                                    <SelectItem key={opt.id} value={opt.id}>
-                                        {opt.name}
-                                    </SelectItem>
-                                ))}
-                            </SelectContent>
-                        </Select>
-
-                        {hasActiveFilters && (
-                            <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={handleClearFilters}
-                                className="list-toolbar__clear-filters"
-                                data-action="clear-filters"
-                            >
-                                Clear
-                            </Button>
-                        )}
-                    </div>
+                <div className="filters-page__ownership" data-component="filter-filters">
+                    <OwnershipToggle value={scope} onValueChange={handleScopeChange} aria-label="Filter by ownership" />
                 </div>
 
                 <div className="filters-page__list" role="list" aria-label="Content filters">
                     {filteredFilters.length === 0 ? (
                         <EmptyState
-                            icon={<Funnel weight="duotone" />}
+                            icon={<FunnelIcon weight="duotone" />}
                             title="No filters found"
                             description={
                                 hasActiveFilters
                                     ? 'Try adjusting your filters'
-                                    : 'Create a filter to start matching content'
-                            }
-                            action={
-                                hasRole(Role.Requester) && !hasActiveFilters ? (
-                                    <Button
-                                        variant="primary"
-                                        size="sm"
-                                        onClick={handleAddFilter}
-                                        data-action="add-filter-empty"
-                                    >
-                                        <Plus weight="bold" aria-hidden="true" />
-                                        <span>Add Filter</span>
-                                    </Button>
-                                ) : undefined
+                                    : 'Reusable filters can be applied in the library and wishlists.'
                             }
                         />
                     ) : (
@@ -589,15 +504,18 @@ export function FiltersPage() {
                                 isLocking={lockingFilters.has(filter.id)}
                                 isOwner={filter.ownerId === user?.id}
                                 canEdit={canEditFilter(filter)}
-                                canManage={canManage}
-                                canCreateWishlist={hasRole(Role.Requester)}
+                                canEditIfUnbound={canEditIfUnbound(filter)}
+                                canDelete={canDeleteFilter(filter)}
                                 onEdit={handleEditFilter}
                                 onDuplicate={handleDuplicateFilter}
                                 onDelete={handleDeleteFilter}
                                 onLock={handleLockFilter}
                                 onUnlock={handleUnlockFilter}
+                                onViewInLibrary={handleViewInLibrary}
+                                onSearchProviders={handleSearchProviders}
                                 onConvertToWishlist={handleConvertToWishlist}
-                                onApplyInLibrary={handleApplyInLibrary}
+                                canCreateWishlist={hasRole(Role.Requester)}
+                                canDuplicate={hasRole(Role.Requester)}
                             />
                         ))
                     )}
@@ -609,23 +527,13 @@ export function FiltersPage() {
             <FilterForm
                 open={formOpen}
                 onOpenChange={handleFormOpenChange}
-                initialValues={editingFilter}
+                initialValues={currentEditingFilter}
                 onSubmit={handleFormSubmit}
                 isSubmitting={isSubmitting}
                 isOwner={isEditingOwner}
-                canEdit={editingFilter ? canEditFilter(editingFilter) : true}
-                isShared={editingFilter ? editingFilter.ownerId === null : false}
-            />
-
-            <WishlistForm
-                open={wishlistFormOpen}
-                onOpenChange={handleWishlistFormOpenChange}
-                initialValues={getWishlistFormInitialValues()}
-                filters={enrichedFilterOptions}
-                qualityTierLists={qualityTierListOptions}
-                tags={tagOptions}
-                onSubmit={handleWishlistSubmit}
-                isSubmitting={isWishlistSubmitting}
+                canEdit={currentEditingFilter ? canEditFilter(currentEditingFilter) : true}
+                isShared={currentEditingFilter ? currentEditingFilter.ownerId === null : false}
+                existingNames={existingFilterNames}
             />
 
             <DeleteConfirmDialog
@@ -647,15 +555,18 @@ interface FilterRowProps {
     isLocking: boolean;
     isOwner: boolean;
     canEdit: boolean;
-    canManage: boolean;
-    canCreateWishlist: boolean;
+    canEditIfUnbound: boolean;
+    canDelete: boolean;
     onEdit: (id: string) => void;
     onDuplicate: (id: string) => void;
     onDelete: (id: string) => void;
     onLock: (id: string) => void;
     onUnlock: (id: string) => void;
+    onViewInLibrary: (id: string) => void;
+    onSearchProviders: (id: string) => void;
     onConvertToWishlist: (id: string) => void;
-    onApplyInLibrary: (id: string) => void;
+    canCreateWishlist: boolean;
+    canDuplicate: boolean;
 }
 
 function FilterRow({
@@ -663,21 +574,24 @@ function FilterRow({
     isLocking,
     isOwner,
     canEdit,
-    canManage,
-    canCreateWishlist,
+    canEditIfUnbound,
+    canDelete,
     onEdit,
     onDuplicate,
     onDelete,
     onLock,
     onUnlock,
+    onViewInLibrary,
+    onSearchProviders,
     onConvertToWishlist,
-    onApplyInLibrary,
+    canCreateWishlist,
+    canDuplicate,
 }: FilterRowProps) {
     const isShared = filter.ownerId === null;
 
     return (
         <div
-            className="filters-page__item"
+            className="filters-page__item list-item-card"
             role="listitem"
             data-filter-id={filter.id}
             data-shared={isShared || undefined}
@@ -698,7 +612,7 @@ function FilterRow({
                                     data-owner-lock="true"
                                     aria-label={isOwner ? 'Locked - Only you can edit' : 'Locked - Only owner can edit'}
                                 >
-                                    <LockSimple weight="fill" aria-hidden="true" />
+                                    <LockSimpleIcon weight="fill" aria-hidden="true" />
                                 </span>
                             </Tooltip>
                         )}
@@ -708,23 +622,36 @@ function FilterRow({
                                     className="filters-page__owner-lock"
                                     aria-label="Unlocked - Anyone with permission can edit"
                                 >
-                                    <LockSimpleOpen weight="fill" aria-hidden="true" />
+                                    <LockSimpleOpenIcon weight="fill" aria-hidden="true" />
                                 </span>
                             </Tooltip>
                         )}
                         <Badge variant={isShared ? 'info' : 'stabilizing'} size="sm">
                             {isShared ? 'Shared' : 'Personal'}
                         </Badge>
+                        {filter.wishlistName && filter.wishlistId && (
+                            <Link
+                                to={`/wishlists/${filter.wishlistId}`}
+                                className="badge badge--default badge--sm filters-page__wishlist-badge"
+                                data-wishlist-id={filter.wishlistId}
+                                data-action="open-wishlist"
+                            >
+                                <StarIcon weight="fill" aria-hidden="true" />
+                                <span className="filters-page__wishlist-badge-label">
+                                    Part of {filter.wishlistName}
+                                </span>
+                            </Link>
+                        )}
                     </div>
                     <div className="filters-page__item-meta">
                         {!isShared && filter.ownerName && (
                             <span className="filters-page__item-owner">
-                                <User weight="regular" aria-hidden="true" />
+                                <UserIcon weight="regular" aria-hidden="true" />
                                 {filter.ownerName}
                             </span>
                         )}
                         <span className="filters-page__item-modified">
-                            <Clock weight="regular" aria-hidden="true" />
+                            <ClockIcon weight="regular" aria-hidden="true" />
                             {formatRelativeTime(filter.modifiedAt || filter.createdAt)}
                         </span>
                     </div>
@@ -743,13 +670,13 @@ function FilterRow({
                     <button
                         type="button"
                         className="filters-page__apply-btn"
-                        onClick={() => onApplyInLibrary(filter.id)}
-                        aria-label={`Apply ${filter.name} in Library`}
-                        data-action="apply-in-library"
+                        onClick={() => onViewInLibrary(filter.id)}
+                        aria-label={`View ${filter.name} in Library`}
+                        data-action="view-in-library"
                         data-target={filter.id}
                     >
-                        <MagnifyingGlass weight="bold" aria-hidden="true" />
-                        <span>Apply</span>
+                        <MagnifyingGlassIcon weight="bold" aria-hidden="true" />
+                        <span>View</span>
                     </button>
 
                     {canEdit && (
@@ -762,7 +689,24 @@ function FilterRow({
                                 data-action="edit"
                                 data-target={filter.id}
                             >
-                                <PencilSimple weight="bold" />
+                                <PencilSimpleIcon weight="bold" />
+                            </button>
+                        </Tooltip>
+                    )}
+
+                    {!canEdit && filter.wishlistName && canEditIfUnbound && (
+                        <Tooltip content="Edit this filter from its wishlist" side="top">
+                            <button
+                                type="button"
+                                className="filters-page__action-btn card-actions__btn"
+                                aria-disabled="true"
+                                onClick={(e) => e.preventDefault()}
+                                aria-label={`Edit ${filter.name} from its wishlist`}
+                                data-action="edit"
+                                data-target={filter.id}
+                                data-disabled-reason="wishlist-bound"
+                            >
+                                <PencilSimpleIcon weight="bold" />
                             </button>
                         </Tooltip>
                     )}
@@ -776,29 +720,41 @@ function FilterRow({
                                 data-action="more-actions"
                                 data-target={filter.id}
                             >
-                                <DotsThreeVertical weight="bold" />
+                                <DotsThreeVerticalIcon weight="bold" />
                             </button>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end" sideOffset={4}>
-                            {canCreateWishlist && (
+                            {canDuplicate && (
+                                <DropdownMenuItem
+                                    onSelect={() => onDuplicate(filter.id)}
+                                    data-action="duplicate"
+                                    data-target={filter.id}
+                                >
+                                    <CopyIcon weight="bold" aria-hidden="true" />
+                                    Duplicate
+                                </DropdownMenuItem>
+                            )}
+                            {filter.query && (
+                                <DropdownMenuItem
+                                    onSelect={() => onSearchProviders(filter.id)}
+                                    data-action="search-providers"
+                                    data-target={filter.id}
+                                >
+                                    <MagnifyingGlassPlusIcon weight="bold" aria-hidden="true" />
+                                    Search providers
+                                </DropdownMenuItem>
+                            )}
+                            {canCreateWishlist && filter.criteriaCount > 0 && !filter.wishlistName && (
                                 <DropdownMenuItem
                                     onSelect={() => onConvertToWishlist(filter.id)}
                                     data-action="convert-to-wishlist"
                                     data-target={filter.id}
                                 >
-                                    <Star weight="bold" aria-hidden="true" />
-                                    Create Wishlist
+                                    <StarIcon weight="bold" aria-hidden="true" />
+                                    Convert to wishlist
                                 </DropdownMenuItem>
                             )}
-                            <DropdownMenuItem
-                                onSelect={() => onDuplicate(filter.id)}
-                                data-action="duplicate"
-                                data-target={filter.id}
-                            >
-                                <Copy weight="bold" aria-hidden="true" />
-                                Duplicate
-                            </DropdownMenuItem>
-                            {!isShared && isOwner && (
+                            {!isShared && isOwner && !filter.wishlistName && (
                                 <>
                                     <DropdownMenuSeparator />
                                     <DropdownMenuItem
@@ -808,21 +764,21 @@ function FilterRow({
                                         data-target={filter.id}
                                     >
                                         {isLocking ? (
-                                            <CircleNotch
+                                            <CircleNotchIcon
                                                 weight="bold"
                                                 className="card-actions__spinner"
                                                 aria-hidden="true"
                                             />
                                         ) : filter.ownerLock ? (
-                                            <LockSimpleOpen weight="bold" aria-hidden="true" />
+                                            <LockSimpleOpenIcon weight="bold" aria-hidden="true" />
                                         ) : (
-                                            <LockSimple weight="bold" aria-hidden="true" />
+                                            <LockSimpleIcon weight="bold" aria-hidden="true" />
                                         )}
                                         {isLocking ? 'Updating...' : filter.ownerLock ? 'Unlock' : 'Lock'}
                                     </DropdownMenuItem>
                                 </>
                             )}
-                            {canManage && (
+                            {canDelete && (
                                 <>
                                     <DropdownMenuSeparator />
                                     <DropdownMenuItem
@@ -831,7 +787,7 @@ function FilterRow({
                                         data-action="delete"
                                         data-target={filter.id}
                                     >
-                                        <Trash weight="bold" aria-hidden="true" />
+                                        <TrashIcon weight="bold" aria-hidden="true" />
                                         Delete
                                     </DropdownMenuItem>
                                 </>

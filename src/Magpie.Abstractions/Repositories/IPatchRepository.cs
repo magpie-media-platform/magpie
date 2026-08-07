@@ -5,23 +5,23 @@ using System.Threading.Tasks;
 namespace Magpie.Abstractions.Repositories;
 
 /// <summary>
-/// Repository interface that supports patch-based updates.
+/// The repository contract for partial updates.
 /// </summary>
-/// <typeparam name="TKey">The key type.</typeparam>
-/// <typeparam name="TModel">The model type.</typeparam>
-/// <typeparam name="TPatch">The patch type.</typeparam>
-public interface IPatchRepository<TKey, TModel, TPatch> : IRepository<TKey, TModel>
+/// <typeparam name="TKey">The type of the entity key.</typeparam>
+/// <typeparam name="TModel">The type of the entity in the repository.</typeparam>
+/// <typeparam name="TPatch">The type of the patch.</typeparam>
+public interface IPatchRepository<TKey, TModel, TPatch> : IKeyedRepository<TKey, TModel>
     where TModel : class
     where TKey : notnull
 {
     /// <summary>
-    /// Patch an entity with partial updates.
+    /// Updates only the fields that a patch sets.
     /// </summary>
-    /// <param name="patch">The patch object containing the updates.</param>
-    /// <param name="modifiedByUserId">The id of the user modifying the record.</param>
-    /// <param name="cancellationToken">The cancellation token.</param>
+    /// <param name="patch">The patch that names the entity and the new field values</param>
+    /// <param name="modifiedByUserId">The id of the user that changes the record</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
     /// <returns>
-    /// <see langword="true"/> if the entity was updated, otherwise <see langword="false"/>.
+    /// <see langword="true"/> when the entity exists, otherwise <see langword="false"/>.
     /// </returns>
     Task<bool> PatchAsync(
         TPatch patch,

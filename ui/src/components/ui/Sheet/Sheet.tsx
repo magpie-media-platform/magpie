@@ -1,6 +1,8 @@
-import { forwardRef, type ComponentPropsWithoutRef, type ElementRef, type ReactNode } from 'react';
+import { forwardRef, type ComponentPropsWithoutRef, type ComponentRef, type ReactNode } from 'react';
 import * as DialogPrimitive from '@radix-ui/react-dialog';
-import { X } from '@phosphor-icons/react';
+import { XIcon } from '@phosphor-icons/react';
+
+import { OverlayBodyGuard } from '../OverlayBodyGuard';
 
 import './Sheet.css';
 
@@ -40,7 +42,7 @@ const SheetPortal = DialogPrimitive.Portal;
 
 const SheetClose = DialogPrimitive.Close;
 
-const SheetOverlay = forwardRef<ElementRef<typeof DialogPrimitive.Overlay>, SheetOverlayProps>(
+const SheetOverlay = forwardRef<ComponentRef<typeof DialogPrimitive.Overlay>, SheetOverlayProps>(
     ({ className, ...props }, ref) => {
         const classes = ['sheet-overlay', className].filter(Boolean).join(' ');
 
@@ -50,8 +52,19 @@ const SheetOverlay = forwardRef<ElementRef<typeof DialogPrimitive.Overlay>, Shee
 
 SheetOverlay.displayName = 'SheetOverlay';
 
-const SheetContent = forwardRef<ElementRef<typeof DialogPrimitive.Content>, SheetContentProps>(
-    ({ className, children, side = 'right', hideCloseButton = false, ...props }, ref) => {
+const SheetContent = forwardRef<ComponentRef<typeof DialogPrimitive.Content>, SheetContentProps>(
+    (
+        {
+            className,
+            children,
+            side = 'right',
+            hideCloseButton = false,
+            'aria-describedby': ariaDescribedBy,
+            onInteractOutside,
+            ...props
+        },
+        ref,
+    ) => {
         const classes = ['sheet-content', `sheet-content--${side}`, className].filter(Boolean).join(' ');
 
         return (
@@ -62,12 +75,24 @@ const SheetContent = forwardRef<ElementRef<typeof DialogPrimitive.Content>, Shee
                     className={classes}
                     data-component="sheet"
                     data-side={side}
+                    aria-describedby={ariaDescribedBy}
+                    onInteractOutside={(event) => {
+                        onInteractOutside?.(event);
+                        if (event.defaultPrevented) {
+                            return;
+                        }
+                        const target = event.target;
+                        if (target instanceof Element && target.closest('.dialog-content, .dialog-overlay')) {
+                            event.preventDefault();
+                        }
+                    }}
                     {...props}
                 >
+                    <OverlayBodyGuard />
                     {children}
                     {!hideCloseButton && (
                         <DialogPrimitive.Close className="overlay-close" aria-label="Close">
-                            <X size={20} weight="bold" aria-hidden="true" />
+                            <XIcon size={20} weight="bold" aria-hidden="true" />
                         </DialogPrimitive.Close>
                     )}
                 </DialogPrimitive.Content>
@@ -94,7 +119,7 @@ const SheetFooter = forwardRef<HTMLDivElement, SheetFooterProps>(({ className, .
 
 SheetFooter.displayName = 'SheetFooter';
 
-const SheetTitle = forwardRef<ElementRef<typeof DialogPrimitive.Title>, SheetTitleProps>(
+const SheetTitle = forwardRef<ComponentRef<typeof DialogPrimitive.Title>, SheetTitleProps>(
     ({ className, ...props }, ref) => {
         const classes = ['sheet-title', className].filter(Boolean).join(' ');
 
@@ -104,7 +129,7 @@ const SheetTitle = forwardRef<ElementRef<typeof DialogPrimitive.Title>, SheetTit
 
 SheetTitle.displayName = 'SheetTitle';
 
-const SheetDescription = forwardRef<ElementRef<typeof DialogPrimitive.Description>, SheetDescriptionProps>(
+const SheetDescription = forwardRef<ComponentRef<typeof DialogPrimitive.Description>, SheetDescriptionProps>(
     ({ className, ...props }, ref) => {
         const classes = ['sheet-description', className].filter(Boolean).join(' ');
 

@@ -3,32 +3,32 @@ using System;
 namespace Magpie.Models.Data;
 
 /// <summary>
-/// An API key for authenticating API requests.
+/// An API key that authenticates API requests.
 /// </summary>
 public record ApiKey
 {
     /// <summary>
-    /// The API key id.
+    /// The unique id of the API key.
     /// </summary>
     public Guid Id { get; set; }
 
     /// <summary>
-    /// The id of the user that the API key belongs to.
+    /// The id of the user who owns the API key.
     /// </summary>
     public Guid UserId { get; set; }
 
     /// <summary>
-    /// The display name for this API key.
+    /// The display name of the API key.
     /// </summary>
     public required string Name { get; set; }
 
     /// <summary>
-    /// The hashed API key value.
+    /// The hash of the API key value.
     /// </summary>
     public string? KeyHash { get; set; }
 
     /// <summary>
-    /// The prefix of the API key for identification purposes.
+    /// The visible prefix that identifies the API key.
     /// </summary>
     public required string KeyPrefix { get; set; }
 
@@ -38,32 +38,32 @@ public record ApiKey
     public bool Enabled { get; set; }
 
     /// <summary>
-    /// When the API key expires.
+    /// The UTC time the API key expires.
     /// </summary>
     public DateTime? ExpiresAt { get; set; }
 
     /// <summary>
-    /// When the API key was last used.
+    /// The UTC time of the last use of the API key.
     /// </summary>
     public DateTime? LastUsedAt { get; set; }
 
     /// <summary>
-    /// When the record was created.
+    /// The UTC time the record was created.
     /// </summary>
     public DateTime CreatedAt { get; set; }
 
     /// <summary>
-    /// The id of the user that created the record.
+    /// The id of the user who created the record.
     /// </summary>
     public Guid? CreatedByUserId { get; set; }
 
     /// <summary>
-    /// When the record was last modified.
+    /// The UTC time the record was last modified.
     /// </summary>
     public DateTime? ModifiedAt { get; set; }
 
     /// <summary>
-    /// The id of the user that last modified the record.
+    /// The id of the user who last modified the record.
     /// </summary>
     public Guid? ModifiedByUserId { get; set; }
 }

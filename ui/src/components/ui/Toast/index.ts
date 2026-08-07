@@ -15,6 +15,14 @@ export {
     type ToastTitleProps,
     type ToastDescriptionProps,
 } from './Toast';
-export { ToastStateProvider, ToastContext, type ToastContextValue } from './ToastContext';
+export {
+    ToastStateProvider,
+    ToastContext,
+    useToast,
+    type ToastContextValue,
+    type ToastData,
+    type ToastOptions,
+    type UseToastReturn,
+} from '@/hooks/ui/useToast';
 export { ToastList } from './ToastList';
-export { useToast, type ToastData, type ToastOptions, type UseToastReturn } from './useToast';
+export { ToastTray } from './ToastTray';

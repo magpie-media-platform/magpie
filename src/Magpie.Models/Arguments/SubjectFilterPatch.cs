@@ -4,17 +4,17 @@ using Magpie.Models.Patch;
 namespace Magpie.Models.Arguments;
 
 /// <summary>
-/// Patch for <see cref="SubjectFilter"/>.
+/// The partial-update arguments for a subject filter.
 /// </summary>
 public sealed record SubjectFilterPatch : TagsPatch
 {
     /// <summary>
-    /// The <see cref="SubjectFilter.Name"/> to patch.
+    /// The patch for the display name of the filter.
     /// </summary>
     public ScalarPatch<string>? Name { get; init; }
 
     /// <summary>
-    /// The <see cref="SubjectFilter.Criteria"/> to patch.
+    /// The patch for the filter criteria.
     /// </summary>
     public ScalarPatch<SubjectFilterCriteria>? Criteria { get; init; }
 }

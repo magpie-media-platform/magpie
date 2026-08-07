@@ -8,27 +8,27 @@ namespace Magpie.Models.Data;
 public record AlternateText
 {
     /// <summary>
-    /// The alternate text id.
+    /// The unique id of the alternate text.
     /// </summary>
     public Guid Id { get; set; }
 
     /// <summary>
-    /// The metadata contribution this alternate text belongs to.
+    /// The id of the metadata contribution that contains this text.
     /// </summary>
     public Guid MetadataContributionId { get; set; }
 
     /// <summary>
-    /// The display order.
+    /// The position in the display order.
     /// </summary>
     public int Ordinal { get; set; }
 
     /// <summary>
-    /// The kind of alternate text (i.e. "Title", "Description").
+    /// The kind of text, for example a title or a description.
     /// </summary>
     public required string Kind { get; set; }
 
     /// <summary>
-    /// The language of this alternate text.
+    /// The language or locale code of the text.
     /// </summary>
     public string? Language { get; set; }
 

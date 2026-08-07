@@ -4,132 +4,137 @@ using System.Collections.Generic;
 namespace Magpie.Models.Data;
 
 /// <summary>
-/// Aggregated metadata materialized from provider contributions.
+/// The merged metadata of a container, built from all provider contributions.
 /// </summary>
 public sealed record MaterializedMetadata
 {
     /// <summary>
-    /// The <see cref="MetadataContainer.Id"/> of the metadata.
+    /// The id of the container that holds the contributions.
     /// </summary>
     public Guid ContainerId { get; init; }
 
     /// <summary>
-    /// The related <see cref="ContentHierarchyItem.Id"/>, if applicable.
+    /// The id of the content hierarchy item that the metadata describes, if it describes one.
     /// </summary>
     public Guid? ContentHierarchyItemId { get; init; }
 
     /// <summary>
-    /// The related <see cref="Subject.Id"/>, if applicable.
+    /// The id of the subject that the metadata describes, if it describes one.
     /// </summary>
     public Guid? SubjectId { get; init; }
 
     /// <summary>
-    /// The materialized <see cref="MetadataContribution.Title"/>.
+    /// The main title to show.
     /// </summary>
     public string? Title { get; init; }
 
     /// <summary>
-    /// The materialized <see cref="MetadataContribution.OriginalTitle"/>.
+    /// The title in the original language.
     /// </summary>
     public string? OriginalTitle { get; init; }
 
     /// <summary>
-    /// The materialized <see cref="MetadataContribution.SortTitle"/>.
+    /// The title to use for sort order.
     /// </summary>
     public string? SortTitle { get; init; }
 
     /// <summary>
-    /// The materialized <see cref="MetadataContribution.Language"/>.
+    /// The primary language, as a language code.
     /// </summary>
     public string? Language { get; init; }
 
     /// <summary>
-    /// The materialized <see cref="MetadataContribution.Overview"/>.
+    /// The long-form description.
     /// </summary>
     public string? Overview { get; init; }
 
     /// <summary>
-    /// The materialized <see cref="MetadataContribution.PublishDate"/>.
+    /// The date of first publication.
     /// </summary>
     public DateTime? PublishDate { get; init; }
 
     /// <summary>
-    /// The materialized <see cref="MetadataContribution.Duration"/>.
+    /// The run time.
     /// </summary>
     public TimeSpan? Duration { get; init; }
 
     /// <summary>
-    /// The materialized <see cref="MetadataContribution.ProductionStatus"/>.
+    /// The position within the parent.
+    /// </summary>
+    public int? SequenceNumber { get; init; }
+
+    /// <summary>
+    /// The production state, such as ended or in production.
     /// </summary>
     public string? ProductionStatus { get; init; }
 
     /// <summary>
-    /// The materialized <see cref="MetadataContribution.Established"/>.
+    /// The date when the subject was formed.
     /// </summary>
     public DateTime? Established { get; init; }
 
     /// <summary>
-    /// The materialized <see cref="MetadataContribution.Dissolved"/>.
+    /// The date when the subject ended.
     /// </summary>
     public DateTime? Dissolved { get; init; }
 
     /// <summary>
-    /// The materialized <see cref="MetadataContribution.BirthDate"/>.
+    /// The date of birth.
     /// </summary>
     public DateTime? BirthDate { get; init; }
 
     /// <summary>
-    /// The materialized <see cref="MetadataContribution.DeathDate"/>.
+    /// The date of death.
     /// </summary>
     public DateTime? DeathDate { get; init; }
 
     /// <summary>
-    /// The materialized <see cref="MetadataContribution.CustomMetadata"/>.
+    /// The provider-defined values that no standard field holds.
     /// </summary>
     public IEnumerable<CustomMetadataValue>? CustomMetadata { get; init; }
 
     /// <summary>
-    /// The materialized <see cref="MetadataContribution.ExternalIds"/>.
+    /// The ids at external providers.
     /// </summary>
     public IEnumerable<ExternalId>? ExternalIds { get; init; }
 
     /// <summary>
-    /// The materialized <see cref="MetadataContribution.References"/>.
+    /// The links to external pages.
     /// </summary>
     public IEnumerable<Reference>? References { get; init; }
 
     /// <summary>
-    /// The materialized <see cref="MetadataContribution.Relationships"/>.
+    /// The links to other metadata containers.
     /// </summary>
     public IEnumerable<Relationship>? Relationships { get; init; }
 
     /// <summary>
-    /// The materialized <see cref="MetadataContribution.Images"/>.
+    /// The artwork, such as posters and backdrops.
     /// </summary>
     public IEnumerable<Image>? Images { get; init; }
 
     /// <summary>
-    /// The materialized <see cref="MetadataContribution.Previews"/>.
+    /// The trailers and other preview clips.
     /// </summary>
     public IEnumerable<Preview>? Previews { get; init; }
 
     /// <summary>
-    /// The materialized <see cref="MetadataContribution.AlternateTexts"/>.
+    /// The titles and descriptions in other languages.
     /// </summary>
     public IEnumerable<AlternateText>? AlternateTexts { get; init; }
 
     /// <summary>
-    /// The materialized <see cref="MetadataContribution.ContentRatings"/>.
+    /// The ratings from ratings bodies.
     /// </summary>
     public IEnumerable<ContentRating>? ContentRatings { get; init; }
 
     /// <summary>
-    /// The materialized <see cref="MetadataContribution.Awards"/>.
+    /// The awards and nominations.
     /// </summary>
     public IEnumerable<Award>? Awards { get; init; }
 
     /// <summary>
-    /// The materialized <see cref="MetadataContribution.Genres"/>.
+    /// The genres.
     /// </summary>
     public IEnumerable<Genre>? Genres { get; init; }
 }

@@ -1,28 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { cn, queryErrorOrNull } from './utils';
-
-describe('cn', () => {
-    it('joins multiple class names', () => {
-        expect(cn('a', 'b', 'c')).toBe('a b c');
-    });
-
-    it('filters out falsy values', () => {
-        expect(cn('a', undefined, null, false, 'b')).toBe('a b');
-    });
-
-    it('returns empty string when all values are falsy', () => {
-        expect(cn(undefined, null, false)).toBe('');
-    });
-
-    it('returns empty string when called with no arguments', () => {
-        expect(cn()).toBe('');
-    });
-
-    it('returns single class when only one is provided', () => {
-        expect(cn('only')).toBe('only');
-    });
-});
+import { queryErrorOrNull } from './utils';
 
 describe('queryErrorOrNull', () => {
     it('returns the error when it is an Error instance', () => {

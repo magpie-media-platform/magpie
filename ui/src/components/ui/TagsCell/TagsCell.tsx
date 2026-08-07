@@ -1,4 +1,4 @@
-import { Tag } from '@phosphor-icons/react';
+import { TagIcon } from '@phosphor-icons/react';
 
 import { Badge } from '../Badge';
 
@@ -14,7 +14,7 @@ export function TagsCell({ tags, showEmptyLabel = false }: TagsCellProps) {
     if (!tags || tags.length === 0) {
         return (
             <span className="tags-cell__empty">
-                <Tag weight="thin" aria-hidden="true" />
+                <TagIcon weight="thin" aria-hidden="true" />
                 {showEmptyLabel && <span className="tags-cell__empty-label">No tags</span>}
             </span>
         );

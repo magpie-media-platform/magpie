@@ -1,33 +1,128 @@
-import { useMemo, useCallback } from 'react';
-import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { Cube, WarningCircle } from '@phosphor-icons/react';
+import { useMemo, useCallback, useEffect } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
+import { WarningCircleIcon } from '@phosphor-icons/react';
+import { type PaginationState, type SortingState, type Updater } from '@tanstack/react-table';
 
+import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
+import { CdnPhosphorIcon } from '@/components/ui/CdnPhosphorIcon';
 import { EmptyState } from '@/components/ui/EmptyState';
+import { MobileMediaCard } from '@/components/ui/MobileMediaCard';
+import { MobileListToolbar, type MobileListSortOption } from '@/components/ui/MobileListToolbar';
+import { PageHeader } from '@/components/ui/PageHeader';
 
 import { SubjectList, type SubjectItem } from '@/components/ui/SubjectList';
-import { ContentSearch } from '@/components/ui/ContentSearch';
-import { SubjectFilters, type SubjectFilterState, type TagItem } from '@/components/ui/SubjectFilters';
-import {
-    SubjectSorting,
-    type SubjectSortState,
-    type SubjectSortField,
-    type SubjectSortDirection,
-} from '@/components/ui/SubjectSorting';
+import { FilterBar } from '@/components/filters/FilterBar';
 import { SubjectListSlot } from '@/components/ui/Slot/SubjectSlots';
 import { PullToRefresh } from '@/components/ui/PullToRefresh';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
-import { useLibraryTypes } from '@/hooks/useLibraryTypes';
-import { useTags } from '@/hooks/useTags';
+import { useUrlFilterState } from '@/hooks/useUrlFilterState';
+import { useDebouncedValue } from '@/hooks/useDebouncedValue';
+import { useLibraryTypes, useTypeIconName } from '@/hooks/useLibraryTypes';
+import { TABLE_LAYOUT_QUERY, useCardLayout } from '@/hooks/ui/useCardLayout';
 import { extractImageUrl, extractTitle } from '@/lib/metadata';
 import { getErrorMessage } from '@/lib/errors';
 import { useSubjects, type ApiSubject } from '@/hooks/useSubjects';
+import { formatSubjectKindLabel } from '@/types';
 
 import './SubjectsPage.css';
 
-const VALID_SORT_FIELDS: SubjectSortField[] = ['title', 'dateAdded'];
+const VALID_SORT_FIELDS = ['title', 'kind'] as const;
 
-const VALID_SORT_DIRECTIONS: SubjectSortDirection[] = ['asc', 'desc'];
+type SortField = (typeof VALID_SORT_FIELDS)[number];
+
+const VALID_SORT_DIRECTIONS = ['asc', 'desc'] as const;
+
+type SortDirection = (typeof VALID_SORT_DIRECTIONS)[number];
+
+const UMBRELLA_LABEL = 'Subjects';
+const SUBJECT_KIND_CLAUSE_PATTERN = /^kind\b/i;
+const PAGE_SIZE = 50;
+const SUBJECT_SORT_OPTIONS: MobileListSortOption[] = [
+    { id: 'title', label: 'Title' },
+    { id: 'kind', label: 'Type' },
+];
+
+function splitTopLevelAndClauses(query: string): string[] {
+    const trimmed = query.trim();
+    if (!trimmed) {
+        return [];
+    }
+
+    const clauses: string[] = [];
+    let current = '';
+    let depth = 0;
+    let inString = false;
+    let i = 0;
+
+    while (i < trimmed.length) {
+        const ch = trimmed[i];
+
+        if (inString) {
+            current += ch;
+            if (ch === '\\' && i + 1 < trimmed.length) {
+                current += trimmed[i + 1];
+                i += 2;
+                continue;
+            }
+            if (ch === '"') {
+                inString = false;
+            }
+            i += 1;
+            continue;
+        }
+
+        if (ch === '"') {
+            inString = true;
+            current += ch;
+            i += 1;
+            continue;
+        }
+
+        if (ch === '(') {
+            depth += 1;
+            current += ch;
+            i += 1;
+            continue;
+        }
+
+        if (ch === ')') {
+            depth = Math.max(0, depth - 1);
+            current += ch;
+            i += 1;
+            continue;
+        }
+
+        if (depth === 0 && /\s/.test(ch)) {
+            const delimiter = trimmed.slice(i).match(/^\s+(and|or)\s+/i);
+            if (delimiter) {
+                if (delimiter[1].toLowerCase() === 'or') {
+                    return [trimmed];
+                }
+                clauses.push(current);
+                current = '';
+                i += delimiter[0].length;
+                continue;
+            }
+        }
+
+        current += ch;
+        i += 1;
+    }
+
+    clauses.push(current);
+    return clauses.map((clause) => clause.trim()).filter(Boolean);
+}
+
+function removeSubjectKindClauses(query: string): string {
+    const trimmed = query.trim();
+    const clauses = splitTopLevelAndClauses(trimmed);
+    if (clauses.length === 1 && clauses[0] === trimmed && /\s+or\s+/i.test(trimmed)) {
+        return trimmed;
+    }
+
+    return clauses.filter((clause) => !SUBJECT_KIND_CLAUSE_PATTERN.test(clause.trim())).join(' and ');
+}
 
 function transformSubject(subject: ApiSubject): SubjectItem {
     const title = extractTitle(subject.metadataContainer) ?? `Subject ${subject.id.slice(0, 8)}`;
@@ -44,82 +139,75 @@ function transformSubject(subject: ApiSubject): SubjectItem {
 }
 
 export function SubjectsPage() {
-    useDocumentTitle('Subjects');
+    const usesCardLayout = useCardLayout();
     const { subjectType: subjectTypeSlug } = useParams<{ subjectType?: string }>();
-    const [searchParams, setSearchParams] = useSearchParams();
     const navigate = useNavigate();
 
-    const search = searchParams.get('search') ?? '';
+    const [urlState, setUrlState] = useUrlFilterState({
+        filter: '',
+        sort: 'title',
+        sortDir: 'asc',
+        page: '',
+    });
 
-    const kindParam = searchParams.get('kind') ?? '';
-    const tagsParam = searchParams.get('tags') ?? '';
-    const filters: SubjectFilterState = useMemo(
-        () => ({
-            kind: kindParam as SubjectFilterState['kind'],
-            tags: tagsParam ? tagsParam.split(',') : [],
-        }),
-        [kindParam, tagsParam],
+    const pageNumber = useMemo(() => {
+        const raw = Number(urlState.page);
+        return Number.isInteger(raw) && raw >= 1 ? raw : 1;
+    }, [urlState.page]);
+
+    const pagination = useMemo<PaginationState>(
+        () => ({ pageIndex: pageNumber - 1, pageSize: PAGE_SIZE }),
+        [pageNumber],
     );
 
-    const sortFieldParam = searchParams.get('sort');
-    const sortDirParam = searchParams.get('sortDir');
-    const sort: SubjectSortState = useMemo(
-        () => ({
-            field:
-                sortFieldParam && VALID_SORT_FIELDS.includes(sortFieldParam as SubjectSortField)
-                    ? (sortFieldParam as SubjectSortField)
-                    : 'title',
-            direction:
-                sortDirParam && VALID_SORT_DIRECTIONS.includes(sortDirParam as SubjectSortDirection)
-                    ? (sortDirParam as SubjectSortDirection)
-                    : 'asc',
-        }),
-        [sortFieldParam, sortDirParam],
-    );
+    const filterQuery = urlState.filter;
+    const scopedSubjectKind = subjectTypeSlug && subjectTypeSlug !== 'all' ? subjectTypeSlug : null;
+    const visibleFilterQuery = scopedSubjectKind ? removeSubjectKindClauses(filterQuery) : filterQuery;
+    const debouncedFilter = useDebouncedValue(visibleFilterQuery, 300);
 
-    const updateParams = useCallback(
-        (updates: Partial<Record<'kind' | 'tags' | 'search' | 'sort' | 'sortDir', string>>) => {
-            setSearchParams(
-                (prev) => {
-                    const next = new URLSearchParams(prev);
-                    for (const [key, val] of Object.entries(updates)) {
-                        const isDefault =
-                            (key === 'sort' && (!val || val === 'title')) ||
-                            (key === 'sortDir' && (!val || val === 'asc')) ||
-                            (key === 'kind' && !val) ||
-                            (key === 'tags' && !val) ||
-                            (key === 'search' && !val);
-                        if (isDefault) {
-                            next.delete(key);
-                        } else if (val) {
-                            next.set(key, val);
-                        }
-                    }
-                    return next;
-                },
-                { replace: true },
-            );
-        },
-        [setSearchParams],
+    useEffect(() => {
+        if (scopedSubjectKind && visibleFilterQuery !== filterQuery) {
+            setUrlState({ filter: visibleFilterQuery }, { replace: true });
+        }
+    }, [scopedSubjectKind, visibleFilterQuery, filterQuery, setUrlState]);
+
+    const sortField: SortField = VALID_SORT_FIELDS.includes(urlState.sort as SortField)
+        ? (urlState.sort as SortField)
+        : 'title';
+    const sortDirection: SortDirection = VALID_SORT_DIRECTIONS.includes(urlState.sortDir as SortDirection)
+        ? (urlState.sortDir as SortDirection)
+        : 'asc';
+
+    const sorting: SortingState = useMemo(
+        () => [{ id: sortField, desc: sortDirection === 'desc' }],
+        [sortField, sortDirection],
     );
 
     const { subjectTypes } = useLibraryTypes();
 
-    const queryParams = useMemo(() => {
-        const kind = subjectTypeSlug && subjectTypeSlug !== 'all' ? subjectTypeSlug : filters.kind || undefined;
-        return { kind };
-    }, [subjectTypeSlug, filters.kind]);
+    const serverFilter = useMemo(() => {
+        const trimmed = debouncedFilter.trim();
+        if (scopedSubjectKind) {
+            const kindClause = `kind = "${scopedSubjectKind}"`;
+            return trimmed ? `${kindClause} and (${trimmed})` : kindClause;
+        }
+        return trimmed;
+    }, [scopedSubjectKind, debouncedFilter]);
 
-    const { subjects, isLoading, error, refetch } = useSubjects(queryParams);
+    const queryParams = useMemo(
+        () => ({
+            ...(serverFilter ? { filter: serverFilter } : {}),
+            sortBy: sortField,
+            sortDirection: sortDirection === 'desc' ? ('Descending' as const) : ('Ascending' as const),
+            pageNumber,
+            pageSize: PAGE_SIZE,
+        }),
+        [serverFilter, sortField, sortDirection, pageNumber],
+    );
 
-    const { tags: apiTags } = useTags();
+    const { subjects, totalItems, isLoading, error, refetch } = useSubjects(queryParams);
 
-    const availableTags: TagItem[] = useMemo(() => {
-        return apiTags.map((tag) => ({
-            id: tag.name,
-            name: tag.name,
-        }));
-    }, [apiTags]);
+    const typeIconName = useTypeIconName();
 
     const currentSubjectType = useMemo(() => {
         if (!subjectTypeSlug || subjectTypeSlug === 'all') {
@@ -128,108 +216,97 @@ export function SubjectsPage() {
         return subjectTypes.find((type) => type.slug === subjectTypeSlug) ?? null;
     }, [subjectTypeSlug, subjectTypes]);
 
-    const pageTitle = currentSubjectType?.name ?? 'Subjects';
-    const PageIcon = Cube;
+    const scoped = currentSubjectType !== null;
+    const pageTitle = scoped ? currentSubjectType.pluralName : UMBRELLA_LABEL;
+    const pageDescription = scoped
+        ? `Browse and manage ${pageTitle.toLowerCase()}.`
+        : 'Subjects that content can be related to.';
+    const pageIconName = typeIconName(currentSubjectType?.slug, { subject: true });
+
+    useDocumentTitle(pageTitle);
 
     const handleSubjectClick = useCallback(
         (item: SubjectItem) => {
-            navigate(`/subjects/${item.id}`);
+            void navigate(`/subjects/${item.id}`);
         },
         [navigate],
     );
 
-    const handleFiltersChange = useCallback(
-        (newFilters: SubjectFilterState) => {
-            updateParams({
-                kind: newFilters.kind,
-                tags: newFilters.tags.length > 0 ? newFilters.tags.join(',') : '',
-            });
+    const handleFilterChange = useCallback(
+        (value: string) => {
+            setUrlState(value.length > 0 ? { filter: value, page: '' } : { filter: '', page: '' }, { replace: true });
         },
-        [updateParams],
+        [setUrlState],
     );
 
-    const handleSortChange = useCallback(
-        (newSort: SubjectSortState) => {
-            updateParams({
-                sort: newSort.field,
-                sortDir: newSort.direction,
-            });
+    const handlePaginationChange = useCallback(
+        (updater: Updater<PaginationState>) => {
+            const next = typeof updater === 'function' ? updater(pagination) : updater;
+            setUrlState({ page: next.pageIndex > 0 ? String(next.pageIndex + 1) : '' }, { replace: true });
         },
-        [updateParams],
+        [pagination, setUrlState],
+    );
+
+    const handleSortingChange = useCallback(
+        (updater: SortingState | ((prev: SortingState) => SortingState)) => {
+            const next = typeof updater === 'function' ? updater(sorting) : updater;
+            const first = next[0];
+            if (!first || !VALID_SORT_FIELDS.includes(first.id as SortField)) {
+                setUrlState({ sort: '', sortDir: '', page: '' }, { replace: true });
+            } else {
+                setUrlState({ sort: first.id, sortDir: first.desc ? 'desc' : 'asc', page: '' }, { replace: true });
+            }
+        },
+        [sorting, setUrlState],
     );
 
     const handleRefresh = useCallback(async () => {
         await refetch();
     }, [refetch]);
 
-    const filteredAndSortedItems = useMemo(() => {
-        const items = subjects.map(transformSubject);
+    const items = useMemo(() => subjects.map(transformSubject), [subjects]);
 
-        const searchQuery = search.trim().toLowerCase();
+    const hasActiveFilter = visibleFilterQuery.trim().length > 0;
 
-        const filtered = items.filter((item) => {
-            if (searchQuery && !item.title.toLowerCase().includes(searchQuery)) {
-                return false;
-            }
-
-            if (filters.tags.length > 0) {
-                const itemTags = item.tags ?? [];
-                const hasMatchingTag = filters.tags.some((tagId) => itemTags.includes(tagId));
-                if (!hasMatchingTag) {
-                    return false;
-                }
-            }
-
-            return true;
-        });
-
-        const sorted = [...filtered].sort((a, b) => {
-            let comparison = 0;
-
-            switch (sort.field) {
-                case 'title':
-                    comparison = a.title.localeCompare(b.title);
-                    break;
-                case 'dateAdded': {
-                    const dateA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
-                    const dateB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
-                    comparison = dateA - dateB;
-                    break;
-                }
-            }
-
-            return sort.direction === 'asc' ? comparison : -comparison;
-        });
-
-        return sorted;
-    }, [subjects, filters, sort, search]);
+    const subjectsEmptyState = isLoading ? (
+        <div
+            className="subjects-page__loading"
+            data-testid="subjects-page__loading"
+            role="status"
+            aria-label="Loading subjects"
+        />
+    ) : hasActiveFilter ? (
+        <EmptyState title="No matches found" description="No subjects match the current filter." size="sm" />
+    ) : (
+        <EmptyState
+            icon={<CdnPhosphorIcon name={pageIconName} weight="duotone" />}
+            title={`No ${pageTitle.toLowerCase()} yet`}
+            description="Subjects appear here once content links to them."
+            size="sm"
+        />
+    );
 
     return (
-        <div className="subjects-page" data-page="subjects">
+        <div className="subjects-page" data-page="subjects" data-layout={usesCardLayout ? 'card' : 'table'}>
             <PullToRefresh onRefresh={handleRefresh} className="subjects-page__pull-to-refresh">
                 <SubjectListSlot>
-                    <header className="subjects-page__header">
-                        <div className="subjects-page__header-left">
-                            <PageIcon
+                    <PageHeader
+                        className="subjects-page__header"
+                        title={pageTitle}
+                        description={pageDescription}
+                        icon={
+                            <CdnPhosphorIcon
+                                name={pageIconName}
                                 weight="duotone"
-                                className="subjects-page__icon"
                                 aria-hidden="true"
                                 data-testid="subjects-page__icon"
                             />
-                            <h1 className="subjects-page__title">{pageTitle}</h1>
-                        </div>
-                        <div className="subjects-page__header-right">
-                            <ContentSearch
-                                value={search}
-                                onChange={(val) => updateParams({ search: val })}
-                                placeholder="Search by title..."
-                            />
-                        </div>
-                    </header>
+                        }
+                    />
 
                     {error && subjects.length === 0 ? (
                         <EmptyState
-                            icon={<WarningCircle weight="duotone" />}
+                            icon={<WarningCircleIcon weight="duotone" />}
                             title="Failed to load subjects"
                             description={getErrorMessage(error)}
                             action={
@@ -240,29 +317,75 @@ export function SubjectsPage() {
                         />
                     ) : (
                         <>
-                            <div className="subjects-page__controls">
+                            <section className="subjects-page__controls" aria-label="Filters and sorting">
                                 <div className="subjects-page__filters">
-                                    <SubjectFilters
-                                        filters={filters}
-                                        availableTags={availableTags}
-                                        onChange={handleFiltersChange}
+                                    <FilterBar
+                                        value={visibleFilterQuery}
+                                        onChange={handleFilterChange}
+                                        context="subject"
                                         loading={isLoading}
+                                        defaultExpanded={visibleFilterQuery.length > 0 ? true : undefined}
+                                        tableLayoutQuery={TABLE_LAYOUT_QUERY}
+                                        defaultSubjectKind={scopedSubjectKind ?? undefined}
+                                        lockSubjectKind={Boolean(scopedSubjectKind)}
                                     />
                                 </div>
-
-                                <div className="subjects-page__sorting">
-                                    <SubjectSorting sort={sort} onChange={handleSortChange} />
-                                </div>
-                            </div>
+                            </section>
 
                             <div className="subjects-page__content">
-                                <SubjectList
-                                    items={filteredAndSortedItems}
-                                    onSubjectClick={handleSubjectClick}
-                                    enableSorting={false}
-                                    enablePagination={false}
-                                    loading={isLoading}
-                                />
+                                {usesCardLayout ? (
+                                    items.length > 0 ? (
+                                        <>
+                                            <MobileListToolbar
+                                                className="subjects-page__mobile-toolbar"
+                                                sorting={sorting}
+                                                sortOptions={SUBJECT_SORT_OPTIONS}
+                                                onSortingChange={handleSortingChange}
+                                            />
+                                            <div
+                                                className="subjects-page__mobile-list"
+                                                data-testid="subjects-page__mobile-list"
+                                            >
+                                                {items.map((item) => (
+                                                    <MobileMediaCard
+                                                        key={item.id}
+                                                        to={`/subjects/${item.id}`}
+                                                        data-subject-id={item.id}
+                                                        posterUrl={item.imageUrl}
+                                                        posterAlt={`${item.title} image`}
+                                                        title={item.title}
+                                                    >
+                                                        <Badge variant="default" size="sm">
+                                                            {formatSubjectKindLabel(item.kind)}
+                                                        </Badge>
+                                                    </MobileMediaCard>
+                                                ))}
+                                            </div>
+                                        </>
+                                    ) : (
+                                        subjectsEmptyState
+                                    )
+                                ) : (
+                                    <div className="subjects-page__table">
+                                        <SubjectList
+                                            items={items}
+                                            onSubjectClick={handleSubjectClick}
+                                            enableSorting
+                                            manualSorting
+                                            sorting={sorting}
+                                            onSortingChange={handleSortingChange}
+                                            enablePagination
+                                            manualPagination
+                                            pagination={pagination}
+                                            onPaginationChange={handlePaginationChange}
+                                            rowCount={totalItems}
+                                            pageSize={PAGE_SIZE}
+                                            loading={isLoading}
+                                            emptyState={subjectsEmptyState}
+                                            keepHeaderWhenEmpty={hasActiveFilter}
+                                        />
+                                    </div>
+                                )}
                             </div>
                         </>
                     )}

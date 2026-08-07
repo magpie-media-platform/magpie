@@ -3,16 +3,17 @@ using Magpie.Models.Filtering;
 namespace Magpie.Models.Data;
 
 /// <summary>
-/// Filter criteria for <see cref="ExternalId"/>.
+/// Filter criteria for external ids.
 /// </summary>
 public sealed record ExternalIdCriteria
 {
     /// <summary>
-    /// The criteria for <see cref="ExternalId.Value"/>.
+    /// Criteria for the value of the external id.
     /// </summary>
     public CriteriaSet<PropertyCriterion<string>> Value { get; init; } = new();
+
     /// <summary>
-    /// The criteria for <see cref="ExternalId.Source"/>.
+    /// Criteria for the name of the source.
     /// </summary>
     public CriteriaSet<PropertyCriterion<string>> Source { get; init; } = new();
 }

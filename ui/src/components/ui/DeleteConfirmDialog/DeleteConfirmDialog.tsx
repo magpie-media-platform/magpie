@@ -1,7 +1,19 @@
-import { Trash } from '@phosphor-icons/react';
+import type { ReactNode } from 'react';
+import { TrashIcon } from '@phosphor-icons/react';
 
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '../Dialog';
-import { Button } from '../Button';
+import { Button, type ButtonVariant } from '../Button';
+import { Switch } from '../Switch';
+
+import './DeleteConfirmDialog.css';
+
+interface DeleteConfirmExtraToggle {
+    label: string;
+
+    checked: boolean;
+
+    onChange: (checked: boolean) => void;
+}
 
 export interface DeleteConfirmDialogProps {
     open: boolean;
@@ -14,7 +26,21 @@ export interface DeleteConfirmDialogProps {
 
     itemType: string;
 
+    description?: ReactNode;
+
     isDeleting?: boolean;
+
+    extraToggle?: DeleteConfirmExtraToggle;
+
+    title?: ReactNode;
+
+    confirmVariant?: ButtonVariant;
+
+    confirmLabel?: string;
+
+    confirmBusyLabel?: string;
+
+    confirmIcon?: ReactNode;
 }
 
 export function DeleteConfirmDialog({
@@ -23,7 +49,14 @@ export function DeleteConfirmDialog({
     onCancel,
     itemName,
     itemType,
+    description,
     isDeleting = false,
+    extraToggle,
+    title,
+    confirmVariant = 'destructive',
+    confirmLabel = 'Delete',
+    confirmBusyLabel = 'Deleting...',
+    confirmIcon,
 }: DeleteConfirmDialogProps) {
     return (
         <Dialog
@@ -32,20 +65,41 @@ export function DeleteConfirmDialog({
                 if (!isOpen) onCancel();
             }}
         >
-            <DialogContent data-component="delete-confirm-dialog">
+            <DialogContent size="alert" data-component="delete-confirm-dialog">
                 <DialogHeader>
-                    <DialogTitle>Delete {itemType}</DialogTitle>
+                    <DialogTitle>{title ?? `Delete ${itemType}`}</DialogTitle>
                     <DialogDescription>
-                        Are you sure you want to delete &quot;{itemName}&quot;? This action cannot be undone.
+                        {description ?? (
+                            <>Are you sure you want to delete &quot;{itemName}&quot;? This action cannot be undone.</>
+                        )}
                     </DialogDescription>
                 </DialogHeader>
+                {extraToggle && (
+                    <div className="delete-confirm-dialog__toggle" data-component="delete-confirm-toggle">
+                        <label className="delete-confirm-dialog__toggle-label" htmlFor="delete-confirm-extra-toggle">
+                            {extraToggle.label}
+                        </label>
+                        <Switch
+                            id="delete-confirm-extra-toggle"
+                            checked={extraToggle.checked}
+                            onCheckedChange={(value) => extraToggle.onChange(value === true)}
+                            disabled={isDeleting}
+                            data-action="extra-toggle"
+                        />
+                    </div>
+                )}
                 <DialogFooter>
                     <Button variant="ghost" onClick={onCancel} disabled={isDeleting} data-action="cancel">
                         Cancel
                     </Button>
-                    <Button variant="destructive" onClick={onConfirm} loading={isDeleting} data-action="confirm-delete">
-                        <Trash weight="bold" aria-hidden="true" />
-                        {isDeleting ? 'Deleting...' : 'Delete'}
+                    <Button
+                        variant={confirmVariant}
+                        onClick={onConfirm}
+                        loading={isDeleting}
+                        data-action="confirm-delete"
+                    >
+                        {confirmIcon ?? <TrashIcon weight="bold" aria-hidden="true" />}
+                        {isDeleting ? confirmBusyLabel : confirmLabel}
                     </Button>
                 </DialogFooter>
             </DialogContent>

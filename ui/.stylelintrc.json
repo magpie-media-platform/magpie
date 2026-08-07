@@ -1,0 +1,16 @@
+{
+    "extends": "stylelint-config-standard",
+    "rules": {
+        "selector-class-pattern": [
+            "^[a-z][a-zA-Z0-9]*((__|--|-|_)[a-zA-Z0-9]+)*$",
+            {
+                "message": "Expected class selector to follow block__element--modifier naming"
+            }
+        ],
+        "keyframes-name-pattern": "^[a-z][a-zA-Z0-9-]*$",
+        "media-feature-range-notation": "prefix",
+        "no-descending-specificity": null,
+        "property-no-vendor-prefix": null,
+        "value-no-vendor-prefix": null
+    }
+}

@@ -1,137 +1,113 @@
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 
-using Magpie.Abstractions.Api;
-using Magpie.Abstractions.Repositories;
-using Magpie.Abstractions.Security;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
+using Magpie.Sdk.Api;
+using Magpie.Sdk.Services;
 
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
 
 namespace Magpie.Api.EndpointGroups;
 
-internal sealed class RootFoldersEndpointGroup(
-    IRootFolderRepository rootFolderRepository) : IApiEndpointGroup
+[MagpieCommandGroup("root-folders", "root-folders", "Manage root folders")]
+internal sealed class RootFoldersEndpointGroup : IApiEndpointGroup
 {
     public string Name => "root-folders";
 
     public void MapEndpoints(IEndpointRouteBuilder builder)
     {
-        builder.MapGet("", GetAllRootFolders)
-            .WithName(nameof(GetAllRootFolders))
-            .Produces<RootFolder[]>()
+        builder.MapGet("", GetRootFoldersAsync)
+            .WithName(nameof(GetRootFoldersAsync))
+            .Produces<IReadOnlyList<RootFolder>>()
             .RequireViewer();
 
-        builder.MapGet("{id:guid}", GetRootFolderById)
-            .WithName(nameof(GetRootFolderById))
+        builder.MapPost("", CreateRootFolderAsync)
+            .WithName(nameof(CreateRootFolderAsync))
+            .Produces<RootFolder>(StatusCodes.Status201Created)
+            .ProducesProblem(StatusCodes.Status400BadRequest)
+            .RequireAdmin();
+
+        builder.MapGet("{id:guid}", GetRootFolderAsync)
+            .WithName(nameof(GetRootFolderAsync))
             .Produces<RootFolder>()
             .ProducesProblem(StatusCodes.Status404NotFound)
             .RequireViewer();
 
-        builder.MapPost("", CreateRootFolder)
-            .WithName(nameof(CreateRootFolder))
-            .Produces<RootFolder>(StatusCodes.Status201Created)
-            .ProducesProblem(StatusCodes.Status400BadRequest)
-            .RequireManager();
-
-        builder.MapPatch("{id:guid}", PatchRootFolder)
-            .WithName(nameof(PatchRootFolder))
+        builder.MapPatch("{id:guid}", PatchRootFolderAsync)
+            .WithName(nameof(PatchRootFolderAsync))
             .Produces(StatusCodes.Status204NoContent)
             .ProducesProblem(StatusCodes.Status404NotFound)
             .ProducesProblem(StatusCodes.Status400BadRequest)
-            .RequireManager();
+            .RequireAdmin();
 
-        builder.MapDelete("{id:guid}", DeleteRootFolder)
-            .WithName(nameof(DeleteRootFolder))
+        builder.MapDelete("{id:guid}", DeleteRootFolderAsync)
+            .WithName(nameof(DeleteRootFolderAsync))
             .Produces(StatusCodes.Status204NoContent)
             .ProducesProblem(StatusCodes.Status404NotFound)
-            .RequireManager();
+            .RequireAdmin();
     }
 
-    private async Task<IResult> GetAllRootFolders(CancellationToken cancellationToken)
+    [MagpieCommand("list", "GET", "", "List root folders")]
+    internal async Task<IResult> GetRootFoldersAsync(
+        [FromServices] IRootFolderService rootFolderService,
+        CancellationToken cancellationToken)
     {
-        var rootFolders = await rootFolderRepository.ListAllAsync(cancellationToken).ConfigureAwait(false);
+        var rootFolders = await rootFolderService.ListAsync(cancellationToken).ConfigureAwait(false);
 
         return Results.Ok(rootFolders);
     }
 
-    private async Task<IResult> GetRootFolderById(Guid id, CancellationToken cancellationToken)
-    {
-        var rootFolder = await rootFolderRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
-
-        return rootFolder is null
-            ? Results.NotFound()
-            : Results.Ok(rootFolder);
-    }
-
-    private async Task<IResult> CreateRootFolder(
-        HttpContext httpContext,
-        RootFolder request,
+    [MagpieCommand("create", "POST", "", "Create a root folder")]
+    internal async Task<IResult> CreateRootFolderAsync(
+        [FromServices] IRootFolderService rootFolderService,
+        AuthenticatedUser user,
+        [FromBody] RootFolderCreate create,
         CancellationToken cancellationToken)
     {
-        var currentUserId = httpContext.User.GetUserId();
-
-        var rootFolder = request with
-        {
-            Id = Guid.NewGuid(),
-            CreatedAt = DateTime.UtcNow,
-            CreatedByUserId = currentUserId,
-            ModifiedAt = null,
-            ModifiedByUserId = null
-        };
-
-        var created = await rootFolderRepository.CreateAsync(rootFolder, currentUserId, cancellationToken)
-            .ConfigureAwait(false);
+        var created = await rootFolderService.CreateAsync(create, user.Id, cancellationToken).ConfigureAwait(false);
 
         return Results.Created($"api/{Name}/{created.Id}", created);
     }
 
-    private async Task<IResult> PatchRootFolder(
-        HttpContext httpContext,
+    [MagpieCommand("get", "GET", "{id:guid}", "Show a root folder")]
+    internal async Task<IResult> GetRootFolderAsync(
+        [FromServices] IRootFolderService rootFolderService,
         Guid id,
-        RootFolderPatch request,
         CancellationToken cancellationToken)
     {
-        var existing = await rootFolderRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
+        var rootFolder = await rootFolderService.GetAsync(id, cancellationToken).ConfigureAwait(false);
 
-        if (existing is null)
-        {
-            return Results.NotFound();
-        }
-
-        var currentUserId = httpContext.User.GetUserId();
-
-        var rootFolder = existing with
-        {
-            Name = request.Name ?? existing.Name,
-            Path = request.Path ?? existing.Path,
-            ContentTypeId = request.ContentTypeId ?? existing.ContentTypeId,
-            ModifiedAt = DateTime.UtcNow,
-            ModifiedByUserId = currentUserId
-        };
-
-        await rootFolderRepository.UpdateAsync(rootFolder, currentUserId, cancellationToken)
-            .ConfigureAwait(false);
-
-        return Results.NoContent();
+        return rootFolder is null ? Results.NotFound() : Results.Ok(rootFolder);
     }
 
-    private async Task<IResult> DeleteRootFolder(
-        HttpContext httpContext,
+    [MagpieCommand("patch", "PATCH", "{id:guid}", "Update fields on a root folder")]
+    internal async Task<IResult> PatchRootFolderAsync(
+        [FromServices] IRootFolderService rootFolderService,
+        AuthenticatedUser user,
+        Guid id,
+        [FromBody] RootFolderPatch patch,
+        CancellationToken cancellationToken)
+    {
+        var updated = await rootFolderService.PatchAsync(id, patch, user.Id, cancellationToken).ConfigureAwait(false);
+
+        return updated ? Results.NoContent() : Results.NotFound();
+    }
+
+    [MagpieCommand("delete", "DELETE", "{id:guid}", "Delete a root folder")]
+    internal async Task<IResult> DeleteRootFolderAsync(
+        [FromServices] IRootFolderService rootFolderService,
+        AuthenticatedUser user,
         Guid id,
         CancellationToken cancellationToken)
     {
-        var currentUserId = httpContext.User.GetUserId();
+        var deleted = await rootFolderService.DeleteAsync(id, user.Id, cancellationToken).ConfigureAwait(false);
 
-        var deleted = await rootFolderRepository.DeleteAsync(id, currentUserId, cancellationToken)
-            .ConfigureAwait(false);
-
-        return deleted
-            ? Results.NoContent()
-            : Results.NotFound();
+        return deleted ? Results.NoContent() : Results.NotFound();
     }
 }

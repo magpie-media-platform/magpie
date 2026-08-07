@@ -1,239 +1,281 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
-using Magpie.Abstractions.Api;
-using Magpie.Abstractions.Repositories;
-using Magpie.Abstractions.Security;
-using Magpie.Api.Request;
 using Magpie.Models.Api;
 using Magpie.Models.Arguments;
+using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Models.Paging;
+using Magpie.Sdk.Api;
+using Magpie.Sdk.Services;
 
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
 
 namespace Magpie.Api.EndpointGroups;
 
-internal sealed class UsersEndpointGroup(
-    IUserRepository userRepository,
-    IUserManager userManager,
-    IPasswordHasher passwordHasher) : IApiEndpointGroup
+[MagpieCommandGroup("users", "users", "Manage users")]
+internal sealed class UsersEndpointGroup : IApiEndpointGroup
 {
     public string Name => "users";
 
     public void MapEndpoints(IEndpointRouteBuilder builder)
     {
-        builder.MapGet("me", GetCurrentUser)
-            .WithName(nameof(GetCurrentUser))
-            .Produces<UserResponse>()
-            .ProducesProblem(StatusCodes.Status401Unauthorized)
-            .RequireViewer();
-
-        builder.MapPatch("me", PatchCurrentUser)
-            .WithName(nameof(PatchCurrentUser))
-            .Produces(StatusCodes.Status204NoContent)
-            .ProducesProblem(StatusCodes.Status401Unauthorized)
-            .ProducesProblem(StatusCodes.Status404NotFound)
-            .RequireViewer();
-
-        builder.MapGet("", GetUsers)
-            .WithName(nameof(GetUsers))
+        builder.MapGet("", GetUsersAsync)
+            .WithName(nameof(GetUsersAsync))
             .Produces<PagedList<UserResponse>>()
             .RequireAdmin();
 
-        builder.MapPost("", CreateUser)
-            .WithName(nameof(CreateUser))
+        builder.MapPost("", CreateUserAsync)
+            .WithName(nameof(CreateUserAsync))
             .Produces<UserResponse>(StatusCodes.Status201Created)
+            .ProducesProblem(StatusCodes.Status400BadRequest)
+            .ProducesProblem(StatusCodes.Status409Conflict)
             .RequireAdmin();
 
-        builder.MapGet("{id:guid}", GetUser)
-            .WithName(nameof(GetUser))
+        builder.MapGet("my", GetMyUserAsync)
+            .WithName(nameof(GetMyUserAsync))
+            .Produces<UserResponse>()
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .RequireViewer();
+
+        builder.MapPatch("my", PatchMyUserAsync)
+            .WithName(nameof(PatchMyUserAsync))
+            .Produces(StatusCodes.Status204NoContent)
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .RequireViewer();
+
+        builder.MapGet("{id:guid}", GetUserAsync)
+            .WithName(nameof(GetUserAsync))
             .Produces<UserResponse>()
             .ProducesProblem(StatusCodes.Status404NotFound)
             .RequireAdmin();
 
-        builder.MapPatch("{id:guid}", PatchUser)
-            .WithName(nameof(PatchUser))
+        builder.MapPatch("{id:guid}", PatchUserAsync)
+            .WithName(nameof(PatchUserAsync))
             .Produces(StatusCodes.Status204NoContent)
             .ProducesProblem(StatusCodes.Status404NotFound)
             .RequireAdmin();
 
-        builder.MapPost("{id:guid}/enable", EnableUser)
-            .WithName(nameof(EnableUser))
-            .Produces<UserResponse>()
+        builder.MapDelete("{id:guid}", DeleteUserAsync)
+            .WithName(nameof(DeleteUserAsync))
+            .Produces(StatusCodes.Status204NoContent)
             .ProducesProblem(StatusCodes.Status404NotFound)
             .RequireAdmin();
 
-        builder.MapPost("{id:guid}/disable", DisableUser)
-            .WithName(nameof(DisableUser))
-            .Produces<UserResponse>()
-            .ProducesProblem(StatusCodes.Status404NotFound)
+        builder.MapGet("{id:guid}/api-keys", GetUserApiKeysAsync)
+            .WithName(nameof(GetUserApiKeysAsync))
+            .Produces<IReadOnlyList<ApiKeyResponse>>()
             .RequireAdmin();
 
-        builder.MapDelete("{id:guid}", DeleteUser)
-            .WithName(nameof(DeleteUser))
+        builder.MapPost("{id:guid}/password", ChangeUserPasswordAsync)
+            .WithName(nameof(ChangeUserPasswordAsync))
+            .Produces(StatusCodes.Status204NoContent)
+            .ProducesProblem(StatusCodes.Status400BadRequest)
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .RequireViewer();
+
+        builder.MapPost("{id:guid}/unlock", UnlockUserAsync)
+            .WithName(nameof(UnlockUserAsync))
             .Produces(StatusCodes.Status204NoContent)
             .ProducesProblem(StatusCodes.Status404NotFound)
             .RequireAdmin();
     }
 
-    private async Task<IResult> GetCurrentUser(HttpContext httpContext, CancellationToken cancellationToken)
-    {
-        var userId = httpContext.User.GetUserId();
-        if (userId is null)
-        {
-            return Results.Problem(statusCode: StatusCodes.Status401Unauthorized);
-        }
-
-        var user = await userRepository.GetByIdAsync(userId.Value, cancellationToken).ConfigureAwait(false);
-
-        return user is null
-            ? Results.NotFound()
-            : Results.Ok(user.ToResponse());
-    }
-
-    private async Task<IResult> PatchCurrentUser(
-        HttpContext httpContext,
-        UserPatch request,
-        CancellationToken cancellationToken)
-    {
-        var userId = httpContext.User.GetUserId();
-        if (userId is null)
-        {
-            return Results.Problem(statusCode: StatusCodes.Status401Unauthorized);
-        }
-
-        var patch = request with { Id = userId.Value };
-        var updated = await userRepository.PatchAsync(patch, userId.Value, cancellationToken).ConfigureAwait(false);
-
-        return updated
-            ? Results.NoContent()
-            : Results.NotFound();
-    }
-
-    private async Task<IResult> GetUsers(
+    [MagpieCommand("list", "GET", "", "List users")]
+    internal async Task<IResult> GetUsersAsync(
+        [FromServices] IUserService userService,
         string? providerType,
         Role? role,
         bool? enabled,
-        int? page,
+        int? pageNumber,
         int? pageSize,
         string? sortBy,
         SortDirection? sortDirection,
         CancellationToken cancellationToken)
     {
         var query = new UserQuery { Enabled = enabled, Role = role, ProviderType = providerType };
-        var paging = page.HasValue || pageSize.HasValue
-            ? new PagingParameter { PageNumber = page ?? 1, PageSize = pageSize ?? 25 }
-            : null;
-        var sort = !string.IsNullOrEmpty(sortBy)
-            ? new SortParameter { PropertyName = sortBy, Direction = sortDirection ?? SortDirection.Ascending }
-            : null;
+        var paging = new PagingParameter { PageNumber = pageNumber ?? 1, PageSize = pageSize ?? 25 };
+        var sort = string.IsNullOrEmpty(sortBy)
+            ? null
+            : new SortParameter { PropertyName = sortBy, Direction = sortDirection ?? SortDirection.Ascending };
 
-        var result = await userRepository.QueryAsync(query, paging, sort, cancellationToken)
-            .ConfigureAwait(false);
+        var users = await userService.QueryAsync(query, paging, sort, cancellationToken).ConfigureAwait(false);
 
-        var response = new PagedList<UserResponse>
-        {
-            Items = result.Items.Select(u => u.ToResponse()),
-            PageNumber = result.PageNumber,
-            PageSize = result.PageSize,
-            TotalItems = result.TotalItems
-        };
-
-        return Results.Ok(response);
+        return Results.Ok(CreateUsersResponse(users));
     }
 
-    private async Task<IResult> CreateUser(
-        HttpContext httpContext,
-        CreateUserRequest request,
+    [MagpieCommand("create", "POST", "", "Create a user")]
+    internal async Task<IResult> CreateUserAsync(
+        [FromServices] IUserService userService,
+        AuthenticatedUser user,
+        [FromBody] LocalUserCreate create,
         CancellationToken cancellationToken)
     {
-        var hashedPassword = await passwordHasher.HashPasswordAsync(request.Password, cancellationToken)
-            .ConfigureAwait(false);
+        var created = await userService.CreateAsync(create, user.Id, cancellationToken).ConfigureAwait(false);
 
-        var createArgs = new UserCreate
-        {
-            Username = request.Username,
-            PasswordHash = hashedPassword.Hash,
-            PasswordSalt = hashedPassword.Salt,
-            Role = request.Role,
-        };
-
-        var user = await userManager.CreateLocalUserAsync(createArgs, cancellationToken).ConfigureAwait(false);
-
-        return Results.Created($"api/{Name}/{user.Id}", user.ToResponse());
+        return created is null
+            ? Results.Problem(
+                detail: $"A user with the username '{create.Username.Trim()}' already exists.",
+                statusCode: StatusCodes.Status409Conflict)
+            : Results.Created($"api/{Name}/{created.Id}", CreateUserResponse(created));
     }
 
-    private async Task<IResult> GetUser(Guid id, CancellationToken cancellationToken)
+    internal async Task<IResult> GetMyUserAsync(
+        [FromServices] IUserService userService,
+        AuthenticatedUser user,
+        CancellationToken cancellationToken)
     {
-        var user = await userRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
-
-        return user is null
-            ? Results.NotFound()
-            : Results.Ok(user.ToResponse());
+        return await userService.GetProfileAsync(user.Id, cancellationToken).ConfigureAwait(false) is { } userProfile
+            ? Results.Ok(CreateUserResponse(userProfile))
+            : Results.NotFound();
     }
 
-    private async Task<IResult> PatchUser(
-        HttpContext httpContext,
+    internal async Task<IResult> PatchMyUserAsync(
+        [FromServices] IUserService userService,
+        AuthenticatedUser user,
+        [FromBody] UserPatch patch,
+        CancellationToken cancellationToken)
+    {
+        var updated = await userService.UpdateProfileAsync(patch, user.Id, cancellationToken).ConfigureAwait(false);
+
+        return updated ? Results.NoContent() : Results.NotFound();
+    }
+
+    [MagpieCommand("get", "GET", "{id:guid}", "Show a user")]
+    internal async Task<IResult> GetUserAsync(
+        [FromServices] IUserService userService,
         Guid id,
-        UserPatch request,
         CancellationToken cancellationToken)
     {
-        var currentUserId = httpContext.User.GetUserId();
-        var patch = request with { Id = id };
-        var updated = await userRepository.PatchAsync(patch, currentUserId, cancellationToken).ConfigureAwait(false);
+        return await userService.GetAsync(id, cancellationToken).ConfigureAwait(false) is { } user
+            ? Results.Ok(CreateUserResponse(user))
+            : Results.NotFound();
+    }
 
-        return updated
+    [MagpieCommand("patch", "PATCH", "{id:guid}", "Update fields on a user")]
+    internal async Task<IResult> PatchUserAsync(
+        [FromServices] IUserService userService,
+        AuthenticatedUser user,
+        Guid id,
+        [FromBody] UserPatch patch,
+        CancellationToken cancellationToken)
+    {
+        return await userService.PatchAsync(id, patch, user.Id, cancellationToken).ConfigureAwait(false)
             ? Results.NoContent()
             : Results.NotFound();
     }
 
-    private async Task<IResult> EnableUser(HttpContext httpContext, Guid id, CancellationToken cancellationToken)
+    [MagpieCommand("delete", "DELETE", "{id:guid}", "Delete a user")]
+    internal async Task<IResult> DeleteUserAsync(
+        [FromServices] IUserService userService,
+        AuthenticatedUser user,
+        Guid id,
+        CancellationToken cancellationToken)
     {
-        var currentUserId = httpContext.User.GetUserId();
-        var existingUser = await userRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
-        if (existingUser is null)
-        {
-            return Results.NotFound();
-        }
-
-        var patch = new UserPatch { Id = id, Enabled = new() { Value = true } };
-        await userRepository.PatchAsync(patch, currentUserId, cancellationToken)
-            .ConfigureAwait(false);
-
-        var user = await userRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
-        return Results.Ok(user?.ToResponse());
-    }
-
-    private async Task<IResult> DisableUser(HttpContext httpContext, Guid id, CancellationToken cancellationToken)
-    {
-        var currentUserId = httpContext.User.GetUserId();
-        var existingUser = await userRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
-        if (existingUser is null)
-        {
-            return Results.NotFound();
-        }
-
-        var patch = new UserPatch { Id = id, Enabled = new() { Value = false } };
-        await userRepository.PatchAsync(patch, currentUserId, cancellationToken)
-            .ConfigureAwait(false);
-
-        var user = await userRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
-        return Results.Ok(user?.ToResponse());
-    }
-
-    private async Task<IResult> DeleteUser(HttpContext httpContext, Guid id, CancellationToken cancellationToken)
-    {
-        var currentUserId = httpContext.User.GetUserId();
-        var deleted = await userRepository.DeleteAsync(id, currentUserId, cancellationToken)
-            .ConfigureAwait(false);
-
-        return deleted
+        return await userService.DeleteAsync(id, user.Id, cancellationToken).ConfigureAwait(false)
             ? Results.NoContent()
             : Results.NotFound();
     }
+
+    internal async Task<IResult> GetUserApiKeysAsync(
+        [FromServices] IApiKeyService apiKeyService,
+        Guid id,
+        bool? enabled,
+        bool? expired,
+        CancellationToken cancellationToken)
+    {
+        var apiKeys = await apiKeyService.ListForUserAsync(id, enabled, expired, cancellationToken)
+            .ConfigureAwait(false);
+
+        return Results.Ok(CreateApiKeysResponse(apiKeys));
+    }
+
+    internal async Task<IResult> ChangeUserPasswordAsync(
+        [FromServices] IUserService userService,
+        AuthenticatedUser user,
+        Guid id,
+        PasswordChange change,
+        CancellationToken cancellationToken)
+    {
+        var changed = await userService.ChangePasswordAsync(
+            id,
+            change,
+            user.Id,
+            user.IsInRole(Role.Admin),
+            cancellationToken)
+            .ConfigureAwait(false);
+
+        return changed ? Results.NoContent() : Results.NotFound();
+    }
+
+    [MagpieCommand("unlock", "POST", "{id:guid}/unlock", "Clear the lockout on a user")]
+    internal async Task<IResult> UnlockUserAsync(
+        [FromServices] IUserService userService,
+        AuthenticatedUser user,
+        Guid id,
+        CancellationToken cancellationToken)
+    {
+        return await userService.UnlockAsync(id, user.Id, cancellationToken).ConfigureAwait(false)
+            ? Results.NoContent()
+            : Results.NotFound();
+    }
+
+    private static PagedList<UserResponse> CreateUsersResponse(PagedList<User> users)
+    {
+        return new()
+        {
+            Items = [.. users.Items.Select(CreateUserResponse)],
+            PageNumber = users.PageNumber,
+            PageSize = users.PageSize,
+            TotalItems = users.TotalItems,
+        };
+    }
+
+    private static UserResponse CreateUserResponse(User user) =>
+        new()
+        {
+            Id = user.Id,
+            Username = user.Username,
+            Email = user.Email,
+            ExtensionId = user.ExtensionId,
+            ProviderType = user.ProviderType,
+            ExternalId = user.ExternalId,
+            Settings = user.Settings,
+            Enabled = user.Enabled,
+            Role = user.Role,
+            FailedLoginAttempts = user.FailedLoginAttempts,
+            LockedUntil = user.LockedUntil,
+            LastLoginAt = user.LastLoginAt,
+            CreatedAt = user.CreatedAt,
+            CreatedByUserId = user.CreatedByUserId,
+            ModifiedAt = user.ModifiedAt,
+            ModifiedByUserId = user.ModifiedByUserId,
+        };
+
+    private static IReadOnlyList<ApiKeyResponse> CreateApiKeysResponse(IReadOnlyList<ApiKey> apiKeys)
+    {
+        return [.. apiKeys.Select(CreateApiKeyResponse)];
+    }
+
+    private static ApiKeyResponse CreateApiKeyResponse(ApiKey apiKey) =>
+        new()
+        {
+            Id = apiKey.Id,
+            UserId = apiKey.UserId,
+            Name = apiKey.Name,
+            KeyPrefix = apiKey.KeyPrefix,
+            Enabled = apiKey.Enabled,
+            ExpiresAt = apiKey.ExpiresAt,
+            LastUsedAt = apiKey.LastUsedAt,
+            CreatedAt = apiKey.CreatedAt,
+            CreatedByUserId = apiKey.CreatedByUserId,
+            ModifiedAt = apiKey.ModifiedAt,
+            ModifiedByUserId = apiKey.ModifiedByUserId,
+        };
 }

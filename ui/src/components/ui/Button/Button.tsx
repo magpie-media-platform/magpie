@@ -9,7 +9,7 @@ import {
 
 import './Button.css';
 
-export type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'destructive' | 'default' | 'outline';
+export type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'destructive' | 'warning' | 'default' | 'outline';
 export type ButtonSize = 'sm' | 'md' | 'lg';
 
 interface ButtonBaseProps {
@@ -45,7 +45,10 @@ export const Button = forwardRef<HTMLElement, ButtonProps | ButtonAsChildProps>(
             return null;
         }
 
+        const { asChild: _asChild, ...passthrough } = rest as { asChild?: boolean } & Record<string, unknown>;
+
         return cloneElement(children as ReactElement<Record<string, unknown>>, {
+            ...passthrough,
             className: [classes, (children.props as Record<string, unknown>).className].filter(Boolean).join(' '),
             'data-component': 'button',
             'data-variant': variant,

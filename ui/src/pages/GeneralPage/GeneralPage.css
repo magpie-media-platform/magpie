@@ -17,22 +17,9 @@
         margin-bottom: var(--space-lg);
     }
 
-    .general-page__header-left {
-        display: flex;
-        align-items: center;
-        gap: var(--space-sm);
-    }
-
     .general-page__icon {
         font-size: var(--text-2xl);
         color: var(--accent-primary);
-    }
-
-    .general-page__title {
-        margin: 0;
-        font-size: var(--text-2xl);
-        font-weight: var(--weight-semibold);
-        color: var(--text-primary);
     }
 
     .general-page__spinner {
@@ -40,10 +27,13 @@
     }
 
     .general-page__settings {
-        max-width: 600px;
         background-color: var(--bg-secondary);
         border: 1px solid var(--border-default);
         border-radius: var(--radius-lg);
+    }
+
+    .general-page__settings + .general-page__settings {
+        margin-top: var(--space-lg);
     }
 
     .general-page__settings-header {
@@ -97,6 +87,19 @@
 
     .general-page__settings-input {
         width: 100%;
+        max-width: 600px;
+    }
+
+    .general-page__settings-row-meta {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: var(--space-sm);
+    }
+
+    .general-page__settings-preview {
+        font-size: var(--text-xs);
+        color: var(--text-muted);
     }
 
     .general-page__settings-actions {
@@ -115,8 +118,9 @@
 
     .general-page__info {
         padding: var(--space-md);
-        background-color: var(--bg-primary);
-        border: 1px solid var(--border-default);
+        background-color: color-mix(in srgb, var(--accent-primary) 10%, transparent);
+        border: 1px solid color-mix(in srgb, var(--accent-primary) 40%, transparent);
+        border-left: 3px solid var(--accent-primary);
         border-radius: var(--radius-md);
     }
 
@@ -129,10 +133,6 @@
     @media (max-width: 480px) {
         .general-page {
             padding: var(--space-md);
-        }
-
-        .general-page__title {
-            font-size: var(--text-xl);
         }
 
         .general-page__settings-header {

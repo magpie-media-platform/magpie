@@ -25,27 +25,15 @@
         margin-bottom: var(--space-md);
     }
 
-    .indexers-page__header-left {
-        display: flex;
-        align-items: center;
-        gap: var(--space-sm);
-    }
-
     .indexers-page__icon {
         font-size: var(--text-2xl);
         color: var(--accent-primary);
     }
 
-    .indexers-page__title {
-        margin: 0;
-        font-size: var(--text-2xl);
-        font-weight: var(--weight-semibold);
-        color: var(--text-primary);
-    }
-
     .indexers-page__header-actions {
         display: flex;
         align-items: center;
+        justify-content: flex-end;
         gap: var(--space-sm);
     }
 
@@ -61,55 +49,38 @@
         gap: var(--space-md);
     }
 
-    .indexers-page__feeds-description {
+    .indexers-page__area-description {
         margin: 0 0 var(--space-sm) 0;
         font-size: var(--text-sm);
         color: var(--text-secondary);
     }
 
-    .indexers-page__list {
+    .indexers-table {
         display: flex;
         flex-direction: column;
-        gap: var(--space-sm);
-    }
-
-    .indexers-page__item {
-        background-color: var(--bg-secondary);
-        border: 1px solid var(--border-default);
-        border-radius: var(--radius-md);
-        padding: var(--space-md);
-        transition: border-color var(--duration-fast) var(--easing-default);
-
-        &:hover {
-            border-color: var(--border-accent);
-        }
-    }
-
-    .indexers-page__item--disabled {
-        opacity: var(--opacity-muted);
-    }
-
-    .indexers-page__item-main {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
         gap: var(--space-md);
     }
 
-    .indexers-page__item-info {
-        flex: 1;
-        min-width: 0;
+    .indexers-table__pager {
+        align-self: center;
     }
 
-    .indexers-page__item-header {
-        display: flex;
+    .indexers-table .data-table__table {
+        table-layout: fixed;
+    }
+
+    .indexers-table .data-table__cell[data-column='name'],
+    .indexers-table .data-table__cell[data-column='description'] {
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .indexers-table__name {
+        display: inline-flex;
         align-items: center;
         gap: var(--space-sm);
-        margin-bottom: var(--space-xs);
-    }
-
-    .indexers-page__item-name {
-        font-size: var(--text-sm);
+        min-width: 0;
+        max-width: 100%;
         font-weight: var(--weight-medium);
         color: var(--text-primary);
         overflow: hidden;
@@ -117,36 +88,36 @@
         white-space: nowrap;
     }
 
-    .indexers-page__item-meta {
-        display: flex;
-        flex-wrap: wrap;
-        align-items: center;
-        gap: var(--space-sm);
-        font-size: var(--text-xs);
-        color: var(--text-muted);
+    .indexers-table__name-text {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
     }
 
-    .indexers-page__item-definition {
+    .indexers-table__definition {
         font-family: var(--font-mono);
         color: var(--text-secondary);
     }
 
-    .indexers-page__item-checked {
-        display: inline-flex;
-        align-items: center;
-        gap: var(--space-xs);
-
-        & svg {
-            font-size: var(--text-sm);
-        }
+    .indexers-table__checked {
+        color: var(--text-muted);
     }
 
-    .indexers-page__item-description {
+    .indexers-table__description {
         color: var(--text-muted);
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
-        max-width: 250px;
+        display: block;
+    }
+
+    .indexers-table__empty-cell {
+        color: var(--text-muted);
+    }
+
+    .indexers-table .indexers-page__item-actions {
+        justify-content: flex-end;
     }
 
     .indexers-page__item-toggle {
@@ -163,6 +134,12 @@
         color: var(--text-muted);
     }
 
+    @media (max-width: 639px) {
+        .indexers-page__header-actions {
+            display: none;
+        }
+    }
+
     @media (max-width: 480px) {
         .indexers-page__pull-to-refresh .pull-to-refresh__content {
             padding: var(--space-md);
@@ -171,21 +148,6 @@
         .indexers-page__header {
             flex-wrap: wrap;
             margin-bottom: var(--space-md);
-        }
-
-        .indexers-page__title {
-            font-size: var(--text-xl);
-        }
-
-        .indexers-page__header-actions [data-action='add-indexer'],
-        .indexers-page__header-actions [data-action='add-feed'] {
-            display: none;
-        }
-
-        .indexers-page__item-main {
-            flex-direction: column;
-            align-items: flex-start;
-            gap: var(--space-sm);
         }
 
         .indexers-page__item-actions {
@@ -197,12 +159,6 @@
             margin-right: auto;
             padding-right: 0;
             border-right: none;
-        }
-    }
-
-    @media (min-width: 900px) {
-        .indexers-page__list {
-            gap: var(--space-md);
         }
     }
 

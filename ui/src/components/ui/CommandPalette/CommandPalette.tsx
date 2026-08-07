@@ -2,24 +2,23 @@ import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type Reac
 import { useNavigate } from 'react-router-dom';
 import * as DialogPrimitive from '@radix-ui/react-dialog';
 import {
-    MagnifyingGlass,
-    House,
-    Books,
-    DownloadSimple,
-    CalendarBlank,
-    Funnel,
-    Star,
-    ClockCountdown,
-    Gear,
-    Users,
-    Rss,
-    Television,
-    HardDrive,
-    Flask,
-    Tag,
-    PuzzlePiece,
-    Database,
-    Info,
+    MagnifyingGlassIcon,
+    HouseIcon,
+    BooksIcon,
+    DownloadSimpleIcon,
+    CalendarBlankIcon,
+    FunnelIcon,
+    StarIcon,
+    ClockCountdownIcon,
+    GearIcon,
+    UsersIcon,
+    RssIcon,
+    TelevisionIcon,
+    HardDriveIcon,
+    FlaskIcon,
+    PuzzlePieceIcon,
+    DatabaseIcon,
+    InfoIcon,
 } from '@phosphor-icons/react';
 
 import { Role, useAuth } from '@/auth';
@@ -35,42 +34,42 @@ interface Command {
 }
 
 const ALL_COMMANDS: Command[] = [
-    { id: 'dashboard', label: 'Dashboard', icon: <House weight="duotone" />, to: '/', group: 'Navigation' },
-    { id: 'library', label: 'Library', icon: <Books weight="duotone" />, to: '/library', group: 'Navigation' },
+    { id: 'dashboard', label: 'Dashboard', icon: <HouseIcon weight="duotone" />, to: '/', group: 'Navigation' },
+    { id: 'library', label: 'Library', icon: <BooksIcon weight="duotone" />, to: '/library', group: 'Navigation' },
     {
         id: 'downloads',
         label: 'Downloads',
-        icon: <DownloadSimple weight="duotone" />,
+        icon: <DownloadSimpleIcon weight="duotone" />,
         to: '/downloads',
         group: 'Navigation',
     },
     {
         id: 'calendar',
         label: 'Calendar',
-        icon: <CalendarBlank weight="duotone" />,
+        icon: <CalendarBlankIcon weight="duotone" />,
         to: '/calendar',
         group: 'Navigation',
     },
     {
         id: 'filters',
-        label: 'Saved Filters',
-        icon: <Funnel weight="duotone" />,
+        label: 'Filters',
+        icon: <FunnelIcon weight="duotone" />,
         to: '/filters',
         group: 'Navigation',
     },
-    { id: 'wishlists', label: 'Wishlists', icon: <Star weight="duotone" />, to: '/wishlists', group: 'Navigation' },
+    { id: 'wishlists', label: 'Wishlists', icon: <StarIcon weight="duotone" />, to: '/wishlists', group: 'Navigation' },
     {
         id: 'my-jobs',
         label: 'My Jobs',
-        icon: <ClockCountdown weight="duotone" />,
+        icon: <ClockCountdownIcon weight="duotone" />,
         to: '/my-jobs',
         group: 'Navigation',
     },
-    { id: 'about', label: 'About', icon: <Info weight="duotone" />, to: '/about', group: 'Navigation' },
+    { id: 'about', label: 'About', icon: <InfoIcon weight="duotone" />, to: '/about', group: 'Navigation' },
     {
         id: 'admin-general',
-        label: 'General Settings',
-        icon: <Gear weight="duotone" />,
+        label: 'Advanced Settings',
+        icon: <GearIcon weight="duotone" />,
         to: '/admin/general',
         group: 'Admin',
         minRole: Role.Admin,
@@ -78,7 +77,7 @@ const ALL_COMMANDS: Command[] = [
     {
         id: 'admin-users',
         label: 'Users',
-        icon: <Users weight="duotone" />,
+        icon: <UsersIcon weight="duotone" />,
         to: '/admin/users',
         group: 'Admin',
         minRole: Role.Admin,
@@ -86,7 +85,7 @@ const ALL_COMMANDS: Command[] = [
     {
         id: 'admin-indexers',
         label: 'Indexers',
-        icon: <Rss weight="duotone" />,
+        icon: <RssIcon weight="duotone" />,
         to: '/admin/indexers',
         group: 'Admin',
         minRole: Role.Admin,
@@ -94,7 +93,7 @@ const ALL_COMMANDS: Command[] = [
     {
         id: 'admin-download-clients',
         label: 'Download Clients',
-        icon: <DownloadSimple weight="duotone" />,
+        icon: <DownloadSimpleIcon weight="duotone" />,
         to: '/admin/download-clients',
         group: 'Admin',
         minRole: Role.Admin,
@@ -102,7 +101,7 @@ const ALL_COMMANDS: Command[] = [
     {
         id: 'admin-media-servers',
         label: 'Media Servers',
-        icon: <Television weight="duotone" />,
+        icon: <TelevisionIcon weight="duotone" />,
         to: '/admin/media-servers',
         group: 'Admin',
         minRole: Role.Admin,
@@ -110,7 +109,7 @@ const ALL_COMMANDS: Command[] = [
     {
         id: 'admin-root-folders',
         label: 'Root Folders',
-        icon: <HardDrive weight="duotone" />,
+        icon: <HardDriveIcon weight="duotone" />,
         to: '/admin/root-folders',
         group: 'Admin',
         minRole: Role.Admin,
@@ -118,23 +117,15 @@ const ALL_COMMANDS: Command[] = [
     {
         id: 'admin-quality-tiers',
         label: 'Quality Tiers',
-        icon: <Flask weight="duotone" />,
+        icon: <FlaskIcon weight="duotone" />,
         to: '/admin/quality-tiers',
         group: 'Admin',
         minRole: Role.Admin,
     },
     {
-        id: 'admin-tags',
-        label: 'Tags',
-        icon: <Tag weight="duotone" />,
-        to: '/admin/tags',
-        group: 'Admin',
-        minRole: Role.Admin,
-    },
-    {
         id: 'admin-jobs',
-        label: 'Jobs',
-        icon: <ClockCountdown weight="duotone" />,
+        label: 'System Jobs',
+        icon: <ClockCountdownIcon weight="duotone" />,
         to: '/admin/jobs',
         group: 'Admin',
         minRole: Role.Admin,
@@ -142,23 +133,23 @@ const ALL_COMMANDS: Command[] = [
     {
         id: 'admin-extensions',
         label: 'Extensions',
-        icon: <PuzzlePiece weight="duotone" />,
+        icon: <PuzzlePieceIcon weight="duotone" />,
         to: '/admin/extensions',
         group: 'Admin',
         minRole: Role.Admin,
     },
     {
         id: 'admin-backups',
-        label: 'Backups',
-        icon: <Database weight="duotone" />,
-        to: '/admin/backups',
+        label: 'Database',
+        icon: <DatabaseIcon weight="duotone" />,
+        to: '/admin/database',
         group: 'Admin',
         minRole: Role.Admin,
     },
     {
         id: 'admin-system',
         label: 'System Status',
-        icon: <Gear weight="duotone" />,
+        icon: <GearIcon weight="duotone" />,
         to: '/admin/system',
         group: 'Admin',
         minRole: Role.Admin,
@@ -194,6 +185,7 @@ export function CommandPalette() {
     const { user } = useAuth();
     const inputRef = useRef<HTMLInputElement>(null);
     const listRef = useRef<HTMLDivElement>(null);
+    const invocationTargetRef = useRef<HTMLElement | null>(null);
 
     const userRole = user?.role ?? Role.Viewer;
     const filtered = filterCommands(ALL_COMMANDS, query, userRole);
@@ -202,7 +194,7 @@ export function CommandPalette() {
     const handleSelect = useCallback(
         (cmd: Command) => {
             setOpen(false);
-            navigate(cmd.to);
+            void navigate(cmd.to);
         },
         [navigate],
     );
@@ -228,9 +220,14 @@ export function CommandPalette() {
 
     useEffect(() => {
         const handleGlobalKeyDown = (e: globalThis.KeyboardEvent) => {
-            if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+            if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
                 e.preventDefault();
-                setOpen((prev) => !prev);
+                setOpen((prev) => {
+                    if (!prev && document.activeElement instanceof HTMLElement) {
+                        invocationTargetRef.current = document.activeElement;
+                    }
+                    return !prev;
+                });
             }
         };
         window.addEventListener('keydown', handleGlobalKeyDown);
@@ -271,9 +268,19 @@ export function CommandPalette() {
                         e.preventDefault();
                         inputRef.current?.focus();
                     }}
+                    onCloseAutoFocus={(e) => {
+                        e.preventDefault();
+                        invocationTargetRef.current?.focus();
+                        invocationTargetRef.current = null;
+                    }}
                 >
+                    <DialogPrimitive.Title className="sr-only">Command palette</DialogPrimitive.Title>
+                    <DialogPrimitive.Description className="sr-only">
+                        Search pages and settings, then select a result to navigate.
+                    </DialogPrimitive.Description>
+
                     <div className="command-palette__search">
-                        <MagnifyingGlass className="command-palette__search-icon" size={18} aria-hidden="true" />
+                        <MagnifyingGlassIcon className="command-palette__search-icon" size={18} aria-hidden="true" />
                         <input
                             ref={inputRef}
                             className="command-palette__input"

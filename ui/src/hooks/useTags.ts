@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 
+import { useInvalidateQueriesOnEvents } from '@/hooks/useInvalidateQueriesOnEvents';
 import { apiGet, buildUrl } from '@/lib/api';
 import { POLLING_INTERVALS } from '@/lib/queryClient';
 import { queryErrorOrNull } from '@/lib/utils';
@@ -8,7 +9,7 @@ export interface ApiTag {
     name: string;
 }
 
-export interface TagsQueryParams {
+interface TagsQueryParams {
     prefix?: string;
 
     entityId?: string;
@@ -21,16 +22,31 @@ export const tagQueryKeys = {
     byEntity: (entityId: string) => ['tags', 'entity', entityId] as const,
 };
 
+const TAG_CHANGE_EVENTS = [
+    'content.hierarchyItem.created',
+    'content.hierarchyItem.deleted',
+    'content.hierarchyItem.updated',
+    'subject.created',
+    'subject.deleted',
+    'subject.updated',
+    'wishlist.created',
+    'wishlist.deleted',
+    'wishlist.updated',
+] as const;
+
 async function fetchTags(params?: TagsQueryParams): Promise<ApiTag[]> {
     const url = buildUrl('/tags', params as Record<string, string | undefined>);
     return apiGet<ApiTag[]>(url);
 }
 
 export function useTags(params?: TagsQueryParams) {
+    useInvalidateQueriesOnEvents(TAG_CHANGE_EVENTS, [tagQueryKeys.list(params)], {
+        exact: true,
+        owner: 'tags:list',
+    });
     const query = useQuery({
         queryKey: tagQueryKeys.list(params),
         queryFn: () => fetchTags(params),
-        refetchInterval: POLLING_INTERVALS.slow,
         staleTime: POLLING_INTERVALS.slow / 2,
     });
 
@@ -45,6 +61,11 @@ export function useTags(params?: TagsQueryParams) {
 }
 
 export function useTagsByPrefix(prefix: string, enabled = true) {
+    useInvalidateQueriesOnEvents(
+        enabled && prefix.length > 0 ? TAG_CHANGE_EVENTS : [],
+        [tagQueryKeys.byPrefix(prefix)],
+        { exact: true, owner: 'tags:prefix' },
+    );
     const query = useQuery({
         queryKey: tagQueryKeys.byPrefix(prefix),
         queryFn: () => fetchTags({ prefix }),
@@ -62,6 +83,11 @@ export function useTagsByPrefix(prefix: string, enabled = true) {
 }
 
 export function useTagsByEntity(entityId: string, enabled = true) {
+    useInvalidateQueriesOnEvents(
+        enabled && entityId.length > 0 ? TAG_CHANGE_EVENTS : [],
+        [tagQueryKeys.byEntity(entityId)],
+        { entityIds: entityId ? [entityId] : [], exact: true, owner: 'tags:entity' },
+    );
     const query = useQuery({
         queryKey: tagQueryKeys.byEntity(entityId),
         queryFn: () => fetchTags({ entityId }),

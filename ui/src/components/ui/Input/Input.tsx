@@ -14,6 +14,8 @@ export interface InputProps extends Omit<InputHTMLAttributes<HTMLInputElement>, 
     leadingIcon?: ReactNode;
 
     trailingIcon?: ReactNode;
+
+    trailingAction?: ReactNode;
 }
 
 export const Input = forwardRef<HTMLInputElement, InputProps>(
@@ -24,6 +26,7 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(
             errorMessage,
             leadingIcon,
             trailingIcon,
+            trailingAction,
             disabled,
             className,
             id,
@@ -35,13 +38,15 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(
         const errorId = errorMessage && id ? `${id}-error` : undefined;
         const describedBy = [ariaDescribedBy, errorId].filter(Boolean).join(' ') || undefined;
 
+        const hasTrailing = !!trailingIcon || !!trailingAction;
+
         const wrapperClasses = [
             'input-wrapper',
             `input-wrapper--${size}`,
             error && 'input-wrapper--error',
             disabled && 'input-wrapper--disabled',
             leadingIcon && 'input-wrapper--has-leading',
-            trailingIcon && 'input-wrapper--has-trailing',
+            hasTrailing && 'input-wrapper--has-trailing',
             className,
         ]
             .filter(Boolean)
@@ -55,7 +60,7 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(
                     data-error={error || undefined}
                     data-disabled={disabled || undefined}
                     data-has-leading={!!leadingIcon || undefined}
-                    data-has-trailing={!!trailingIcon || undefined}
+                    data-has-trailing={hasTrailing || undefined}
                 >
                     {leadingIcon && (
                         <span className="input__icon input__icon--leading" aria-hidden="true">
@@ -76,6 +81,7 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(
                             {trailingIcon}
                         </span>
                     )}
+                    {trailingAction && <span className="input__action input__action--trailing">{trailingAction}</span>}
                 </div>
                 {errorMessage && (
                     <span id={errorId} className="input__error" role="alert">

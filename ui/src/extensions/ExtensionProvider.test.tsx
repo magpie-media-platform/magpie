@@ -113,6 +113,10 @@ describe('ExtensionProvider', () => {
         expect(screen.getByTestId('user-id')).toHaveTextContent('user-123');
         expect(screen.getByTestId('username')).toHaveTextContent('testuser');
         expect(screen.getByTestId('role')).toHaveTextContent('Admin');
+
+        await waitFor(() => {
+            expect(screen.getByTestId('state')).toHaveTextContent('ready');
+        });
     });
 
     it('provides theme in context', () => {
@@ -141,7 +145,7 @@ describe('ExtensionProvider', () => {
         );
 
         render(
-            <ExtensionProvider>
+            <ExtensionProvider userId="user-123">
                 <TestConsumer />
             </ExtensionProvider>,
         );
@@ -156,10 +160,11 @@ describe('ExtensionProvider', () => {
     });
 
     it('handles fetch errors', async () => {
-        mockFetch.mockResolvedValueOnce(mockErrorResponse(500, 'Internal Server Error'));
+        mockFetch.mockReset();
+        mockFetch.mockResolvedValue(mockErrorResponse(500, 'Internal Server Error'));
 
         render(
-            <ExtensionProvider>
+            <ExtensionProvider userId="user-123">
                 <TestConsumer />
             </ExtensionProvider>,
         );
@@ -169,6 +174,34 @@ describe('ExtensionProvider', () => {
         });
 
         expect(screen.getByTestId('error').textContent).not.toBe('null');
+    });
+
+    it('defers manifest loading until an auth context is available', async () => {
+        const { rerender } = render(
+            <ExtensionProvider>
+                <TestConsumer />
+            </ExtensionProvider>,
+        );
+
+        await waitFor(() => {
+            expect(screen.getByTestId('state')).toHaveTextContent('idle');
+        });
+        expect(mockFetch.mock.calls.filter(([url]) => String(url).includes('/ui/manifest'))).toHaveLength(0);
+
+        mockFetch.mockResolvedValueOnce(mockJsonResponse({ assets: [], extensions: [] }));
+
+        rerender(
+            <ExtensionProvider userId="user-123" username="alice" role="Admin">
+                <TestConsumer />
+            </ExtensionProvider>,
+        );
+
+        await waitFor(() => {
+            expect(screen.getByTestId('state')).toHaveTextContent('ready');
+        });
+
+        const manifestRequests = mockFetch.mock.calls.filter(([url]) => String(url).includes('/ui/manifest'));
+        expect(manifestRequests).toHaveLength(1);
     });
 
     it('provides getExtensionsForSlot function', async () => {
@@ -188,7 +221,8 @@ describe('ExtensionProvider', () => {
             ],
         };
 
-        mockFetch.mockResolvedValueOnce(mockJsonResponse(manifest));
+        mockFetch.mockReset();
+        mockFetch.mockResolvedValue(mockJsonResponse(manifest));
 
         function SlotConsumer() {
             const ctx = useContext(ExtensionContext);
@@ -206,7 +240,7 @@ describe('ExtensionProvider', () => {
         }
 
         render(
-            <ExtensionProvider>
+            <ExtensionProvider userId="user-123">
                 <SlotConsumer />
             </ExtensionProvider>,
         );
@@ -221,7 +255,8 @@ describe('ExtensionProvider', () => {
     it('retry resets loader and re-fetches after error', async () => {
         const user = userEvent.setup();
 
-        mockFetch.mockResolvedValueOnce(mockErrorResponse(503, 'Service Unavailable'));
+        mockFetch.mockReset();
+        mockFetch.mockResolvedValue(mockErrorResponse(503, 'Service Unavailable'));
 
         function RetryConsumer() {
             const ctx = useContext(ExtensionContext);
@@ -236,7 +271,7 @@ describe('ExtensionProvider', () => {
         }
 
         render(
-            <ExtensionProvider>
+            <ExtensionProvider userId="user-123">
                 <RetryConsumer />
             </ExtensionProvider>,
         );
@@ -245,15 +280,13 @@ describe('ExtensionProvider', () => {
             expect(screen.getByTestId('state')).toHaveTextContent('error');
         });
 
-        mockFetch.mockResolvedValueOnce(mockJsonResponse({ assets: [], extensions: [] }));
+        mockFetch.mockResolvedValue(mockJsonResponse({ assets: [], extensions: [] }));
 
         await user.click(screen.getByTestId('retry'));
 
         await waitFor(() => {
             expect(screen.getByTestId('state')).toHaveTextContent('ready');
         });
-
-        expect(mockFetch).toHaveBeenCalledTimes(2);
     });
 
     it('renders children', () => {
@@ -290,6 +323,10 @@ describe('ExtensionProvider', () => {
 
         expect(screen.getByTestId('user-id')).toHaveTextContent('user-2');
         expect(screen.getByTestId('username')).toHaveTextContent('bob');
+
+        await waitFor(() => {
+            expect(screen.getByTestId('state')).toHaveTextContent('ready');
+        });
     });
 });
 

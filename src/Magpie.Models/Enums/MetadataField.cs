@@ -1,107 +1,128 @@
 using System;
 
-using Magpie.Models.Data;
-
 namespace Magpie.Models.Enums;
 
 /// <summary>
-/// Flags indicating which metadata fields are supported or present.
+/// Flags for the metadata fields that are supported or present.
 /// </summary>
 [Flags]
 public enum MetadataField : long
 {
     /// <summary>
-    /// No metadata fields are supported.
+    /// No metadata fields.
     /// </summary>
     None = 0x0,
     /// <summary>
-    /// Metadata field <see cref="MetadataContribution.Title" />
+    /// The title.
     /// </summary>
     Title = 0x1,
     /// <summary>
-    /// Metadata field <see cref="MetadataContribution.OriginalTitle" />
+    /// The title in the original language.
     /// </summary>
     OriginalTitle = 0x2,
     /// <summary>
-    /// Metadata field <see cref="MetadataContribution.SortTitle" />
+    /// The title for sort order.
     /// </summary>
     SortTitle = 0x4,
     /// <summary>
-    /// Metadata field <see cref="MetadataContribution.Language" />
+    /// The primary language.
     /// </summary>
     Language = 0x8,
     /// <summary>
-    /// Metadata field <see cref="MetadataContribution.Overview" />
+    /// The descriptive overview text.
     /// </summary>
     Overview = 0x10,
     /// <summary>
-    /// Metadata field <see cref="MetadataContribution.PublishDate" />
+    /// The publish date.
     /// </summary>
     PublishDate = 0x20,
     /// <summary>
-    /// Metadata field <see cref="MetadataContribution.Duration" />
+    /// The duration.
     /// </summary>
     Duration = 0x40,
     /// <summary>
-    /// Metadata field <see cref="MetadataContribution.ProductionStatus" />
+    /// The production status.
     /// </summary>
     ProductionStatus = 0x80,
     /// <summary>
-    /// Metadata field <see cref="MetadataContribution.Established" />
+    /// The established date.
     /// </summary>
     Established = 0x100,
     /// <summary>
-    /// Metadata field <see cref="MetadataContribution.Dissolved" />
+    /// The dissolved date.
     /// </summary>
     Dissolved = 0x200,
     /// <summary>
-    /// Metadata field <see cref="MetadataContribution.BirthDate" />
+    /// The birth date.
     /// </summary>
     BirthDate = 0x400,
     /// <summary>
-    /// Metadata field <see cref="MetadataContribution.DeathDate" />
+    /// The death date.
     /// </summary>
     DeathDate = 0x800,
     /// <summary>
-    /// Metadata field <see cref="MetadataContribution.ExternalIds" />
+    /// The identifiers at external providers.
     /// </summary>
     ExternalIds = 0x1000,
     /// <summary>
-    /// Metadata field <see cref="MetadataContribution.References" />
+    /// The external references.
     /// </summary>
     References = 0x2000,
     /// <summary>
-    /// Metadata field <see cref="MetadataContribution.Relationships" />
+    /// The relationships to other subjects.
     /// </summary>
     Relationships = 0x4000,
     /// <summary>
-    /// Metadata field <see cref="MetadataContribution.Images" />
+    /// The images.
     /// </summary>
     Images = 0x8000,
     /// <summary>
-    /// Metadata field <see cref="MetadataContribution.Previews" />
+    /// The previews.
     /// </summary>
     Previews = 0x10000,
     /// <summary>
-    /// Metadata field <see cref="MetadataContribution.AlternateTexts" />
+    /// The alternate texts.
     /// </summary>
     AlternateTexts = 0x20000,
     /// <summary>
-    /// Metadata field <see cref="MetadataContribution.ContentRatings" />
+    /// The content ratings.
     /// </summary>
     ContentRatings = 0x40000,
     /// <summary>
-    /// Metadata field <see cref="MetadataContribution.Awards" />
+    /// The awards.
     /// </summary>
     Awards = 0x80000,
     /// <summary>
-    /// Metadata field <see cref="MetadataContribution.Genres" />
+    /// The genres.
     /// </summary>
     Genres = 0x100000,
     /// <summary>
-    /// All metadata fields are supported.
+    /// The sequence number.
     /// </summary>
-    All = Title | OriginalTitle | SortTitle | Language | Overview | PublishDate | Duration |
-          ProductionStatus | Established | Dissolved | BirthDate | DeathDate | ExternalIds |
-          References | Relationships | Images | Previews | AlternateTexts | ContentRatings | Awards | Genres
+    SequenceNumber = 0x200000,
+    /// <summary>
+    /// All metadata fields.
+    /// </summary>
+    All = Title |
+        OriginalTitle |
+        SortTitle |
+        Language |
+        Overview |
+        PublishDate |
+        Duration |
+        ProductionStatus |
+        Established |
+        Dissolved |
+        BirthDate |
+        DeathDate |
+        ExternalIds |
+        References |
+        Relationships |
+        Images |
+        Previews |
+        AlternateTexts |
+        ContentRatings |
+        Awards |
+        Genres |
+        SequenceNumber
 }

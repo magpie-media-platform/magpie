@@ -1,0 +1,112 @@
+@layer components {
+    .execution-row__detail-tabs-list {
+        padding: 0 var(--space-md);
+        background-color: var(--bg-secondary);
+        border-bottom: 1px solid var(--border-default);
+    }
+
+    .execution-row__detail-tab {
+        text-transform: uppercase;
+        letter-spacing: var(--tracking-wide);
+        font-size: var(--text-xs);
+    }
+
+    .execution-row__logs-list {
+        max-height: 300px;
+        overflow-y: auto;
+        padding: var(--space-xs);
+    }
+
+    .execution-row__log-entry {
+        display: flex;
+        align-items: flex-start;
+        gap: var(--space-sm);
+        padding: var(--space-xs) var(--space-sm);
+        font-family: var(--font-mono);
+        font-size: var(--text-xs);
+        line-height: var(--leading-relaxed);
+        border-radius: var(--radius-sm);
+
+        &:hover {
+            background-color: var(--bg-tertiary);
+        }
+    }
+
+    .execution-row__log-time {
+        flex-shrink: 0;
+        min-width: 70px;
+        color: var(--text-muted);
+    }
+
+    .execution-row__log-level {
+        flex-shrink: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 18px;
+
+        & svg {
+            font-size: var(--text-sm);
+        }
+    }
+
+    .execution-row__log-entry--debug .execution-row__log-level {
+        color: var(--text-muted);
+    }
+
+    .execution-row__log-entry--info .execution-row__log-level {
+        color: var(--accent-secondary);
+    }
+
+    .execution-row__log-entry--warn .execution-row__log-level {
+        color: var(--status-degraded);
+    }
+
+    .execution-row__log-entry--error .execution-row__log-level {
+        color: var(--status-unhealthy);
+    }
+
+    .execution-row__log-message {
+        flex: 1;
+        color: var(--text-primary);
+        overflow-wrap: break-word;
+    }
+
+    .execution-row__log-entry--debug .execution-row__log-message {
+        color: var(--text-muted);
+    }
+
+    .execution-row__log-entry--warn .execution-row__log-message {
+        color: var(--status-degraded);
+    }
+
+    .execution-row__log-entry--error .execution-row__log-message {
+        color: var(--status-unhealthy);
+    }
+
+    @media (max-width: 480px) {
+        .execution-row__logs-list {
+            max-height: 200px;
+        }
+
+        .execution-row__log-entry {
+            flex-wrap: wrap;
+            gap: var(--space-xs);
+        }
+
+        .execution-row__log-time {
+            min-width: auto;
+            order: 1;
+        }
+
+        .execution-row__log-level {
+            order: 0;
+        }
+
+        .execution-row__log-message {
+            order: 2;
+            width: 100%;
+            padding-left: calc(18px + var(--space-sm));
+        }
+    }
+}

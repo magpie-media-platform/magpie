@@ -1,15 +1,19 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
+using Magpie.Abstractions;
 using Magpie.Abstractions.Repositories;
 using Magpie.Data;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Models.Paging;
+using Magpie.Sdk.Events;
+using Magpie.Sdk.Services;
 
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
@@ -18,8 +22,13 @@ namespace Magpie.Core.Repositories;
 
 internal sealed class AuditRecordRepository(
     MagpieDbContext context,
-    ILogger<AuditRecordRepository> logger) : IAuditRecordRepository
+    IEventBus eventBus,
+    ILogger<AuditRecordRepository> logger,
+    ITransactionManager transactionManager,
+    TimeProvider? timeProvider = null) : IAuditRecordRepository
 {
+    private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
+
     public async Task<IEnumerable<AuditRecord>> ListAllAsync(CancellationToken cancellationToken)
     {
         try
@@ -32,7 +41,7 @@ internal sealed class AuditRecordRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Error listing audit records");
+            logger.LogError(ex, "The audit record repository failed to list the audit records.");
             throw;
         }
     }
@@ -48,14 +57,14 @@ internal sealed class AuditRecordRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Error getting audit record {AuditRecordId}", id);
+            logger.LogError(ex, "The audit record repository failed to read audit record {AuditRecordId}.", id);
             throw;
         }
     }
 
     public async Task<PagedList<AuditRecord>> QueryAsync(
         AuditRecordQuery query,
-        PagingParameter? page,
+        PagingParameter page,
         SortParameter? sort,
         CancellationToken cancellationToken)
     {
@@ -66,70 +75,88 @@ internal sealed class AuditRecordRepository(
             {
                 auditRecords = auditRecords.Where(r => r.EntityId == query.EntityId);
             }
+
             if (query.ParentEntityId is not null)
             {
                 auditRecords = auditRecords.Where(r => r.ParentEntityId == query.ParentEntityId);
             }
+
             if (query.EntityType is not null)
             {
                 auditRecords = auditRecords.Where(r => r.EntityType == query.EntityType);
             }
+
             if (query.Category is not null)
             {
                 auditRecords = auditRecords.Where(r => r.Category == query.Category);
             }
+
             if (query.Operation is not null)
             {
                 auditRecords = auditRecords.Where(r => r.Operation == query.Operation);
             }
+
             if (query.Detail is not null)
             {
                 auditRecords = auditRecords.Where(r => r.Detail != null && r.Detail.Contains(query.Detail));
             }
+
             if (query.Timestamp?.Min is not null)
             {
                 auditRecords = auditRecords.Where(r => r.Timestamp >= query.Timestamp.Min);
             }
+
             if (query.Timestamp?.Max is not null)
             {
                 auditRecords = auditRecords.Where(r => r.Timestamp <= query.Timestamp.Max);
             }
+
+            if (query.TimestampBefore is { } timestampBefore)
+            {
+                auditRecords = auditRecords.Where(record => record.Timestamp < timestampBefore);
+            }
+
             if (query.UserId is not null)
             {
                 auditRecords = auditRecords.Where(r => r.UserId == query.UserId);
             }
 
+            if (query.CorrelationId is not null)
+            {
+                auditRecords = auditRecords.Where(r => r.CorrelationId == query.CorrelationId);
+            }
+
             var totalCount = await auditRecords.CountAsync(cancellationToken).ConfigureAwait(false);
 
-            if (sort is not null)
+            var sortProperty = typeof(AuditRecord).GetProperties()
+                .Select(property => property.Name)
+                .FirstOrDefault(name => string.Equals(name, sort?.PropertyName, StringComparison.OrdinalIgnoreCase));
+            if (sort is not null && sortProperty is not null)
             {
                 auditRecords = sort.Direction == SortDirection.Ascending
-                    ? auditRecords.OrderBy(r => EF.Property<AuditRecord>(r, sort.PropertyName))
-                    : auditRecords.OrderByDescending(r => EF.Property<AuditRecord>(r, sort.PropertyName));
+                    ? auditRecords.OrderBy(r => EF.Property<AuditRecord>(r, sortProperty)).ThenBy(r => r.Id)
+                    : auditRecords.OrderByDescending(r => EF.Property<AuditRecord>(r, sortProperty)).ThenBy(r => r.Id);
             }
             else
             {
-                auditRecords = auditRecords.OrderByDescending(r => r.Timestamp);
+                auditRecords = auditRecords.OrderByDescending(r => r.Timestamp).ThenBy(r => r.Id);
             }
 
-            if (page is not null)
-            {
-                auditRecords = auditRecords.Skip((page.PageNumber - 1) * page.PageSize).Take(page.PageSize);
-            }
+            auditRecords = auditRecords.Skip((page.PageNumber - 1) * page.PageSize).Take(page.PageSize);
 
             var items = await auditRecords.ToListAsync(cancellationToken).ConfigureAwait(false);
 
             return new()
             {
                 Items = items,
-                PageNumber = page?.PageNumber,
-                PageSize = page?.PageSize,
+                PageNumber = page.PageNumber,
+                PageSize = page.PageSize,
                 TotalItems = totalCount
             };
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Error querying audit records");
+            logger.LogError(ex, "The audit record repository failed to query the audit records.");
             throw;
         }
     }
@@ -140,15 +167,19 @@ internal sealed class AuditRecordRepository(
         {
             if (auditRecord.Timestamp == default)
             {
-                auditRecord.Timestamp = DateTime.UtcNow;
+                auditRecord.Timestamp = _time.GetUtcNow().UtcDateTime;
             }
 
             context.AuditRecords.Add(auditRecord);
             await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+            await transactionManager.OnCommittedAsync(
+                token => eventBus.PublishAsync(AuditRecordCreated(auditRecord.Id), token),
+                cancellationToken).ConfigureAwait(false);
 
-            logger.LogInformation(
-                "Audit:{AuditCategory}:{AuditOperation}:{EntityType}({ParentEntityId}/{EntityId}) " +
-                "by UserId {UserId}: {AuditDetail}",
+            logger.LogDebug(
+                "The audit record repository recorded {AuditCategory} {AuditOperation} on {EntityType} " +
+                "with parent {ParentEntityId} and entity {EntityId} by user {UserId}. " +
+                "The detail is {AuditDetail}.",
                 auditRecord.Category,
                 auditRecord.Operation,
                 auditRecord.EntityType ?? "",
@@ -163,10 +194,41 @@ internal sealed class AuditRecordRepository(
         {
             logger.LogError(
                 ex,
-                "Error creating audit record {AuditCategory}/{AuditOperation}",
+                "The audit record repository failed to create audit record {AuditCategory}/{AuditOperation}.",
                 auditRecord.Category,
                 auditRecord.Operation);
             throw;
         }
+    }
+
+    public async Task<int> DeleteWhereAsync(
+        AuditRecordQuery query,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var records = context.AuditRecords.AsQueryable();
+            if (query.TimestampBefore is { } timestampBefore)
+            {
+                records = records.Where(record => record.Timestamp < timestampBefore);
+            }
+
+            return await records.ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "The audit record repository failed to delete audit records.");
+            throw;
+        }
+    }
+
+    private static Models.MagpieEvent AuditRecordCreated(Guid auditRecordId)
+    {
+        var context = new Dictionary<string, string>
+        {
+            [MagpieEvents.Keys.AuditRecordId] = auditRecordId.ToString("D", CultureInfo.InvariantCulture),
+        };
+
+        return new(Guid.Empty, MagpieEvents.Names.AuditRecordCreated, context, default, default, null);
     }
 }

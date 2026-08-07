@@ -1,0 +1,7 @@
+@layer components {
+    .release-detail-sections__download-loading {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-sm);
+    }
+}

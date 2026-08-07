@@ -9,7 +9,6 @@
         box-shadow: var(--shadow-lg);
         padding: var(--space-xs);
         overflow: hidden;
-
         animation-duration: var(--duration-fast);
         animation-timing-function: var(--easing-default);
 
@@ -147,7 +146,7 @@
 
     .dropdown-menu-checkbox-item,
     .dropdown-menu-radio-item {
-        padding-left: var(--space-md);
+        padding-left: calc(var(--space-sm) + 16px + var(--space-sm));
     }
 
     .dropdown-menu-item__indicator {

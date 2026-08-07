@@ -8,22 +8,22 @@ namespace Magpie.Models.Data;
 public record CustomMetadataValue
 {
     /// <summary>
-    /// The custom metadata value id.
+    /// The unique id of the custom metadata value.
     /// </summary>
     public Guid Id { get; set; }
 
     /// <summary>
-    /// The metadata contribution this value belongs to.
+    /// The id of the metadata contribution that contains this value.
     /// </summary>
     public Guid MetadataContributionId { get; set; }
 
     /// <summary>
-    /// The custom metadata field key.
+    /// The name of the custom metadata field.
     /// </summary>
     public required string Key { get; set; }
 
     /// <summary>
-    /// The custom metadata field value.
+    /// The value of the custom metadata field.
     /// </summary>
     public string? Value { get; set; }
 }

@@ -3,7 +3,7 @@ import { EditorState } from '@codemirror/state';
 import { CompletionContext } from '@codemirror/autocomplete';
 import { LRLanguage, LanguageSupport, ensureSyntaxTree } from '@codemirror/language';
 
-import { parser } from './filter-query-parser';
+import { parser } from './filter-query-parser.gen';
 import { filterQueryHighlight } from './highlight';
 import { filterQueryAutocomplete } from './autocomplete';
 import {
@@ -240,6 +240,8 @@ describe('Filter Query Autocomplete', () => {
             expect(labels).toContain('genres');
             expect(labels).toContain('tag');
             expect(labels).toContain('tags');
+            expect(labels).toContain('relationship');
+            expect(labels).toContain('relationships');
 
             expect(labels).toContain('and');
             expect(labels).toContain('or');
@@ -264,19 +266,16 @@ describe('Filter Query Autocomplete', () => {
             }
         });
 
-        it('includes all subject fields from registry', () => {
+        it('includes the curated subject fields from registry', () => {
             const result = getCompletions('|', subjectFieldRegistry);
 
             expect(result).not.toBeNull();
             const labels = getLabels(result);
 
             expect(labels).toContain('kind');
-            expect(labels).toContain('dateLastRefreshed');
-            expect(labels).toContain('birthDate');
-            expect(labels).toContain('deathDate');
-
-            expect(labels).toContain('award');
-            expect(labels).toContain('awards');
+            expect(labels).toContain('title');
+            expect(labels).toContain('tag');
+            expect(labels).toContain('tags');
         });
 
         it('provides field type in completion detail', () => {
@@ -286,11 +285,18 @@ describe('Filter Query Autocomplete', () => {
 
             const monitoringCompletion = result!.options.find((o) => o.label === 'monitoring');
             expect(monitoringCompletion).toBeDefined();
-            expect(monitoringCompletion!.detail).toBe('enum');
+            expect(monitoringCompletion!.detail).toBe('boolean');
 
             const fileSizeCompletion = result!.options.find((o) => o.label === 'fileSize');
             expect(fileSizeCompletion).toBeDefined();
             expect(fileSizeCompletion!.detail).toBe('long');
+        });
+
+        it('suggests true and false for a boolean field value', () => {
+            const result = getCompletions('monitoring = |');
+
+            expect(result).not.toBeNull();
+            expect(getLabels(result)).toEqual(expect.arrayContaining(['true', 'false']));
         });
 
         it('provides field description in completion info', () => {
@@ -371,10 +377,8 @@ describe('Filter Query Autocomplete', () => {
             const labels = getLabels(result);
 
             expect(labels).toContain('kind');
-            expect(labels).toContain('birthDate');
-            expect(labels).toContain('deathDate');
-            expect(labels).toContain('established');
-            expect(labels).toContain('dissolved');
+            expect(labels).toContain('title');
+            expect(labels).toContain('tag');
 
             expect(labels).not.toContain('contentType');
             expect(labels).not.toContain('level');
@@ -395,12 +399,13 @@ describe('Filter Query Autocomplete', () => {
             const result = getCompletions('|');
 
             expect(result).not.toBeNull();
-            expect(result!.validFor).toBeDefined();
+            expect(result!.validFor).toBeInstanceOf(RegExp);
 
-            expect(result!.validFor!.test('abc')).toBe(true);
-            expect(result!.validFor!.test('!')).toBe(true);
-            expect(result!.validFor!.test('!has')).toBe(true);
-            expect(result!.validFor!.test(' ')).toBe(false);
+            const validFor = result!.validFor as RegExp;
+            expect(validFor.test('abc')).toBe(true);
+            expect(validFor.test('!')).toBe(true);
+            expect(validFor.test('!has')).toBe(true);
+            expect(validFor.test(' ')).toBe(false);
         });
     });
 
@@ -560,15 +565,12 @@ describe('Filter Query Autocomplete', () => {
             expect(fieldNames).toContain('image');
         });
 
-        it('monitoring field has correct enum values', () => {
+        it('monitoring field is boolean', () => {
             const monitoring = getScalarField(contentFieldRegistry, 'monitoring');
 
             expect(monitoring).toBeDefined();
-            expect(monitoring!.type).toBe('enum');
-            expect(monitoring!.enumValues).toBeDefined();
-            expect(monitoring!.enumValues).toContain('None');
-            expect(monitoring!.enumValues).toContain('Active');
-            expect(monitoring!.enumValues).toContain('Excluded');
+            expect(monitoring!.type).toBe('boolean');
+            expect(monitoring!.enumValues).toBeUndefined();
         });
 
         it('awards collection has expected item fields', () => {
@@ -592,23 +594,13 @@ describe('Filter Query Autocomplete', () => {
             const fieldNames = subjectFieldRegistry.scalarFields.map((f) => f.name);
 
             expect(fieldNames).toContain('kind');
-            expect(fieldNames).toContain('dateLastRefreshed');
             expect(fieldNames).toContain('title');
-            expect(fieldNames).toContain('originalTitle');
-            expect(fieldNames).toContain('overview');
-            expect(fieldNames).toContain('language');
-            expect(fieldNames).toContain('birthDate');
-            expect(fieldNames).toContain('deathDate');
-            expect(fieldNames).toContain('established');
-            expect(fieldNames).toContain('dissolved');
         });
 
         it('has expected collection fields', () => {
             const fieldNames = subjectFieldRegistry.collectionFields.map((f) => f.name);
 
-            expect(fieldNames).toContain('award');
-            expect(fieldNames).toContain('externalId');
-            expect(fieldNames).toContain('image');
+            expect(fieldNames).toContain('tag');
         });
 
         it('subject does not have content-specific fields', () => {

@@ -4,8 +4,8 @@ import { useAuth } from '@/auth';
 import { useUsers } from '@/hooks/useUsers';
 
 export function useUserMap(): Map<string, string> {
-    const { user } = useAuth();
-    const { users } = useUsers();
+    const { user, hasPermission } = useAuth();
+    const { users } = useUsers(undefined, { enabled: hasPermission('users.manage') });
 
     return useMemo(() => {
         const map = new Map<string, string>();

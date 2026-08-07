@@ -135,12 +135,8 @@
 
     .tier-list-detail-page__description {
         margin: 0 0 var(--space-lg);
-        padding: var(--space-sm) var(--space-md);
         font-size: var(--text-sm);
         color: var(--text-secondary);
-        background-color: var(--bg-secondary);
-        border: 1px solid var(--border-default);
-        border-radius: var(--radius-md);
         line-height: var(--leading-normal);
     }
 
@@ -343,6 +339,17 @@
         margin-right: var(--space-2xs);
     }
 
+    .tier-list-detail-page__tier-actions .card-actions__btn--active {
+        color: var(--status-healthy);
+        border-color: color-mix(in srgb, var(--status-healthy) 30%, transparent);
+        background-color: color-mix(in srgb, var(--status-healthy) 12%, transparent);
+
+        &:hover {
+            color: var(--status-healthy);
+            border-color: var(--status-healthy);
+        }
+    }
+
     .tier-list-detail-page__tier-meta {
         font-size: var(--text-xs);
         color: var(--text-muted);
@@ -505,5 +512,11 @@
         .tier-list-detail-page__pull-to-refresh .pull-to-refresh__content {
             padding: var(--space-xl);
         }
+    }
+
+    .tier-list-detail-page__list-rules-body {
+        flex: 1;
+        overflow-y: auto;
+        padding: var(--space-lg);
     }
 }

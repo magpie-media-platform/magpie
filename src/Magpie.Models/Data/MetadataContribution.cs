@@ -4,92 +4,92 @@ using System.Collections.Generic;
 namespace Magpie.Models.Data;
 
 /// <summary>
-/// A metadata contribution from a provider.
+/// The metadata for one item from one provider.
 /// </summary>
 public record MetadataContribution
 {
     /// <summary>
-    /// The metadata contribution id.
+    /// The unique id of the metadata contribution.
     /// </summary>
     public Guid Id { get; set; }
 
     /// <summary>
-    /// The metadata container the contribution belongs to.
+    /// The id of the container that holds the contribution.
     /// </summary>
     public Guid MetadataContainerId { get; set; }
 
     /// <summary>
-    /// The priority order.
+    /// The position in display order.
     /// </summary>
     public int Ordinal { get; set; }
 
     /// <summary>
-    /// Whether the contribution is locked from automatic updates.
-    /// </summary>
-    public bool Locked { get; set; }
-
-    /// <summary>
-    /// The extension that defines the metadata provider.
+    /// The id of the extension that supplies the provider.
     /// </summary>
     public Guid? ExtensionId { get; set; }
 
     /// <summary>
-    /// The metadata provider type.
+    /// The name of the provider type that made the contribution.
     /// </summary>
     public required string ProviderType { get; set; }
 
     /// <summary>
-    /// Attribution source for the metadata.
+    /// The name of the upstream source of the data.
     /// </summary>
     public string? Source { get; set; }
 
     /// <summary>
-    /// The primary title.
+    /// The main title to show.
     /// </summary>
     public string? Title { get; set; }
 
     /// <summary>
-    /// The original title in the original language.
+    /// The title in the original language.
     /// </summary>
     public string? OriginalTitle { get; set; }
 
     /// <summary>
-    /// The title used for sorting.
+    /// The title to use for sort order.
     /// </summary>
     public string? SortTitle { get; set; }
 
     /// <summary>
-    /// The primary language.
+    /// The primary language, as a language code.
     /// </summary>
     public string? Language { get; set; }
 
     /// <summary>
-    /// A description or summary.
+    /// The long-form description.
     /// </summary>
     public string? Overview { get; set; }
 
     /// <summary>
-    /// The publication or release date.
+    /// The date of first publication.
     /// </summary>
     public DateTime? PublishDate { get; set; }
 
     /// <summary>
-    /// The duration of the content.
+    /// The run time.
     /// </summary>
     public TimeSpan? Duration { get; set; }
 
     /// <summary>
-    /// The production status (e.g., "In Production", "Released").
+    /// The position within the parent.
+    /// </summary>
+    public int? SequenceNumber { get; set; }
+
+    /// <summary>
+    /// The production state, such as ended or in production.
     /// </summary>
     public string? ProductionStatus { get; set; }
 
     /// <summary>
-    /// When the entity was established.
+    /// The date when the subject was formed.
     /// </summary>
     public DateTime? Established { get; set; }
 
     /// <summary>
-    /// When the entity was dissolved.
+    /// The date when the subject ended.
     /// </summary>
     public DateTime? Dissolved { get; set; }
 
@@ -104,82 +104,82 @@ public record MetadataContribution
     public DateTime? DeathDate { get; set; }
 
     /// <summary>
-    /// When the record was created.
+    /// The UTC time when the record was created.
     /// </summary>
     public DateTime CreatedAt { get; set; }
 
     /// <summary>
-    /// The id of the user that created metadata contribution.
+    /// The id of the user who created the record.
     /// </summary>
     public Guid? CreatedByUserId { get; set; }
 
     /// <summary>
-    /// When the record was last modified.
+    /// The UTC time when the record last changed.
     /// </summary>
     public DateTime? ModifiedAt { get; set; }
 
     /// <summary>
-    /// The id of the user that last modified the metadata contribution.
+    /// The id of the user who last changed the record.
     /// </summary>
     public Guid? ModifiedByUserId { get; set; }
 
     /// <summary>
-    /// When the contribution was last refreshed.
+    /// The UTC time of the last refresh from the provider.
     /// </summary>
     public DateTime? DateLastRefreshed { get; set; }
 
     /// <summary>
-    /// The <see cref="MetadataContainer"/> that the contribution belongs to.
+    /// The <see cref="MetadataContainer"/> that holds the contribution.
     /// </summary>
     public MetadataContainer? MetadataContainer { get; set; }
 
     /// <summary>
-    /// The <see cref="AlternateText"/> entries associated with the contribution.
+    /// The titles and descriptions in other languages.
     /// </summary>
     public ICollection<AlternateText> AlternateTexts { get; } = [];
 
     /// <summary>
-    /// The <see cref="Award"/> entries associated with the contribution.
+    /// The awards and nominations.
     /// </summary>
     public ICollection<Award> Awards { get; } = [];
 
     /// <summary>
-    /// The <see cref="ContentRating"/> entries associated with the contribution.
+    /// The ratings from ratings bodies.
     /// </summary>
     public ICollection<ContentRating> ContentRatings { get; } = [];
 
     /// <summary>
-    /// The <see cref="CustomMetadataValue"/> values associated with the contribution.
+    /// The provider-defined values that no standard field holds.
     /// </summary>
     public ICollection<CustomMetadataValue> CustomMetadata { get; } = [];
 
     /// <summary>
-    /// The <see cref="ExternalId"/> entries associated with the contribution.
+    /// The ids at external providers.
     /// </summary>
     public ICollection<ExternalId> ExternalIds { get; } = [];
 
     /// <summary>
-    /// The <see cref="Genre"/> entries associated with the contribution.
+    /// The genres.
     /// </summary>
     public ICollection<Genre> Genres { get; } = [];
 
     /// <summary>
-    /// The <see cref="Image"/> entries associated with the contribution.
+    /// The artwork, such as posters and backdrops.
     /// </summary>
     public ICollection<Image> Images { get; } = [];
 
     /// <summary>
-    /// The <see cref="Preview"/> entries associated with the contribution.
+    /// The trailers and other preview clips.
     /// </summary>
     public ICollection<Preview> Previews { get; } = [];
 
     /// <summary>
-    /// The <see cref="Reference"/> entries associated with the contribution.
+    /// The links to external pages.
     /// </summary>
     public ICollection<Reference> References { get; } = [];
 
     /// <summary>
-    /// The <see cref="Relationship"/> entries associated with the contribution.
+    /// The links to other metadata containers.
     /// </summary>
     public ICollection<Relationship> Relationships { get; } = [];
 }

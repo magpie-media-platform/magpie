@@ -1,0 +1,64 @@
+@layer components {
+    .mime-types-editor,
+    .mime-types-editor__patterns,
+    .mime-types-editor__actions,
+    .mime-types-editor__status {
+        display: flex;
+        align-items: center;
+        gap: var(--space-xs);
+    }
+
+    .mime-types-editor {
+        flex-wrap: wrap;
+        min-width: 0;
+    }
+
+    .mime-types-editor__patterns {
+        flex-wrap: wrap;
+    }
+
+    .mime-types-editor__any {
+        color: var(--text-secondary);
+        font-size: var(--text-sm);
+    }
+
+    .mime-types-editor__edit {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: var(--touch-target-min);
+        min-height: var(--touch-target-min);
+        padding: var(--space-xs);
+        color: var(--text-secondary);
+        background: transparent;
+        border: 0;
+        border-radius: var(--radius-sm);
+        cursor: pointer;
+
+        &:hover,
+        &:focus-visible {
+            color: var(--accent-primary);
+            background: var(--bg-tertiary);
+        }
+    }
+
+    .mime-types-editor--editing {
+        align-items: flex-start;
+        min-width: min(24rem, 75vw);
+    }
+
+    .mime-types-editor--editing .tag-input {
+        flex: 1 1 14rem;
+    }
+
+    .mime-types-editor__status {
+        font-size: var(--text-xs);
+        color: var(--status-healthy);
+    }
+
+    .mime-types-editor__error {
+        flex-basis: 100%;
+        font-size: var(--text-xs);
+        color: var(--status-error);
+    }
+}

@@ -1,11 +1,14 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Security.Cryptography;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions;
 using Magpie.Abstractions.Repositories;
+using Magpie.Core.Jobs;
 using Magpie.Data;
 using Magpie.Models;
 using Magpie.Models.Arguments;
@@ -18,53 +21,379 @@ using Microsoft.Extensions.Logging;
 
 namespace Magpie.Core.Repositories;
 
-/// <summary>
-/// Repository for managing releases.
-/// </summary>
-public sealed class ReleaseRepository(
+internal sealed class ReleaseRepository(
     MagpieDbContext context,
     IAuditRecordRepository auditRecordRepository,
     ITransactionManager transactionManager,
-    ILogger<ReleaseRepository> logger) : IReleaseRepository
+    ILogger<ReleaseRepository> logger,
+    TimeProvider? timeProvider = null) : IReleaseRepository
 {
-    /// <inheritdoc />
+    private const int ParameterBatchSize = 1_000;
+
+    private const string CreateSavepoint = "release_create";
+
+    private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
+
+    private static void NormalizeIdentityKeys(Release release)
+    {
+        var normalized = new List<ReleaseIdentityKey>();
+        var seen = new HashSet<(string Authority, string Value)>();
+        foreach (var key in release.IdentityKeys)
+        {
+            if (string.IsNullOrWhiteSpace(key.Authority) || string.IsNullOrWhiteSpace(key.Value))
+            {
+                continue;
+            }
+
+            key.Authority = key.Authority.Trim();
+            key.Value = key.Value.Trim();
+            if (seen.Add((key.Authority, key.Value)))
+            {
+                normalized.Add(key);
+            }
+        }
+
+        release.IdentityKeys.Clear();
+        foreach (var key in normalized)
+        {
+            key.Ordinal = release.IdentityKeys.Count;
+            release.IdentityKeys.Add(key);
+        }
+    }
+
+    private static string SourceKey(ReleaseSource source)
+    {
+        var selector = !string.IsNullOrWhiteSpace(source.ExternalId)
+            ? $"{source.IndexerId:D}\nid:{source.ExternalId.Trim()}"
+            : $"{source.IndexerId:D}\nurl:{source.InfoUrl}";
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(selector))).ToLowerInvariant();
+    }
+
+    private static ReleaseSource SourceFromRelease(Release release)
+    {
+        return new ReleaseSource
+        {
+            Key = string.Empty,
+            IndexerId = release.IndexerId,
+            Protocol = release.Protocol,
+            ExternalId = release.ExternalId,
+            Title = release.Title,
+            PublishDate = release.PublishDate,
+            Size = release.Size,
+            InfoUrl = release.InfoUrl,
+            Categories = [.. release.Categories],
+            Languages = [.. release.Languages],
+            Properties = release.Properties,
+        };
+    }
+
+    private static void EnsureReleaseSources(Release release, DateTime now)
+    {
+        var incoming = release.Sources.Count == 0 ? [SourceFromRelease(release)] : release.Sources.ToList();
+        release.Sources.Clear();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var source in incoming)
+        {
+            source.Key = SourceKey(source);
+            if (!seen.Add(source.Key))
+            {
+                continue;
+            }
+
+            source.ReleaseId = release.Id;
+            source.CreatedAt = source.CreatedAt == default ? now : source.CreatedAt;
+            source.ObservedAt = now;
+            release.Sources.Add(source);
+        }
+    }
+
+    private static List<ReleaseIdentityKey> SnapshotReleaseIdentityKeys(IEnumerable<ReleaseIdentityKey> keys)
+    {
+        return
+        [
+            ..keys.Select(key => new ReleaseIdentityKey
+            {
+                Authority = key.Authority,
+                Value = key.Value,
+                Ordinal = key.Ordinal,
+            })
+        ];
+    }
+
     public async Task<IEnumerable<Release>> ListAllAsync(CancellationToken cancellationToken)
     {
         try
         {
             return await context.Releases
                 .AsNoTracking()
+                .AsSplitQuery()
+                .Include(r => r.ExternalIds)
+                .Include(r => r.IdentityKeys)
+                .Include(r => r.Sources)
                 .ToListAsync(cancellationToken)
                 .ConfigureAwait(false);
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Error listing releases");
+            logger.LogError(ex, "The release repository failed to list releases.");
             throw;
         }
     }
 
-    /// <inheritdoc />
     public async Task<Release?> GetByIdAsync(Guid id, CancellationToken cancellationToken)
     {
         try
         {
             return await context.Releases
                 .AsNoTracking()
+                .AsSplitQuery()
+                .Include(r => r.ExternalIds)
+                .Include(r => r.IdentityKeys)
+                .Include(r => r.Sources)
                 .FirstOrDefaultAsync(r => r.Id == id, cancellationToken)
                 .ConfigureAwait(false);
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Error getting release {ReleaseId}", id);
+            logger.LogError(ex, "The release repository failed to read release {ReleaseId}.", id);
             throw;
         }
     }
 
-    /// <inheritdoc />
+    private async Task<List<Release>> ListByIdentityKeysAsync(
+        IReadOnlyCollection<ReleaseIdentityKey> identityKeys,
+        CancellationToken cancellationToken)
+    {
+        var releaseIds = await ListReleaseIdsByIdentityKeysAsync(identityKeys, cancellationToken)
+            .ConfigureAwait(false);
+        if (releaseIds.Count == 0)
+        {
+            return [];
+        }
+
+        return await context.Releases
+            .AsNoTracking()
+            .AsSplitQuery()
+            .Include(candidate => candidate.ExternalIds)
+            .Include(candidate => candidate.IdentityKeys)
+            .Include(candidate => candidate.Sources)
+            .Where(candidate => releaseIds.Contains(candidate.Id))
+            .OrderByDescending(candidate => candidate.ObservedAt)
+            .ThenByDescending(candidate => candidate.CreatedAt)
+            .ThenBy(candidate => candidate.Id)
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    private async Task<List<Release>> FindUpsertMatchesAsync(
+        Release release,
+        CancellationToken cancellationToken)
+    {
+        if (release.IdentityKeys.Count > 0)
+        {
+            var matches = await ListByIdentityKeysAsync([.. release.IdentityKeys], cancellationToken)
+                .ConfigureAwait(false);
+            if (matches.Count > 0)
+            {
+                return matches;
+            }
+        }
+
+        if (release.IndexerId is not { } indexerId || string.IsNullOrWhiteSpace(release.ExternalId))
+        {
+            return [];
+        }
+
+        var byProvider = (await QueryAsync(
+                new ReleaseQuery { IndexerId = indexerId, ExternalId = release.ExternalId },
+                new PagingParameter { PageNumber = 1, PageSize = 1 },
+                null,
+                cancellationToken)
+            .ConfigureAwait(false)).Items.FirstOrDefault();
+        if (byProvider is null)
+        {
+            return [];
+        }
+
+        return [byProvider];
+    }
+
+    private async Task<List<Guid>> ListReleaseIdsByIdentityKeysAsync(
+        IReadOnlyCollection<ReleaseIdentityKey> identityKeys,
+        CancellationToken cancellationToken)
+    {
+        var keys = identityKeys
+            .Where(key => !string.IsNullOrWhiteSpace(key.Authority) && !string.IsNullOrWhiteSpace(key.Value))
+            .Select(key => (Authority: key.Authority.Trim(), Value: key.Value.Trim()))
+            .Distinct()
+            .ToList();
+        if (keys.Count == 0)
+        {
+            return [];
+        }
+
+        var authorities = keys.Select(key => key.Authority).Distinct().ToList();
+        var values = keys.Select(key => key.Value).Distinct().ToList();
+        var keySet = keys.ToHashSet();
+        var candidateRows = await (
+            from key in context.ReleaseIdentityKeys.AsNoTracking()
+            where key.ReleaseId != null
+            where authorities.Contains(key.Authority) && values.Contains(key.Value)
+            select new
+            {
+                ReleaseId = key.ReleaseId!.Value,
+                key.Authority,
+                key.Value
+            })
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+        var releaseIds = candidateRows
+            .Where(row => keySet.Contains((row.Authority, row.Value)))
+            .Select(row => row.ReleaseId)
+            .Distinct()
+            .ToList();
+        return releaseIds;
+    }
+
+    private async Task CoalesceIdentityMatchesAsync(
+        Release incoming,
+        Release canonical,
+        IReadOnlyCollection<Release> matches,
+        CancellationToken cancellationToken)
+    {
+        var aliasIds = matches.Where(match => match.Id != canonical.Id).Select(match => match.Id).ToArray();
+        if (aliasIds.Length == 0)
+        {
+            return;
+        }
+
+        foreach (var identity in matches.SelectMany(match => match.IdentityKeys))
+        {
+            incoming.IdentityKeys.Add(new ReleaseIdentityKey
+            {
+                Authority = identity.Authority,
+                Value = identity.Value,
+                Ordinal = incoming.IdentityKeys.Count,
+            });
+        }
+
+        var sourceRows = await context.ReleaseSources
+            .AsNoTracking()
+            .Where(source => source.ReleaseId == canonical.Id || aliasIds.Contains(source.ReleaseId))
+            .OrderBy(source => source.ReleaseId == canonical.Id ? 0 : 1)
+            .ThenBy(source => source.Id)
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+        var sourceIdsByKey = sourceRows
+            .Where(source => source.ReleaseId == canonical.Id)
+            .ToDictionary(source => source.Key, source => source.Id, StringComparer.Ordinal);
+        foreach (var source in sourceRows.Where(source => source.ReleaseId != canonical.Id))
+        {
+            if (sourceIdsByKey.TryGetValue(source.Key, out var retainedSourceId))
+            {
+                await context.Downloads
+                    .Where(download => download.ReleaseSourceId == source.Id)
+                    .ExecuteUpdateAsync(
+                        setters => setters.SetProperty(
+                            download => download.ReleaseSourceId,
+                            (Guid?)retainedSourceId),
+                        cancellationToken)
+                    .ConfigureAwait(false);
+                await context.ReleaseSources
+                    .Where(candidate => candidate.Id == source.Id)
+                    .ExecuteDeleteAsync(cancellationToken)
+                    .ConfigureAwait(false);
+                continue;
+            }
+
+            await context.ReleaseSources
+                .Where(candidate => candidate.Id == source.Id)
+                .ExecuteUpdateAsync(
+                    setters => setters.SetProperty(candidate => candidate.ReleaseId, canonical.Id),
+                    cancellationToken)
+                .ConfigureAwait(false);
+            sourceIdsByKey.Add(source.Key, source.Id);
+        }
+
+        await context.Downloads
+            .Where(download => download.ReleaseId != null && aliasIds.Contains(download.ReleaseId.Value))
+            .ExecuteUpdateAsync(
+                setters => setters.SetProperty(download => download.ReleaseId, (Guid?)canonical.Id),
+                cancellationToken)
+            .ConfigureAwait(false);
+        await context.ExternalIds
+            .Where(externalId => externalId.ReleaseId != null && aliasIds.Contains(externalId.ReleaseId.Value))
+            .ExecuteUpdateAsync(
+                setters => setters.SetProperty(externalId => externalId.ReleaseId, (Guid?)canonical.Id),
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        var canonicalScopeIds = await context.ReleaseScopes
+            .AsNoTracking()
+            .Where(scope => scope.ReleaseId == canonical.Id)
+            .Select(scope => scope.ContentHierarchyItemId)
+            .ToHashSetAsync(cancellationToken)
+            .ConfigureAwait(false);
+        var aliasScopeIds = await context.ReleaseScopes
+            .AsNoTracking()
+            .Where(scope => aliasIds.Contains(scope.ReleaseId))
+            .Select(scope => scope.ContentHierarchyItemId)
+            .Distinct()
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+        foreach (var contentHierarchyItemId in aliasScopeIds.Where(canonicalScopeIds.Add))
+        {
+            context.ReleaseScopes.Add(new ReleaseScope
+            {
+                ReleaseId = canonical.Id,
+                ContentHierarchyItemId = contentHierarchyItemId,
+            });
+        }
+
+        await context.ReleaseScopes
+            .Where(scope => aliasIds.Contains(scope.ReleaseId))
+            .ExecuteDeleteAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        var aliasTagNames = await context.Tags
+            .AsNoTracking()
+            .Where(tag => tag.Releases.Any(release => aliasIds.Contains(release.Id)))
+            .Select(tag => tag.Name)
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+        var canonicalTagNames = await context.Tags
+            .AsNoTracking()
+            .Where(tag => tag.Releases.Any(release => release.Id == canonical.Id))
+            .Select(tag => tag.Name)
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+        var missingTagNames = aliasTagNames.Except(canonicalTagNames, StringComparer.Ordinal).ToArray();
+        if (missingTagNames.Length > 0)
+        {
+            var canonicalEntity = await context.Releases
+                .FirstAsync(release => release.Id == canonical.Id, cancellationToken)
+                .ConfigureAwait(false);
+            var missingTags = await context.Tags
+                .Where(tag => missingTagNames.Contains(tag.Name))
+                .ToListAsync(cancellationToken)
+                .ConfigureAwait(false);
+            foreach (var tag in missingTags)
+            {
+                tag.Releases.Add(canonicalEntity);
+            }
+        }
+
+        await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        context.ChangeTracker.Clear();
+        await context.Releases
+            .Where(release => aliasIds.Contains(release.Id))
+            .ExecuteDeleteAsync(cancellationToken)
+            .ConfigureAwait(false);
+    }
+
     public async Task<PagedList<Release>> QueryAsync(
         ReleaseQuery query,
-        PagingParameter? paging,
+        PagingParameter paging,
         SortParameter? sort,
         CancellationToken cancellationToken)
     {
@@ -72,34 +401,80 @@ public sealed class ReleaseRepository(
         {
             var releases = context.Releases.AsNoTracking().AsQueryable();
 
-            if (query.IndexerId is not null)
+            if (query.Ids is { Count: > 0 })
             {
-                releases = releases.Where(r => r.IndexerId == query.IndexerId);
+                releases = releases.Where(r => query.Ids.Contains(r.Id));
             }
-            if (query.ContentItemId is not null)
+
+            if (query.IndexerId is { } indexerId && query.ExternalId is { } externalId)
             {
-                releases = releases.Where(r => r.ContentItemId == query.ContentItemId);
+                releases = releases.Where(r =>
+                    (r.IndexerId == indexerId && r.ExternalId == externalId) ||
+                    r.Sources.Any(source => source.IndexerId == indexerId && source.ExternalId == externalId));
             }
+            else if (query.IndexerId is not null)
+            {
+                releases = releases.Where(r => r.IndexerId == query.IndexerId ||
+                    r.Sources.Any(source => source.IndexerId == query.IndexerId));
+            }
+
+            var contentNodeIds = new List<Guid>();
+            if (query.ContentHierarchyItemId is { } contentNodeId)
+            {
+                contentNodeIds.Add(contentNodeId);
+            }
+
+            if (query.ContentHierarchyItemIds is { Count: > 0 })
+            {
+                contentNodeIds.AddRange(query.ContentHierarchyItemIds);
+            }
+
+            contentNodeIds = [.. contentNodeIds.Distinct()];
+            if (contentNodeIds.Count > 0)
+            {
+                var releaseIds = (
+                    from c in context.ReleaseScopes.AsNoTracking()
+                    where contentNodeIds.Contains(c.ContentHierarchyItemId)
+                    select c.ReleaseId)
+                    .Distinct();
+                releases = releases.Where(r => releaseIds.Contains(r.Id));
+            }
+
             if (query.Title is not null)
             {
                 releases = releases.Where(r => r.Title.Contains(query.Title));
             }
+
             if (query.Category is not null)
             {
                 releases = releases.Where(r => r.Categories.Contains(query.Category));
             }
-            if (query.ExternalId is not null)
+
+            if (query.IndexerId is null && query.ExternalId is not null)
             {
                 releases = releases.Where(r => r.ExternalId == query.ExternalId);
             }
+
             if (query.PublishDate?.Min is not null)
             {
                 releases = releases.Where(r => r.PublishDate >= query.PublishDate.Min);
             }
+
             if (query.PublishDate?.Max is not null)
             {
                 releases = releases.Where(r => r.PublishDate <= query.PublishDate.Max);
             }
+
+            if (query.ObservedAt?.Min is { } observedAtMin)
+            {
+                releases = releases.Where(release => release.ObservedAt >= observedAtMin);
+            }
+
+            if (query.ObservedAt?.Max is { } observedAtMax)
+            {
+                releases = releases.Where(release => release.ObservedAt <= observedAtMax);
+            }
+
             if (query.Tags is not null && query.Tags.Any())
             {
                 releases = releases.Where(r => context.Tags
@@ -110,169 +485,547 @@ public sealed class ReleaseRepository(
 
             var totalCount = await releases.CountAsync(cancellationToken).ConfigureAwait(false);
 
-            if (sort is not null)
+            var sortProperty = typeof(Release).GetProperties()
+                .Select(property => property.Name)
+                .FirstOrDefault(name => string.Equals(name, sort?.PropertyName, StringComparison.OrdinalIgnoreCase));
+            if (sort is not null && sortProperty is not null)
             {
                 releases = sort.Direction == SortDirection.Ascending
-                    ? releases.OrderBy(r => EF.Property<Release>(r, sort.PropertyName))
-                    : releases.OrderByDescending(r => EF.Property<Release>(r, sort.PropertyName));
+                    ? releases.OrderBy(r => EF.Property<Release>(r, sortProperty)).ThenBy(r => r.Id)
+                    : releases.OrderByDescending(r => EF.Property<Release>(r, sortProperty)).ThenBy(r => r.Id);
             }
             else
             {
-                releases = releases.OrderByDescending(r => r.PublishDate);
+                releases = releases.OrderByDescending(r => r.PublishDate).ThenBy(r => r.Id);
             }
 
-            if (paging is not null)
-            {
-                releases = releases.Skip((paging.PageNumber - 1) * paging.PageSize).Take(paging.PageSize);
-            }
+            releases = releases.Skip((paging.PageNumber - 1) * paging.PageSize).Take(paging.PageSize);
 
-            var items = await releases.ToListAsync(cancellationToken).ConfigureAwait(false);
+            var items = await releases
+                .AsSplitQuery()
+                .Include(r => r.ExternalIds)
+                .Include(r => r.IdentityKeys)
+                .Include(r => r.Sources)
+                .ToListAsync(cancellationToken)
+                .ConfigureAwait(false);
 
             return new()
             {
                 Items = items,
-                PageNumber = paging?.PageNumber,
-                PageSize = paging?.PageSize,
+                PageNumber = paging.PageNumber,
+                PageSize = paging.PageSize,
                 TotalItems = totalCount
             };
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Error querying releases");
+            logger.LogError(ex, "The release repository failed to query releases.");
             throw;
         }
     }
 
-    /// <inheritdoc />
+    public async Task<int> MarkObservedAsync(
+        IReadOnlyCollection<Guid> releaseIds,
+        CancellationToken cancellationToken = default)
+    {
+        if (releaseIds.Count == 0)
+        {
+            return 0;
+        }
+
+        try
+        {
+            var now = _time.GetUtcNow().UtcDateTime;
+            var distinctReleaseIds = releaseIds.Distinct().ToList();
+            var updated = 0;
+            foreach (var batch in distinctReleaseIds.Chunk(ParameterBatchSize))
+            {
+                updated += await context.Releases
+                    .Where(r => batch.Contains(r.Id))
+                    .ExecuteUpdateAsync(s => s.SetProperty(r => r.ObservedAt, now), cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
+            return updated;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "The release repository failed to mark {ReleaseCount} releases " +
+                "observed.", releaseIds.Count);
+            throw;
+        }
+    }
+
     public async Task<Release> CreateAsync(Release model, Guid? createdByUserId, CancellationToken cancellationToken)
     {
         try
         {
-            return await transactionManager.ExecuteWithTransactionAsync(async _ =>
-            {
-                var now = DateTime.UtcNow;
-                model.CreatedAt = now;
-                model.CreatedByUserId = createdByUserId;
-
-                context.Releases.Add(model);
-                await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
-
-                await auditRecordRepository.CreateAsync(new()
+            return await transactionManager.ExecuteWithTransactionAsync(
+                async _ =>
                 {
-                    Category = AuditCategories.Integrations,
-                    Operation = "Create",
-                    EntityId = model.Id.ToString(),
-                    EntityType = nameof(Release),
-                    Detail = $"Created release {model.Title}",
-                    Timestamp = now,
-                    UserId = createdByUserId
-                }, cancellationToken).ConfigureAwait(false);
+                    var now = _time.GetUtcNow().UtcDateTime;
+                    model.Id = model.Id == Guid.Empty ? Guid.NewGuid() : model.Id;
+                    model.CreatedAt = now;
+                    model.ObservedAt = now;
+                    model.CreatedByUserId = createdByUserId;
+                    NormalizeIdentityKeys(model);
+                    EnsureReleaseSources(model, now);
 
-                return model;
-            }, cancellationToken);
+                    var transaction = context.Database.CurrentTransaction;
+                    var savepointTaken = transaction is { SupportsSavepoints: true };
+                    if (savepointTaken)
+                    {
+                        await transaction!.CreateSavepointAsync(CreateSavepoint, cancellationToken)
+                            .ConfigureAwait(false);
+                    }
+
+                    try
+                    {
+                        context.Releases.Add(model);
+                        await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+                    }
+                    catch (DbUpdateException)
+                    {
+                        if (savepointTaken)
+                        {
+                            await transaction!.RollbackToSavepointAsync(CreateSavepoint, cancellationToken)
+                                .ConfigureAwait(false);
+                        }
+
+                        context.ChangeTracker.Clear();
+                        throw;
+                    }
+
+                    await auditRecordRepository.CreateAsync(
+                        new()
+                        {
+                            Category = AuditCategories.Integrations,
+                            Operation = "Create",
+                            EntityId = model.Id.ToString(),
+                            EntityType = nameof(Release),
+                            Detail = $"Created release {model.Title}",
+                            Timestamp = now,
+                            UserId = createdByUserId
+                        },
+                        cancellationToken).ConfigureAwait(false);
+
+                    return model;
+                },
+                cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Error creating release {ReleaseTitle}", model.Title);
+            logger.LogError(ex, "The release repository failed to create release {ReleaseTitle}.", model.Title);
             throw;
         }
     }
 
-    /// <inheritdoc />
     public async Task<bool> UpdateAsync(Release model, Guid? modifiedByUserId, CancellationToken cancellationToken)
     {
         try
         {
-            return await transactionManager.ExecuteWithTransactionAsync(async _ =>
-            {
-                var now = DateTime.UtcNow;
-                var updated = await context.Releases
-                    .Where(r => r.Id == model.Id)
-                    .ExecuteUpdateAsync(
-                        s => s
-                            .SetProperty(r => r.IndexerId, model.IndexerId)
-                            .SetProperty(r => r.ContentItemId, model.ContentItemId)
-                            .SetProperty(r => r.Protocol, model.Protocol)
-                            .SetProperty(r => r.ExternalId, model.ExternalId)
-                            .SetProperty(r => r.Title, model.Title)
-                            .SetProperty(r => r.PublishDate, model.PublishDate)
-                            .SetProperty(r => r.Size, model.Size)
-                            .SetProperty(r => r.InfoUrl, model.InfoUrl)
-                            .SetProperty(r => r.Categories, model.Categories)
-                            .SetProperty(r => r.Languages, model.Languages)
-                            .SetProperty(r => r.Properties, model.Properties)
-                            .SetProperty(r => r.ModifiedAt, now)
-                            .SetProperty(r => r.ModifiedByUserId, modifiedByUserId),
-                        cancellationToken)
-                    .ConfigureAwait(false);
-                if (updated > 0)
+            return await transactionManager.ExecuteWithTransactionAsync(
+                async _ =>
                 {
-                    await auditRecordRepository.CreateAsync(new()
+                    var now = _time.GetUtcNow().UtcDateTime;
+                    NormalizeIdentityKeys(model);
+                    EnsureReleaseSources(model, now);
+                    var matches = await FindUpsertMatchesAsync(model, cancellationToken)
+                        .ConfigureAwait(false);
+                    var canonical = matches.FirstOrDefault(match => match.Id == model.Id);
+                    if (canonical is null && model.Id != Guid.Empty)
                     {
-                        Category = AuditCategories.Integrations,
-                        Operation = "Update",
-                        EntityId = model.Id.ToString(),
-                        EntityType = nameof(Release),
-                        Detail = $"Updated release {model.Title}",
-                        Timestamp = now,
-                        UserId = modifiedByUserId
-                    }, cancellationToken).ConfigureAwait(false);
-                }
+                        canonical = await context.Releases
+                            .AsNoTracking()
+                            .AsSplitQuery()
+                            .Include(release => release.ExternalIds)
+                            .Include(release => release.IdentityKeys)
+                            .Include(release => release.Sources)
+                            .FirstOrDefaultAsync(release => release.Id == model.Id, cancellationToken)
+                            .ConfigureAwait(false);
+                    }
 
-                return updated > 0;
-            }, cancellationToken);
+                    canonical ??= matches.FirstOrDefault();
+                    if (canonical is null)
+                    {
+                        return false;
+                    }
+
+                    model.Id = canonical.Id;
+                    if (matches.All(match => match.Id != canonical.Id))
+                    {
+                        matches.Insert(0, canonical);
+                    }
+
+                    if (matches.Count > 1)
+                    {
+                        await CoalesceIdentityMatchesAsync(model, canonical, matches, cancellationToken)
+                            .ConfigureAwait(false);
+                    }
+
+                    var updated = await context.Releases
+                        .Where(r => r.Id == model.Id)
+                        .ExecuteUpdateAsync(
+                            s => s
+                                .SetProperty(r => r.IndexerId, model.IndexerId)
+                                .SetProperty(r => r.Protocol, model.Protocol)
+                                .SetProperty(r => r.ExternalId, model.ExternalId)
+                                .SetProperty(r => r.Title, model.Title)
+                                .SetProperty(r => r.PublishDate, model.PublishDate)
+                                .SetProperty(r => r.Size, model.Size)
+                                .SetProperty(r => r.InfoUrl, model.InfoUrl)
+                                .SetProperty(r => r.Categories, model.Categories)
+                                .SetProperty(r => r.Languages, model.Languages)
+                                .SetProperty(r => r.Properties, model.Properties)
+                                .SetProperty(r => r.ModifiedAt, now)
+                                .SetProperty(r => r.ModifiedByUserId, modifiedByUserId),
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                    if (updated > 0)
+                    {
+                        await MergeReleaseIdentityKeysAsync(model, cancellationToken).ConfigureAwait(false);
+                        await MergeReleaseSourcesAsync(model, now, cancellationToken).ConfigureAwait(false);
+                        await auditRecordRepository.CreateAsync(
+                            new()
+                            {
+                                Category = AuditCategories.Integrations,
+                                Operation = "Update",
+                                EntityId = model.Id.ToString(),
+                                EntityType = nameof(Release),
+                                Detail = $"Updated release {model.Title}",
+                                Timestamp = now,
+                                UserId = modifiedByUserId
+                            },
+                            cancellationToken).ConfigureAwait(false);
+                    }
+
+                    return updated > 0;
+                },
+                cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Error updating release {ReleaseId}", model.Id);
+            logger.LogError(ex, "The release repository failed to update release {ReleaseId}.", model.Id);
             throw;
         }
     }
 
-    /// <inheritdoc />
+    private async Task MergeReleaseIdentityKeysAsync(Release release, CancellationToken cancellationToken)
+    {
+        var incomingKeys = SnapshotReleaseIdentityKeys(release.IdentityKeys);
+        var existingKeys = await context.ReleaseIdentityKeys
+            .AsNoTracking()
+            .Where(k => k.ReleaseId == release.Id)
+            .OrderBy(k => k.Ordinal)
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        var normalizedRelease = new Release
+        {
+            IndexerId = release.IndexerId,
+            ExternalId = release.ExternalId,
+            Protocol = release.Protocol,
+            Title = release.Title,
+            Size = release.Size,
+            InfoUrl = release.InfoUrl,
+        };
+        foreach (var key in SnapshotReleaseIdentityKeys(existingKeys).Concat(incomingKeys))
+        {
+            normalizedRelease.IdentityKeys.Add(key);
+        }
+
+        NormalizeIdentityKeys(normalizedRelease);
+        var normalizedKeys = SnapshotReleaseIdentityKeys(normalizedRelease.IdentityKeys);
+
+        var trackedKeys = context.ChangeTracker
+            .Entries<ReleaseIdentityKey>()
+            .Where(entry => entry.Entity.ReleaseId == release.Id)
+            .ToArray();
+        foreach (var entry in trackedKeys)
+        {
+            entry.State = EntityState.Detached;
+        }
+
+        await context.ReleaseIdentityKeys
+            .Where(k => k.ReleaseId == release.Id)
+            .ExecuteDeleteAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        foreach (var key in normalizedKeys)
+        {
+            key.ReleaseId = release.Id;
+            context.ReleaseIdentityKeys.Add(key);
+        }
+
+        await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task MergeReleaseSourcesAsync(
+        Release release,
+        DateTime observedAt,
+        CancellationToken cancellationToken)
+    {
+        var existingSources = await context.ReleaseSources
+            .AsNoTracking()
+            .Where(source => source.ReleaseId == release.Id)
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+        foreach (var source in release.Sources)
+        {
+            var matches = existingSources.Where(candidate =>
+                string.Equals(candidate.Key, source.Key, StringComparison.Ordinal) ||
+                (candidate.IndexerId == source.IndexerId &&
+                    ((!string.IsNullOrWhiteSpace(source.ExternalId) &&
+                        string.Equals(candidate.ExternalId, source.ExternalId, StringComparison.Ordinal)) ||
+                        (string.IsNullOrWhiteSpace(source.ExternalId) && Equals(candidate.InfoUrl, source.InfoUrl)))))
+                .ToList();
+            var existing = matches.FirstOrDefault(candidate =>
+                    string.Equals(candidate.Key, source.Key, StringComparison.Ordinal)) ??
+                matches.FirstOrDefault();
+            if (existing is null)
+            {
+                context.ReleaseSources.Add(new ReleaseSource
+                {
+                    ReleaseId = release.Id,
+                    Key = source.Key,
+                    IndexerId = source.IndexerId,
+                    Protocol = source.Protocol,
+                    ExternalId = source.ExternalId,
+                    Title = source.Title,
+                    PublishDate = source.PublishDate,
+                    Size = source.Size,
+                    InfoUrl = source.InfoUrl,
+                    Categories = [.. source.Categories],
+                    Languages = [.. source.Languages],
+                    Properties = source.Properties,
+                    CreatedAt = observedAt,
+                    ObservedAt = observedAt,
+                });
+                continue;
+            }
+
+            foreach (var duplicate in matches.Where(candidate => candidate.Id != existing.Id))
+            {
+                await context.Downloads
+                    .Where(download => download.ReleaseSourceId == duplicate.Id)
+                    .ExecuteUpdateAsync(
+                        setters => setters.SetProperty(download => download.ReleaseSourceId, (Guid?)existing.Id),
+                        cancellationToken)
+                    .ConfigureAwait(false);
+                await context.ReleaseSources
+                    .Where(candidate => candidate.Id == duplicate.Id)
+                    .ExecuteDeleteAsync(cancellationToken)
+                    .ConfigureAwait(false);
+                existingSources.Remove(duplicate);
+            }
+
+            await context.ReleaseSources
+                .Where(candidate => candidate.Id == existing.Id)
+                .ExecuteUpdateAsync(
+                    setters => setters
+                        .SetProperty(candidate => candidate.Key, source.Key)
+                        .SetProperty(candidate => candidate.IndexerId, source.IndexerId)
+                        .SetProperty(candidate => candidate.Protocol, source.Protocol)
+                        .SetProperty(candidate => candidate.ExternalId, source.ExternalId)
+                        .SetProperty(candidate => candidate.Title, source.Title)
+                        .SetProperty(candidate => candidate.PublishDate, source.PublishDate)
+                        .SetProperty(candidate => candidate.Size, source.Size)
+                        .SetProperty(candidate => candidate.InfoUrl, source.InfoUrl)
+                        .SetProperty(candidate => candidate.Categories, source.Categories)
+                        .SetProperty(candidate => candidate.Languages, source.Languages)
+                        .SetProperty(candidate => candidate.Properties, source.Properties)
+                        .SetProperty(candidate => candidate.ObservedAt, observedAt),
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<List<Guid>> ListProtectedAcquisitionLockPartitionReleaseIdsAsync(
+        CancellationToken cancellationToken)
+    {
+        var activeStatuses = new[] { JobExecutionStatus.Queued, JobExecutionStatus.Running };
+        var acquisitionPartitionPrefix =
+            $"type:{MagpieJobs.Types.ReleaseDownloadItem}|{MagpieJobs.Parameters.ReleaseId}=";
+        var partitions = await (
+            from job in context.JobExecutions.AsNoTracking()
+            where job.JobType == MagpieJobs.Types.ReleaseDownloadItem
+            where activeStatuses.Contains(job.Status)
+            where job.LockPartition != null && job.LockPartition.StartsWith(acquisitionPartitionPrefix)
+            select job.LockPartition!)
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        var releaseIds = new List<Guid>();
+        foreach (var partition in partitions)
+        {
+            var rawReleaseId = partition[acquisitionPartitionPrefix.Length..];
+            var separatorIndex = rawReleaseId.IndexOf('&', StringComparison.Ordinal);
+            if (separatorIndex >= 0)
+            {
+                rawReleaseId = rawReleaseId[..separatorIndex];
+            }
+
+            if (Guid.TryParse(rawReleaseId, out var releaseId))
+            {
+                releaseIds.Add(releaseId);
+            }
+        }
+
+        return releaseIds;
+    }
+
+    private async Task<HashSet<Guid>> ExpandSubtreeIdsAsync(
+        IReadOnlyCollection<Guid> rootIds,
+        CancellationToken cancellationToken)
+    {
+        var rows = await (
+            from item in context.ContentHierarchyItems.AsNoTracking()
+            select new
+            {
+                item.Id,
+                item.ParentId
+            })
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        var subtreeIds = rootIds.ToHashSet();
+        var added = true;
+        while (added)
+        {
+            added = false;
+            foreach (var row in rows)
+            {
+                if (row.ParentId is not { } parentId || !subtreeIds.Contains(parentId) || !subtreeIds.Add(row.Id))
+                {
+                    continue;
+                }
+
+                added = true;
+            }
+        }
+
+        return subtreeIds;
+    }
+
+    public async Task<int> DeleteWhereAsync(
+        ReleaseQuery query,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var releases = new List<Release>();
+            var pageNumber = 1;
+            while (true)
+            {
+                var page = await QueryAsync(
+                    query,
+                    new() { PageNumber = pageNumber, PageSize = ParameterBatchSize },
+                    null,
+                    cancellationToken).ConfigureAwait(false);
+                var pageItems = page.Items.ToList();
+                releases.AddRange(pageItems);
+                if (pageItems.Count < ParameterBatchSize)
+                {
+                    break;
+                }
+
+                pageNumber++;
+            }
+
+            if (releases.Count == 0)
+            {
+                return 0;
+            }
+
+            return await transactionManager.ExecuteWithTransactionAsync(
+                async ct =>
+                {
+                    var now = _time.GetUtcNow().UtcDateTime;
+                    var ids = releases.Select(release => release.Id).ToList();
+                    var deleted = 0;
+                    foreach (var batch in ids.Chunk(ParameterBatchSize))
+                    {
+                        deleted += await context.Releases
+                            .Where(release => batch.Contains(release.Id))
+                            .ExecuteDeleteAsync(ct)
+                            .ConfigureAwait(false);
+                    }
+
+                    foreach (var release in releases)
+                    {
+                        await auditRecordRepository.CreateAsync(
+                            new()
+                            {
+                                Category = AuditCategories.Integrations,
+                                Operation = "Delete",
+                                EntityId = release.Id.ToString(),
+                                EntityType = nameof(Release),
+                                Detail = $"Deleted release {release.Title}",
+                                Timestamp = now
+                            },
+                            ct).ConfigureAwait(false);
+                    }
+
+                    return deleted;
+                },
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "The release repository failed to delete releases by query.");
+            throw;
+        }
+    }
+
     public async Task<bool> DeleteAsync(Guid id, Guid? deletedByUserId, CancellationToken cancellationToken)
     {
         try
         {
-            return await transactionManager.ExecuteWithTransactionAsync(async _ =>
-            {
-                var now = DateTime.UtcNow;
-                var model = await context.Releases
-                    .AsNoTracking()
-                    .Where(r => r.Id == id)
-                    .Select(r => new { r.Title })
-                    .FirstOrDefaultAsync(cancellationToken)
-                    .ConfigureAwait(false);
-
-                if (model is null)
+            return await transactionManager.ExecuteWithTransactionAsync(
+                async _ =>
                 {
-                    return false;
-                }
+                    var now = _time.GetUtcNow().UtcDateTime;
+                    var model = await (
+                        from r in context.Releases.AsNoTracking()
+                        where r.Id == id
+                        select new { r.Title })
+                        .FirstOrDefaultAsync(cancellationToken)
+                        .ConfigureAwait(false);
 
-                var deleted = await context.Releases
-                    .Where(r => r.Id == id)
-                    .ExecuteDeleteAsync(cancellationToken)
-                    .ConfigureAwait(false);
-                if (deleted > 0)
-                {
-                    await auditRecordRepository.CreateAsync(new()
+                    if (model is null)
                     {
-                        Category = AuditCategories.Integrations,
-                        Operation = "Delete",
-                        EntityId = id.ToString(),
-                        EntityType = nameof(Release),
-                        Detail = $"Deleted release {model.Title}",
-                        Timestamp = now,
-                        UserId = deletedByUserId
-                    }, cancellationToken).ConfigureAwait(false);
-                }
+                        return false;
+                    }
 
-                return deleted > 0;
-            }, cancellationToken);
+                    var deleted = await context.Releases
+                        .Where(r => r.Id == id)
+                        .ExecuteDeleteAsync(cancellationToken)
+                        .ConfigureAwait(false);
+                    if (deleted > 0)
+                    {
+                        await auditRecordRepository.CreateAsync(
+                            new()
+                            {
+                                Category = AuditCategories.Integrations,
+                                Operation = "Delete",
+                                EntityId = id.ToString(),
+                                EntityType = nameof(Release),
+                                Detail = $"Deleted release {model.Title}",
+                                Timestamp = now,
+                                UserId = deletedByUserId
+                            },
+                            cancellationToken).ConfigureAwait(false);
+                    }
+
+                    return deleted > 0;
+                },
+                cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Error deleting release {ReleaseId}", id);
+            logger.LogError(ex, "The release repository failed to delete release {ReleaseId}.", id);
             throw;
         }
     }

@@ -1,26 +1,32 @@
 import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
-import { AuthProvider } from './AuthContext';
+import { AuthTestProvider as AuthProvider } from '@/test/AuthTestProvider';
+import { AuthProvider as ProductionAuthProvider } from './AuthContext';
 import { useAuth } from './useAuth';
-import { Role } from './types';
-import { clearAuthStorage, tokenExpirationStorage, refreshTokenStorage } from '@/lib/authApi';
+import { Role, type EffectivePermissions } from './types';
+import { clearAuthStorage, tokenExpirationStorage } from '@/lib/authApi';
 import * as authApiModule from '@/lib/authApi';
-import { tokenStorage } from '@/lib/api';
+import { ApiError, tokenStorage } from '@/lib/api';
 import { ToastStateProvider, useToast } from '@/components/ui/Toast';
 
 vi.mock('@/lib/authApi', async (importOriginal) => {
     const actual = await importOriginal<typeof import('@/lib/authApi')>();
-    return { ...actual, refreshAccessToken: vi.fn() };
+    return {
+        ...actual,
+        login: vi.fn(),
+        logout: vi.fn(),
+        refreshAccessToken: vi.fn(),
+        fetchEffectivePermissions: vi.fn(),
+    };
 });
 
 const mockFetch = vi.fn();
 global.fetch = mockFetch;
 
 function fakeJwt(claims: Record<string, string | number>): string {
-    // Default to a far-future `exp` so callers don't have to specify one for every test.
-    // decodeJwtUser strictly requires a numeric `exp` claim.
     const claimsWithExp: Record<string, string | number> = {
         exp: Math.floor(Date.now() / 1000) + 3600,
         ...claims,
@@ -31,7 +37,7 @@ function fakeJwt(claims: Record<string, string | number>): string {
 }
 
 function AuthConsumer() {
-    const { isAuthenticated, isLoading, user, hasPermission, hasRole, signIn, signOut } = useAuth();
+    const { isAuthenticated, isLoading, user, hasPermission, hasRole, signIn, signOut, login } = useAuth();
 
     return (
         <div>
@@ -46,8 +52,22 @@ function AuthConsumer() {
             <span data-testid="is-admin">{hasRole(Role.Admin).toString()}</span>
             <button onClick={() => signIn({ id: '1', username: 'testuser', role: Role.Manager })}>Sign In</button>
             <button onClick={signOut}>Sign Out</button>
+            <button onClick={() => void login('viewer', 'password')}>Log In</button>
         </div>
     );
+}
+
+function setupStoredAdminSession() {
+    const expSeconds = Math.floor(Date.now() / 1000) + 600;
+    const token = fakeJwt({
+        sub: '1',
+        name: 'admin',
+        role: 3,
+        exp: expSeconds,
+    });
+    tokenStorage.set(token);
+    tokenExpirationStorage.set(new Date(expSeconds * 1000));
+    return token;
 }
 
 describe('AuthProvider', () => {
@@ -94,6 +114,132 @@ describe('AuthProvider', () => {
         );
 
         expect(screen.getByTestId('loading')).toHaveTextContent('true');
+    });
+
+    it('clears a malformed stored token even when its separate expiry is in the future', async () => {
+        tokenStorage.set('not-a-valid-jwt');
+        tokenExpirationStorage.set(new Date(Date.now() + 300_000));
+
+        render(
+            <AuthProvider>
+                <AuthConsumer />
+            </AuthProvider>,
+        );
+
+        await waitFor(() => expect(screen.getByTestId('loading')).toHaveTextContent('false'));
+
+        expect(tokenStorage.get()).toBeNull();
+        expect(tokenExpirationStorage.get()).toBeNull();
+        expect(screen.getByTestId('authenticated')).toHaveTextContent('false');
+    });
+
+    it('restores stream authentication for a retained bearer session without a stream cookie', async () => {
+        setupStoredAdminSession();
+        let resolvePermissions: ((value: EffectivePermissions) => void) | undefined;
+        vi.mocked(authApiModule.fetchEffectivePermissions).mockImplementation(
+            () =>
+                new Promise((resolve) => {
+                    resolvePermissions = resolve;
+                }),
+        );
+
+        render(
+            <AuthProvider>
+                <AuthConsumer />
+            </AuthProvider>,
+        );
+
+        await waitFor(() => expect(vi.mocked(authApiModule.fetchEffectivePermissions)).toHaveBeenCalledOnce());
+
+        expect(screen.getByTestId('authenticated')).toHaveTextContent('false');
+
+        resolvePermissions?.({
+            role: Role.Admin,
+            permissions: {},
+        });
+
+        await waitFor(() => expect(screen.getByTestId('authenticated')).toHaveTextContent('true'));
+
+        expect(vi.mocked(authApiModule.refreshAccessToken)).not.toHaveBeenCalled();
+    });
+
+    it('does not restore a bearer session after another tab signs out during permission restoration', async () => {
+        setupStoredAdminSession();
+        let resolvePermissions: ((value: EffectivePermissions) => void) | undefined;
+        vi.mocked(authApiModule.fetchEffectivePermissions).mockImplementation(
+            () =>
+                new Promise((resolve) => {
+                    resolvePermissions = resolve;
+                }),
+        );
+
+        render(
+            <AuthProvider>
+                <AuthConsumer />
+            </AuthProvider>,
+        );
+
+        await waitFor(() => expect(vi.mocked(authApiModule.fetchEffectivePermissions)).toHaveBeenCalledOnce());
+
+        clearAuthStorage();
+        await act(async () => {
+            window.dispatchEvent(
+                new StorageEvent('storage', {
+                    key: tokenExpirationStorage.storageKey,
+                    newValue: null,
+                }),
+            );
+        });
+
+        resolvePermissions?.({
+            role: Role.Admin,
+            permissions: {},
+        });
+
+        await waitFor(() => expect(screen.getByTestId('loading')).toHaveTextContent('false'));
+
+        expect(screen.getByTestId('authenticated')).toHaveTextContent('false');
+        expect(tokenStorage.get()).toBeNull();
+        expect(tokenExpirationStorage.get()).toBeNull();
+    });
+
+    it.each([401, 403])('clears a bearer session when permissions returns %i', async (status) => {
+        setupStoredAdminSession();
+        vi.mocked(authApiModule.fetchEffectivePermissions).mockRejectedValue(
+            new ApiError(status, 'Session refresh rejected'),
+        );
+
+        render(
+            <AuthProvider>
+                <AuthConsumer />
+            </AuthProvider>,
+        );
+
+        await waitFor(() => expect(screen.getByTestId('loading')).toHaveTextContent('false'));
+
+        expect(vi.mocked(authApiModule.fetchEffectivePermissions)).toHaveBeenCalledOnce();
+        expect(screen.getByTestId('authenticated')).toHaveTextContent('false');
+        expect(tokenStorage.get()).toBeNull();
+        expect(tokenExpirationStorage.get()).toBeNull();
+    });
+
+    it.each([0, 503])('preserves a bearer session when permissions returns transient status %i', async (status) => {
+        const token = setupStoredAdminSession();
+        vi.mocked(authApiModule.fetchEffectivePermissions).mockRejectedValue(
+            new ApiError(status, 'Permissions temporarily unavailable'),
+        );
+
+        render(
+            <AuthProvider>
+                <AuthConsumer />
+            </AuthProvider>,
+        );
+
+        await waitFor(() => expect(screen.getByTestId('loading')).toHaveTextContent('false'));
+
+        expect(screen.getByTestId('authenticated')).toHaveTextContent('true');
+        expect(tokenStorage.get()).toBe(token);
+        expect(tokenExpirationStorage.get()).not.toBeNull();
     });
 });
 
@@ -195,6 +341,55 @@ describe('useAuth', () => {
         });
         expect(screen.getByTestId('username')).toHaveTextContent('none');
     });
+
+    it('clears admin permissions and data across logout and viewer login', async () => {
+        const user = userEvent.setup();
+        const queryClient = new QueryClient({
+            defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+        });
+        const admin = { id: 'admin-id', username: 'admin', role: Role.Admin };
+        const adminPermissions: EffectivePermissions = { role: Role.Admin, permissions: {} };
+        const viewerPermissions: EffectivePermissions = { role: Role.Viewer, permissions: {} };
+        queryClient.setQueryData(['auth', 'permissions', admin.id], adminPermissions);
+        queryClient.setQueryData(['users', 'list'], { items: [{ id: admin.id }] });
+        vi.mocked(authApiModule.login).mockResolvedValue({
+            id: 'viewer-id',
+            username: 'viewer',
+            role: Role.Viewer,
+        });
+        vi.mocked(authApiModule.logout).mockResolvedValue();
+        vi.mocked(authApiModule.fetchEffectivePermissions).mockResolvedValue(viewerPermissions);
+
+        render(
+            <QueryClientProvider client={queryClient}>
+                <ProductionAuthProvider initialUser={admin} skipSessionInit>
+                    <AuthConsumer />
+                </ProductionAuthProvider>
+            </QueryClientProvider>,
+        );
+
+        expect(screen.getByTestId('is-admin')).toHaveTextContent('true');
+        await user.click(screen.getByRole('button', { name: 'Sign Out' }));
+
+        await waitFor(() => {
+            expect(screen.getByTestId('authenticated')).toHaveTextContent('false');
+        });
+        expect(queryClient.getQueryData(['auth', 'permissions', admin.id])).toBeUndefined();
+        expect(queryClient.getQueryData(['users', 'list'])).toBeUndefined();
+
+        queryClient.setQueryData(['auth', 'permissions'], adminPermissions);
+        queryClient.setQueryData(['users', 'list'], { items: [{ id: admin.id }] });
+        await user.click(screen.getByRole('button', { name: 'Log In' }));
+
+        await waitFor(() => {
+            expect(screen.getByTestId('username')).toHaveTextContent('viewer');
+            expect(screen.getByTestId('role')).toHaveTextContent(String(Role.Viewer));
+            expect(screen.getByTestId('is-admin')).toHaveTextContent('false');
+        });
+        expect(queryClient.getQueryData(['auth', 'permissions'])).toBeUndefined();
+        expect(queryClient.getQueryData(['users', 'list'])).toBeUndefined();
+        expect(vi.mocked(authApiModule.fetchEffectivePermissions)).toHaveBeenCalled();
+    });
 });
 
 describe('cross-tab token sync', () => {
@@ -227,7 +422,7 @@ describe('cross-tab token sync', () => {
 
         await act(async () => {
             const event = new StorageEvent('storage', {
-                key: 'magpie_token_expires',
+                key: tokenExpirationStorage.storageKey,
                 newValue: new Date(Date.now() + 300_000).toISOString(),
             });
             window.dispatchEvent(event);
@@ -252,7 +447,7 @@ describe('cross-tab token sync', () => {
 
         await act(async () => {
             const event = new StorageEvent('storage', {
-                key: 'magpie_token_expires',
+                key: tokenExpirationStorage.storageKey,
                 newValue: null,
             });
             window.dispatchEvent(event);
@@ -264,10 +459,6 @@ describe('cross-tab token sync', () => {
     });
 
     it('logs out when another tab updates the expiry but the access token decodes to null', async () => {
-        // Reproduces the desync the listener now guards against: another tab wrote
-        // a fresh expiry value but localStorage's access token is missing/garbage so
-        // getCurrentUserFromToken() returns null. Local state must clear rather than
-        // remain stuck on the old user.
         const initialUser = { id: '1', username: 'admin', role: Role.Admin };
 
         render(
@@ -278,13 +469,12 @@ describe('cross-tab token sync', () => {
 
         expect(screen.getByTestId('authenticated')).toHaveTextContent('true');
 
-        // Put a non-decodable token in storage so getCurrentUserFromToken() -> null.
         tokenStorage.set('not-a-valid-jwt');
         tokenExpirationStorage.set(new Date(Date.now() + 300_000));
 
         await act(async () => {
             const event = new StorageEvent('storage', {
-                key: 'magpie_token_expires',
+                key: tokenExpirationStorage.storageKey,
                 newValue: new Date(Date.now() + 300_000).toISOString(),
             });
             window.dispatchEvent(event);
@@ -321,7 +511,6 @@ describe('cross-tab token sync', () => {
 describe('performRefresh', () => {
     function setupExpiredSession() {
         tokenStorage.set('fake-access-token');
-        refreshTokenStorage.set('test-refresh-token');
         tokenExpirationStorage.set(new Date(Date.now() - 1000));
     }
 
@@ -386,12 +575,6 @@ describe('performRefresh', () => {
     });
 
     it('refreshes (not fast-path) when token is within the refresh buffer', async () => {
-        // Token is not strictly expired (30s in the future), but it IS inside the
-        // 60s refresh buffer used by scheduleRefresh. The fast-path early-return
-        // must NOT short-circuit here -- the next request would 401 otherwise.
-        // The JWT is fully decodable, so without the buffer check the fast-path
-        // would happily return the decoded user and never call refresh; this is
-        // what discriminates the buffered fast-path from the unbuffered one.
         const expSeconds = Math.floor(Date.now() / 1000) + 30;
         tokenStorage.set(
             fakeJwt({
@@ -401,7 +584,6 @@ describe('performRefresh', () => {
                 exp: expSeconds,
             }),
         );
-        refreshTokenStorage.set('test-refresh-token');
         tokenExpirationStorage.set(new Date(expSeconds * 1000));
 
         vi.mocked(authApiModule.refreshAccessToken).mockResolvedValue({
@@ -423,9 +605,6 @@ describe('performRefresh', () => {
     });
 
     it('takes the fast-path (no refresh) when token expiry is outside the refresh buffer', async () => {
-        // Paired with the within-buffer test above: a token whose expiry is well
-        // outside the 60s refresh buffer must take the fast-path and NOT trigger
-        // a network refresh. This nails down the other side of the buffer logic.
         const expSeconds = Math.floor(Date.now() / 1000) + 600;
         tokenStorage.set(
             fakeJwt({
@@ -435,7 +614,6 @@ describe('performRefresh', () => {
                 exp: expSeconds,
             }),
         );
-        refreshTokenStorage.set('test-refresh-token');
         tokenExpirationStorage.set(new Date(expSeconds * 1000));
 
         const initialUser = { id: '1', username: 'admin', role: Role.Admin };
@@ -445,8 +623,6 @@ describe('performRefresh', () => {
             </AuthProvider>,
         );
 
-        // Wait for the provider's session-init effect to settle so any refresh it
-        // would have triggered has had a chance to run.
         await waitFor(() => {
             expect(screen.getByTestId('authenticated')).toHaveTextContent('true');
         });

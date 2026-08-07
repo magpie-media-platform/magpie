@@ -19,9 +19,7 @@ describe('UnsavedChangesDialog', () => {
         });
 
         expect(screen.getByText('Unsaved Changes')).toBeInTheDocument();
-        expect(
-            screen.getByText(/You have unsaved changes\. Are you sure you want to close without saving\?/),
-        ).toBeInTheDocument();
+        expect(screen.getByText('Close without saving your changes?')).toBeInTheDocument();
     });
 
     it('does not render when open is false', () => {

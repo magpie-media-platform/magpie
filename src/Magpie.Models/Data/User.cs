@@ -11,105 +11,102 @@ namespace Magpie.Models.Data;
 public record User
 {
     /// <summary>
-    /// The user id.
+    /// The unique id of the user.
     /// </summary>
     public Guid Id { get; set; }
 
     /// <summary>
-    /// The username.
+    /// The name that the user signs in with.
     /// </summary>
     public required string Username { get; set; }
 
     /// <summary>
-    /// The email address.
+    /// The email address of the user.
     /// </summary>
     public string? Email { get; set; }
 
     /// <summary>
-    /// The extension that defines the authentication provider.
+    /// The id of the extension that supplies the provider.
     /// </summary>
     public Guid? ExtensionId { get; set; }
 
     /// <summary>
-    /// The type of authentication provider used to authenticate this user.
+    /// The name of the provider type that authenticates the user.
     /// </summary>
     public required string ProviderType { get; set; }
 
     /// <summary>
-    /// The external identifier from the authentication provider.
+    /// The id of the user at the authentication provider.
     /// </summary>
     public string? ExternalId { get; set; }
 
     /// <summary>
-    /// Provider-specific settings for this user.
+    /// The provider settings for the user, keyed by name.
     /// </summary>
-    /// <remarks>
-    /// The data is stored as serialized JSON.
-    /// </remarks>
     public Dictionary<string, string>? Settings { get; set; }
 
     /// <summary>
-    /// Whether the user account is enabled.
+    /// Whether the user can sign in.
     /// </summary>
     public bool Enabled { get; set; }
 
     /// <summary>
-    /// The user's role.
+    /// The access level of the user, from <see cref="Enums.Role"/>.
     /// </summary>
     public Role Role { get; set; }
 
     /// <summary>
-    /// The hashed password for local authentication.
+    /// The hash of the password for local authentication.
     /// </summary>
     public string? PasswordHash { get; set; }
 
     /// <summary>
-    /// The password salt for local authentication.
+    /// The salt of the password for local authentication.
     /// </summary>
     public string? PasswordSalt { get; set; }
 
     /// <summary>
-    /// The number of consecutive failed login attempts.
+    /// The number of failed sign-in attempts since the last success.
     /// </summary>
     public int FailedLoginAttempts { get; set; }
 
     /// <summary>
-    /// When the account lockout expires.
+    /// The UTC time until which the account stays locked.
     /// </summary>
     public DateTime? LockedUntil { get; set; }
 
     /// <summary>
-    /// When the user last logged in.
+    /// The UTC time of the last successful sign-in.
     /// </summary>
     public DateTime? LastLoginAt { get; set; }
 
     /// <summary>
-    /// When the record was created.
+    /// The UTC time when the record was created.
     /// </summary>
     public DateTime CreatedAt { get; set; }
 
     /// <summary>
-    /// The id of the user that created the record.
+    /// The id of the user who created the record.
     /// </summary>
     public Guid? CreatedByUserId { get; set; }
 
     /// <summary>
-    /// When the record was last modified.
+    /// The UTC time when the record last changed.
     /// </summary>
     public DateTime? ModifiedAt { get; set; }
 
     /// <summary>
-    /// The id of the user that last modified the record.
+    /// The id of the user who last changed the record.
     /// </summary>
     public Guid? ModifiedByUserId { get; set; }
 
     /// <summary>
-    /// API keys for this user.
+    /// The API keys of the user.
     /// </summary>
     public ICollection<ApiKey> ApiKeys { get; } = [];
 
     /// <summary>
-    /// Refresh tokens for this user.
+    /// The refresh tokens of the user.
     /// </summary>
     public ICollection<RefreshToken> RefreshTokens { get; } = [];
 }

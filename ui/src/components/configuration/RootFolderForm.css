@@ -1,0 +1,120 @@
+@layer components {
+    .root-folder-form__sheet {
+        max-width: 480px;
+    }
+
+    .root-folder-form {
+        display: flex;
+        flex-direction: column;
+        flex: 1;
+        min-height: 0;
+        overflow: hidden;
+    }
+
+    .root-folder-form__body {
+        flex: 1;
+        overflow-y: auto;
+        padding: var(--space-lg);
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-lg);
+    }
+
+    .root-folder-form__field {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-xs);
+    }
+
+    .root-folder-form__help {
+        margin: 0;
+        font-size: var(--text-xs);
+        color: var(--text-muted);
+        line-height: var(--leading-normal);
+    }
+
+    .root-folder-form__toggle-row {
+        display: flex;
+        align-items: center;
+        gap: var(--space-sm);
+    }
+
+    .root-folder-form__radio-field {
+        margin: 0;
+        padding: 0;
+        border: 0;
+    }
+
+    .root-folder-form__radio-field legend {
+        padding: 0;
+        margin-bottom: var(--space-xs);
+    }
+
+    .root-folder-form__radio-group {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-sm);
+    }
+
+    .root-folder-form__radio-option {
+        display: flex;
+        align-items: center;
+        gap: var(--space-sm);
+        cursor: pointer;
+    }
+
+    .root-folder-form__radio-option input {
+        accent-color: var(--accent-primary);
+    }
+
+    .root-folder-form__level-defaults {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-md);
+        margin: 0;
+        padding: 0;
+        border: 0;
+    }
+
+    .root-folder-form__level-defaults legend {
+        padding: 0;
+    }
+
+    .root-folder-form__level-default {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-xs);
+        min-width: 0;
+    }
+
+    .root-folder-form__advanced {
+        border: 1px solid var(--border-subtle);
+        border-radius: var(--radius-md);
+        padding: var(--space-md);
+    }
+
+    .root-folder-form__advanced summary {
+        cursor: pointer;
+        font-weight: var(--weight-medium);
+    }
+
+    .root-folder-form__advanced[open] summary {
+        margin-bottom: var(--space-sm);
+    }
+
+    .root-folder-form__advanced > .root-folder-form__help {
+        margin-bottom: var(--space-md);
+    }
+
+    @media (max-width: 480px) {
+        .root-folder-form__sheet {
+            max-width: 100%;
+            border-radius: 0;
+        }
+
+        .root-folder-form__body {
+            padding: var(--space-md);
+            gap: var(--space-md);
+        }
+    }
+}

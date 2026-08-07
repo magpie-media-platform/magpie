@@ -1,17 +1,37 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { SkipLink } from '@/components/ui/SkipLink';
-import { Dialog, DialogTrigger, DialogContent, DialogTitle, DialogHeader, DialogFooter } from '@/components/ui/Dialog';
+import {
+    Dialog,
+    DialogTrigger,
+    DialogContent,
+    DialogTitle,
+    DialogDescription,
+    DialogHeader,
+    DialogFooter,
+} from '@/components/ui/Dialog';
 import { Sheet, SheetTrigger, SheetContent, SheetTitle, SheetHeader, SheetFooter } from '@/components/ui/Sheet';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/Tabs';
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from '@/components/ui/DropdownMenu';
 import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/Select';
 import { Checkbox } from '@/components/ui/Checkbox';
 import { Switch } from '@/components/ui/Switch';
+
+function focusElement(element: HTMLElement) {
+    act(() => {
+        element.focus();
+    });
+}
+
+function pressKeys(keys: string) {
+    const target = document.activeElement instanceof HTMLElement ? document.activeElement : document.body;
+    const key = keys === '{ArrowRight}' ? 'ArrowRight' : keys === '{ArrowLeft}' ? 'ArrowLeft' : 'Enter';
+    fireEvent.keyDown(target, { key, code: key });
+}
 
 describe('Keyboard Navigation Integration', () => {
     describe('Skip Link Navigation', () => {
@@ -304,8 +324,6 @@ describe('Keyboard Navigation Integration', () => {
 
     describe('Tabs Keyboard Navigation', () => {
         it('navigates tabs with arrow keys', async () => {
-            const user = userEvent.setup();
-
             render(
                 <Tabs defaultValue="tab1">
                     <TabsList>
@@ -320,21 +338,25 @@ describe('Keyboard Navigation Integration', () => {
             );
 
             const tab1 = screen.getByRole('tab', { name: 'Tab 1' });
-            tab1.focus();
+            focusElement(tab1);
 
-            await user.keyboard('{ArrowRight}');
-            expect(screen.getByRole('tab', { name: 'Tab 2' })).toHaveFocus();
+            pressKeys('{ArrowRight}');
+            await waitFor(() => {
+                expect(screen.getByRole('tab', { name: 'Tab 2' })).toHaveFocus();
+            });
 
-            await user.keyboard('{ArrowRight}');
-            expect(screen.getByRole('tab', { name: 'Tab 3' })).toHaveFocus();
+            pressKeys('{ArrowRight}');
+            await waitFor(() => {
+                expect(screen.getByRole('tab', { name: 'Tab 3' })).toHaveFocus();
+            });
 
-            await user.keyboard('{ArrowLeft}');
-            expect(screen.getByRole('tab', { name: 'Tab 2' })).toHaveFocus();
+            pressKeys('{ArrowLeft}');
+            await waitFor(() => {
+                expect(screen.getByRole('tab', { name: 'Tab 2' })).toHaveFocus();
+            });
         });
 
         it('wraps tab focus at ends', async () => {
-            const user = userEvent.setup();
-
             render(
                 <Tabs defaultValue="tab1">
                     <TabsList>
@@ -347,17 +369,20 @@ describe('Keyboard Navigation Integration', () => {
             );
 
             const tab1 = screen.getByRole('tab', { name: 'Tab 1' });
-            tab1.focus();
+            focusElement(tab1);
 
-            await user.keyboard('{ArrowLeft}');
-            expect(screen.getByRole('tab', { name: 'Tab 2' })).toHaveFocus();
+            pressKeys('{ArrowLeft}');
+            await waitFor(() => {
+                expect(screen.getByRole('tab', { name: 'Tab 2' })).toHaveFocus();
+            });
 
-            await user.keyboard('{ArrowRight}');
-            expect(screen.getByRole('tab', { name: 'Tab 1' })).toHaveFocus();
+            pressKeys('{ArrowRight}');
+            await waitFor(() => {
+                expect(screen.getByRole('tab', { name: 'Tab 1' })).toHaveFocus();
+            });
         });
 
         it('activates tab with Enter or Space', async () => {
-            const user = userEvent.setup();
             const handleValueChange = vi.fn();
 
             render(
@@ -372,17 +397,17 @@ describe('Keyboard Navigation Integration', () => {
             );
 
             const tab1 = screen.getByRole('tab', { name: 'Tab 1' });
-            tab1.focus();
+            focusElement(tab1);
 
-            await user.keyboard('{ArrowRight}');
-            await user.keyboard('{Enter}');
+            pressKeys('{ArrowRight}');
+            pressKeys('{Enter}');
 
-            expect(handleValueChange).toHaveBeenCalledWith('tab2');
+            await waitFor(() => {
+                expect(handleValueChange).toHaveBeenCalledWith('tab2');
+            });
         });
 
         it('skips disabled tabs during arrow navigation', async () => {
-            const user = userEvent.setup();
-
             render(
                 <Tabs defaultValue="tab1">
                     <TabsList>
@@ -399,10 +424,12 @@ describe('Keyboard Navigation Integration', () => {
             );
 
             const tab1 = screen.getByRole('tab', { name: 'Tab 1' });
-            tab1.focus();
+            focusElement(tab1);
 
-            await user.keyboard('{ArrowRight}');
-            expect(screen.getByRole('tab', { name: 'Tab 3' })).toHaveFocus();
+            pressKeys('{ArrowRight}');
+            await waitFor(() => {
+                expect(screen.getByRole('tab', { name: 'Tab 3' })).toHaveFocus();
+            });
         });
     });
 
@@ -785,11 +812,11 @@ describe('Keyboard Navigation Integration', () => {
                     <DialogTrigger asChild>
                         <Button>Open</Button>
                     </DialogTrigger>
-                    <DialogContent aria-describedby="dialog-desc">
+                    <DialogContent>
                         <DialogHeader>
                             <DialogTitle>Dialog Title</DialogTitle>
+                            <DialogDescription>Dialog description</DialogDescription>
                         </DialogHeader>
-                        <p id="dialog-desc">Dialog description</p>
                     </DialogContent>
                 </Dialog>,
             );

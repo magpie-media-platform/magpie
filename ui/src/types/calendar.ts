@@ -1,9 +1,11 @@
-import type { ContentKind, FulfillmentStatus } from './content';
+import type { FulfillmentStatus } from './content';
 
 export interface CalendarEvent {
     id: string;
 
     contentId: string;
+
+    parentId?: string;
 
     title: string;
 
@@ -13,9 +15,17 @@ export interface CalendarEvent {
 
     posterUrl?: string;
 
-    kind: ContentKind;
+    contentType: string;
+
+    level: string;
+
+    levelLabel?: string;
 
     fulfillment: FulfillmentStatus;
+
+    monitoring: boolean | null;
+
+    effectiveMonitoring: boolean;
 }
 
 export type CalendarView = 'month' | 'week' | 'day' | 'list';

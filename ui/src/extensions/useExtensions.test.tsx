@@ -101,7 +101,7 @@ describe('useExtensions', () => {
         );
 
         render(
-            <ExtensionProvider>
+            <ExtensionProvider userId="user-123">
                 <TestUseExtensions />
             </ExtensionProvider>,
         );
@@ -120,7 +120,7 @@ describe('useExtensions', () => {
         mockFetch.mockResolvedValueOnce(mockJsonResponse(manifest));
 
         render(
-            <ExtensionProvider>
+            <ExtensionProvider userId="user-123">
                 <TestUseExtensions />
             </ExtensionProvider>,
         );
@@ -138,7 +138,7 @@ describe('useExtensions', () => {
         mockFetch.mockResolvedValueOnce(mockErrorResponse(500, 'Internal Server Error'));
 
         render(
-            <ExtensionProvider>
+            <ExtensionProvider userId="user-123">
                 <TestUseExtensions />
             </ExtensionProvider>,
         );
@@ -222,7 +222,7 @@ describe('useExtensions', () => {
         }
 
         render(
-            <ExtensionProvider>
+            <ExtensionProvider userId="user-123">
                 <TestGetExtensions />
             </ExtensionProvider>,
         );
@@ -252,7 +252,7 @@ describe('useExtensions', () => {
         }
 
         render(
-            <ExtensionProvider>
+            <ExtensionProvider userId="user-123">
                 <TestRetry />
             </ExtensionProvider>,
         );
@@ -347,7 +347,7 @@ describe('useSlotExtensions', () => {
         }
 
         render(
-            <ExtensionProvider>
+            <ExtensionProvider userId="user-123">
                 <TestSlotExtensions />
             </ExtensionProvider>,
         );
@@ -400,7 +400,7 @@ describe('useSlotExtensions', () => {
         }
 
         render(
-            <ExtensionProvider>
+            <ExtensionProvider userId="user-123">
                 <TestSlotExtensions />
             </ExtensionProvider>,
         );
@@ -445,7 +445,7 @@ describe('useSlotExtensions', () => {
         }
 
         render(
-            <ExtensionProvider>
+            <ExtensionProvider userId="user-123">
                 <TestSlotExtensions />
             </ExtensionProvider>,
         );

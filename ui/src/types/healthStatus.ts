@@ -1,15 +1,36 @@
-export type HealthStatusValue = 0 | 1 | 2 | 3;
+export type HealthStatusValue = 'Unknown' | 'Healthy' | 'Unhealthy' | 'Stale' | 'Degraded' | 'Stabilizing';
 
 export const healthStatusLabels: Record<HealthStatusValue, string> = {
-    0: 'Unknown',
-    1: 'Healthy',
-    2: 'Unhealthy',
-    3: 'Stale',
+    Unknown: 'Unknown',
+    Healthy: 'Healthy',
+    Unhealthy: 'Unhealthy',
+    Stale: 'Stale',
+    Degraded: 'Degraded',
+    Stabilizing: 'Stabilizing',
 };
 
 export const healthStatusVariants: Record<HealthStatusValue, string> = {
-    0: 'unknown',
-    1: 'healthy',
-    2: 'unhealthy',
-    3: 'stale',
+    Unknown: 'unknown',
+    Healthy: 'healthy',
+    Unhealthy: 'unhealthy',
+    Stale: 'stale',
+    Degraded: 'degraded',
+    Stabilizing: 'stabilizing',
 };
+
+export const normalizedHealthStatuses: Record<string, HealthStatusValue> = {
+    unknown: 'Unknown',
+    healthy: 'Healthy',
+    unhealthy: 'Unhealthy',
+    stale: 'Stale',
+    degraded: 'Degraded',
+    stabilizing: 'Stabilizing',
+};
+
+export function normalizeHealthStatus(status: string | null | undefined): HealthStatusValue {
+    if (!status) {
+        return 'Unknown';
+    }
+
+    return normalizedHealthStatuses[status.trim().toLowerCase()] ?? 'Unknown';
+}

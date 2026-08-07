@@ -13,6 +13,7 @@ const mockContextValue: AuthContextValue = {
     isAuthenticated: true,
     user: mockUser,
     hasPermission: () => true,
+    getRequiredRole: () => undefined,
     hasRole: () => true,
     signIn: () => {},
     signOut: async () => {},
@@ -20,8 +21,7 @@ const mockContextValue: AuthContextValue = {
 };
 
 function createWrapper(value: AuthContextValue) {
-    return ({ children }: { children: React.ReactNode }) =>
-        createElement(AuthContext.Provider, { value }, children);
+    return ({ children }: { children: React.ReactNode }) => createElement(AuthContext.Provider, { value }, children);
 }
 
 describe('useAuth', () => {
@@ -36,7 +36,6 @@ describe('useAuth', () => {
     });
 
     it('returns default context value when used outside AuthProvider', () => {
-        // AuthContext has a default value, so useContext never returns undefined
         const { result } = renderHook(() => useAuth());
 
         expect(result.current.isLoading).toBe(true);

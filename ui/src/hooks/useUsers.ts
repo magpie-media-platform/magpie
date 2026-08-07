@@ -2,19 +2,28 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 
 import { apiGet, apiPost, apiPatch, apiDelete, buildUrl } from '@/lib/api';
 import { POLLING_INTERVALS } from '@/lib/queryClient';
+import { useInvalidateQueriesOnEvents } from './useInvalidateQueriesOnEvents';
 import { queryErrorOrNull } from '@/lib/utils';
-import type { Role } from '@/auth';
-import type { UserItem, UserCreate, UserUpdate } from '@/types';
+import { roleFromApi, type Role } from '@/auth';
+import type { UserItem, UserCreate, UserUpdate, UserExternalCreate } from '@/types';
 import type { PagedList } from '@/types/paging';
+
+function normalizeUser(user: UserItem): UserItem {
+    return { ...user, role: roleFromApi(user.role) };
+}
 
 export interface UserQueryParams {
     providerType?: string;
     role?: Role;
     enabled?: boolean;
-    page?: number;
+    pageNumber?: number;
     pageSize?: number;
     sortBy?: string;
     sortDirection?: 0 | 1 | 2;
+}
+
+interface UseUsersOptions {
+    enabled?: boolean;
 }
 
 interface ApiUserPatch {
@@ -38,7 +47,7 @@ function buildUserQueryUrl(params?: UserQueryParams): string {
         providerType: params.providerType,
         role: params.role,
         enabled: params.enabled,
-        page: params.page,
+        pageNumber: params.pageNumber,
         pageSize: params.pageSize,
         sortBy: params.sortBy,
         sortDirection: params.sortDirection,
@@ -47,56 +56,65 @@ function buildUserQueryUrl(params?: UserQueryParams): string {
 
 async function fetchUsers(params?: UserQueryParams): Promise<PagedList<UserItem>> {
     const url = buildUserQueryUrl(params);
-    return apiGet<PagedList<UserItem>>(url);
+    const result = await apiGet<PagedList<UserItem>>(url);
+    return { ...result, items: result.items.map(normalizeUser) };
 }
 
 async function fetchCurrentUser(): Promise<UserItem> {
-    return apiGet<UserItem>('/users/me');
+    return normalizeUser(await apiGet<UserItem>('/users/my'));
 }
 
 async function fetchUser(id: string): Promise<UserItem> {
-    return apiGet<UserItem>(`/users/${id}`);
+    return normalizeUser(await apiGet<UserItem>(`/users/${id}`));
 }
 
 async function createUser(data: UserCreate): Promise<UserItem> {
-    return apiPost<UserItem>('/users', data);
+    return normalizeUser(await apiPost<UserItem>('/users', data));
+}
+
+async function createExternalUser(data: UserExternalCreate): Promise<UserItem> {
+    return normalizeUser(await apiPost<UserItem>('/users/external', data));
 }
 
 async function updateUser(id: string, data: ApiUserPatch): Promise<void> {
     return apiPatch(`/users/${id}`, data);
 }
 
-async function enableUser(id: string): Promise<UserItem> {
-    return apiPost<UserItem>(`/users/${id}/enable`);
-}
-
-async function disableUser(id: string): Promise<UserItem> {
-    return apiPost<UserItem>(`/users/${id}/disable`);
-}
-
 async function deleteUser(id: string): Promise<void> {
     return apiDelete(`/users/${id}`);
 }
 
-export function useUsers(params?: UserQueryParams) {
+async function unlockUser(id: string): Promise<void> {
+    return apiPost(`/users/${id}/unlock`);
+}
+
+export function useUsers(params?: UserQueryParams, options?: UseUsersOptions) {
+    useInvalidateQueriesOnEvents(
+        ['user.created', 'user.updated', 'user.deleted', 'user.lockedOut', 'user.unlocked'],
+        [userQueryKeys.list(params)],
+        { exact: true, owner: 'users:list' },
+    );
     const queryClient = useQueryClient();
+    const enabled = options?.enabled ?? true;
 
     const usersQuery = useQuery({
         queryKey: userQueryKeys.list(params),
         queryFn: () => fetchUsers(params),
-        refetchInterval: POLLING_INTERVALS.slow,
+        enabled,
         staleTime: POLLING_INTERVALS.slow / 2,
     });
 
     const createMutation = useMutation({
-        mutationFn: (data: { username: string; password: string; role: Role }) =>
-            createUser({
-                username: data.username,
-                password: data.password,
-                role: data.role,
-            }),
+        mutationFn: createUser,
         onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: userQueryKeys.all });
+            void queryClient.invalidateQueries({ queryKey: userQueryKeys.all });
+        },
+    });
+
+    const createExternalMutation = useMutation({
+        mutationFn: (data: UserExternalCreate) => createExternalUser(data),
+        onSuccess: () => {
+            void queryClient.invalidateQueries({ queryKey: userQueryKeys.all });
         },
     });
 
@@ -112,40 +130,37 @@ export function useUsers(params?: UserQueryParams) {
             return updateUser(id, apiData);
         },
         onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: userQueryKeys.all });
+            void queryClient.invalidateQueries({ queryKey: userQueryKeys.all });
         },
     });
 
-    const enableMutation = useMutation({
-        mutationFn: enableUser,
+    const toggleMutation = useMutation({
+        mutationFn: ({ id, enabled }: { id: string; enabled: boolean }) =>
+            updateUser(id, { enabled: { value: enabled } }),
         onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: userQueryKeys.all });
-        },
-    });
-
-    const disableMutation = useMutation({
-        mutationFn: disableUser,
-        onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: userQueryKeys.all });
+            void queryClient.invalidateQueries({ queryKey: userQueryKeys.all });
         },
     });
 
     const deleteMutation = useMutation({
         mutationFn: deleteUser,
         onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: userQueryKeys.all });
+            void queryClient.invalidateQueries({ queryKey: userQueryKeys.all });
+        },
+    });
+
+    const unlockMutation = useMutation({
+        mutationFn: unlockUser,
+        onSuccess: () => {
+            void queryClient.invalidateQueries({ queryKey: userQueryKeys.all });
         },
     });
 
     const pagedResult = usersQuery.data ?? { items: [], pageNumber: null, pageSize: null, totalItems: 0 };
     const users: UserItem[] = pagedResult.items;
 
-    const toggleUserEnabled = async (id: string, enabled: boolean): Promise<UserItem> => {
-        if (enabled) {
-            return enableMutation.mutateAsync(id);
-        } else {
-            return disableMutation.mutateAsync(id);
-        }
+    const toggleUserEnabled = async (id: string, enabled: boolean): Promise<void> => {
+        await toggleMutation.mutateAsync({ id, enabled });
     };
 
     const patchUser = async (id: string, data: UserUpdate): Promise<void> => {
@@ -163,14 +178,20 @@ export function useUsers(params?: UserQueryParams) {
         createUser: createMutation.mutateAsync,
         isCreating: createMutation.isPending,
 
+        createExternalUser: createExternalMutation.mutateAsync,
+        isCreatingExternal: createExternalMutation.isPending,
+
         updateUser: patchUser,
         isUpdating: updateMutation.isPending,
 
         toggleUserEnabled,
-        isToggling: enableMutation.isPending || disableMutation.isPending,
+        isToggling: toggleMutation.isPending,
 
         deleteUser: deleteMutation.mutateAsync,
         isDeleting: deleteMutation.isPending,
+
+        unlockUser: unlockMutation.mutateAsync,
+        isUnlocking: unlockMutation.isPending,
 
         refetch: usersQuery.refetch,
     };
@@ -182,6 +203,15 @@ export function useCurrentUser() {
         queryFn: fetchCurrentUser,
         staleTime: POLLING_INTERVALS.slow,
     });
+    useInvalidateQueriesOnEvents(
+        ['user.updated', 'user.deleted', 'user.lockedOut', 'user.unlocked'],
+        [userQueryKeys.me()],
+        {
+            entityIds: currentUserQuery.data?.id ? [currentUserQuery.data.id] : [],
+            exact: true,
+            owner: 'users:current',
+        },
+    );
 
     return {
         currentUser: currentUserQuery.data ?? null,
@@ -192,6 +222,11 @@ export function useCurrentUser() {
 }
 
 export function useUser(id: string | null) {
+    useInvalidateQueriesOnEvents(
+        ['user.created', 'user.updated', 'user.deleted', 'user.lockedOut', 'user.unlocked'],
+        [userQueryKeys.detail(id ?? '')],
+        { entityIds: id ? [id] : [], exact: true, owner: 'users:detail' },
+    );
     const userQuery = useQuery({
         queryKey: userQueryKeys.detail(id ?? ''),
         queryFn: () => fetchUser(id!),

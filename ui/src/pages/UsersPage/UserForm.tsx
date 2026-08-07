@@ -1,15 +1,18 @@
 import { useState, useCallback, useEffect, useMemo, useRef, type ReactNode, type RefObject } from 'react';
-import { FloppyDisk, X } from '@phosphor-icons/react';
+import { FloppyDiskIcon, XIcon } from '@phosphor-icons/react';
 
 import { useUnsavedChangesGuard } from '@/hooks/useUnsavedChangesGuard';
+import { useExternalChangeConflict } from '@/hooks/useExternalChangeConflict';
 
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Label } from '@/components/ui/Label';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription, SheetFooter } from '@/components/ui/Sheet';
 import { UnsavedChangesDialog } from '@/components/ui/UnsavedChangesDialog';
+import { ExternalChangeConflictWarning, StaleSaveConfirmationDialog } from '@/components/ui/ExternalChangeConflict';
 import { Switch } from '@/components/ui/Switch';
 import { Select, SelectTrigger, SelectContent, SelectItem } from '@/components/ui/Select';
+import { useExternalUserProviderTypes } from '@/hooks/useProviderTypes';
 import { Role, RoleName } from '@/auth';
 
 import './UserForm.css';
@@ -20,13 +23,22 @@ export interface UserFormValues {
     role: Role;
     enabled: boolean;
     password?: string;
+    providerType?: string;
+    externalId?: string;
+    email?: string;
+}
+
+const LOCAL_PROVIDER_TYPE = 'local';
+
+function isLocalProvider(providerType: string | undefined): boolean {
+    return !providerType || providerType === LOCAL_PROVIDER_TYPE;
 }
 
 interface UserFormProps {
     open: boolean;
     onOpenChange: (open: boolean) => void;
     initialValues: UserFormValues | null;
-    onSubmit: (values: UserFormValues) => void;
+    onSubmit: (values: UserFormValues) => void | Promise<void>;
     isSubmitting?: boolean;
     returnFocusRef?: RefObject<HTMLElement | null>;
 }
@@ -48,30 +60,57 @@ export function UserForm({
     const isEditing = Boolean(initialValues?.id);
     const title = isEditing ? 'Edit User' : 'Add User';
 
+    const { types: externalProviders } = useExternalUserProviderTypes();
+
     const [values, setValues] = useState<UserFormValues>(initialValues ?? defaultValues);
     const [errors, setErrors] = useState<Record<string, string>>({});
 
     const cleanValuesRef = useRef<UserFormValues>(initialValues ?? defaultValues);
     const [showUnsavedDialog, setShowUnsavedDialog] = useState(false);
-
-    useEffect(() => {
-        if (open) {
-            const clean = initialValues ?? defaultValues;
-            setValues(clean);
-            cleanValuesRef.current = clean;
-            setErrors({});
-            setShowUnsavedDialog(false);
-        }
-    }, [open, initialValues]);
+    const [showStaleSaveConfirmation, setShowStaleSaveConfirmation] = useState(false);
+    const loadedEntityIdRef = useRef<string | null | undefined>(undefined);
 
     const isDirty = useMemo(
         () =>
             values.username !== cleanValuesRef.current.username ||
             values.role !== cleanValuesRef.current.role ||
             values.enabled !== cleanValuesRef.current.enabled ||
-            values.password !== cleanValuesRef.current.password,
+            values.password !== cleanValuesRef.current.password ||
+            values.providerType !== cleanValuesRef.current.providerType ||
+            values.externalId !== cleanValuesRef.current.externalId,
         [values],
     );
+    const isDirtyRef = useRef(isDirty);
+    isDirtyRef.current = isDirty;
+
+    useEffect(() => {
+        if (!open) {
+            loadedEntityIdRef.current = undefined;
+            return;
+        }
+        const nextEntityId = initialValues?.id ?? null;
+        if (loadedEntityIdRef.current === nextEntityId && isDirtyRef.current) {
+            return;
+        }
+        const clean = initialValues ?? defaultValues;
+        setValues(clean);
+        cleanValuesRef.current = clean;
+        loadedEntityIdRef.current = nextEntityId;
+        setErrors({});
+        setShowUnsavedDialog(false);
+        setShowStaleSaveConfirmation(false);
+    }, [open, initialValues]);
+
+    const isExternal = !isLocalProvider(values.providerType);
+
+    const conflict = useExternalChangeConflict({
+        dirty: isDirty,
+        entityId: initialValues?.id,
+        eventNames: ['user.updated', 'user.deleted'],
+        deletedEventNames: ['user.deleted'],
+        contextKeys: ['user.id'],
+        enabled: open && isEditing,
+    });
 
     useUnsavedChangesGuard(open && isDirty);
 
@@ -123,23 +162,42 @@ export function UserForm({
         }
 
         if (!isEditing) {
-            if (!values.password || values.password.length < 8) {
+            if (isExternal) {
+                if (!values.externalId?.trim()) {
+                    newErrors.externalId = 'External id is required';
+                }
+            } else if (!values.password || values.password.length < 8) {
                 newErrors.password = 'Password must be at least 8 characters';
             }
         }
 
         setErrors(newErrors);
         return Object.keys(newErrors).length === 0;
-    }, [values, isEditing]);
+    }, [values, isEditing, isExternal]);
+
+    const save = useCallback(async () => {
+        conflict.beginOwnSave();
+        try {
+            await onSubmit(values);
+            conflict.endOwnSave(true);
+        } catch {
+            conflict.endOwnSave(false);
+        }
+    }, [conflict, onSubmit, values]);
 
     const handleSubmit = useCallback(
-        (e: React.FormEvent) => {
+        (e: React.SubmitEvent) => {
             e.preventDefault();
-            if (validate()) {
-                onSubmit(values);
+            if (conflict.state === 'deleted' || !validate()) {
+                return;
             }
+            if (conflict.state === 'stale') {
+                setShowStaleSaveConfirmation(true);
+                return;
+            }
+            void save();
         },
-        [values, validate, onSubmit],
+        [conflict.state, save, validate],
     );
 
     return (
@@ -164,6 +222,13 @@ export function UserForm({
 
                 <form onSubmit={handleSubmit} className="user-form">
                     <div className="user-form__body">
+                        {conflict.state && (
+                            <ExternalChangeConflictWarning
+                                state={conflict.state}
+                                entityLabel="User"
+                                id="user-external-change"
+                            />
+                        )}
                         <div className="user-form__field">
                             <Label htmlFor="user-username" error={!!errors.username} required>
                                 Username
@@ -185,6 +250,44 @@ export function UserForm({
                             )}
                         </div>
 
+                        {!isEditing && (
+                            <div className="user-form__field">
+                                <Label htmlFor="user-provider">Provider</Label>
+                                <Select
+                                    value={isExternal ? (values.providerType ?? '') : LOCAL_PROVIDER_TYPE}
+                                    onValueChange={(v) => handleChange('providerType', v)}
+                                    disabled={isSubmitting}
+                                >
+                                    <SelectTrigger id="user-provider" data-field="provider">
+                                        {isExternal ? values.providerType : 'Local (password)'}
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value={LOCAL_PROVIDER_TYPE}>Local (password)</SelectItem>
+                                        {externalProviders.map((provider) => (
+                                            <SelectItem key={provider} value={provider}>
+                                                {provider}
+                                            </SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
+                            </div>
+                        )}
+
+                        {isEditing && (
+                            <div className="user-form__field">
+                                <Label htmlFor="user-provider">Provider</Label>
+                                <Input
+                                    id="user-provider"
+                                    type="text"
+                                    value={values.providerType ?? LOCAL_PROVIDER_TYPE}
+                                    readOnly
+                                    disabled
+                                    data-field="provider"
+                                />
+                                <p className="user-form__help">The authentication provider cannot be changed.</p>
+                            </div>
+                        )}
+
                         <div className="user-form__field">
                             <Label htmlFor="user-role">Role</Label>
                             <Select
@@ -204,18 +307,20 @@ export function UserForm({
                             </Select>
                         </div>
 
-                        <div className="user-form__field user-form__field--inline">
-                            <Label htmlFor="user-enabled">Enabled</Label>
-                            <Switch
-                                id="user-enabled"
-                                checked={values.enabled}
-                                onCheckedChange={(checked) => handleChange('enabled', checked)}
-                                aria-label="User enabled"
-                                disabled={isSubmitting}
-                            />
-                        </div>
+                        {(isEditing || !isExternal) && (
+                            <div className="user-form__field user-form__field--inline">
+                                <Label htmlFor="user-enabled">Enabled</Label>
+                                <Switch
+                                    id="user-enabled"
+                                    checked={values.enabled}
+                                    onCheckedChange={(checked) => handleChange('enabled', checked)}
+                                    aria-label="User enabled"
+                                    disabled={isSubmitting}
+                                />
+                            </div>
+                        )}
 
-                        {!isEditing && (
+                        {!isEditing && !isExternal && (
                             <div className="user-form__field">
                                 <Label htmlFor="user-password" error={!!errors.password}>
                                     Password
@@ -235,6 +340,28 @@ export function UserForm({
                                 <p className="user-form__help">Minimum 8 characters</p>
                             </div>
                         )}
+
+                        {!isEditing && isExternal && (
+                            <div className="user-form__field">
+                                <Label htmlFor="user-external-id" error={!!errors.externalId} required>
+                                    External id
+                                </Label>
+                                <Input
+                                    id="user-external-id"
+                                    type="text"
+                                    value={values.externalId ?? ''}
+                                    onChange={(e) => handleChange('externalId', e.target.value)}
+                                    placeholder="Identifier used by the authentication provider"
+                                    error={!!errors.externalId}
+                                    errorMessage={errors.externalId || undefined}
+                                    disabled={isSubmitting}
+                                    data-field="external-id"
+                                />
+                                <p className="user-form__help">
+                                    The provider account this user maps to. No password is stored.
+                                </p>
+                            </div>
+                        )}
                     </div>
 
                     <SheetFooter>
@@ -245,16 +372,17 @@ export function UserForm({
                             onClick={handleCancel}
                             data-action="cancel"
                         >
-                            <X weight="bold" aria-hidden="true" />
+                            <XIcon weight="bold" aria-hidden="true" />
                             Cancel
                         </Button>
                         <Button
                             type="submit"
                             variant="primary"
                             loading={isSubmitting}
+                            disabled={conflict.state === 'deleted'}
                             data-action={isEditing ? 'save' : 'create'}
                         >
-                            <FloppyDisk weight="bold" aria-hidden="true" />
+                            <FloppyDiskIcon weight="bold" aria-hidden="true" />
                             {isEditing ? 'Save' : 'Create'}
                         </Button>
                     </SheetFooter>
@@ -262,6 +390,17 @@ export function UserForm({
             </SheetContent>
 
             <UnsavedChangesDialog open={showUnsavedDialog} onDiscard={handleDiscard} onCancel={handleKeepEditing} />
+            <StaleSaveConfirmationDialog
+                open={showStaleSaveConfirmation}
+                title="Save changes based on older data?"
+                description="This item changed after editing began. Saving will overwrite the newer changes."
+                saving={isSubmitting}
+                onCancel={() => setShowStaleSaveConfirmation(false)}
+                onConfirm={() => {
+                    setShowStaleSaveConfirmation(false);
+                    void save();
+                }}
+            />
         </Sheet>
     );
 }

@@ -7,8 +7,8 @@ internal sealed class SubjectTransformContext
     private SubjectFilterCriteria? _subject;
     private MetadataCriteria? _metadata;
 
-    public SubjectFilterCriteria Subject => _subject ??= new SubjectFilterCriteria();
-    public MetadataCriteria Metadata => _metadata ??= new MetadataCriteria();
+    public SubjectFilterCriteria Subject => _subject ??= new();
+    public MetadataCriteria Metadata => _metadata ??= new();
 
     public SubjectFilterCriteria Build()
     {

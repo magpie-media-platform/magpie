@@ -3,16 +3,17 @@ using Magpie.Models.Filtering;
 namespace Magpie.Models.Data;
 
 /// <summary>
-/// Filter criteria for <see cref="ContentItem"/>.
+/// Filter criteria for a content filter.
 /// </summary>
 public sealed record ContentFilterCriteria
 {
     /// <summary>
-    /// The criteria for related <see cref="ContentHierarchyItem"/>s.
+    /// Criteria for the <see cref="ContentHierarchyItem"/>.
     /// </summary>
     public CriteriaSet<ContentHierarchyItemCriteria> ContentHierarchyItem { get; init; } = new();
+
     /// <summary>
-    /// The criteria for <see cref="ContentItem.MediaFiles"/>.
+    /// Criteria for the media files of the content.
     /// </summary>
     public CriteriaSet<MediaFileCriteria> MediaFiles { get; init; } = new();
 }

@@ -1,0 +1,163 @@
+@layer components {
+    .interactive-search {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-lg);
+        max-width: var(--content-max-width);
+        margin: 0 auto;
+        width: 100%;
+        padding: var(--space-lg);
+    }
+
+    .interactive-search__nav {
+        display: flex;
+        align-items: center;
+    }
+
+    .interactive-search__header-skeleton {
+        height: 140px;
+        border-radius: var(--radius-md);
+    }
+
+    .interactive-search__results {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-md);
+    }
+
+    .interactive-search__results-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: var(--space-md);
+        flex-wrap: wrap;
+    }
+
+    .interactive-search__results-title {
+        display: flex;
+        align-items: center;
+        gap: var(--space-xs);
+        margin: 0;
+        font-size: var(--text-lg);
+        font-weight: var(--weight-semibold);
+        color: var(--text-primary);
+    }
+
+    .interactive-search__searching {
+        display: flex;
+        align-items: center;
+        gap: var(--space-xs);
+        color: var(--text-secondary);
+        font-size: var(--text-sm);
+    }
+
+    .interactive-search__loading {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-sm);
+    }
+
+    .interactive-search__loading > * {
+        height: 44px;
+        border-radius: var(--radius-sm);
+    }
+
+    .interactive-search__table {
+        min-width: 0;
+    }
+
+    .interactive-search[data-layout='table'] {
+        & .interactive-search__table .data-table__wrapper {
+            overflow-x: hidden;
+        }
+
+        & .interactive-search__table .data-table__table {
+            table-layout: fixed;
+            width: 100%;
+        }
+
+        & .interactive-search__table .data-table__cell,
+        & .interactive-search__table .data-table__header-cell {
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+    }
+
+    .interactive-search__title {
+        display: block;
+        min-width: 0;
+        max-width: 100%;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        padding: 0;
+        border: 0;
+        background: none;
+        color: var(--text-primary);
+        font: inherit;
+        text-align: left;
+        cursor: pointer;
+
+        &:hover {
+            color: var(--accent-primary);
+            text-decoration: underline;
+        }
+
+        &:focus-visible {
+            outline: var(--focus-ring-width) solid var(--focus-ring-color);
+            outline-offset: var(--focus-ring-offset);
+            border-radius: var(--radius-sm);
+        }
+    }
+
+    .interactive-search__empty-cell {
+        color: var(--text-muted);
+    }
+
+    .interactive-search__match {
+        display: inline-flex;
+        align-items: center;
+        gap: var(--space-2xs);
+    }
+
+    @media (min-width: 1024px) and (max-width: 1279px) {
+        .interactive-search__table .data-table__header-cell[data-column='publishDate'],
+        .interactive-search__table .data-table__cell[data-column='publishDate'] {
+            display: none;
+        }
+    }
+
+    @media (max-width: 767px) {
+        .interactive-search {
+            padding: var(--space-md);
+            padding-bottom: calc(var(--bottom-nav-height) + var(--space-lg) + env(safe-area-inset-bottom, 0px));
+        }
+    }
+
+    .interactive-search[data-layout='card'] {
+        & .interactive-search__table .data-table__cell[data-column='title'] {
+            flex: 1 1 0;
+            min-width: 0;
+            order: 0;
+        }
+
+        & .interactive-search__table .data-table__cell[data-column='title'] .interactive-search__title {
+            flex: 1 1 auto;
+            text-align: right;
+        }
+
+        & .interactive-search__table .data-table__cell[data-column='action'] {
+            order: 1;
+        }
+
+        & .interactive-search__table .data-table__cell:not([data-column='title'], [data-column='action']) {
+            order: 2;
+        }
+
+        & .interactive-search__table [data-action='grab'] {
+            scroll-margin-block-end: calc(
+                var(--bottom-nav-height) + var(--space-lg) + env(safe-area-inset-bottom, 0px)
+            );
+        }
+    }
+}

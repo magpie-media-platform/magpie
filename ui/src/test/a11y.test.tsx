@@ -10,7 +10,6 @@ import { Card, CardHeader, CardBody, CardFooter } from '@/components/ui/Card';
 import { Alert } from '@/components/ui/Alert';
 import { Badge } from '@/components/ui/Badge';
 import { Skeleton } from '@/components/ui/Skeleton';
-import { Separator } from '@/components/ui/Separator';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Avatar } from '@/components/ui/Avatar';
 
@@ -158,7 +157,7 @@ describe('Accessibility: Badge', () => {
     });
 
     it('has no a11y violations for all semantic variants', async () => {
-        const variants = ['healthy', 'degraded', 'unhealthy', 'unknown', 'monitored', 'unmonitored'] as const;
+        const variants = ['healthy', 'degraded', 'unhealthy', 'unknown', 'stabilizing', 'missing'] as const;
         for (const variant of variants) {
             const { container } = render(<Badge variant={variant}>{variant}</Badge>);
             const results = await checkA11y(container);
@@ -184,32 +183,6 @@ describe('Accessibility: Avatar', () => {
 describe('Accessibility: Skeleton', () => {
     it('has no a11y violations', async () => {
         const { container } = render(<Skeleton className="h-4 w-32" />);
-        const results = await checkA11y(container);
-        expect(results).toHaveNoViolations();
-    });
-});
-
-describe('Accessibility: Separator', () => {
-    it('has no a11y violations for horizontal separator', async () => {
-        const { container } = render(
-            <div>
-                <p>Above</p>
-                <Separator />
-                <p>Below</p>
-            </div>,
-        );
-        const results = await checkA11y(container);
-        expect(results).toHaveNoViolations();
-    });
-
-    it('has no a11y violations for vertical separator', async () => {
-        const { container } = render(
-            <div style={{ display: 'flex', height: 20 }}>
-                <span>Left</span>
-                <Separator orientation="vertical" />
-                <span>Right</span>
-            </div>,
-        );
         const results = await checkA11y(container);
         expect(results).toHaveNoViolations();
     });

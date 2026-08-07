@@ -6,26 +6,58 @@ using System.Threading.Tasks;
 
 using Magpie.Abstractions;
 using Magpie.Abstractions.Repositories;
+using Magpie.Core.Events;
 using Magpie.Data;
 using Magpie.Models;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
+using Magpie.Sdk.Services;
 
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 
 namespace Magpie.Core.Repositories;
 
-/// <summary>
-/// Repository for managing settings and settings groups.
-/// </summary>
-public sealed class SettingsRepository(
+internal sealed class SettingsRepository(
     MagpieDbContext context,
     IAuditRecordRepository auditRecordRepository,
     ITransactionManager transactionManager,
-    ILogger<SettingsRepository> logger) : ISettingsRepository
+    IContentHierarchyItemRepository contentHierarchyItemRepository,
+    IEventBus eventBus,
+    ILogger<SettingsRepository> logger,
+    TimeProvider? timeProvider = null) : ISettingsRepository
 {
-    /// <inheritdoc />
+    private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
+
+    private static IReadOnlyCollection<string> ChangedFields(SettingsGroupPatch patch)
+    {
+        var keys = new HashSet<string>(StringComparer.Ordinal);
+        if (patch.Settings.Add is not null)
+        {
+            keys.UnionWith(patch.Settings.Add.Keys);
+        }
+
+        if (patch.Settings.Update is not null)
+        {
+            keys.UnionWith(patch.Settings.Update.Keys);
+        }
+
+        if (patch.Settings.Remove is not null)
+        {
+            keys.UnionWith(patch.Settings.Remove);
+        }
+
+        return [.. keys.OrderBy(key => key, StringComparer.Ordinal)];
+    }
+
+    private static bool AffectsSystemDefaultMonitoring(SettingsGroupPatch patch)
+    {
+        const string key = "system-default";
+        return patch.Settings.Add?.ContainsKey(key) == true ||
+            patch.Settings.Update?.ContainsKey(key) == true ||
+            patch.Settings.Remove?.Contains(key, StringComparer.Ordinal) == true;
+    }
+
     public async Task<IEnumerable<SettingsGroup>> ListAllAsync(CancellationToken cancellationToken)
     {
         try
@@ -38,12 +70,11 @@ public sealed class SettingsRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Error listing settings groups");
+            logger.LogError(ex, "The settings repository failed to list settings groups.");
             throw;
         }
     }
 
-    /// <inheritdoc />
     public async Task<SettingsGroup?> GetByIdAsync(SettingsGroupLookupKey id, CancellationToken cancellationToken)
     {
         try
@@ -51,23 +82,21 @@ public sealed class SettingsRepository(
             return await context.SettingsGroups
                 .AsNoTracking()
                 .Include(sg => sg.Settings)
-                .FirstOrDefaultAsync(
-                    sg => sg.ExtensionId == id.ExtensionId && sg.Name == id.Name,
-                    cancellationToken)
+                .FirstOrDefaultAsync(sg => sg.ExtensionId == id.ExtensionId && sg.Name == id.Name, cancellationToken)
                 .ConfigureAwait(false);
         }
         catch (Exception ex)
         {
             logger.LogError(
                 ex,
-                "Error getting settings group {SettingsGroupName} for extension {ExtensionId}",
+                "The settings repository failed to read settings group {SettingsGroupName} for extension " +
+                "{ExtensionId}.",
                 id.Name,
                 id.ExtensionId);
             throw;
         }
     }
 
-    /// <inheritdoc />
     public async Task<bool> PatchAsync(
         SettingsGroupPatch patch,
         Guid? modifiedByUserId,
@@ -75,131 +104,166 @@ public sealed class SettingsRepository(
     {
         try
         {
-            return await transactionManager.ExecuteWithTransactionAsync(async _ =>
-            {
-                var now = DateTime.UtcNow;
-                var settingsGroup = await context.SettingsGroups
-                    .Include(sg => sg.Settings)
-                    .FirstOrDefaultAsync(
-                        sg => sg.ExtensionId == patch.ExtensionId && sg.Name == patch.Name,
-                        cancellationToken)
-                    .ConfigureAwait(false);
-
-                if (settingsGroup is null)
+            var changedFields = ChangedFields(patch);
+            var patched = await transactionManager.ExecuteWithTransactionAsync(
+                async _ =>
                 {
-                    settingsGroup = new SettingsGroup
-                    {
-                        Name = patch.Name,
-                        ExtensionId = patch.ExtensionId,
-                        CreatedAt = now,
-                        CreatedByUserId = modifiedByUserId
-                    };
-                    context.SettingsGroups.Add(settingsGroup);
-                    await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+                    var now = _time.GetUtcNow().UtcDateTime;
+                    var settingsGroup = await context.SettingsGroups
+                        .Include(sg => sg.Settings)
+                        .FirstOrDefaultAsync(
+                            sg => sg.ExtensionId == patch.ExtensionId && sg.Name == patch.Name,
+                            cancellationToken)
+                        .ConfigureAwait(false);
 
-                    await auditRecordRepository.CreateAsync(new()
+                    if (settingsGroup is null)
                     {
-                        Category = AuditCategories.System,
-                        Operation = "Create",
-                        EntityId = settingsGroup.Id.ToString(),
-                        EntityType = nameof(SettingsGroup),
-                        Detail = $"Created settings group {patch.Name}",
-                        Timestamp = now,
-                        UserId = modifiedByUserId
-                    }, cancellationToken).ConfigureAwait(false);
-                }
-
-                if (patch.Settings.Add is not null)
-                {
-                    foreach (var (key, value) in patch.Settings.Add)
-                    {
-                        var setting = new Setting
+                        settingsGroup = new SettingsGroup
                         {
-                            SettingsGroupId = settingsGroup.Id,
-                            Key = key,
-                            Value = value ?? string.Empty,
+                            Name = patch.Name,
+                            ExtensionId = patch.ExtensionId,
                             CreatedAt = now,
                             CreatedByUserId = modifiedByUserId
                         };
-                        settingsGroup.Settings.Add(setting);
+                        context.SettingsGroups.Add(settingsGroup);
                         await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
 
-                        await auditRecordRepository.CreateAsync(new()
-                        {
-                            Category = AuditCategories.System,
-                            Operation = "Create",
-                            EntityId = setting.Id.ToString(),
-                            EntityType = nameof(Setting),
-                            Detail = $"Created setting {key} in group {patch.Name}",
-                            Timestamp = now,
-                            UserId = modifiedByUserId
-                        }, cancellationToken).ConfigureAwait(false);
-                    }
-                }
-
-                if (patch.Settings.Update is not null)
-                {
-                    foreach (var (key, value) in patch.Settings.Update)
-                    {
-                        var setting = settingsGroup.Settings.FirstOrDefault(s => s.Key == key);
-                        if (setting is not null)
-                        {
-                            setting.Value = value ?? string.Empty;
-                            setting.ModifiedAt = now;
-                            setting.ModifiedByUserId = modifiedByUserId;
-                            await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
-
-                            await auditRecordRepository.CreateAsync(new()
+                        await auditRecordRepository.CreateAsync(
+                            new()
                             {
                                 Category = AuditCategories.System,
-                                Operation = "Update",
-                                EntityId = setting.Id.ToString(),
-                                EntityType = nameof(Setting),
-                                Detail = $"Updated setting {key} in group {patch.Name}",
+                                Operation = "Create",
+                                EntityId = settingsGroup.Id.ToString(),
+                                EntityType = nameof(SettingsGroup),
+                                Detail = $"Created settings group {patch.Name}",
                                 Timestamp = now,
                                 UserId = modifiedByUserId
-                            }, cancellationToken).ConfigureAwait(false);
-                        }
+                            },
+                            cancellationToken).ConfigureAwait(false);
                     }
-                }
 
-                if (patch.Settings.Remove is not null)
-                {
-                    foreach (var key in patch.Settings.Remove)
+                    if (patch.Settings.Add is not null)
                     {
-                        var setting = settingsGroup.Settings.FirstOrDefault(s => s.Key == key);
-                        if (setting is not null)
+                        foreach (var (key, value) in patch.Settings.Add)
                         {
-                            var settingId = setting.Id;
-                            context.Settings.Remove(setting);
+                            var setting = new Setting
+                            {
+                                SettingsGroupId = settingsGroup.Id,
+                                Key = key,
+                                Value = value ?? string.Empty,
+                                CreatedAt = now,
+                                CreatedByUserId = modifiedByUserId
+                            };
+                            settingsGroup.Settings.Add(setting);
                             await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
 
-                            await auditRecordRepository.CreateAsync(new()
-                            {
-                                Category = AuditCategories.System,
-                                Operation = "Delete",
-                                EntityId = settingId.ToString(),
-                                EntityType = nameof(Setting),
-                                Detail = $"Deleted setting {key} from group {patch.Name}",
-                                Timestamp = now,
-                                UserId = modifiedByUserId
-                            }, cancellationToken).ConfigureAwait(false);
+                            await auditRecordRepository.CreateAsync(
+                                new()
+                                {
+                                    Category = AuditCategories.System,
+                                    Operation = "Create",
+                                    EntityId = setting.Id.ToString(),
+                                    EntityType = nameof(Setting),
+                                    Detail = $"Created setting {key} in group {patch.Name}",
+                                    Timestamp = now,
+                                    UserId = modifiedByUserId
+                                },
+                                cancellationToken).ConfigureAwait(false);
                         }
                     }
-                }
 
-                settingsGroup.ModifiedAt = now;
-                settingsGroup.ModifiedByUserId = modifiedByUserId;
-                await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+                    if (patch.Settings.Update is not null)
+                    {
+                        foreach (var (key, value) in patch.Settings.Update)
+                        {
+                            var setting = settingsGroup.Settings.FirstOrDefault(s => s.Key == key);
+                            if (setting is not null)
+                            {
+                                setting.Value = value ?? string.Empty;
+                                setting.ModifiedAt = now;
+                                setting.ModifiedByUserId = modifiedByUserId;
+                                await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
 
-                return true;
-            }, cancellationToken);
+                                await auditRecordRepository.CreateAsync(
+                                    new()
+                                    {
+                                        Category = AuditCategories.System,
+                                        Operation = "Update",
+                                        EntityId = setting.Id.ToString(),
+                                        EntityType = nameof(Setting),
+                                        Detail = $"Updated setting {key} in group {patch.Name}",
+                                        Timestamp = now,
+                                        UserId = modifiedByUserId
+                                    },
+                                    cancellationToken).ConfigureAwait(false);
+                            }
+                        }
+                    }
+
+                    if (patch.Settings.Remove is not null)
+                    {
+                        foreach (var key in patch.Settings.Remove)
+                        {
+                            var setting = settingsGroup.Settings.FirstOrDefault(s => s.Key == key);
+                            if (setting is not null)
+                            {
+                                var settingId = setting.Id;
+                                context.Settings.Remove(setting);
+                                await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+
+                                await auditRecordRepository.CreateAsync(
+                                    new()
+                                    {
+                                        Category = AuditCategories.System,
+                                        Operation = "Delete",
+                                        EntityId = settingId.ToString(),
+                                        EntityType = nameof(Setting),
+                                        Detail = $"Deleted setting {key} from group {patch.Name}",
+                                        Timestamp = now,
+                                        UserId = modifiedByUserId
+                                    },
+                                    cancellationToken).ConfigureAwait(false);
+                            }
+                        }
+                    }
+
+                    settingsGroup.ModifiedAt = now;
+                    settingsGroup.ModifiedByUserId = modifiedByUserId;
+                    await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+
+                    return true;
+                },
+                cancellationToken).ConfigureAwait(false);
+
+            if (patched)
+            {
+                await transactionManager.OnCommittedAsync(
+                    token => eventBus.PublishAsync(
+                        ConfigurationEventBuilder.BuildSettingsGroupUpdatedEvent(
+                            patch.ExtensionId,
+                            patch.Name,
+                            changedFields),
+                        token),
+                    cancellationToken).ConfigureAwait(false);
+            }
+
+            if (patched &&
+                patch.ExtensionId is null &&
+                string.Equals(patch.Name, "monitoring", StringComparison.Ordinal) &&
+                AffectsSystemDefaultMonitoring(patch))
+            {
+                await contentHierarchyItemRepository.RecomputeAllEffectiveValuesAsync(cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
+            return patched;
         }
         catch (Exception ex)
         {
             logger.LogError(
                 ex,
-                "Error patching settings group {SettingsGroupName} for extension {ExtensionId}",
+                "The settings repository failed to patch settings group {SettingsGroupName} for extension " +
+                "{ExtensionId}.",
                 patch.Name,
                 patch.ExtensionId);
             throw;

@@ -3,13 +3,13 @@ using System.Collections.Generic;
 namespace Magpie.Models.Filtering;
 
 /// <summary>
-/// Criteria for a set of key/value pairs.
+/// The criteria for a dictionary of values, keyed by name.
 /// </summary>
-/// <typeparam name="TCriteria">The criteria type for values in the dictionary.</typeparam>
+/// <typeparam name="TCriteria">The type of criterion for one value of the dictionary.</typeparam>
 public record DictionaryCriteria<TCriteria>
 {
     /// <summary>
-    /// The criteria to apply to items in the dictionary.
+    /// The criterion for each dictionary value, keyed by name.
     /// </summary>
     public Dictionary<string, TCriteria> Items { get; init; } = [];
 }

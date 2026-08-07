@@ -1,36 +1,34 @@
 using System.Collections.Generic;
 
-using Magpie.Models.Data;
-
 namespace Magpie.Models.Arguments;
 
 /// <summary>
-/// Patch for <see cref="IndexerFeed"/>.
+/// The partial-update arguments for an indexer feed.
 /// </summary>
 public sealed record IndexerFeedPatch
 {
     /// <summary>
-    /// The <see cref="IndexerFeed.ProviderType"/> to patch.
+    /// The patch for the provider type of the feed.
     /// </summary>
     public string? ProviderType { get; init; }
 
     /// <summary>
-    /// The <see cref="IndexerFeed.Name"/> to patch.
+    /// The patch for the display name of the feed.
     /// </summary>
     public string? Name { get; init; }
 
     /// <summary>
-    /// The <see cref="IndexerFeed.Description"/> to patch.
+    /// The patch for the description of the feed.
     /// </summary>
     public string? Description { get; init; }
 
     /// <summary>
-    /// The <see cref="IndexerFeed.Settings"/> to patch.
+    /// The patch for the feed settings.
     /// </summary>
     public Dictionary<string, string>? Settings { get; init; }
 
     /// <summary>
-    /// The <see cref="IndexerFeed.Enabled"/> to patch.
+    /// The patch for whether the feed is enabled.
     /// </summary>
     public bool? Enabled { get; init; }
 }

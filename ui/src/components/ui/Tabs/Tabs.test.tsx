@@ -1,8 +1,27 @@
-import { render, screen } from '@testing-library/react';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
+import { TooltipProvider } from '@/components/ui/Tooltip';
+
+import { DetailTabsList } from './DetailTabsList';
+import { DetailTabTrigger } from './DetailTabTrigger';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from './Tabs';
+
+function focusElement(element: HTMLElement) {
+    act(() => {
+        element.focus();
+    });
+}
+
+function pressKeys(keys: string) {
+    const target = document.activeElement instanceof HTMLElement ? document.activeElement : document.body;
+    const key = keys === '{ArrowRight}' ? 'ArrowRight' : keys === '{ArrowLeft}' ? 'ArrowLeft' : 'Enter';
+    fireEvent.keyDown(target, { key, code: key });
+}
 
 describe('Tabs', () => {
     it('renders tabs with triggers and content', () => {
@@ -58,6 +77,244 @@ describe('Tabs', () => {
         expect(screen.getByText('Content 2')).toBeInTheDocument();
     });
 
+    it('holds then releases the region height on switch when holdHeightOnValueChange is set', async () => {
+        const user = userEvent.setup();
+        const frames: FrameRequestCallback[] = [];
+        const rafSpy = vi.spyOn(window, 'requestAnimationFrame').mockImplementation((cb) => {
+            frames.push(cb);
+            return frames.length;
+        });
+        const offsetSpy = vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(420);
+
+        const { container } = render(
+            <Tabs defaultValue="tab1" holdHeightOnValueChange>
+                <TabsList>
+                    <TabsTrigger value="tab1">Tab 1</TabsTrigger>
+                    <TabsTrigger value="tab2">Tab 2</TabsTrigger>
+                </TabsList>
+                <TabsContent value="tab1">Content 1</TabsContent>
+                <TabsContent value="tab2">Content 2</TabsContent>
+            </Tabs>,
+        );
+
+        const root = container.querySelector('[data-component="tabs"]') as HTMLElement;
+
+        await user.click(screen.getByRole('tab', { name: 'Tab 2' }));
+        expect(root.style.minHeight).toBe('420px');
+
+        frames.forEach((cb) => cb(0));
+        expect(root.style.minHeight).toBe('');
+
+        offsetSpy.mockRestore();
+        rafSpy.mockRestore();
+    });
+
+    it('does not pin a height on switch when holdHeightOnValueChange is unset', async () => {
+        const user = userEvent.setup();
+        const offsetSpy = vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(420);
+
+        const { container } = render(
+            <Tabs defaultValue="tab1">
+                <TabsList>
+                    <TabsTrigger value="tab1">Tab 1</TabsTrigger>
+                    <TabsTrigger value="tab2">Tab 2</TabsTrigger>
+                </TabsList>
+                <TabsContent value="tab1">Content 1</TabsContent>
+                <TabsContent value="tab2">Content 2</TabsContent>
+            </Tabs>,
+        );
+
+        const root = container.querySelector('[data-component="tabs"]') as HTMLElement;
+
+        await user.click(screen.getByRole('tab', { name: 'Tab 2' }));
+        expect(root.style.minHeight).toBe('');
+
+        offsetSpy.mockRestore();
+    });
+
+    it('holds and re-applies the captured scroll until the incoming panel settles to the held height', async () => {
+        const user = userEvent.setup();
+
+        const frames: FrameRequestCallback[] = [];
+        const rafSpy = vi.spyOn(window, 'requestAnimationFrame').mockImplementation((cb) => {
+            frames.push(cb);
+            return frames.length;
+        });
+
+        let panelHeight = 445;
+        const offsetSpy = vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockImplementation(function (
+            this: HTMLElement,
+        ) {
+            return this.getAttribute('role') === 'tabpanel' ? panelHeight : 1200;
+        });
+
+        let resizeCb: ResizeObserverCallback = () => {};
+        const observeSpy = vi.fn();
+        const disconnectSpy = vi.fn();
+        vi.stubGlobal(
+            'ResizeObserver',
+            class {
+                constructor(cb: ResizeObserverCallback) {
+                    resizeCb = cb;
+                }
+                observe = observeSpy;
+                unobserve = vi.fn();
+                disconnect = disconnectSpy;
+            },
+        );
+
+        const scroller = document.createElement('div');
+        document.body.appendChild(scroller);
+        scroller.scrollTop = 1100;
+        const realGetComputedStyle = window.getComputedStyle.bind(window);
+        const gcsSpy = vi.spyOn(window, 'getComputedStyle').mockImplementation((el, pseudo) => {
+            if (el === scroller) {
+                return { overflowY: 'auto' } as CSSStyleDeclaration;
+            }
+            return realGetComputedStyle(el as Element, pseudo);
+        });
+
+        render(
+            <Tabs defaultValue="tab1" holdHeightOnValueChange>
+                <TabsList>
+                    <TabsTrigger value="tab1">Tab 1</TabsTrigger>
+                    <TabsTrigger value="tab2">Tab 2</TabsTrigger>
+                </TabsList>
+                <TabsContent value="tab1">Content 1</TabsContent>
+                <TabsContent value="tab2">Content 2</TabsContent>
+            </Tabs>,
+            { container: scroller },
+        );
+
+        const root = scroller.querySelector('[data-component="tabs"]') as HTMLElement;
+
+        await user.click(screen.getByRole('tab', { name: 'Tab 2' }));
+        expect(root.style.minHeight).toBe('1200px');
+
+        frames.forEach((cb) => cb(0));
+        expect(observeSpy).toHaveBeenCalledTimes(1);
+        expect(root.style.minHeight).toBe('1200px');
+
+        scroller.scrollTop = 445;
+        panelHeight = 1200;
+        resizeCb([], {} as ResizeObserver);
+
+        expect(scroller.scrollTop).toBe(1100);
+        expect(root.style.minHeight).toBe('');
+        expect(disconnectSpy).toHaveBeenCalled();
+
+        gcsSpy.mockRestore();
+        offsetSpy.mockRestore();
+        rafSpy.mockRestore();
+        vi.unstubAllGlobals();
+        scroller.remove();
+    });
+
+    it('releases the hold via the backstop when a shorter tab never reaches the held height', async () => {
+        const user = userEvent.setup();
+
+        const frames: FrameRequestCallback[] = [];
+        const rafSpy = vi.spyOn(window, 'requestAnimationFrame').mockImplementation((cb) => {
+            frames.push(cb);
+            return frames.length;
+        });
+
+        const offsetSpy = vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockImplementation(function (
+            this: HTMLElement,
+        ) {
+            return this.getAttribute('role') === 'tabpanel' ? 300 : 1200;
+        });
+
+        vi.stubGlobal(
+            'ResizeObserver',
+            class {
+                observe = vi.fn();
+                unobserve = vi.fn();
+                disconnect = vi.fn();
+            },
+        );
+
+        const { container } = render(
+            <Tabs defaultValue="tab1" holdHeightOnValueChange>
+                <TabsList>
+                    <TabsTrigger value="tab1">Tab 1</TabsTrigger>
+                    <TabsTrigger value="tab2">Tab 2</TabsTrigger>
+                </TabsList>
+                <TabsContent value="tab1">Content 1</TabsContent>
+                <TabsContent value="tab2">Content 2</TabsContent>
+            </Tabs>,
+        );
+
+        const root = container.querySelector('[data-component="tabs"]') as HTMLElement;
+
+        await user.click(screen.getByRole('tab', { name: 'Tab 2' }));
+        expect(root.style.minHeight).toBe('1200px');
+
+        const timers: Array<() => void> = [];
+        const setTimeoutSpy = vi.spyOn(window, 'setTimeout').mockImplementation(((cb: () => void) => {
+            timers.push(cb);
+            return 1;
+        }) as typeof window.setTimeout);
+
+        frames.forEach((cb) => cb(0));
+        expect(root.style.minHeight).toBe('1200px');
+
+        timers.forEach((fn) => fn());
+        expect(root.style.minHeight).toBe('');
+
+        setTimeoutSpy.mockRestore();
+        offsetSpy.mockRestore();
+        rafSpy.mockRestore();
+        vi.unstubAllGlobals();
+    });
+
+    it('disconnects the resize observer when unmounted mid-hold', async () => {
+        const user = userEvent.setup();
+
+        const frames: FrameRequestCallback[] = [];
+        const rafSpy = vi.spyOn(window, 'requestAnimationFrame').mockImplementation((cb) => {
+            frames.push(cb);
+            return frames.length;
+        });
+
+        const offsetSpy = vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockImplementation(function (
+            this: HTMLElement,
+        ) {
+            return this.getAttribute('role') === 'tabpanel' ? 445 : 1200;
+        });
+
+        const disconnectSpy = vi.fn();
+        vi.stubGlobal(
+            'ResizeObserver',
+            class {
+                observe = vi.fn();
+                unobserve = vi.fn();
+                disconnect = disconnectSpy;
+            },
+        );
+
+        const { unmount } = render(
+            <Tabs defaultValue="tab1" holdHeightOnValueChange>
+                <TabsList>
+                    <TabsTrigger value="tab1">Tab 1</TabsTrigger>
+                    <TabsTrigger value="tab2">Tab 2</TabsTrigger>
+                </TabsList>
+                <TabsContent value="tab1">Content 1</TabsContent>
+                <TabsContent value="tab2">Content 2</TabsContent>
+            </Tabs>,
+        );
+
+        await user.click(screen.getByRole('tab', { name: 'Tab 2' }));
+        frames.forEach((cb) => cb(0));
+
+        unmount();
+        expect(disconnectSpy).toHaveBeenCalled();
+
+        offsetSpy.mockRestore();
+        rafSpy.mockRestore();
+        vi.unstubAllGlobals();
+    });
+
     it('sets aria-selected on active tab', async () => {
         const user = userEvent.setup();
 
@@ -84,8 +341,13 @@ describe('Tabs', () => {
         expect(tab2).toHaveAttribute('aria-selected', 'true');
     });
 
-    it('supports keyboard navigation with arrow keys', async () => {
-        const user = userEvent.setup();
+    it('keeps inactive tabs quiet while supporting keyboard navigation', async () => {
+        const css = readFileSync(resolve(process.cwd(), 'src/components/ui/Tabs/Tabs.css'), 'utf8');
+        const triggerRule = css.match(/\.tabs-trigger\s*{(?<declarations>[\s\S]*?)\n\s*&:hover/)?.groups?.declarations;
+
+        expect(triggerRule).toContain('color: var(--text-secondary);');
+        expect(triggerRule).toContain('background-color: transparent;');
+        expect(triggerRule).toContain('border: none;');
 
         render(
             <Tabs defaultValue="tab1">
@@ -101,21 +363,29 @@ describe('Tabs', () => {
         );
 
         const tab1 = screen.getByRole('tab', { name: 'Tab 1' });
-        tab1.focus();
+        const tab2 = screen.getByRole('tab', { name: 'Tab 2' });
+        expect(tab2).toHaveAttribute('data-state', 'inactive');
 
-        await user.keyboard('{ArrowRight}');
-        expect(screen.getByRole('tab', { name: 'Tab 2' })).toHaveFocus();
+        focusElement(tab1);
 
-        await user.keyboard('{ArrowRight}');
-        expect(screen.getByRole('tab', { name: 'Tab 3' })).toHaveFocus();
+        pressKeys('{ArrowRight}');
+        await waitFor(() => {
+            expect(tab2).toHaveFocus();
+        });
+        expect(tab2).toHaveAttribute('data-state', 'active');
 
-        await user.keyboard('{ArrowLeft}');
-        expect(screen.getByRole('tab', { name: 'Tab 2' })).toHaveFocus();
+        pressKeys('{ArrowRight}');
+        await waitFor(() => {
+            expect(screen.getByRole('tab', { name: 'Tab 3' })).toHaveFocus();
+        });
+
+        pressKeys('{ArrowLeft}');
+        await waitFor(() => {
+            expect(screen.getByRole('tab', { name: 'Tab 2' })).toHaveFocus();
+        });
     });
 
     it('wraps focus when navigating past the ends', async () => {
-        const user = userEvent.setup();
-
         render(
             <Tabs defaultValue="tab1">
                 <TabsList>
@@ -128,13 +398,17 @@ describe('Tabs', () => {
         );
 
         const tab1 = screen.getByRole('tab', { name: 'Tab 1' });
-        tab1.focus();
+        focusElement(tab1);
 
-        await user.keyboard('{ArrowLeft}');
-        expect(screen.getByRole('tab', { name: 'Tab 2' })).toHaveFocus();
+        pressKeys('{ArrowLeft}');
+        await waitFor(() => {
+            expect(screen.getByRole('tab', { name: 'Tab 2' })).toHaveFocus();
+        });
 
-        await user.keyboard('{ArrowRight}');
-        expect(screen.getByRole('tab', { name: 'Tab 1' })).toHaveFocus();
+        pressKeys('{ArrowRight}');
+        await waitFor(() => {
+            expect(screen.getByRole('tab', { name: 'Tab 1' })).toHaveFocus();
+        });
     });
 
     it('calls onValueChange when tab changes', async () => {
@@ -313,7 +587,6 @@ describe('Tabs', () => {
     });
 
     it('activates tab on Enter/Space when focused', async () => {
-        const user = userEvent.setup();
         const handleValueChange = vi.fn();
 
         render(
@@ -328,12 +601,14 @@ describe('Tabs', () => {
         );
 
         const tab1 = screen.getByRole('tab', { name: 'Tab 1' });
-        tab1.focus();
+        focusElement(tab1);
 
-        await user.keyboard('{ArrowRight}');
-        await user.keyboard('{Enter}');
+        pressKeys('{ArrowRight}');
+        pressKeys('{Enter}');
 
-        expect(handleValueChange).toHaveBeenCalledWith('tab2');
+        await waitFor(() => {
+            expect(handleValueChange).toHaveBeenCalledWith('tab2');
+        });
     });
 
     it('forwards ref to Tabs root', () => {
@@ -418,5 +693,32 @@ describe('Tabs', () => {
         );
 
         expect(screen.getByTestId('icon')).toBeInTheDocument();
+    });
+});
+
+describe('DetailTabsList', () => {
+    const strip = () => (
+        <TooltipProvider>
+            <Tabs defaultValue="tab1">
+                <DetailTabsList>
+                    <DetailTabTrigger value="tab1" label="Tab 1" icon={<span>📋</span>} />
+                    <DetailTabTrigger value="tab2" label="Tab 2" icon={<span>📁</span>} count={3} />
+                </DetailTabsList>
+                <TabsContent value="tab1">Content 1</TabsContent>
+                <TabsContent value="tab2">Content 2</TabsContent>
+            </Tabs>
+        </TooltipProvider>
+    );
+
+    it('uses the shared two-mode detail strip without measurement state', () => {
+        render(strip());
+
+        const list = screen.getByRole('tablist');
+        expect(list).toHaveClass('tabs-list--detail');
+        expect(list).not.toHaveAttribute('data-collapsed');
+        expect(list).not.toHaveAttribute('data-measuring');
+        expect(screen.getByText('Tab 1')).toBeInTheDocument();
+        expect(screen.getByRole('tab', { name: 'Tab 2' })).toBeInTheDocument();
+        expect(screen.getByText('3')).toBeInTheDocument();
     });
 });

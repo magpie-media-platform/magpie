@@ -1,7 +1,8 @@
 import { useCallback, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 
-import { apiPost } from '@/lib/api';
+import { apiGet, buildUrl } from '@/lib/api';
+import { useInvalidateQueriesOnEvents } from '@/hooks/useInvalidateQueriesOnEvents';
 import { queryErrorOrNull } from '@/lib/utils';
 
 export interface FileSystemEntry {
@@ -14,25 +15,24 @@ export interface FileSystemEntry {
     size?: number;
 }
 
-export interface FileBrowserRequest {
-    path?: string;
+async function fetchContents(endpoint: string, path: string): Promise<FileSystemEntry[]> {
+    return apiGet<FileSystemEntry[]>(buildUrl(endpoint, { path }));
 }
 
-async function fetchContents(path: string): Promise<FileSystemEntry[]> {
-    const request: FileBrowserRequest = { path };
-    return apiPost<FileSystemEntry[]>('/file-browser/contents', request);
-}
+const fileBrowserQueryKey = (endpoint: string, path: string | undefined) => ['file-browser', endpoint, path] as const;
 
-export const fileBrowserQueryKey = (path: string | undefined) => ['file-browser', path] as const;
-
-export function useFileBrowser() {
+export function useFileBrowser(endpoint = '/system/files') {
     const queryClient = useQueryClient();
     const [path, setPath] = useState<string | undefined>(undefined);
+    useInvalidateQueriesOnEvents(
+        path ? ['download.imported', 'library.scan.completed'] : [],
+        [fileBrowserQueryKey(endpoint, path)],
+        { debounceMs: 300, exact: true, maxWaitMs: 1200, owner: 'file-browser' },
+    );
 
-    // Default staleTime/gcTime intentional: always-fresh on open, cached briefly for fast reopens.
     const query = useQuery({
-        queryKey: fileBrowserQueryKey(path),
-        queryFn: () => fetchContents(path!),
+        queryKey: fileBrowserQueryKey(endpoint, path),
+        queryFn: () => fetchContents(endpoint, path!),
         enabled: path !== undefined,
     });
 
@@ -44,12 +44,12 @@ export function useFileBrowser() {
         (next: string) => {
             setPath(next);
             return queryClient.fetchQuery({
-                queryKey: fileBrowserQueryKey(next),
-                queryFn: () => fetchContents(next),
+                queryKey: fileBrowserQueryKey(endpoint, next),
+                queryFn: () => fetchContents(endpoint, next),
                 staleTime: 0,
             });
         },
-        [queryClient],
+        [endpoint, queryClient],
     );
 
     const reset = useCallback(() => {
@@ -62,11 +62,6 @@ export function useFileBrowser() {
         navigate,
 
         navigateAsync,
-
-        // Backwards-compatible aliases for existing consumers/tests.
-        browse: navigate,
-
-        browseAsync: navigateAsync,
 
         entries: path !== undefined && query.data ? query.data : [],
 

@@ -116,6 +116,17 @@
         padding-right: var(--space-sm);
     }
 
+    .input__action {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+    }
+
+    .input__action--trailing {
+        padding-right: var(--space-xs);
+    }
+
     .input__error {
         font-size: var(--text-sm);
         color: var(--status-unhealthy);

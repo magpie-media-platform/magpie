@@ -6,19 +6,23 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="DynamicProxyGenAssembly2" />
     <InternalsVisibleTo Include="Magpie.Test.Core" />
   </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Cronos" />
+    <PackageReference Include="Microsoft.Extensions.Caching.Memory" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore" />
     <PackageReference Include="Microsoft.Extensions.Hosting" />
+    <PackageReference Include="Microsoft.Extensions.Http.Resilience" />
     <PackageReference Include="System.Reactive" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\Magpie.Data\Magpie.Data.csproj" />
+    <ProjectReference Include="..\Magpie.QueryLanguage\Magpie.QueryLanguage.csproj" />
     <ProjectReference Include="..\Magpie.Abstractions\Magpie.Abstractions.csproj" />
-    <ProjectReference Include="..\Magpie.Abstractions.Auth\Magpie.Abstractions.Auth.csproj" />
   </ItemGroup>
 
 </Project>

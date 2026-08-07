@@ -1,36 +1,67 @@
 import { useState, useCallback, useMemo, useEffect, useRef, type ReactNode } from 'react';
-import { FloppyDisk, X, Info, LockSimple } from '@phosphor-icons/react';
+import {
+    FloppyDiskIcon,
+    XIcon,
+    InfoIcon,
+    LockSimpleIcon,
+    SparkleIcon,
+    WarningCircleIcon,
+    MagnifyingGlassIcon,
+} from '@phosphor-icons/react';
 
+import { useWishlistPreview } from '@/hooks/useWishlistPreview';
+import { ProviderSearchWarnings } from '@/components/content/ProviderSearchWarnings';
+import { useQualityTierLists } from '@/hooks/useQualityTierLists';
 import { useUnsavedChangesGuard } from '@/hooks/useUnsavedChangesGuard';
+import { deepEqual, useFormDirty } from '@/hooks/useFormDirty';
+import { useExternalChangeConflict } from '@/hooks/useExternalChangeConflict';
+import { parseMagpieQl, formatMagpieQlCriteria } from '@/lib/magpieQl';
+import { getErrorMessage } from '@/lib/errors';
+import type { ContentFilterCriteria } from '@/hooks/useFilters';
+import type { ProviderMetadataCandidate } from '@/hooks/useProviderMetadataCandidateSearch';
 
+import { getQueryContentType, setQueryContentType } from './wishlistFormUtils';
+
+import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
+import { EmptyState } from '@/components/ui/EmptyState';
+import { FilterBar } from '@/components/filters/FilterBar';
 import { Input } from '@/components/ui/Input';
 import { Label } from '@/components/ui/Label';
+import { Skeleton } from '@/components/ui/Skeleton';
 import { Switch } from '@/components/ui/Switch';
 import { Select, SelectTrigger, SelectContent, SelectItem } from '@/components/ui/Select';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription, SheetFooter } from '@/components/ui/Sheet';
+import { TagInput } from '@/components/ui/TagInput';
 import { Tooltip } from '@/components/ui/Tooltip';
 import { UnsavedChangesDialog } from '@/components/ui/UnsavedChangesDialog';
-import type { ContentFilterOption, QualityTierListOption, TagOption, WishlistFormValues } from '@/types';
+import { ExternalChangeConflictWarning, StaleSaveConfirmationDialog } from '@/components/ui/ExternalChangeConflict';
+import type {
+    ContentFilterOption,
+    QualityTierListOption,
+    RootFolderOption,
+    TagOption,
+    WishlistFormValues,
+} from '@/types';
 
 import './WishlistForm.css';
 
-export type { ContentFilterOption, QualityTierListOption, TagOption, WishlistFormValues };
+export type { ContentFilterOption, QualityTierListOption, RootFolderOption, TagOption, WishlistFormValues };
 
-export interface WishlistFormProps {
+interface WishlistFormProps {
     open: boolean;
 
     onOpenChange: (open: boolean) => void;
 
     initialValues?: WishlistFormValues | null;
 
-    filters: ContentFilterOption[];
+    qualityTierLists?: QualityTierListOption[];
 
-    qualityTierLists: QualityTierListOption[];
+    rootFolders: RootFolderOption[];
 
     tags: TagOption[];
 
-    onSubmit: (values: WishlistFormValues) => void;
+    onSubmit: (values: WishlistFormValues) => void | Promise<void>;
 
     isSubmitting?: boolean;
 
@@ -41,31 +72,67 @@ export interface WishlistFormProps {
 
 const NONE_VALUE = '__none__';
 
+const PREVIEW_LIMIT = 3;
+
+const emptyCriteria: ContentFilterCriteria = {};
+
 const emptyValues: WishlistFormValues = {
     name: '',
     filterId: null,
+    contentType: '',
+    criteria: emptyCriteria,
     qualityTierListId: null,
+    rootFolderId: null,
     monitored: true,
     tagIds: [],
 };
 
-export function valuesEqual(a: WishlistFormValues, b: WishlistFormValues): boolean {
-    return (
-        a.name === b.name &&
-        a.filterId === b.filterId &&
-        a.qualityTierListId === b.qualityTierListId &&
-        a.monitored === b.monitored &&
-        a.tagIds.length === b.tagIds.length &&
-        a.tagIds.every((id) => b.tagIds.includes(id))
-    );
+function isContentFilterCriteria(value: unknown): value is ContentFilterCriteria {
+    return typeof value === 'object' && value !== null;
+}
+
+function normalizeWishlist(input: { values: WishlistFormValues; filterQuery: string }): unknown {
+    const { values, filterQuery } = input;
+    return {
+        name: values.name,
+        contentType: values.contentType,
+        qualityTierListId: values.qualityTierListId,
+        rootFolderId: values.rootFolderId,
+        monitored: values.monitored,
+        tagIds: [...values.tagIds].sort(),
+        filterQuery,
+    };
+}
+
+function normalizeServerWishlist(values: WishlistFormValues): unknown {
+    return {
+        name: values.name,
+        contentType: values.contentType,
+        criteria: values.criteria,
+        qualityTierListId: values.qualityTierListId,
+        rootFolderId: values.rootFolderId,
+        monitored: values.monitored,
+        tagIds: [...values.tagIds].sort(),
+    };
+}
+
+function criteriaIsEmpty(criteria: ContentFilterCriteria | null | undefined): boolean {
+    if (!criteria) {
+        return true;
+    }
+    const chi = criteria.contentHierarchyItem;
+    const media = criteria.mediaFiles;
+    const count = (set?: { and?: unknown[]; or?: unknown[]; not?: unknown }) =>
+        (set?.and?.length ?? 0) + (set?.or?.length ?? 0) + (set?.not != null ? 1 : 0);
+    return count(chi) + count(media) === 0;
 }
 
 export function WishlistForm({
     open,
     onOpenChange,
     initialValues,
-    filters,
     qualityTierLists,
+    rootFolders,
     tags,
     onSubmit,
     isSubmitting = false,
@@ -75,43 +142,172 @@ export function WishlistForm({
     const isEditing = !!initialValues?.id;
 
     const [values, setValues] = useState<WishlistFormValues>(initialValues ?? emptyValues);
+    const { tierLists: applicableTierLists } = useQualityTierLists({
+        contentType: values.contentType || undefined,
+        enabled: qualityTierLists === undefined && !!values.contentType,
+    });
+    const { tierLists: allTierLists, isLoading: allTierListsLoading } = useQualityTierLists({
+        enabled: qualityTierLists === undefined && !!values.qualityTierListId,
+    });
+    const availableTierLists: QualityTierListOption[] =
+        qualityTierLists ??
+        applicableTierLists.map((tierList) => ({
+            id: tierList.id,
+            name: tierList.name,
+            mimeTypes: tierList.mimeTypes,
+        }));
     const [errors, setErrors] = useState<Record<string, string>>({});
 
+    const [filterQuery, setFilterQuery] = useState('');
+    const [filterBarExpanded, setFilterBarExpanded] = useState(true);
+    const [previewCandidates, setPreviewCandidates] = useState<ProviderMetadataCandidate[] | null>(null);
+    const [previewTotal, setPreviewTotal] = useState(0);
+    const [previewError, setPreviewError] = useState<string | null>(null);
+
     const cleanValuesRef = useRef<WishlistFormValues>(initialValues ?? emptyValues);
+    const cleanQueryRef = useRef('');
+    const filterQueryEditedRef = useRef(false);
+    const valuesRef = useRef(values);
+    const filterQueryRef = useRef(filterQuery);
+    const openEntityIdRef = useRef<string | null>(null);
+    const wasOpenRef = useRef(false);
+    const initialValuesRef = useRef(initialValues);
+    const pendingSavedValuesRef = useRef<WishlistFormValues | null>(null);
+    initialValuesRef.current = initialValues;
+    valuesRef.current = values;
+    filterQueryRef.current = filterQuery;
+    const initialValuesKey = JSON.stringify(initialValues ?? null);
 
     const [showUnsavedDialog, setShowUnsavedDialog] = useState(false);
+    const [staleSave, setStaleSave] = useState<{ values: WishlistFormValues; filterQuery: string } | null>(null);
+
+    const preview = useWishlistPreview();
 
     useEffect(() => {
-        if (open) {
-            const clean = initialValues ?? emptyValues;
-            setValues(clean);
-            cleanValuesRef.current = clean;
-            setErrors({});
-            setShowUnsavedDialog(false);
+        if (!open) {
+            wasOpenRef.current = false;
+            return;
         }
-    }, [open, initialValues]);
+        let cancelled = false;
+        const clean = initialValuesRef.current ?? emptyValues;
+        const entityId = clean.id ?? null;
+        const sameOpenEntity = wasOpenRef.current && openEntityIdRef.current === entityId;
+        const currentlyDirty = !deepEqual(
+            normalizeWishlist({ values: valuesRef.current, filterQuery: filterQueryRef.current }),
+            normalizeWishlist({ values: cleanValuesRef.current, filterQuery: cleanQueryRef.current }),
+        );
+        wasOpenRef.current = true;
+        openEntityIdRef.current = entityId;
+        if (sameOpenEntity && currentlyDirty) {
+            return;
+        }
+        setValues(clean);
+        cleanValuesRef.current = clean;
+        filterQueryEditedRef.current = false;
+        setErrors({});
+        setShowUnsavedDialog(false);
+        setStaleSave(null);
+        pendingSavedValuesRef.current = null;
+        setPreviewCandidates(null);
+        setPreviewTotal(0);
+        setPreviewError(null);
 
-    const isDirty = useMemo(() => !valuesEqual(values, cleanValuesRef.current), [values]);
+        if (!criteriaIsEmpty(clean.criteria)) {
+            setFilterBarExpanded(true);
+            formatMagpieQlCriteria(clean.criteria, 'content')
+                .then((result) => {
+                    if (cancelled) {
+                        return;
+                    }
+                    cleanQueryRef.current = result.query;
+                    const formattedContentType = getQueryContentType(result.query);
+                    if (formattedContentType) {
+                        cleanValuesRef.current = { ...cleanValuesRef.current, contentType: formattedContentType };
+                        setValues((current) => ({ ...current, contentType: formattedContentType }));
+                    }
+                    if (!filterQueryEditedRef.current) {
+                        setFilterQuery(result.query);
+                    }
+                })
+                .catch((error: unknown) => {
+                    if (cancelled) {
+                        return;
+                    }
+                    setFilterQuery('');
+                    cleanQueryRef.current = '';
+                    setErrors((prev) => ({
+                        ...prev,
+                        criteria: getErrorMessage(error, 'Failed to format filter criteria.'),
+                    }));
+                });
+        } else {
+            setFilterQuery('');
+            cleanQueryRef.current = '';
+            setFilterBarExpanded(true);
+        }
+
+        return () => {
+            cancelled = true;
+        };
+    }, [open, initialValuesKey]);
+
+    const isDirty = useFormDirty(
+        { values, filterQuery },
+        { values: cleanValuesRef.current, filterQuery: cleanQueryRef.current },
+        normalizeWishlist,
+    );
+
+    const {
+        state: conflictState,
+        beginOwnSave,
+        endOwnSave,
+        clearConflict,
+    } = useExternalChangeConflict({
+        dirty: isDirty,
+        entityId: initialValues?.id,
+        eventNames: ['wishlist.updated', 'wishlist.deleted'],
+        deletedEventNames: ['wishlist.deleted'],
+        contextKeys: ['wishlist.id'],
+        enabled: open && isEditing,
+    });
 
     const readOnly = isEditing && !canEdit;
 
-    useUnsavedChangesGuard(open && isDirty && !readOnly);
+    useEffect(() => {
+        const pendingSavedValues = pendingSavedValuesRef.current;
+        const serverValues = initialValuesRef.current;
+        if (
+            !pendingSavedValues ||
+            !serverValues ||
+            !deepEqual(normalizeServerWishlist(serverValues), normalizeServerWishlist(pendingSavedValues))
+        ) {
+            return;
+        }
+
+        pendingSavedValuesRef.current = null;
+        clearConflict();
+    }, [clearConflict, initialValuesKey]);
+
+    useUnsavedChangesGuard(open && isDirty && !readOnly && !isSubmitting);
 
     const handleOpenChange = useCallback(
         (nextOpen: boolean) => {
-            if (!nextOpen && isDirty && !readOnly) {
+            if (!nextOpen && isDirty && !readOnly && !isSubmitting) {
                 setShowUnsavedDialog(true);
                 return;
             }
             onOpenChange(nextOpen);
         },
-        [isDirty, readOnly, onOpenChange],
+        [isDirty, readOnly, isSubmitting, onOpenChange],
     );
 
     const handleDiscard = useCallback(() => {
+        cleanValuesRef.current = values;
+        cleanQueryRef.current = filterQuery;
+        clearConflict();
         setShowUnsavedDialog(false);
         onOpenChange(false);
-    }, [onOpenChange]);
+    }, [values, filterQuery, clearConflict, onOpenChange]);
 
     const handleKeepEditing = useCallback(() => {
         setShowUnsavedDialog(false);
@@ -126,11 +322,25 @@ export function WishlistForm({
         setErrors((prev) => ({ ...prev, name: '' }));
     }, []);
 
-    const handleFilterChange = useCallback((filterId: string) => {
-        setValues((prev) => ({
-            ...prev,
-            filterId: filterId === NONE_VALUE ? null : filterId,
-        }));
+    const queryContentType = useMemo(() => getQueryContentType(filterQuery), [filterQuery]);
+    const effectiveContentType = queryContentType || values.contentType;
+
+    const handleFilterQueryChange = useCallback((value: string) => {
+        filterQueryEditedRef.current = true;
+        setFilterQuery(value);
+        const contentType = getQueryContentType(value);
+        setValues((prev) => {
+            const nextContentType = contentType || prev.contentType;
+            return {
+                ...prev,
+                contentType: nextContentType,
+                qualityTierListId: prev.contentType === nextContentType ? prev.qualityTierListId : null,
+            };
+        });
+        setErrors((prev) => ({ ...prev, criteria: '', contentType: '' }));
+        if (value.length > 0) {
+            setFilterBarExpanded(true);
+        }
     }, []);
 
     const handleQualityTierListChange = useCallback((qualityTierListId: string) => {
@@ -140,43 +350,158 @@ export function WishlistForm({
         }));
     }, []);
 
-    const handleMonitoredChange = useCallback((monitored: boolean) => {
-        setValues((prev) => ({ ...prev, monitored }));
-    }, []);
-
-    const handleTagToggle = useCallback((tagId: string) => {
+    const handleRootFolderChange = useCallback((rootFolderId: string) => {
         setValues((prev) => ({
             ...prev,
-            tagIds: prev.tagIds.includes(tagId) ? prev.tagIds.filter((id) => id !== tagId) : [...prev.tagIds, tagId],
+            rootFolderId: rootFolderId === NONE_VALUE ? null : rootFolderId,
         }));
     }, []);
 
-    const validate = useCallback((): boolean => {
-        const newErrors: Record<string, string> = {};
+    const handleMonitoredChange = useCallback((monitored: boolean) => {
+        setValues((prev) => ({ ...prev, monitored }));
+        setErrors((prev) => ({ ...prev, criteria: '' }));
+    }, []);
 
-        if (!values.name.trim()) {
-            newErrors.name = 'Name is required';
+    const handleTagsChange = useCallback((tagIds: string[]) => {
+        setValues((prev) => ({ ...prev, tagIds }));
+    }, []);
+
+    const resolveCriteria = useCallback(async (): Promise<ContentFilterCriteria | null> => {
+        const query = effectiveContentType ? setQueryContentType(filterQuery, effectiveContentType) : filterQuery;
+        if (!query.trim()) {
+            return emptyCriteria;
         }
+        const result = await parseMagpieQl(query, 'content');
+        if (result.error) {
+            setErrors((prev) => ({ ...prev, criteria: result.error!.message }));
+            return null;
+        }
+        return isContentFilterCriteria(result.criteria) ? result.criteria : emptyCriteria;
+    }, [filterQuery, effectiveContentType]);
 
-        setErrors(newErrors);
-        return Object.keys(newErrors).length === 0;
-    }, [values]);
+    const handlePreview = useCallback(async () => {
+        if (readOnly) {
+            return;
+        }
+        setPreviewError(null);
+        const criteria = await resolveCriteria();
+        if (!criteria) {
+            return;
+        }
+        try {
+            const result = await preview.mutateAsync({
+                criteria,
+                contentType: effectiveContentType || undefined,
+                page: 1,
+            });
+            const total = result.pageItemCount || result.candidates.length;
+            setPreviewCandidates(result.candidates.slice(0, PREVIEW_LIMIT));
+            setPreviewTotal(total);
+        } catch {
+            setPreviewCandidates(null);
+            setPreviewTotal(0);
+            setPreviewError('Preview failed. Please try again.');
+        }
+    }, [readOnly, resolveCriteria, preview, effectiveContentType]);
 
-    const handleSubmit = useCallback(
-        (e: React.FormEvent) => {
-            e.preventDefault();
-            if (validate()) {
-                onSubmit(values);
+    const submitValues = useCallback(
+        async (submittedValues: WishlistFormValues, submittedFilterQuery: string) => {
+            if (isEditing) {
+                beginOwnSave();
+            }
+            try {
+                await onSubmit(submittedValues);
+                const changedDuringSave = !deepEqual(
+                    normalizeWishlist({ values: valuesRef.current, filterQuery: filterQueryRef.current }),
+                    normalizeWishlist({ values: submittedValues, filterQuery: submittedFilterQuery }),
+                );
+                cleanValuesRef.current = submittedValues;
+                cleanQueryRef.current = submittedFilterQuery;
+                if (isEditing) {
+                    pendingSavedValuesRef.current = changedDuringSave ? submittedValues : null;
+                    endOwnSave(true);
+                    const serverValues = initialValuesRef.current;
+                    if (
+                        changedDuringSave &&
+                        serverValues &&
+                        deepEqual(normalizeServerWishlist(serverValues), normalizeServerWishlist(submittedValues))
+                    ) {
+                        pendingSavedValuesRef.current = null;
+                        clearConflict();
+                    }
+                }
+                setStaleSave(null);
+                if (!isEditing || !changedDuringSave) {
+                    onOpenChange(false);
+                    return;
+                }
+                setValues((current) => ({ ...current }));
+            } catch {
+                if (isEditing) {
+                    endOwnSave(false);
+                }
             }
         },
-        [values, validate, onSubmit],
+        [beginOwnSave, clearConflict, endOwnSave, isEditing, onOpenChange, onSubmit],
     );
 
-    const selectedFilter = useMemo(() => filters.find((f) => f.id === values.filterId), [filters, values.filterId]);
+    const handleSubmit = useCallback(
+        async (e: React.SubmitEvent) => {
+            e.preventDefault();
+
+            const newErrors: Record<string, string> = {};
+            if (!values.name.trim()) {
+                newErrors.name = 'Name is required';
+            }
+
+            const criteria = await resolveCriteria();
+            if (criteria === null) {
+                setErrors((prev) => ({ ...prev, ...newErrors }));
+                return;
+            }
+
+            if (values.monitored && criteriaIsEmpty(criteria)) {
+                newErrors.criteria = 'Add filter criteria to monitor this wishlist';
+            }
+
+            if (values.monitored && !effectiveContentType) {
+                newErrors.contentType = 'Select a content type to monitor this wishlist';
+            }
+
+            if (Object.keys(newErrors).length > 0) {
+                setErrors(newErrors);
+                return;
+            }
+
+            setErrors({});
+            const submittedValues = { ...values, contentType: effectiveContentType, criteria };
+            if (conflictState === 'deleted') {
+                return;
+            }
+            if (conflictState === 'stale') {
+                setStaleSave({ values: submittedValues, filterQuery });
+                return;
+            }
+            await submitValues(submittedValues, filterQuery);
+        },
+        [values, resolveCriteria, effectiveContentType, conflictState, filterQuery, submitValues],
+    );
 
     const selectedQualityTierList = useMemo(
-        () => qualityTierLists.find((q) => q.id === values.qualityTierListId),
-        [qualityTierLists, values.qualityTierListId],
+        () => (qualityTierLists ?? allTierLists).find((tierList) => tierList.id === values.qualityTierListId),
+        [allTierLists, qualityTierLists, values.qualityTierListId],
+    );
+
+    const eligibleRootFolders = useMemo(() => {
+        if (!effectiveContentType) {
+            return rootFolders;
+        }
+        return rootFolders.filter((f) => f.contentType.toLowerCase() === effectiveContentType.toLowerCase());
+    }, [rootFolders, effectiveContentType]);
+
+    const selectedRootFolder = useMemo(
+        () => rootFolders.find((f) => f.id === values.rootFolderId),
+        [rootFolders, values.rootFolderId],
     );
 
     return (
@@ -185,10 +510,22 @@ export function WishlistForm({
                 <SheetHeader>
                     <SheetTitle>
                         {isEditing ? 'Edit Wishlist' : 'Add Wishlist'}
-                        {isEditing && !isOwner && (
+                        {readOnly && (
+                            <Badge
+                                size="sm"
+                                variant="default"
+                                badgeStyle="outline"
+                                className="wishlist-form__readonly-badge"
+                                data-testid="wishlist-form__readonly-badge"
+                            >
+                                <LockSimpleIcon weight="fill" aria-hidden="true" />
+                                Read-only
+                            </Badge>
+                        )}
+                        {isEditing && !isOwner && !readOnly && (
                             <Tooltip content="This wishlist is owned by another user" side="bottom">
                                 <span className="wishlist-form__owner-lock" data-testid="wishlist-form__owner-lock">
-                                    <LockSimple weight="fill" aria-hidden="true" />
+                                    <LockSimpleIcon weight="fill" aria-hidden="true" />
                                 </span>
                             </Tooltip>
                         )}
@@ -198,12 +535,19 @@ export function WishlistForm({
                             ? readOnly
                                 ? 'View wishlist configuration.'
                                 : 'Update the wishlist configuration.'
-                            : 'Configure a new wishlist for content discovery.'}
+                            : 'A wishlist is a saved filter Magpie uses to automatically monitor for matching content.'}
                     </SheetDescription>
                 </SheetHeader>
 
                 <form onSubmit={handleSubmit} className="wishlist-form">
                     <div className="wishlist-form__body">
+                        {conflictState && (
+                            <ExternalChangeConflictWarning
+                                state={conflictState}
+                                entityLabel="Wishlist"
+                                id="wishlist-external-change-warning"
+                            />
+                        )}
                         <div className="wishlist-form__field">
                             <Label htmlFor="wishlist-name" error={!!errors.name} required>
                                 Name
@@ -221,55 +565,139 @@ export function WishlistForm({
                         </div>
 
                         <div className="wishlist-form__field">
-                            <div className="wishlist-form__label-row">
-                                <Label htmlFor="wishlist-filter">Content Filter</Label>
-                                <Tooltip
-                                    content={
-                                        <p className="wishlist-form__tooltip">
-                                            Optional filter to automatically match content.
-                                            <br />
-                                            If set, matching content will be added to this wishlist.
-                                        </p>
-                                    }
-                                    side="top"
-                                >
-                                    <button
+                            <Label error={!!errors.criteria || !!errors.contentType}>Filter</Label>
+                            <FilterBar
+                                value={filterQuery}
+                                onChange={handleFilterQueryChange}
+                                context="content"
+                                expanded={filterBarExpanded}
+                                onExpandedChange={setFilterBarExpanded}
+                                readOnly={readOnly || (!isEditing && isSubmitting)}
+                                defaultContentType={values.contentType}
+                                data-field="criteria"
+                            />
+                            {errors.criteria && (
+                                <p className="wishlist-form__error" role="alert" data-field="criteria-error">
+                                    {errors.criteria}
+                                </p>
+                            )}
+                            {errors.contentType && (
+                                <p className="wishlist-form__error" role="alert" data-field="contentType-error">
+                                    {errors.contentType}
+                                </p>
+                            )}
+                            {!readOnly && (
+                                <div className="wishlist-form__filter-actions">
+                                    <Button
                                         type="button"
-                                        className="wishlist-form__info-button"
-                                        aria-label="Content filter help"
+                                        variant="secondary"
+                                        size="sm"
+                                        onClick={handlePreview}
+                                        loading={preview.isPending}
+                                        disabled={isSubmitting}
+                                        data-action="preview"
                                     >
-                                        <Info weight="fill" aria-hidden="true" />
-                                    </button>
-                                </Tooltip>
-                            </div>
-                            <Select
-                                value={values.filterId ?? NONE_VALUE}
-                                onValueChange={handleFilterChange}
-                                disabled={isSubmitting || readOnly}
-                            >
-                                <SelectTrigger id="wishlist-filter" placeholder="No filter" data-field="filterId">
-                                    {selectedFilter?.name ?? 'No filter'}
-                                </SelectTrigger>
-                                <SelectContent>
-                                    <SelectItem value={NONE_VALUE}>No filter</SelectItem>
-                                    {filters.map((filter) => (
-                                        <SelectItem key={filter.id} value={filter.id}>
-                                            {filter.name}
-                                        </SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
+                                        <SparkleIcon weight="bold" aria-hidden="true" />
+                                        Preview
+                                    </Button>
+                                </div>
+                            )}
                         </div>
+
+                        {(preview.isPending || previewCandidates !== null || previewError) && (
+                            <div className="wishlist-form__preview" data-testid="wishlist-form__preview">
+                                {!preview.isPending && !previewError && previewCandidates !== null && (
+                                    <ProviderSearchWarnings
+                                        warnings={preview.data?.warnings ?? []}
+                                        hasResults={previewCandidates.length > 0}
+                                    />
+                                )}
+                                {preview.isPending ? (
+                                    <div className="wishlist-form__preview-loading">
+                                        <Skeleton className="wishlist-form__preview-skeleton" />
+                                        <Skeleton className="wishlist-form__preview-skeleton" />
+                                    </div>
+                                ) : previewError ? (
+                                    <EmptyState
+                                        icon={<WarningCircleIcon weight="duotone" />}
+                                        title="Preview failed"
+                                        description={previewError}
+                                        size="sm"
+                                        data-testid="wishlist-form__preview-error"
+                                    />
+                                ) : previewCandidates && previewCandidates.length > 0 ? (
+                                    <>
+                                        <p className="wishlist-form__preview-heading">
+                                            {previewTotal > previewCandidates.length
+                                                ? `Newest ${previewCandidates.length} of ${previewTotal}`
+                                                : `${previewTotal} match${previewTotal === 1 ? '' : 'es'}`}
+                                        </p>
+                                        <ul
+                                            className="wishlist-form__preview-list"
+                                            data-testid="wishlist-form__preview-list"
+                                        >
+                                            {previewCandidates.map((candidate) => (
+                                                <li
+                                                    key={`${candidate.providerType}:${candidate.externalIdSource}:${candidate.externalId}`}
+                                                    className="wishlist-form__preview-item"
+                                                >
+                                                    {candidate.thumbnailUrl ? (
+                                                        <img
+                                                            src={candidate.thumbnailUrl}
+                                                            alt=""
+                                                            className="wishlist-form__preview-thumb"
+                                                            loading="lazy"
+                                                        />
+                                                    ) : (
+                                                        <div
+                                                            className="wishlist-form__preview-thumb wishlist-form__preview-thumb--placeholder"
+                                                            aria-hidden="true"
+                                                        />
+                                                    )}
+                                                    <div className="wishlist-form__preview-body">
+                                                        <span className="wishlist-form__preview-title">
+                                                            {candidate.title?.trim() || 'Untitled'}
+                                                            {candidate.year != null && (
+                                                                <span className="wishlist-form__preview-year">
+                                                                    {candidate.year}
+                                                                </span>
+                                                            )}
+                                                        </span>
+                                                        <Badge size="sm" variant="info" badgeStyle="outline">
+                                                            {candidate.providerType}
+                                                        </Badge>
+                                                    </div>
+                                                </li>
+                                            ))}
+                                        </ul>
+                                    </>
+                                ) : (
+                                    <EmptyState
+                                        icon={<MagnifyingGlassIcon weight="duotone" />}
+                                        title="No matches"
+                                        description={
+                                            (preview.data?.warnings?.length ?? 0) > 0
+                                                ? 'No usable matches were returned. Review the provider warnings and adjust the filter.'
+                                                : 'No metadata provider found content matching these criteria.'
+                                        }
+                                        size="sm"
+                                        data-testid="wishlist-form__preview-empty"
+                                    />
+                                )}
+                            </div>
+                        )}
 
                         <div className="wishlist-form__field">
                             <div className="wishlist-form__label-row">
-                                <Label htmlFor="wishlist-quality-tier">Quality Tier List</Label>
+                                <Label htmlFor="wishlist-quality-tier">Quality</Label>
                                 <Tooltip
                                     content={
                                         <p className="wishlist-form__tooltip">
-                                            Quality preferences for searching.
+                                            Controls how matching releases are ranked.
                                             <br />
-                                            Determines acceptable quality levels for content.
+                                            Only releases that meet the quality can be grabbed.
+                                            <br />
+                                            Inherit uses the current root folder default.
                                         </p>
                                     }
                                     side="top"
@@ -277,9 +705,9 @@ export function WishlistForm({
                                     <button
                                         type="button"
                                         className="wishlist-form__info-button"
-                                        aria-label="Quality tier help"
+                                        aria-label="Quality help"
                                     >
-                                        <Info weight="fill" aria-hidden="true" />
+                                        <InfoIcon weight="fill" aria-hidden="true" />
                                     </button>
                                 </Tooltip>
                             </div>
@@ -290,16 +718,70 @@ export function WishlistForm({
                             >
                                 <SelectTrigger
                                     id="wishlist-quality-tier"
-                                    placeholder="Default quality"
+                                    placeholder="Inherit"
                                     data-field="qualityTierListId"
                                 >
-                                    {selectedQualityTierList?.name ?? 'Default quality'}
+                                    {selectedQualityTierList
+                                        ? `${selectedQualityTierList.name} - ${
+                                              selectedQualityTierList.mimeTypes?.length
+                                                  ? selectedQualityTierList.mimeTypes.join(', ')
+                                                  : 'Any MIME type'
+                                          }`
+                                        : values.qualityTierListId
+                                          ? allTierListsLoading
+                                              ? 'Loading...'
+                                              : 'Unknown tier list'
+                                          : 'Inherit'}
                                 </SelectTrigger>
                                 <SelectContent>
-                                    <SelectItem value={NONE_VALUE}>Default quality</SelectItem>
-                                    {qualityTierLists.map((qtl) => (
+                                    <SelectItem value={NONE_VALUE}>Inherit</SelectItem>
+                                    {availableTierLists.map((qtl) => (
                                         <SelectItem key={qtl.id} value={qtl.id}>
-                                            {qtl.name}
+                                            {qtl.name} -{' '}
+                                            {qtl.mimeTypes?.length ? qtl.mimeTypes.join(', ') : 'Any MIME type'}
+                                        </SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
+                        </div>
+
+                        <div className="wishlist-form__field">
+                            <div className="wishlist-form__label-row">
+                                <Label htmlFor="wishlist-root-folder">Root Folder</Label>
+                                <Tooltip
+                                    content={
+                                        <p className="wishlist-form__tooltip">
+                                            Folder where acquired content will be stored.
+                                            <br />A selected folder takes priority. None uses the content type&apos;s
+                                            default root folder.
+                                        </p>
+                                    }
+                                    side="top"
+                                >
+                                    <button
+                                        type="button"
+                                        className="wishlist-form__info-button"
+                                        aria-label="Root folder help"
+                                    >
+                                        <InfoIcon weight="fill" aria-hidden="true" />
+                                    </button>
+                                </Tooltip>
+                            </div>
+                            <Select
+                                value={values.rootFolderId ?? NONE_VALUE}
+                                onValueChange={handleRootFolderChange}
+                                disabled={isSubmitting || readOnly}
+                            >
+                                <SelectTrigger id="wishlist-root-folder" placeholder="None" data-field="rootFolderId">
+                                    {selectedRootFolder
+                                        ? `${selectedRootFolder.name} (${selectedRootFolder.path})`
+                                        : 'None'}
+                                </SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem value={NONE_VALUE}>None</SelectItem>
+                                    {eligibleRootFolders.map((folder) => (
+                                        <SelectItem key={folder.id} value={folder.id}>
+                                            {folder.name} ({folder.path})
                                         </SelectItem>
                                     ))}
                                 </SelectContent>
@@ -322,26 +804,19 @@ export function WishlistForm({
                             </p>
                         </div>
 
-                        {tags.length > 0 && (
-                            <div className="wishlist-form__field">
-                                <Label>Tags</Label>
-                                <div className="wishlist-form__tags" data-field="tags">
-                                    {tags.map((tag) => (
-                                        <button
-                                            key={tag.id}
-                                            type="button"
-                                            className={`wishlist-form__tag${values.tagIds.includes(tag.id) ? ' wishlist-form__tag--selected' : ''}`}
-                                            onClick={() => handleTagToggle(tag.id)}
-                                            disabled={isSubmitting || readOnly}
-                                            data-tag-id={tag.id}
-                                            aria-pressed={values.tagIds.includes(tag.id)}
-                                        >
-                                            {tag.name}
-                                        </button>
-                                    ))}
-                                </div>
-                            </div>
-                        )}
+                        <div className="wishlist-form__field" data-field="tags">
+                            <Label htmlFor="wishlist-tags">Tags</Label>
+                            <TagInput
+                                id="wishlist-tags"
+                                label="Tags"
+                                value={values.tagIds}
+                                onChange={handleTagsChange}
+                                suggestions={tags.map((tag) => tag.name)}
+                                allowCreate
+                                placeholder="Add a tag..."
+                                disabled={isSubmitting || readOnly}
+                            />
+                        </div>
                     </div>
 
                     <SheetFooter>
@@ -352,12 +827,19 @@ export function WishlistForm({
                             onClick={handleCancel}
                             data-action="cancel"
                         >
-                            <X weight="bold" aria-hidden="true" />
+                            <XIcon weight="bold" aria-hidden="true" />
                             {readOnly ? 'Close' : 'Cancel'}
                         </Button>
                         {!readOnly && (
-                            <Button type="submit" variant="primary" loading={isSubmitting} data-action="save">
-                                <FloppyDisk weight="bold" aria-hidden="true" />
+                            <Button
+                                type="submit"
+                                variant="primary"
+                                loading={isSubmitting}
+                                disabled={conflictState === 'deleted'}
+                                aria-describedby={conflictState ? 'wishlist-external-change-warning' : undefined}
+                                data-action="save"
+                            >
+                                <FloppyDiskIcon weight="bold" aria-hidden="true" />
                                 Save
                             </Button>
                         )}
@@ -366,6 +848,18 @@ export function WishlistForm({
             </SheetContent>
 
             <UnsavedChangesDialog open={showUnsavedDialog} onDiscard={handleDiscard} onCancel={handleKeepEditing} />
+            <StaleSaveConfirmationDialog
+                open={staleSave !== null}
+                title="Save over newer wishlist changes?"
+                description="This wishlist changed elsewhere after editing began. Saving will overwrite the newer changes."
+                saving={isSubmitting}
+                onCancel={() => setStaleSave(null)}
+                onConfirm={() => {
+                    if (staleSave) {
+                        void submitValues(staleSave.values, staleSave.filterQuery);
+                    }
+                }}
+            />
         </Sheet>
     );
 }

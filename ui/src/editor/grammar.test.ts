@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { parser } from './filter-query-parser';
+import { parser } from './filter-query-parser.gen';
 
 function parseQuery(query: string): { success: boolean; errorNodes: string[] } {
     const tree = parser.parse(query);
@@ -39,8 +39,12 @@ describe('Filter Query Grammar', () => {
                 expectParses('fileSize > 1000000000');
             });
 
-            it('parses equals with identifier', () => {
-                expectParses('monitoring = Monitored');
+            it('parses equals with boolean true', () => {
+                expectParses('monitoring = true');
+            });
+
+            it('parses equals with boolean false', () => {
+                expectParses('monitoring = false');
             });
 
             it('parses not equals', () => {
@@ -87,6 +91,11 @@ describe('Filter Query Grammar', () => {
         });
 
         describe('Null Operators', () => {
+            it('parses has-no-value semantics for monitoring', () => {
+                expectParses('monitoring null');
+                expectParses('monitoring !null');
+            });
+
             it('parses null', () => {
                 expectParses('overview null');
             });
@@ -121,7 +130,7 @@ describe('Filter Query Grammar', () => {
 
     describe('Binary Expressions', () => {
         it('parses and expression', () => {
-            expectParses('monitoring = Monitored and contentType = "show"');
+            expectParses('monitoring = true and contentType = "show"');
         });
 
         it('parses or expression', () => {
@@ -222,12 +231,12 @@ describe('Filter Query Grammar', () => {
     describe('Complex Real-World Queries', () => {
         it('parses complex query with multiple conditions', () => {
             expectParses(
-                'monitoring = Monitored and contentType = "movie" and genre has "Action" and genre !has "Horror" and fileSize > 1000000000',
+                'monitoring = true and contentType = "movie" and genre has "Action" and genre !has "Horror" and fileSize > 1000000000',
             );
         });
 
         it('parses query with monitoring and genres', () => {
-            expectParses('Monitoring = Active and (Genre has "Action" or Genre has "Comedy")');
+            expectParses('Monitoring = true and (Genre has "Action" or Genre has "Comedy")');
         });
 
         it('parses query with multiple sections', () => {
@@ -292,8 +301,8 @@ describe('Filter Query Grammar', () => {
             expectParses('Name = "Breaking Bad"');
         });
 
-        it('parses: Monitoring = Active', () => {
-            expectParses('Monitoring = Active');
+        it('parses: Monitoring = true', () => {
+            expectParses('Monitoring = true');
         });
 
         it('parses: FileSize > 1000000000', () => {
@@ -340,8 +349,8 @@ describe('Filter Query Grammar', () => {
             expectParses('ParentId = "12345678-1234-1234-1234-123456789abc"');
         });
 
-        it('parses: ContentType = "show" and Monitoring = Active', () => {
-            expectParses('ContentType = "show" and Monitoring = Active');
+        it('parses: ContentType = "show" and Monitoring = true', () => {
+            expectParses('ContentType = "show" and Monitoring = true');
         });
 
         it('parses: Genre has "Action" or Genre has "Comedy"', () => {
@@ -368,8 +377,8 @@ describe('Filter Query Grammar', () => {
             expectParses('ContentType = "movie" and FileSize > 5000000000');
         });
 
-        it('parses: Monitoring = Active and (Genre has "Action" or Genre has "Comedy")', () => {
-            expectParses('Monitoring = Active and (Genre has "Action" or Genre has "Comedy")');
+        it('parses: Monitoring = true and (Genre has "Action" or Genre has "Comedy")', () => {
+            expectParses('Monitoring = true and (Genre has "Action" or Genre has "Comedy")');
         });
 
         it('parses: Kind = "person"', () => {
@@ -545,6 +554,28 @@ describe('Filter Query Grammar', () => {
 
         it('parses complex query with mixed-case keywords', () => {
             expectParses('name CONTAINS "test" AND status = Active OR type HAS "movie"');
+        });
+
+        it.each([
+            ['!HAS', 'genre !HAS "Horror"'],
+            ['!Contains', 'title !Contains "bad"'],
+            ['!STARTSWITH', 'name !STARTSWITH "A"'],
+            ['!EndsWith', 'name !EndsWith "s"'],
+            ['!IN', 'status !IN (Active, Ended)'],
+            ['!Null', 'overview !Null'],
+        ])('parses case-insensitive negated keyword %s', (_operator, query) => {
+            expectParses(query);
+        });
+    });
+
+    describe('Tokenizer Parity', () => {
+        it('treats a negated keyword prefix as part of one invalid token', () => {
+            expectFailsToParse('genre !hasValue');
+            expectFailsToParse('status !inList (Active)');
+        });
+
+        it('handles Unicode whitespace accepted by MagpieQL', () => {
+            expectParses('name\u00a0=\u2003"test"');
         });
     });
 });

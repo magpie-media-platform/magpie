@@ -51,7 +51,7 @@ describe('BulkTagAssignment', () => {
         it('renders description with item title for single item', () => {
             render(<BulkTagAssignment {...defaultProps} selectedItems={[{ id: '1', title: 'Test Item', tags: [] }]} />);
 
-            expect(screen.getByText(/Modify tags for "Test Item"/)).toBeInTheDocument();
+            expect(document.querySelector('.sheet-description')).toHaveTextContent(/^Modify tags for "Test Item"$/);
         });
 
         it('renders all available tags', () => {
@@ -66,7 +66,7 @@ describe('BulkTagAssignment', () => {
             render(<BulkTagAssignment {...defaultProps} availableTags={[]} />);
 
             expect(screen.getByText('No tags available')).toBeInTheDocument();
-            expect(screen.getByText('Create tags in the Tags page first')).toBeInTheDocument();
+            expect(screen.getByText("Add tags from an item's detail page to use them here")).toBeInTheDocument();
         });
 
         it('renders Cancel and Apply buttons', () => {

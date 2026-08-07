@@ -1,30 +1,54 @@
 using System;
+using System.Collections.Generic;
+
+using Magpie.Models.Data;
 
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Design;
+using Microsoft.EntityFrameworkCore.Infrastructure;
 
 using Npgsql;
 
 namespace Magpie.Data.PostgreSQL;
 
 /// <summary>
-/// Design-time factory for PostgreSQL migrations.
+/// The factory for PostgreSQL-backed <see cref="MagpieDbContext"/> instances.
 /// </summary>
 public sealed class MagpieDbContextFactory : IDesignTimeDbContextFactory<MagpieDbContext>
 {
-    /// <inheritdoc />
-    public MagpieDbContext CreateDbContext(string[] args)
+    /// <summary>
+    /// Creates a context for the given connection string.
+    /// </summary>
+    /// <param name="connectionString">The PostgreSQL connection string</param>
+    /// <param name="defaultScheduleTriggers">The default schedule triggers to seed</param>
+    /// <param name="defaultEventTriggers">The default event triggers to seed</param>
+    public static MagpieDbContext Create(
+        string connectionString,
+        IReadOnlyList<ScheduleTrigger> defaultScheduleTriggers,
+        IReadOnlyList<EventTrigger> defaultEventTriggers)
     {
-        ArgumentNullException.ThrowIfNull(args);
-
-        var connectionString = args.Length > 0 ? args[0] : GetDesignTimeConnectionString();
+        ArgumentException.ThrowIfNullOrWhiteSpace(connectionString);
 
         var optionsBuilder = new DbContextOptionsBuilder<MagpieDbContext>();
-        optionsBuilder.UseNpgsql(
-            connectionString,
-            options => options.MigrationsAssembly(typeof(MagpieDbContextFactory).Assembly.GetName().Name));
+        ConfigureOptions(optionsBuilder, connectionString, defaultScheduleTriggers, defaultEventTriggers);
 
         return new(optionsBuilder.Options);
+    }
+
+    internal static void ConfigureOptions(
+        DbContextOptionsBuilder optionsBuilder,
+        string connectionString,
+        IReadOnlyList<ScheduleTrigger> defaultScheduleTriggers,
+        IReadOnlyList<EventTrigger> defaultEventTriggers)
+    {
+        optionsBuilder
+            .UseNpgsql(
+                connectionString,
+                npgsql => npgsql
+                    .MigrationsAssembly(typeof(MagpieDbContextFactory).Assembly.GetName().Name)
+                    .UseQuerySplittingBehavior(QuerySplittingBehavior.SplitQuery))
+            .ReplaceService<IModelCustomizer, PostgreSqlModelCustomizer>()
+            .UseMagpieSeeding(defaultScheduleTriggers, defaultEventTriggers);
     }
 
     private static string GetDesignTimeConnectionString()
@@ -39,5 +63,15 @@ public sealed class MagpieDbContextFactory : IDesignTimeDbContextFactory<MagpieD
         };
 
         return builder.ConnectionString;
+    }
+
+    /// <inheritdoc />
+    public MagpieDbContext CreateDbContext(string[] args)
+    {
+        ArgumentNullException.ThrowIfNull(args);
+
+        var connectionString = args.Length > 0 ? args[0] : GetDesignTimeConnectionString();
+
+        return Create(connectionString, [], []);
     }
 }

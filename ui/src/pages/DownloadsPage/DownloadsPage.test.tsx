@@ -1,7 +1,7 @@
 import { render, screen, within, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
-import { MemoryRouter, useSearchParams } from 'react-router-dom';
+import { MemoryRouter, useSearchParams, Routes, Route } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 
@@ -15,7 +15,16 @@ vi.mock('@/lib/api', () => ({
         }
         const searchParams = new URLSearchParams();
         for (const [key, value] of Object.entries(params)) {
-            if (value !== undefined && value !== null) {
+            if (value === undefined || value === null) {
+                continue;
+            }
+            if (Array.isArray(value)) {
+                for (const element of value) {
+                    if (element !== undefined && element !== null) {
+                        searchParams.append(key, String(element));
+                    }
+                }
+            } else {
                 searchParams.set(key, String(value));
             }
         }
@@ -29,75 +38,120 @@ vi.mock('@/lib/api', () => ({
 
 const mockUseExtensions = vi.fn();
 const mockUseSlotExtensions = vi.fn();
+const mockHasPermission = vi.fn((_permission: string) => true as boolean);
 
 vi.mock('@/extensions/useExtensions', () => ({
     useExtensions: () => mockUseExtensions(),
     useSlotExtensions: (slot: string) => mockUseSlotExtensions(slot),
 }));
 
+vi.mock('@/auth', async () => {
+    const actual = await vi.importActual<typeof import('@/auth')>('@/auth');
+    return {
+        ...actual,
+        useAuth: () => ({
+            hasPermission: (permission: string) => mockHasPermission(permission),
+            hasRole: () => true,
+        }),
+    };
+});
+
 import { ToastList, ToastProvider, ToastStateProvider, ToastViewport } from '@/components/ui/Toast';
 import { TooltipProvider } from '@/components/ui/Tooltip';
 import { apiGet, apiPost, apiDelete } from '@/lib/api';
-import type { ApiDownload, PagedDownloads } from '@/hooks/useDownloads';
+import { formatDateTime } from '@/lib/dateFormatting';
+import type { ApiDownload, DownloadStatusValue, PagedDownloads } from '@/hooks/useDownloads';
 import type { ApiDownloadClient } from '@/hooks/useDownloadClients';
+import { Role, type Permission } from '@/auth/types';
+import { testHasPermission } from '@/test/permissions';
 import { DownloadsPage } from './DownloadsPage';
 
 const mockApiDownloads: ApiDownload[] = [
     {
         id: 'dl-1',
         downloadClientId: 'client-1',
+        downloadClientName: 'SABnzbd',
         externalId: 'sab_123',
         title: 'Breaking.Bad.S01E01.1080p.BluRay.x264',
-        status: 2,
+        contentHierarchyName: 'Breaking Bad',
+        contentHierarchyItemId: 'chi-1',
+        posterUrl: 'https://images.example/breaking-bad.jpg',
+        releaseInfoUrl: 'https://indexer.example/release/bb-101',
+        status: 'Downloading',
+        progress: 42,
+        canPause: true,
+        canResume: true,
         createdAt: '2024-01-15T10:00:00Z',
+        modifiedAt: '2024-01-15T10:01:00Z',
     },
     {
         id: 'dl-2',
         downloadClientId: 'client-2',
+        downloadClientName: 'DownloadClient A',
         externalId: 'qbt_456',
         title: 'The.Office.S03E07.720p.WEB.x264',
-        status: 2,
+        status: 'Downloading',
+        canPause: true,
+        canResume: true,
         createdAt: '2024-01-15T10:05:00Z',
     },
     {
         id: 'dl-3',
         downloadClientId: 'client-1',
+        downloadClientName: 'SABnzbd',
         externalId: 'sab_789',
         title: 'Dune.Part.Two.2024.2160p.UHD.BluRay.x265',
-        status: 1,
+        contentHierarchyName: 'Dune: Part Two',
+        contentHierarchyItemId: 'chi-3',
+        status: 'Queued',
+        canPause: true,
+        canResume: true,
         createdAt: '2024-01-15T09:30:00Z',
     },
     {
         id: 'dl-4',
         downloadClientId: 'client-2',
+        downloadClientName: 'DownloadClient A',
         externalId: 'qbt_101',
         title: 'Shogun.2024.S01E05.1080p.WEB.H264',
-        status: 0,
+        status: 'Grabbed',
+        canPause: true,
+        canResume: true,
         createdAt: '2024-01-15T10:15:00Z',
     },
     {
         id: 'dl-5',
         downloadClientId: 'client-1',
+        downloadClientName: 'SABnzbd',
         externalId: 'sab_202',
         title: 'The.Gentlemen.S01E03.1080p.WEB.x264',
-        status: 3,
+        status: 'Paused',
+        canPause: true,
+        canResume: true,
         createdAt: '2024-01-15T10:20:00Z',
     },
     {
         id: 'dl-6',
         downloadClientId: 'client-2',
+        downloadClientName: 'DownloadClient A',
         externalId: 'qbt_303',
         title: '3.Body.Problem.S01E01.720p.WEB.x264',
-        status: 4,
+        status: 'Stalled',
         statusReason: 'Tracker returned warning: slow peer',
+        canPause: true,
+        canResume: true,
+        canForceStart: true,
         createdAt: '2024-01-15T09:00:00Z',
     },
     {
         id: 'hist-1',
         downloadClientId: 'client-1',
+        downloadClientName: 'SABnzbd',
         externalId: 'sab_hist_1',
         title: 'The.Bear.S02E10.1080p.WEB.H264',
-        status: 6,
+        contentHierarchyName: 'The Bear',
+        contentHierarchyItemId: 'chi-bear',
+        status: 'Imported',
         outputPath: '/media/tv/The Bear/Season 2/The.Bear.S02E10.1080p.WEB.H264.mkv',
         dateCompleted: '2024-01-15T08:45:00Z',
         createdAt: '2024-01-14T22:00:00Z',
@@ -105,9 +159,10 @@ const mockApiDownloads: ApiDownload[] = [
     {
         id: 'hist-2',
         downloadClientId: 'client-2',
+        downloadClientName: 'DownloadClient A',
         externalId: 'qbt_hist_2',
         title: 'Oppenheimer.2023.2160p.UHD.BluRay.x265',
-        status: 5,
+        status: 'Downloaded',
         outputPath: '/media/movies/Oppenheimer (2023)/Oppenheimer.2023.2160p.UHD.BluRay.x265.mkv',
         dateCompleted: '2024-01-14T22:10:00Z',
         createdAt: '2024-01-14T20:00:00Z',
@@ -115,21 +170,127 @@ const mockApiDownloads: ApiDownload[] = [
     {
         id: 'hist-3',
         downloadClientId: 'client-1',
+        downloadClientName: 'SABnzbd',
         externalId: 'sab_hist_3',
         title: 'True.Detective.S04E01.1080p.WEB.x264',
-        status: 7,
+        status: 'Failed',
         statusReason: 'Hash mismatch after download',
+        failureReason: 'DownloadErrored',
+        failedAt: '2024-01-14T15:22:00Z',
         dateCompleted: '2024-01-14T15:22:00Z',
         createdAt: '2024-01-14T12:00:00Z',
     },
 ];
 
-const mockPagedDownloads: PagedDownloads = {
-    items: mockApiDownloads,
-    pageNumber: 1,
-    pageSize: 25,
-    totalItems: 9,
-};
+const terminalTimestampDownloads: ApiDownload[] = [
+    {
+        id: 'term-failed',
+        downloadClientId: 'client-1',
+        downloadClientName: 'SABnzbd',
+        externalId: 'sab_failed_terminal',
+        title: 'Terminal.Timestamp.Failed.1080p.WEB.x264',
+        status: 'Failed',
+        statusReason: 'Hash mismatch after download',
+        failureReason: 'DownloadErrored',
+        failedAt: '2024-01-16T03:00:00Z',
+        dateCompleted: '2024-01-12T03:00:00Z',
+        createdAt: '2024-01-10T03:00:00Z',
+    },
+    {
+        id: 'term-cancelled',
+        downloadClientId: 'client-2',
+        downloadClientName: 'DownloadClient A',
+        externalId: 'qbt_cancelled_terminal',
+        title: 'Terminal.Timestamp.Cancelled.2160p.WEB.x265',
+        status: 'Cancelled',
+        modifiedAt: '2024-01-15T03:00:00Z',
+        dateCompleted: '2024-01-11T03:00:00Z',
+        createdAt: '2024-01-09T03:00:00Z',
+    },
+    {
+        id: 'term-completed',
+        downloadClientId: 'client-1',
+        downloadClientName: 'SABnzbd',
+        externalId: 'sab_completed_terminal',
+        title: 'Terminal.Timestamp.Completed.720p.WEB.x264',
+        status: 'Imported',
+        outputPath: '/media/tv/Terminal Timestamp/Terminal.Timestamp.Completed.720p.WEB.x264.mkv',
+        dateCompleted: '2024-01-14T03:00:00Z',
+        createdAt: '2024-01-08T03:00:00Z',
+    },
+];
+
+function getDownloadEndedAt(download: ApiDownload): string {
+    if (download.status === 'Failed') {
+        return download.failedAt ?? download.dateCompleted ?? download.modifiedAt ?? download.createdAt;
+    }
+    if (download.status === 'Cancelled') {
+        return download.modifiedAt ?? download.dateCompleted ?? download.createdAt;
+    }
+    return download.dateCompleted ?? download.modifiedAt ?? download.createdAt;
+}
+
+function respondDownloads(url: string, source: ApiDownload[] = mockApiDownloads): PagedDownloads {
+    const query = url.includes('?') ? url.slice(url.indexOf('?') + 1) : '';
+    const params = new URLSearchParams(query);
+    const single = params.get('status');
+    const set = params.getAll('statuses');
+    const client = params.get('downloadClientId');
+    const pageNumber = Number.parseInt(params.get('pageNumber') ?? '1', 10) || 1;
+    const pageSize = Number.parseInt(params.get('pageSize') ?? '25', 10) || 25;
+
+    let items = source;
+    if (client) {
+        items = items.filter((d) => d.downloadClientId === client);
+    }
+    if (single) {
+        items = items.filter((d) => d.status === single);
+    } else if (set.length > 0) {
+        items = items.filter((d) => set.includes(d.status));
+    }
+
+    const sortBy = params.get('sortBy');
+    const desc = (params.get('sortDirection') ?? '2') !== '1';
+    const dir = desc ? -1 : 1;
+    const cmp = (a: string | number, b: string | number) => (a < b ? -1 : a > b ? 1 : 0);
+    if (sortBy === 'DateCompleted') {
+        items = [...items].sort(
+            (a, b) => dir * cmp(Date.parse(getDownloadEndedAt(a)), Date.parse(getDownloadEndedAt(b))),
+        );
+    } else if (sortBy === 'CreatedAt') {
+        items = [...items].sort((a, b) => dir * cmp(Date.parse(a.createdAt), Date.parse(b.createdAt)));
+    } else if (sortBy === 'ModifiedAt') {
+        items = [...items].sort(
+            (a, b) => dir * cmp(Date.parse(a.modifiedAt ?? a.createdAt), Date.parse(b.modifiedAt ?? b.createdAt)),
+        );
+    } else if (sortBy === 'ContentHierarchyName') {
+        items = [...items].sort(
+            (a, b) =>
+                dir *
+                cmp(
+                    (a.contentHierarchyName ?? a.title).toLowerCase(),
+                    (b.contentHierarchyName ?? b.title).toLowerCase(),
+                ),
+        );
+    } else if (sortBy === 'DownloadClientName') {
+        items = [...items].sort(
+            (a, b) => dir * cmp((a.downloadClientName ?? '').toLowerCase(), (b.downloadClientName ?? '').toLowerCase()),
+        );
+    } else if (sortBy === 'Status') {
+        items = [...items].sort((a, b) => dir * cmp(a.status, b.status));
+    } else if (sortBy === 'Progress') {
+        items = [...items].sort((a, b) => dir * cmp(a.progress ?? -1, b.progress ?? -1));
+    }
+
+    const totalItems = items.length;
+    const start = (pageNumber - 1) * pageSize;
+    return {
+        items: items.slice(start, start + pageSize),
+        pageNumber,
+        pageSize,
+        totalItems,
+    };
+}
 
 const mockApiClients: ApiDownloadClient[] = [
     {
@@ -137,15 +298,19 @@ const mockApiClients: ApiDownloadClient[] = [
         name: 'SABnzbd',
         providerType: 'sabnzbd',
         enabled: true,
-        status: 1,
+        status: 'Healthy',
+        cleanupDeleteFiles: true,
+        keepFailedOnClient: false,
         createdAt: '2024-01-01T00:00:00Z',
     },
     {
         id: 'client-2',
-        name: 'qBittorrent',
-        providerType: 'qbittorrent',
+        name: 'DownloadClient A',
+        providerType: 'downloadclient-a',
         enabled: true,
-        status: 1,
+        status: 'Healthy',
+        cleanupDeleteFiles: true,
+        keepFailedOnClient: false,
         createdAt: '2024-01-01T00:00:00Z',
     },
 ];
@@ -166,13 +331,8 @@ const noExtensions = {
 function createTestQueryClient() {
     return new QueryClient({
         defaultOptions: {
-            queries: {
-                retry: false,
-                gcTime: 0,
-            },
-            mutations: {
-                retry: false,
-            },
+            queries: { retry: false, gcTime: 0 },
+            mutations: { retry: false },
         },
     });
 }
@@ -182,6 +342,30 @@ function createTestWrapper(queryClient: QueryClient) {
         return (
             <QueryClientProvider client={queryClient}>
                 <MemoryRouter>
+                    <TooltipProvider>
+                        <ToastProvider>
+                            <ToastStateProvider>
+                                <Routes>
+                                    <Route path="/" element={<>{children}</>} />
+                                    <Route path="/library/:contentId" element={<div>Library Detail</div>} />
+                                </Routes>
+                                <ToastList />
+                                <ToastViewport />
+                            </ToastStateProvider>
+                        </ToastProvider>
+                    </TooltipProvider>
+                </MemoryRouter>
+            </QueryClientProvider>
+        );
+    };
+}
+
+function createUrlWrapper(url: string) {
+    const queryClient = createTestQueryClient();
+    return function TestWrapperWithUrl({ children }: { children: ReactNode }) {
+        return (
+            <QueryClientProvider client={queryClient}>
+                <MemoryRouter initialEntries={[url]}>
                     <TooltipProvider>
                         <ToastProvider>
                             <ToastStateProvider>
@@ -197,353 +381,381 @@ function createTestWrapper(queryClient: QueryClient) {
     };
 }
 
-describe('DownloadsPage', () => {
+function setupApiGet(source: ApiDownload[] = mockApiDownloads) {
     const mockApiGet = vi.mocked(apiGet);
+    mockApiGet.mockImplementation((url: string) => {
+        if (url.startsWith('/downloads')) {
+            return Promise.resolve(respondDownloads(url, source));
+        }
+        if (url === '/download-clients') {
+            return Promise.resolve(mockApiClients);
+        }
+        return Promise.resolve([]);
+    });
+    return mockApiGet;
+}
 
+function getTable(): HTMLElement {
+    return document.querySelector('[data-component="data-table"]') as HTMLElement;
+}
+
+function getTableRow(id: string): HTMLElement {
+    const row = getTable().querySelector<HTMLElement>(`[data-row-id="${id}"]`);
+    expect(row).toBeInTheDocument();
+    return row as HTMLElement;
+}
+
+function getEndedCell(id: string): HTMLElement {
+    const cell = getTableRow(id).querySelector<HTMLElement>('[data-column="completed"] .downloads-page__date');
+    expect(cell).toBeInTheDocument();
+    return cell as HTMLElement;
+}
+
+function getTableRowIds(): string[] {
+    return Array.from(getTable().querySelectorAll<HTMLElement>('.data-table__row')).map(
+        (row) => row.dataset.rowId ?? '',
+    );
+}
+
+function createMatchMedia(width: number) {
+    return vi.fn((query: string) => {
+        const minWidth = query.match(/\(min-width:\s*(\d+)px\)/);
+        const maxWidth = query.match(/\(max-width:\s*(\d+)px\)/);
+        return {
+            matches:
+                (minWidth === null || width >= Number(minWidth[1])) &&
+                (maxWidth === null || width <= Number(maxWidth[1])),
+            media: query,
+            onchange: null,
+            addListener: () => {},
+            removeListener: () => {},
+            addEventListener: () => {},
+            removeEventListener: () => {},
+            dispatchEvent: () => false,
+        };
+    });
+}
+
+beforeEach(() => {
+    vi.stubGlobal('matchMedia', createMatchMedia(1024));
+});
+
+afterEach(() => {
+    vi.unstubAllGlobals();
+});
+
+async function openRowMenu(user: ReturnType<typeof userEvent.setup>, titleFragment: RegExp) {
+    const trigger = within(getTable()).getByRole('button', { name: titleFragment });
+    await user.click(trigger);
+}
+
+describe('DownloadsPage shell', () => {
     beforeEach(() => {
         vi.clearAllMocks();
         mockUseExtensions.mockReturnValue(defaultExtensionContext);
         mockUseSlotExtensions.mockReturnValue(noExtensions);
-        mockApiGet.mockImplementation((url: string) => {
-            if (url.startsWith('/downloads')) {
-                return Promise.resolve(mockPagedDownloads);
-            }
-            if (url === '/download-clients') {
-                return Promise.resolve(mockApiClients);
-            }
-            return Promise.resolve([]);
-        });
+        setupApiGet();
     });
 
     afterEach(() => {
         vi.restoreAllMocks();
     });
 
-    it('renders with correct data-page attribute', async () => {
+    it('renders selectable mobile cards only at a 390px viewport', async () => {
+        const matchMedia = createMatchMedia(390);
+        vi.stubGlobal('matchMedia', matchMedia);
+        const user = userEvent.setup();
+        const queryClient = createTestQueryClient();
+        render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
+
+        const queueCards = await screen.findByRole('list', { name: 'Download queue' });
+        expect(await within(queueCards).findByText('Breaking Bad')).toBeInTheDocument();
+        expect(matchMedia).toHaveBeenCalledWith('(max-width: 1023px)');
+        expect(document.querySelector('[data-component="data-table"]')).not.toBeInTheDocument();
+        expect(screen.queryByRole('columnheader', { name: 'Title' })).not.toBeInTheDocument();
+
+        await user.click(screen.getByRole('button', { name: /^select$/i }));
+        await user.click(within(queueCards).getByRole('checkbox', { name: 'Select Breaking Bad' }));
+
+        const queueBar = document.querySelector(
+            '[data-component="downloads-mobile-selection-bar-queue"]',
+        ) as HTMLElement;
+        expect(within(queueBar).getByText('1 selected')).toBeInTheDocument();
+    });
+
+    it('hands queue progress directly to the purpose-built card at a 768px viewport', async () => {
+        const matchMedia = createMatchMedia(768);
+        vi.stubGlobal('matchMedia', matchMedia);
+        const queryClient = createTestQueryClient();
+        render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
+
+        const queueCards = await screen.findByRole('list', { name: 'Download queue' });
+        expect(await within(queueCards).findByText('Breaking Bad')).toBeInTheDocument();
+
+        const progress = within(queueCards).getByTestId('downloads-page__progress');
+        expect(matchMedia).toHaveBeenCalledWith('(max-width: 1023px)');
+        expect(document.querySelector('[data-component="data-table"]')).not.toBeInTheDocument();
+        expect(progress.querySelector('.downloads-page__progress-fill')).toHaveStyle({ width: '42%' });
+    });
+
+    it('renders with the data-page attribute and title', () => {
         const queryClient = createTestQueryClient();
         render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
 
         expect(document.querySelector('[data-page="downloads"]')).toBeInTheDocument();
-    });
-
-    it('renders the page title', async () => {
-        const queryClient = createTestQueryClient();
-        render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
-
         expect(screen.getByRole('heading', { name: 'Downloads', level: 1 })).toBeInTheDocument();
     });
 
-    it('renders the total active count', async () => {
+    it('renders the active count as plain text in the Active tab label', async () => {
         const queryClient = createTestQueryClient();
         render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
 
         await waitFor(() => {
-            const count = screen.getByTestId('downloads-page__count');
-            expect(count).toBeInTheDocument();
-            expect(count).toHaveTextContent('6');
+            expect(screen.getAllByTestId('downloads-page__tab-count')[0]).toHaveTextContent('6');
         });
     });
 
-    it('shows the page count even when zero active downloads', async () => {
-        const emptyPaged: PagedDownloads = {
-            items: [],
-            pageNumber: 1,
-            pageSize: 25,
-            totalItems: 0,
-        };
-        const mockApiGet = vi.mocked(apiGet);
-        mockApiGet.mockImplementation((url: string) => {
-            if (url.startsWith('/downloads')) {
-                return Promise.resolve(emptyPaged);
-            }
-            if (url === '/download-clients') {
-                return Promise.resolve(mockApiClients);
-            }
-            return Promise.resolve([]);
-        });
-
+    it('keeps terminal downloads out of the empty Active panel and shows them in History', async () => {
+        const user = userEvent.setup();
+        setupApiGet(terminalTimestampDownloads);
         const queryClient = createTestQueryClient();
         render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
 
         await waitFor(() => {
-            const count = screen.getByTestId('downloads-page__count');
-            expect(count).toBeInTheDocument();
-            expect(count).toHaveTextContent('0');
+            expect(screen.getAllByText('No active downloads').length).toBeGreaterThan(0);
+            expect(screen.getByTestId('downloads-page__tab-count')).toHaveTextContent('3');
+        });
+
+        expect(within(getTable()).queryByText('Terminal.Timestamp.Failed.1080p.WEB.x264')).not.toBeInTheDocument();
+
+        await user.click(screen.getByRole('tab', { name: /history/i }));
+
+        await waitFor(() => {
+            expect(within(getTable()).getByText('Terminal.Timestamp.Failed.1080p.WEB.x264')).toBeInTheDocument();
+            expect(within(getTable()).getByText('Terminal.Timestamp.Cancelled.2160p.WEB.x265')).toBeInTheDocument();
+            expect(within(getTable()).getByText('Terminal.Timestamp.Completed.720p.WEB.x264')).toBeInTheDocument();
         });
     });
 
-    it('renders the page icon as decorative', () => {
+    it('renders Active and History tabs with Active active by default', () => {
         const queryClient = createTestQueryClient();
         render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
 
-        const icon = screen.getByTestId('downloads-page__icon');
-        expect(icon).toHaveAttribute('aria-hidden', 'true');
-    });
-
-    it('renders Queue and History tabs', () => {
-        const queryClient = createTestQueryClient();
-        render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
-
-        expect(screen.getByRole('tab', { name: /queue/i })).toBeInTheDocument();
+        const activeTab = screen.getByRole('tab', { name: /active/i });
+        expect(activeTab).toHaveAttribute('data-state', 'active');
         expect(screen.getByRole('tab', { name: /history/i })).toBeInTheDocument();
     });
-
-    it('shows Queue tab as active by default', () => {
-        const queryClient = createTestQueryClient();
-        render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
-
-        const queueTab = screen.getByRole('tab', { name: /queue/i });
-        expect(queueTab).toHaveAttribute('data-state', 'active');
-    });
-
-    it('shows tab count badges', async () => {
-        const queryClient = createTestQueryClient();
-        render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
-
-        await waitFor(() => {
-            const tabCounts = screen.getAllByTestId('downloads-page__tab-count');
-            expect(tabCounts.length).toBeGreaterThanOrEqual(1);
-        });
-    });
 });
 
-describe('DownloadsPage summary badges', () => {
-    const mockApiGet = vi.mocked(apiGet);
-
+describe('DownloadsPage table columns', () => {
     beforeEach(() => {
         vi.clearAllMocks();
         mockUseExtensions.mockReturnValue(defaultExtensionContext);
         mockUseSlotExtensions.mockReturnValue(noExtensions);
-        mockApiGet.mockImplementation((url: string) => {
-            if (url.startsWith('/downloads')) {
-                return Promise.resolve(mockPagedDownloads);
-            }
-            if (url === '/download-clients') {
-                return Promise.resolve(mockApiClients);
-            }
-            return Promise.resolve([]);
-        });
+        setupApiGet();
     });
 
-    afterEach(() => {
-        vi.restoreAllMocks();
-    });
+    afterEach(() => vi.restoreAllMocks());
 
-    it('renders summary badges for each status', async () => {
+    it('renders a sortable table with the expected column headers', async () => {
         const queryClient = createTestQueryClient();
         render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
 
         await waitFor(() => {
-            expect(screen.getAllByText('Downloading').length).toBeGreaterThanOrEqual(1);
-            expect(screen.getAllByText('Queued').length).toBeGreaterThanOrEqual(1);
-            expect(screen.getAllByText('Paused').length).toBeGreaterThanOrEqual(1);
+            expect(within(getTable()).getByText('Breaking Bad')).toBeInTheDocument();
         });
+
+        const table = getTable();
+        expect(table).toBeInTheDocument();
+        for (const header of ['Title', 'Client', 'Status', 'Added', 'Last status']) {
+            expect(within(table).getByText(header)).toBeInTheDocument();
+        }
     });
 
-    it('applies data-status attributes to badges', async () => {
+    it('reserves enough Status column width for the Downloading badge', async () => {
         const queryClient = createTestQueryClient();
         render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
 
         await waitFor(() => {
-            const summary = document.querySelector('[aria-label="Queue summary"]');
-            const badges = summary?.querySelectorAll('[data-component="badge"]') ?? [];
-            const statuses = Array.from(badges).map((b) => b.getAttribute('data-status'));
-            expect(statuses).toContain('downloading');
-            expect(statuses).toContain('queued');
+            expect(within(getTable()).getByText('Breaking Bad')).toBeInTheDocument();
         });
+
+        expect(getTable().querySelector('[data-column="status"]')).toHaveStyle({ width: '156px' });
+        expect(within(getTable()).getAllByText('Downloading')).not.toHaveLength(0);
     });
 
-    it('renders badge dots as decorative', async () => {
+    it('shows the content title (not the release title) linking to the library item', async () => {
         const queryClient = createTestQueryClient();
         render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
 
         await waitFor(() => {
-            const summary = document.querySelector('[aria-label="Queue summary"]');
-            const dots = summary?.querySelectorAll('[data-component="badge"] [aria-hidden="true"]') ?? [];
-            expect(dots.length).toBeGreaterThan(0);
-            dots.forEach((dot) => {
-                expect(dot).toHaveAttribute('aria-hidden', 'true');
-            });
+            expect(within(getTable()).getByText('Breaking Bad')).toBeInTheDocument();
+        });
+
+        const link = within(getTable()).getByRole('link', { name: 'Breaking Bad' });
+        expect(link).toHaveAttribute('href', '/library/chi-1');
+        expect(within(getTable()).queryByText('Breaking.Bad.S01E01.1080p.BluRay.x264')).not.toBeInTheDocument();
+    });
+
+    it('falls back to the release title (no link) when there is no content link', async () => {
+        const queryClient = createTestQueryClient();
+        render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
+
+        await waitFor(() => {
+            expect(within(getTable()).getByText('The.Office.S03E07.720p.WEB.x264')).toBeInTheDocument();
+        });
+
+        expect(
+            within(getTable()).queryByRole('link', { name: 'The.Office.S03E07.720p.WEB.x264' }),
+        ).not.toBeInTheDocument();
+    });
+
+    it('renders client names per row', async () => {
+        const queryClient = createTestQueryClient();
+        render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
+
+        await waitFor(() => {
+            expect(screen.getAllByText('SABnzbd').length).toBeGreaterThan(0);
+            expect(screen.getAllByText('DownloadClient A').length).toBeGreaterThan(0);
+        });
+    });
+
+    it('navigates to the library item when the title link is clicked (SPA, no reload)', async () => {
+        const user = userEvent.setup();
+        const queryClient = createTestQueryClient();
+        render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
+
+        await waitFor(() => {
+            expect(within(getTable()).getByText('Breaking Bad')).toBeInTheDocument();
+        });
+
+        await user.click(within(getTable()).getByRole('link', { name: 'Breaking Bad' }));
+
+        await waitFor(() => {
+            expect(screen.getByText('Library Detail')).toBeInTheDocument();
         });
     });
 });
 
-describe('DownloadsPage queue items', () => {
-    const mockApiGet = vi.mocked(apiGet);
-
+describe('DownloadsPage sorting', () => {
     beforeEach(() => {
         vi.clearAllMocks();
         mockUseExtensions.mockReturnValue(defaultExtensionContext);
         mockUseSlotExtensions.mockReturnValue(noExtensions);
-        mockApiGet.mockImplementation((url: string) => {
-            if (url.startsWith('/downloads')) {
-                return Promise.resolve(mockPagedDownloads);
-            }
-            if (url === '/download-clients') {
-                return Promise.resolve(mockApiClients);
-            }
-            return Promise.resolve([]);
-        });
     });
 
-    afterEach(() => {
-        vi.restoreAllMocks();
-    });
+    afterEach(() => vi.restoreAllMocks());
 
-    it('renders download items in the queue list', async () => {
+    it('issues the default sort (CreatedAt desc) for the active tab', async () => {
+        const mockApiGet = setupApiGet();
         const queryClient = createTestQueryClient();
         render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
 
         await waitFor(() => {
-            const queue = screen.getByRole('list', { name: /download queue/i });
-            const items = within(queue).getAllByRole('listitem');
-            expect(items.length).toBe(6);
+            const listCalls = mockApiGet.mock.calls
+                .map((c) => String(c[0]))
+                .filter((u) => u.startsWith('/downloads') && u.includes('statuses='));
+            expect(listCalls.some((u) => u.includes('sortBy=CreatedAt') && u.includes('sortDirection=2'))).toBe(true);
         });
     });
 
-    it('renders download titles', async () => {
+    it('requests a new server sort when a column header is clicked', async () => {
+        const user = userEvent.setup();
+        const mockApiGet = setupApiGet();
         const queryClient = createTestQueryClient();
         render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
 
         await waitFor(() => {
-            expect(screen.getByText('Breaking.Bad.S01E01.1080p.BluRay.x264')).toBeInTheDocument();
-            expect(screen.getByText('The.Office.S03E07.720p.WEB.x264')).toBeInTheDocument();
-            expect(screen.getByText('Dune.Part.Two.2024.2160p.UHD.BluRay.x265')).toBeInTheDocument();
+            expect(within(getTable()).getByText('Breaking Bad')).toBeInTheDocument();
+        });
+
+        await user.click(within(getTable()).getByRole('button', { name: 'Sort by Client' }));
+
+        await waitFor(() => {
+            const sorted = mockApiGet.mock.calls
+                .map((c) => String(c[0]))
+                .some((u) => u.startsWith('/downloads') && u.includes('sortBy=DownloadClientName'));
+            expect(sorted).toBe(true);
         });
     });
 
-    it('renders title attributes on download titles for tooltip on truncation', async () => {
+    it('requests a progress server sort from the active tab Progress header', async () => {
+        const user = userEvent.setup();
+        const mockApiGet = setupApiGet();
         const queryClient = createTestQueryClient();
         render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
 
         await waitFor(() => {
-            const titleElements = screen.getAllByTestId('downloads-page__item-title');
-            expect(titleElements.length).toBe(6);
-            titleElements.forEach((el) => {
-                expect(el).toHaveAttribute('title');
-                expect(el.getAttribute('title')).toBe(el.textContent);
-            });
+            expect(within(getTable()).getByText('Breaking Bad')).toBeInTheDocument();
+        });
+
+        await user.click(within(getTable()).getByRole('button', { name: 'Sort by Progress' }));
+
+        await waitFor(() => {
+            const sorted = mockApiGet.mock.calls
+                .map((c) => String(c[0]))
+                .some(
+                    (u) => u.startsWith('/downloads') && u.includes('sortBy=Progress') && u.includes('sortDirection='),
+                );
+            expect(sorted).toBe(true);
         });
     });
 
-    it('renders client names for items', async () => {
+    it('requests both directions of the Ended server sort for history', async () => {
+        const user = userEvent.setup();
+        const mockApiGet = setupApiGet();
         const queryClient = createTestQueryClient();
         render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
 
-        await waitFor(() => {
-            const clientLabels = screen.getAllByText('SABnzbd');
-            expect(clientLabels.length).toBeGreaterThan(0);
-            const qbtLabels = screen.getAllByText('qBittorrent');
-            expect(qbtLabels.length).toBeGreaterThan(0);
-        });
-    });
+        await waitFor(() => expect(within(getTable()).getByText('Breaking Bad')).toBeInTheDocument());
+        await user.click(screen.getByRole('tab', { name: /history/i }));
+        await waitFor(() => expect(within(getTable()).getByText('The Bear')).toBeInTheDocument());
+        expect(getTableRowIds()).toEqual(['hist-1', 'hist-2', 'hist-3']);
 
-    it('renders status reason messages when present', async () => {
-        const queryClient = createTestQueryClient();
-        render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
+        const endedHeader = within(getTable()).getByRole('button', { name: 'Sort by Ended' });
+        await user.click(endedHeader);
 
         await waitFor(() => {
-            expect(screen.getByText('Tracker returned warning: slow peer')).toBeInTheDocument();
+            const requestedAscending = mockApiGet.mock.calls
+                .map((call) => String(call[0]))
+                .some(
+                    (url) =>
+                        url.startsWith('/downloads') &&
+                        url.includes('sortBy=DateCompleted') &&
+                        url.includes('sortDirection=1'),
+                );
+            expect(requestedAscending).toBe(true);
         });
-    });
+        await waitFor(() => expect(getTableRowIds()).toEqual(['hist-3', 'hist-2', 'hist-1']));
 
-    it('applies data-download-id to items', async () => {
-        const queryClient = createTestQueryClient();
-        render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
+        await user.click(within(getTable()).getByRole('button', { name: 'Sort by Ended' }));
 
         await waitFor(() => {
-            const items = document.querySelectorAll('[data-download-id]');
-            expect(items.length).toBeGreaterThan(0);
-            expect(items[0]).toHaveAttribute('data-download-id', 'dl-1');
+            const requestedDescending = mockApiGet.mock.calls
+                .map((call) => String(call[0]))
+                .some(
+                    (url) =>
+                        url.startsWith('/downloads') &&
+                        url.includes('sortBy=DateCompleted') &&
+                        url.includes('sortDirection=2'),
+                );
+            expect(requestedDescending).toBe(true);
         });
-    });
-
-    it('applies data-status to items', async () => {
-        const queryClient = createTestQueryClient();
-        render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
-
-        await waitFor(() => {
-            const downloadingItems = document.querySelectorAll('[data-status="downloading"]');
-            expect(downloadingItems.length).toBeGreaterThan(0);
-        });
+        await waitFor(() => expect(getTableRowIds()).toEqual(['hist-1', 'hist-2', 'hist-3']));
     });
 });
 
-describe('DownloadsPage actions', () => {
-    const mockApiGet = vi.mocked(apiGet);
-
+describe('DownloadsPage row actions', () => {
     beforeEach(() => {
         vi.clearAllMocks();
         mockUseExtensions.mockReturnValue(defaultExtensionContext);
         mockUseSlotExtensions.mockReturnValue(noExtensions);
-        mockApiGet.mockImplementation((url: string) => {
-            if (url.startsWith('/downloads')) {
-                return Promise.resolve(mockPagedDownloads);
-            }
-            if (url === '/download-clients') {
-                return Promise.resolve(mockApiClients);
-            }
-            return Promise.resolve([]);
-        });
+        setupApiGet();
     });
 
-    afterEach(() => {
-        vi.restoreAllMocks();
-    });
+    afterEach(() => vi.restoreAllMocks());
 
-    it('renders pause buttons for downloading items', async () => {
-        const queryClient = createTestQueryClient();
-        render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
-
-        await waitFor(() => {
-            const pauseButtons = screen.getAllByRole('button', { name: /^pause /i });
-            expect(pauseButtons.length).toBe(2);
-        });
-    });
-
-    it('renders resume buttons for grabbed, queued, and paused items', async () => {
-        const queryClient = createTestQueryClient();
-        render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
-
-        await waitFor(() => {
-            const resumeButtons = screen.getAllByRole('button', { name: /^resume /i });
-            expect(resumeButtons.length).toBe(3);
-        });
-    });
-
-    it('renders remove buttons for all items', async () => {
-        const queryClient = createTestQueryClient();
-        render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
-
-        await waitFor(() => {
-            const removeButtons = screen.getAllByRole('button', { name: /^remove /i });
-            expect(removeButtons.length).toBe(6);
-        });
-    });
-
-    it('pause button has correct aria-label', async () => {
-        const queryClient = createTestQueryClient();
-        render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
-
-        await waitFor(() => {
-            const pauseButton = screen.getByRole('button', { name: /^pause breaking/i });
-            expect(pauseButton).toHaveAttribute('data-action', 'pause');
-        });
-    });
-
-    it('remove button has correct data-action', async () => {
-        const queryClient = createTestQueryClient();
-        render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
-
-        await waitFor(() => {
-            const removeButtons = screen.getAllByRole('button', { name: /^remove /i });
-            removeButtons.forEach((btn) => {
-                expect(btn).toHaveAttribute('data-action', 'remove');
-            });
-        });
-    });
-
-    it('calls pause endpoint when pause button is clicked', async () => {
+    it('offers Pause for a downloading row and calls the pause endpoint', async () => {
         const user = userEvent.setup();
         const mockApiPost = vi.mocked(apiPost);
         mockApiPost.mockResolvedValue(undefined);
@@ -551,17 +763,15 @@ describe('DownloadsPage actions', () => {
         const queryClient = createTestQueryClient();
         render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
 
-        await waitFor(() => {
-            expect(screen.getByText('Breaking.Bad.S01E01.1080p.BluRay.x264')).toBeInTheDocument();
-        });
+        await waitFor(() => expect(within(getTable()).getByText('Breaking Bad')).toBeInTheDocument());
 
-        const pauseButton = screen.getByRole('button', { name: /^pause breaking/i });
-        await user.click(pauseButton);
+        await openRowMenu(user, /actions for breaking bad/i);
+        await user.click(await screen.findByRole('menuitem', { name: /^pause$/i }));
 
-        expect(mockApiPost).toHaveBeenCalledWith('/downloads/dl-1/pause');
+        await waitFor(() => expect(mockApiPost).toHaveBeenCalledWith('/downloads/dl-1/pause'));
     });
 
-    it('calls resume endpoint when resume button is clicked', async () => {
+    it('offers Resume for a queued row and calls the resume endpoint', async () => {
         const user = userEvent.setup();
         const mockApiPost = vi.mocked(apiPost);
         mockApiPost.mockResolvedValue(undefined);
@@ -569,17 +779,15 @@ describe('DownloadsPage actions', () => {
         const queryClient = createTestQueryClient();
         render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
 
-        await waitFor(() => {
-            expect(screen.getByText('Dune.Part.Two.2024.2160p.UHD.BluRay.x265')).toBeInTheDocument();
-        });
+        await waitFor(() => expect(within(getTable()).getByText('Dune: Part Two')).toBeInTheDocument());
 
-        const resumeButton = screen.getByRole('button', { name: /^resume dune/i });
-        await user.click(resumeButton);
+        await openRowMenu(user, /actions for dune: part two/i);
+        await user.click(await screen.findByRole('menuitem', { name: /^resume$/i }));
 
-        expect(mockApiPost).toHaveBeenCalledWith('/downloads/dl-3/resume');
+        await waitFor(() => expect(mockApiPost).toHaveBeenCalledWith('/downloads/dl-3/resume'));
     });
 
-    it('shows success toast when pause succeeds', async () => {
+    it('offers Force start only for a force-start-capable row and calls the force-start endpoint', async () => {
         const user = userEvent.setup();
         const mockApiPost = vi.mocked(apiPost);
         mockApiPost.mockResolvedValue(undefined);
@@ -587,625 +795,731 @@ describe('DownloadsPage actions', () => {
         const queryClient = createTestQueryClient();
         render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
 
-        await waitFor(() => {
-            expect(screen.getByText('Breaking.Bad.S01E01.1080p.BluRay.x264')).toBeInTheDocument();
-        });
+        await waitFor(() => expect(within(getTable()).getByText('Breaking Bad')).toBeInTheDocument());
 
-        const pauseButton = screen.getByRole('button', { name: /^pause breaking/i });
-        await user.click(pauseButton);
+        await openRowMenu(user, /actions for breaking bad/i);
+        expect(screen.queryByRole('menuitem', { name: /force start/i })).not.toBeInTheDocument();
+        await user.keyboard('{Escape}');
 
-        await waitFor(() => {
-            expect(screen.getByText('Download paused')).toBeInTheDocument();
-        });
+        await openRowMenu(user, /actions for 3\.body\.problem/i);
+        await user.click(await screen.findByRole('menuitem', { name: /force start/i }));
+
+        await waitFor(() => expect(mockApiPost).toHaveBeenCalledWith('/downloads/dl-6/force-start'));
+        await waitFor(() => expect(screen.getByText(/Kicked/)).toBeInTheDocument());
     });
 
-    it('shows error toast when pause fails', async () => {
+    it('offers Stop for an in-flight row and calls the cancel endpoint', async () => {
         const user = userEvent.setup();
         const mockApiPost = vi.mocked(apiPost);
-        mockApiPost.mockRejectedValue(new Error('Network error'));
-
-        const queryClient = createTestQueryClient();
-        render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
-
-        await waitFor(() => {
-            expect(screen.getByText('Breaking.Bad.S01E01.1080p.BluRay.x264')).toBeInTheDocument();
-        });
-
-        const pauseButton = screen.getByRole('button', { name: /^pause breaking/i });
-        await user.click(pauseButton);
-
-        await waitFor(() => {
-            expect(screen.getByText('Failed to pause download')).toBeInTheDocument();
-        });
-    });
-
-    it('shows success toast when resume succeeds', async () => {
-        const user = userEvent.setup();
-        const mockApiPost = vi.mocked(apiPost);
-        mockApiPost.mockResolvedValue(undefined);
-
-        const queryClient = createTestQueryClient();
-        render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
-
-        await waitFor(() => {
-            expect(screen.getByText('Dune.Part.Two.2024.2160p.UHD.BluRay.x265')).toBeInTheDocument();
-        });
-
-        const resumeButton = screen.getByRole('button', { name: /^resume dune/i });
-        await user.click(resumeButton);
-
-        await waitFor(() => {
-            expect(screen.getByText('Download resumed')).toBeInTheDocument();
-        });
-    });
-
-    it('shows error toast when resume fails', async () => {
-        const user = userEvent.setup();
-        const mockApiPost = vi.mocked(apiPost);
-        mockApiPost.mockRejectedValue(new Error('Network error'));
-
-        const queryClient = createTestQueryClient();
-        render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
-
-        await waitFor(() => {
-            expect(screen.getByText('Dune.Part.Two.2024.2160p.UHD.BluRay.x265')).toBeInTheDocument();
-        });
-
-        const resumeButton = screen.getByRole('button', { name: /^resume dune/i });
-        await user.click(resumeButton);
-
-        await waitFor(() => {
-            expect(screen.getByText('Failed to resume download')).toBeInTheDocument();
-        });
-    });
-
-    it('opens confirmation dialog when remove button is clicked', async () => {
-        const user = userEvent.setup();
-
-        const queryClient = createTestQueryClient();
-        render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
-
-        await waitFor(() => {
-            expect(screen.getByText('Breaking.Bad.S01E01.1080p.BluRay.x264')).toBeInTheDocument();
-        });
-
-        const removeButtons = screen.getAllByRole('button', { name: /^remove /i });
-        await user.click(removeButtons[0]);
-
-        await waitFor(() => {
-            const dialog = screen.getByRole('dialog');
-            expect(dialog).toBeInTheDocument();
-            expect(within(dialog).getByText('Delete Download')).toBeInTheDocument();
-            expect(within(dialog).getByText(/Breaking\.Bad\.S01E01\.1080p\.BluRay\.x264/)).toBeInTheDocument();
-        });
-    });
-
-    it('closes confirmation dialog when cancel is clicked', async () => {
-        const user = userEvent.setup();
-
-        const queryClient = createTestQueryClient();
-        render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
-
-        await waitFor(() => {
-            expect(screen.getByText('Breaking.Bad.S01E01.1080p.BluRay.x264')).toBeInTheDocument();
-        });
-
-        const removeButtons = screen.getAllByRole('button', { name: /^remove /i });
-        await user.click(removeButtons[0]);
-
-        await waitFor(() => {
-            expect(screen.getByRole('dialog')).toBeInTheDocument();
-        });
-
-        await user.click(screen.getByRole('button', { name: 'Cancel' }));
-
-        await waitFor(() => {
-            expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
-        });
-    });
-
-    it('shows success toast when remove is confirmed', async () => {
-        const user = userEvent.setup();
         const mockApiDelete = vi.mocked(apiDelete);
-        mockApiDelete.mockResolvedValue(undefined);
+        mockApiPost.mockResolvedValue(undefined);
 
         const queryClient = createTestQueryClient();
         render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
 
-        await waitFor(() => {
-            expect(screen.getByText('Breaking.Bad.S01E01.1080p.BluRay.x264')).toBeInTheDocument();
-        });
+        await waitFor(() => expect(within(getTable()).getByText('Breaking Bad')).toBeInTheDocument());
 
-        const removeButtons = screen.getAllByRole('button', { name: /^remove /i });
-        await user.click(removeButtons[0]);
+        await openRowMenu(user, /actions for breaking bad/i);
+        await user.click(await screen.findByRole('menuitem', { name: /^stop$/i }));
 
-        await waitFor(() => {
-            expect(screen.getByRole('dialog')).toBeInTheDocument();
-        });
-
-        await user.click(screen.getByRole('button', { name: /delete/i }));
-
-        await waitFor(() => {
-            expect(screen.getByText('Download removed')).toBeInTheDocument();
-        });
-    });
-
-    it('shows error toast when remove fails after confirmation', async () => {
-        const user = userEvent.setup();
-        const mockApiDelete = vi.mocked(apiDelete);
-        mockApiDelete.mockRejectedValue(new Error('Network error'));
-
-        const queryClient = createTestQueryClient();
-        render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
-
-        await waitFor(() => {
-            expect(screen.getByText('Breaking.Bad.S01E01.1080p.BluRay.x264')).toBeInTheDocument();
-        });
-
-        const removeButtons = screen.getAllByRole('button', { name: /^remove /i });
-        await user.click(removeButtons[0]);
-
-        await waitFor(() => {
-            expect(screen.getByRole('dialog')).toBeInTheDocument();
-        });
-
-        await user.click(screen.getByRole('button', { name: /delete/i }));
-
-        await waitFor(() => {
-            expect(screen.getByText('Failed to remove download')).toBeInTheDocument();
-        });
-    });
-
-    it('does not call API when remove is cancelled', async () => {
-        const user = userEvent.setup();
-        const mockApiDelete = vi.mocked(apiDelete);
-        mockApiDelete.mockResolvedValue(undefined);
-
-        const queryClient = createTestQueryClient();
-        render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
-
-        await waitFor(() => {
-            expect(screen.getByText('Breaking.Bad.S01E01.1080p.BluRay.x264')).toBeInTheDocument();
-        });
-
-        const removeButtons = screen.getAllByRole('button', { name: /^remove /i });
-        await user.click(removeButtons[0]);
-
-        await waitFor(() => {
-            expect(screen.getByRole('dialog')).toBeInTheDocument();
-        });
-
-        await user.click(screen.getByRole('button', { name: 'Cancel' }));
-
+        await waitFor(() => expect(mockApiPost).toHaveBeenCalledWith('/downloads/dl-1/cancel'));
         expect(mockApiDelete).not.toHaveBeenCalled();
     });
+
+    it('Forget confirms then issues DELETE /downloads/{id} and makes no files call', async () => {
+        const user = userEvent.setup();
+        const mockApiDelete = vi.mocked(apiDelete);
+        mockApiDelete.mockResolvedValue(undefined);
+
+        const queryClient = createTestQueryClient();
+        render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
+
+        await waitFor(() => expect(within(getTable()).getByText('Breaking Bad')).toBeInTheDocument());
+
+        await openRowMenu(user, /actions for breaking bad/i);
+        await user.click(await screen.findByRole('menuitem', { name: /^forget$/i }));
+
+        const dialog = await screen.findByRole('dialog');
+        await user.click(within(dialog).getByRole('button', { name: /^forget$/i }));
+
+        await waitFor(() => expect(mockApiDelete).toHaveBeenCalledWith('/downloads/dl-1'));
+        expect(mockApiDelete).not.toHaveBeenCalledWith('/downloads/dl-1/files');
+    });
+
+    it('Remove confirms then issues DELETE /downloads/{id}/files', async () => {
+        const user = userEvent.setup();
+        const mockApiDelete = vi.mocked(apiDelete);
+        mockApiDelete.mockResolvedValue(undefined);
+
+        const queryClient = createTestQueryClient();
+        render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
+
+        await waitFor(() => expect(within(getTable()).getByText('Breaking Bad')).toBeInTheDocument());
+
+        await openRowMenu(user, /actions for breaking bad/i);
+        await user.click(await screen.findByRole('menuitem', { name: /^remove$/i }));
+
+        const dialog = await screen.findByRole('dialog');
+        await user.click(within(dialog).getByRole('button', { name: /^remove$/i }));
+
+        await waitFor(() => expect(mockApiDelete).toHaveBeenCalledWith('/downloads/dl-1/files'));
+    });
+
+    it('shows a success toast after a successful pause', async () => {
+        const user = userEvent.setup();
+        const mockApiPost = vi.mocked(apiPost);
+        mockApiPost.mockResolvedValue(undefined);
+
+        const queryClient = createTestQueryClient();
+        render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
+
+        await waitFor(() => expect(within(getTable()).getByText('Breaking Bad')).toBeInTheDocument());
+
+        await openRowMenu(user, /actions for breaking bad/i);
+        await user.click(await screen.findByRole('menuitem', { name: /^pause$/i }));
+
+        await waitFor(() => expect(screen.getByText('Download paused')).toBeInTheDocument());
+    });
 });
 
-describe('DownloadsPage filters', () => {
-    const mockApiGet = vi.mocked(apiGet);
-
+describe('DownloadsPage details modal', () => {
     beforeEach(() => {
         vi.clearAllMocks();
         mockUseExtensions.mockReturnValue(defaultExtensionContext);
         mockUseSlotExtensions.mockReturnValue(noExtensions);
-        mockApiGet.mockImplementation((url: string) => {
-            if (url.startsWith('/downloads')) {
-                return Promise.resolve(mockPagedDownloads);
-            }
-            if (url === '/download-clients') {
-                return Promise.resolve(mockApiClients);
-            }
-            return Promise.resolve([]);
-        });
+        setupApiGet();
     });
 
-    afterEach(() => {
-        vi.restoreAllMocks();
-    });
+    afterEach(() => vi.restoreAllMocks());
 
-    it('renders download filters component', () => {
-        const queryClient = createTestQueryClient();
-        render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
-
-        expect(document.querySelector('[data-component="download-filters"]')).toBeInTheDocument();
-    });
-
-    it('renders client and state filter dropdowns', () => {
-        const queryClient = createTestQueryClient();
-        render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
-
-        expect(document.querySelector('[data-filter="client"]')).toBeInTheDocument();
-        expect(document.querySelector('[data-filter="state"]')).toBeInTheDocument();
-    });
-
-    it('client filter displays "All Clients" by default', () => {
-        const queryClient = createTestQueryClient();
-        render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
-
-        const clientTrigger = document.querySelector('[data-filter="client"]');
-        expect(clientTrigger).toHaveTextContent('All Clients');
-    });
-
-    it('filters items by client when selection changes', async () => {
+    it('opens a modal showing the file name, transfer id, and release title', async () => {
         const user = userEvent.setup();
         const queryClient = createTestQueryClient();
         render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
 
-        await waitFor(() => {
-            expect(screen.getByText('Breaking.Bad.S01E01.1080p.BluRay.x264')).toBeInTheDocument();
-        });
+        await waitFor(() => expect(within(getTable()).getByText('Breaking Bad')).toBeInTheDocument());
 
-        const clientTrigger = document.querySelector('[data-filter="client"]') as HTMLElement;
-        await user.click(clientTrigger);
+        await openRowMenu(user, /actions for breaking bad/i);
+        await user.click(await screen.findByRole('menuitem', { name: /view details/i }));
 
-        const sabnzbdOption = await screen.findByRole('option', { name: 'SABnzbd' });
-        await user.click(sabnzbdOption);
+        const dialog = await screen.findByTestId('download-details-dialog');
+        expect(within(dialog).getByText('Breaking.Bad.S01E01.1080p.BluRay.x264')).toBeInTheDocument();
+        expect(within(dialog).getByText('sab_123')).toBeInTheDocument();
+    });
 
-        const queue = screen.getByRole('list', { name: /download queue/i });
-        const items = within(queue).getAllByRole('listitem');
+    it('renders the release page as an external indexer link when a URL is known', async () => {
+        const user = userEvent.setup();
+        const queryClient = createTestQueryClient();
+        render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
 
-        items.forEach((item) => {
-            expect(within(item).getByText('SABnzbd')).toBeInTheDocument();
-        });
+        await waitFor(() => expect(within(getTable()).getByText('Breaking Bad')).toBeInTheDocument());
+
+        await openRowMenu(user, /actions for breaking bad/i);
+        await user.click(await screen.findByRole('menuitem', { name: /view details/i }));
+
+        const dialog = await screen.findByTestId('download-details-dialog');
+        const link = dialog.querySelector('[data-detail="Release page"] a') as HTMLElement;
+        expect(link).toHaveAttribute('href', 'https://indexer.example/release/bb-101');
+        expect(link).toHaveAttribute('target', '_blank');
+        expect(link).toHaveAttribute('rel', 'noopener noreferrer');
+        expect(link).toHaveTextContent('https://indexer.example/release/bb-101');
+    });
+
+    it('omits the release page row when no indexer URL is known', async () => {
+        const user = userEvent.setup();
+        const queryClient = createTestQueryClient();
+        render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
+
+        await waitFor(() =>
+            expect(within(getTable()).getByText('The.Office.S03E07.720p.WEB.x264')).toBeInTheDocument(),
+        );
+
+        await openRowMenu(user, /actions for the\.office/i);
+        await user.click(await screen.findByRole('menuitem', { name: /view details/i }));
+
+        const dialog = await screen.findByTestId('download-details-dialog');
+        expect(dialog.querySelector('[data-detail="Release page"]')).toBeNull();
+        expect(within(dialog).queryByRole('link')).not.toBeInTheDocument();
+        expect(dialog.querySelector('[data-detail="Title"]')).toHaveTextContent('The.Office.S03E07.720p.WEB.x264');
+    });
+
+    it('shows the output path and failure reason for a failed history row', async () => {
+        const user = userEvent.setup();
+        const queryClient = createTestQueryClient();
+        render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
+
+        await waitFor(() => expect(within(getTable()).getByText('Breaking Bad')).toBeInTheDocument());
+        await user.click(screen.getByRole('tab', { name: /history/i }));
+
+        await waitFor(() =>
+            expect(within(getTable()).getByText('True.Detective.S04E01.1080p.WEB.x264')).toBeInTheDocument(),
+        );
+
+        await openRowMenu(user, /actions for true\.detective/i);
+        await user.click(await screen.findByRole('menuitem', { name: /view details/i }));
+
+        const dialog = await screen.findByTestId('download-details-dialog');
+        expect(within(dialog).getByText('Hash mismatch after download')).toBeInTheDocument();
+        expect(within(dialog).getByText('Download errored')).toBeInTheDocument();
     });
 });
 
-describe('DownloadsPage accessibility', () => {
-    const mockApiGet = vi.mocked(apiGet);
-
+describe('DownloadsPage poster column', () => {
     beforeEach(() => {
         vi.clearAllMocks();
         mockUseExtensions.mockReturnValue(defaultExtensionContext);
         mockUseSlotExtensions.mockReturnValue(noExtensions);
-        mockApiGet.mockImplementation((url: string) => {
-            if (url.startsWith('/downloads')) {
-                return Promise.resolve(mockPagedDownloads);
-            }
-            if (url === '/download-clients') {
-                return Promise.resolve(mockApiClients);
-            }
-            return Promise.resolve([]);
-        });
+        setupApiGet();
     });
 
-    afterEach(() => {
-        vi.restoreAllMocks();
-    });
+    afterEach(() => vi.restoreAllMocks());
 
-    it('queue list has accessible label', () => {
+    it('renders a poster thumbnail for a row that resolves one', async () => {
         const queryClient = createTestQueryClient();
         render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
 
-        expect(screen.getByRole('list', { name: /download queue/i })).toBeInTheDocument();
+        await waitFor(() => expect(within(getTable()).getByText('Breaking Bad')).toBeInTheDocument());
+
+        const artwork = within(getTable()).getByRole('img', { name: 'Breaking Bad artwork' });
+        expect(artwork).toHaveAttribute('src', 'https://images.example/breaking-bad.jpg');
+    });
+});
+
+describe('DownloadsPage progress', () => {
+    beforeEach(() => {
+        vi.clearAllMocks();
+        mockUseExtensions.mockReturnValue(defaultExtensionContext);
+        mockUseSlotExtensions.mockReturnValue(noExtensions);
+        setupApiGet();
     });
 
-    it('action buttons have aria-labels', async () => {
+    afterEach(() => vi.restoreAllMocks());
+
+    it('renders a Progress column with a bar and percent for a reporting active row', async () => {
         const queryClient = createTestQueryClient();
         render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
 
-        await waitFor(() => {
-            const actionButtons = screen.getAllByTestId('downloads-page__action-btn');
-            expect(actionButtons.length).toBeGreaterThan(0);
-            actionButtons.forEach((btn) => {
-                expect(btn).toHaveAttribute('aria-label');
-            });
-        });
+        await waitFor(() => expect(within(getTable()).getByText('Breaking Bad')).toBeInTheDocument());
+
+        const table = getTable();
+        expect(within(table).getByText('Progress')).toBeInTheDocument();
+        expect(within(table).getByText('42%')).toBeInTheDocument();
+        const bar = within(table).getAllByRole('progressbar')[0];
+        expect(bar).toHaveAttribute('aria-valuenow', '42');
     });
 
-    it('state indicator dots are hidden from screen readers', async () => {
+    it('renders a muted dash for an active row with no reported percent', async () => {
         const queryClient = createTestQueryClient();
         render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
 
-        await waitFor(() => {
-            const queue = screen.getByRole('list', { name: /download queue/i });
-            const dots = queue.querySelectorAll('[data-component="badge"] [aria-hidden="true"]');
-            expect(dots.length).toBeGreaterThan(0);
-            dots.forEach((dot) => {
-                expect(dot).toHaveAttribute('aria-hidden', 'true');
-            });
-        });
+        await waitFor(() =>
+            expect(within(getTable()).getByText('The.Office.S03E07.720p.WEB.x264')).toBeInTheDocument(),
+        );
+
+        const table = getTable();
+        expect(within(table).queryByText('0%')).not.toBeInTheDocument();
     });
 
-    it('filter triggers have aria-labels', () => {
+    it('omits the Progress column on the history tab', async () => {
+        const user = userEvent.setup();
         const queryClient = createTestQueryClient();
         render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
 
-        const clientFilter = document.querySelector('[data-filter="client"]');
-        expect(clientFilter).toHaveAttribute('aria-label', 'Filter by client');
+        await waitFor(() => expect(within(getTable()).getByText('Breaking Bad')).toBeInTheDocument());
+        await user.click(screen.getByRole('tab', { name: /history/i }));
 
-        const stateFilter = document.querySelector('[data-filter="state"]');
-        expect(stateFilter).toHaveAttribute('aria-label', 'Filter by state');
+        await waitFor(() => expect(within(getTable()).getByText('The Bear')).toBeInTheDocument());
+
+        expect(within(getTable()).queryByText('Progress')).not.toBeInTheDocument();
     });
 
-    it('tabs have proper ARIA roles', () => {
+    it('renders the progress bar in the mobile card for an active row', async () => {
+        vi.stubGlobal('matchMedia', createMatchMedia(768));
         const queryClient = createTestQueryClient();
         render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
 
-        expect(screen.getByRole('tablist')).toBeInTheDocument();
-        expect(screen.getAllByRole('tab').length).toBe(2);
-        expect(screen.getByRole('tabpanel')).toBeInTheDocument();
+        const queueCards = await screen.findByRole('list', { name: 'Download queue' });
+        await within(queueCards).findByText('Breaking Bad');
+
+        const card = document.querySelector('.downloads-page__mobile-list [data-download-id="dl-1"]') as HTMLElement;
+        expect(card).toBeInTheDocument();
+        expect(within(card).getByRole('progressbar')).toHaveAttribute('aria-valuenow', '42');
+        expect(within(card).getByText('42%')).toBeInTheDocument();
     });
 });
 
 describe('DownloadsPage history tab', () => {
-    const mockApiGet = vi.mocked(apiGet);
-
     beforeEach(() => {
         vi.clearAllMocks();
         mockUseExtensions.mockReturnValue(defaultExtensionContext);
         mockUseSlotExtensions.mockReturnValue(noExtensions);
-        mockApiGet.mockImplementation((url: string) => {
-            if (url.startsWith('/downloads')) {
-                return Promise.resolve(mockPagedDownloads);
-            }
-            if (url === '/download-clients') {
-                return Promise.resolve(mockApiClients);
-            }
-            return Promise.resolve([]);
-        });
+        setupApiGet();
     });
 
-    afterEach(() => {
-        vi.restoreAllMocks();
-    });
+    afterEach(() => vi.restoreAllMocks());
 
-    it('switches to history tab when clicked', async () => {
+    it('switches to history and renders the Ended column with terminal rows', async () => {
         const user = userEvent.setup();
         const queryClient = createTestQueryClient();
         render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
 
-        const historyTab = screen.getByRole('tab', { name: /history/i });
-        await user.click(historyTab);
-
-        expect(historyTab).toHaveAttribute('data-state', 'active');
-    });
-
-    it('renders history items when history tab is active', async () => {
-        const user = userEvent.setup();
-        const queryClient = createTestQueryClient();
-        render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
+        await waitFor(() => expect(within(getTable()).getByText('Breaking Bad')).toBeInTheDocument());
+        await user.click(screen.getByRole('tab', { name: /history/i }));
 
         await waitFor(() => {
-            expect(screen.getByText('Breaking.Bad.S01E01.1080p.BluRay.x264')).toBeInTheDocument();
+            expect(within(getTable()).getByText('The Bear')).toBeInTheDocument();
+            expect(within(getTable()).getByText('Oppenheimer.2023.2160p.UHD.BluRay.x265')).toBeInTheDocument();
         });
+
+        const table = document.querySelector('[data-component="data-table"]') as HTMLElement;
+        expect(within(table).getByText('Ended')).toBeInTheDocument();
+        expect(within(table).queryByText('Added')).not.toBeInTheDocument();
+    });
+
+    it('issues the default DateCompleted sort for history', async () => {
+        const user = userEvent.setup();
+        const mockApiGet = setupApiGet();
+        const queryClient = createTestQueryClient();
+        render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
 
         await user.click(screen.getByRole('tab', { name: /history/i }));
 
         await waitFor(() => {
-            const historyList = screen.getByRole('list', { name: /download history/i });
-            const items = within(historyList).getAllByRole('listitem');
-            expect(items.length).toBe(3);
+            const sorted = mockApiGet.mock.calls
+                .map((c) => String(c[0]))
+                .some(
+                    (u) =>
+                        u.startsWith('/downloads') &&
+                        u.includes('statuses=Imported') &&
+                        u.includes('sortBy=DateCompleted'),
+                );
+            expect(sorted).toBe(true);
         });
     });
 
-    it('renders history item titles', async () => {
+    it('renders Failed history Ended from failedAt on a Failed filter URL', async () => {
+        setupApiGet(terminalTimestampDownloads);
+        render(<DownloadsPage />, { wrapper: createUrlWrapper('/downloads?tab=history&hstate=Failed') });
+
+        await waitFor(() =>
+            expect(within(getTable()).getByText('Terminal.Timestamp.Failed.1080p.WEB.x264')).toBeInTheDocument(),
+        );
+
+        expect(getEndedCell('term-failed')).toHaveAttribute('title', formatDateTime('2024-01-16T03:00:00Z'));
+        expect(getEndedCell('term-failed')).not.toHaveAttribute('title', formatDateTime('2024-01-10T03:00:00Z'));
+    });
+
+    it('renders Cancelled and completed history Ended from their terminal timestamps', async () => {
+        setupApiGet(terminalTimestampDownloads);
+        render(<DownloadsPage />, { wrapper: createUrlWrapper('/downloads?tab=history') });
+
+        await waitFor(() =>
+            expect(within(getTable()).getByText('Terminal.Timestamp.Cancelled.2160p.WEB.x265')).toBeInTheDocument(),
+        );
+
+        expect(getEndedCell('term-cancelled')).toHaveAttribute('title', formatDateTime('2024-01-15T03:00:00Z'));
+        expect(getEndedCell('term-completed')).toHaveAttribute('title', formatDateTime('2024-01-14T03:00:00Z'));
+    });
+
+    it('sorts history rows by terminal timestamp by default', async () => {
+        setupApiGet(terminalTimestampDownloads);
+        render(<DownloadsPage />, { wrapper: createUrlWrapper('/downloads?tab=history') });
+
+        await waitFor(() => expect(getTableRowIds()).toEqual(['term-failed', 'term-cancelled', 'term-completed']));
+    });
+});
+
+describe('DownloadsPage filters and summary', () => {
+    beforeEach(() => {
+        vi.clearAllMocks();
+        mockUseExtensions.mockReturnValue(defaultExtensionContext);
+        mockUseSlotExtensions.mockReturnValue(noExtensions);
+        setupApiGet();
+    });
+
+    afterEach(() => vi.restoreAllMocks());
+
+    it('drops the redundant filter chrome (toolbar dropdowns and the status-count pill row)', async () => {
+        const queryClient = createTestQueryClient();
+        render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
+
+        await waitFor(() => expect(within(getTable()).getByText('Breaking Bad')).toBeInTheDocument());
+
+        expect(document.querySelector('[data-component="download-filters"]')).not.toBeInTheDocument();
+        expect(document.querySelector('[data-filter="client"]')).not.toBeInTheDocument();
+        expect(document.querySelector('[data-filter="state"]')).not.toBeInTheDocument();
+
+        expect(document.querySelector('[aria-label="Queue summary"]')).not.toBeInTheDocument();
+        expect(document.querySelector('[aria-label="History summary"]')).not.toBeInTheDocument();
+    });
+
+    it('exposes a funnel filter on the Client and Status column headers', async () => {
+        const queryClient = createTestQueryClient();
+        render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
+
+        await waitFor(() => expect(within(getTable()).getByText('Breaking Bad')).toBeInTheDocument());
+
+        const table = getTable();
+        expect(within(table).getByRole('button', { name: 'Filter by Client' })).toBeInTheDocument();
+        expect(within(table).getByRole('button', { name: 'Filter by Status' })).toBeInTheDocument();
+    });
+
+    it('filters by client via the Client header funnel', async () => {
         const user = userEvent.setup();
         const queryClient = createTestQueryClient();
         render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
 
-        await waitFor(() => {
-            expect(screen.getByText('Breaking.Bad.S01E01.1080p.BluRay.x264')).toBeInTheDocument();
-        });
+        await waitFor(() => expect(within(getTable()).getByText('Breaking Bad')).toBeInTheDocument());
 
-        await user.click(screen.getByRole('tab', { name: /history/i }));
-
-        await waitFor(() => {
-            expect(screen.getByText('The.Bear.S02E10.1080p.WEB.H264')).toBeInTheDocument();
-            expect(screen.getByText('Oppenheimer.2023.2160p.UHD.BluRay.x265')).toBeInTheDocument();
-        });
-    });
-
-    it('renders title attributes on history item titles for tooltip on truncation', async () => {
-        const user = userEvent.setup();
-        const queryClient = createTestQueryClient();
-        render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
+        await user.click(within(getTable()).getByRole('button', { name: 'Filter by Client' }));
+        await user.click(await screen.findByRole('menuitemradio', { name: 'SABnzbd' }));
 
         await waitFor(() => {
-            expect(screen.getByText('Breaking.Bad.S01E01.1080p.BluRay.x264')).toBeInTheDocument();
-        });
-
-        await user.click(screen.getByRole('tab', { name: /history/i }));
-
-        await waitFor(() => {
-            const titleElements = screen.getAllByTestId('downloads-page__history-item-title');
-            expect(titleElements.length).toBe(3);
-            titleElements.forEach((el) => {
-                expect(el).toHaveAttribute('title');
-                expect(el.getAttribute('title')).toBe(el.textContent);
-            });
+            expect(screen.queryByText('The.Office.S03E07.720p.WEB.x264')).not.toBeInTheDocument();
+            expect(within(getTable()).getByText('Breaking Bad')).toBeInTheDocument();
         });
     });
 
-    it('renders Imported badges for imported downloads', async () => {
+    it('filters by status via the Status header funnel and offers a Clear filters reset', async () => {
         const user = userEvent.setup();
+        const mockApiGet = setupApiGet();
         const queryClient = createTestQueryClient();
         render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
 
+        await waitFor(() => expect(within(getTable()).getByText('Breaking Bad')).toBeInTheDocument());
+
+        await user.click(within(getTable()).getByRole('button', { name: 'Filter by Status' }));
+        await user.click(await screen.findByRole('menuitemradio', { name: 'Paused' }));
+
         await waitFor(() => {
-            expect(screen.getByText('Breaking.Bad.S01E01.1080p.BluRay.x264')).toBeInTheDocument();
+            const filtered = mockApiGet.mock.calls
+                .map((c) => String(c[0]))
+                .some((u) => u.startsWith('/downloads') && u.includes('status=Paused') && !u.includes('statuses='));
+            expect(filtered).toBe(true);
         });
 
-        await user.click(screen.getByRole('tab', { name: /history/i }));
+        const filterBar = getTable().querySelector('[data-component="data-table-filter-bar"]') as HTMLElement;
+        const clearFilters = within(filterBar).getByRole('button', { name: 'Clear filters' });
+        expect(screen.getAllByRole('button', { name: 'Clear filters' })).toEqual([clearFilters]);
 
+        await user.click(clearFilters);
         await waitFor(() => {
-            expect(screen.getByText('Imported')).toBeInTheDocument();
+            expect(within(getTable()).getByText('Breaking Bad')).toBeInTheDocument();
         });
     });
 
-    it('renders Failed badges for failed downloads', async () => {
+    it('clears an active queue filter from the table filter bar', async () => {
         const user = userEvent.setup();
-        const queryClient = createTestQueryClient();
-        render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
+        render(<DownloadsPage />, { wrapper: createUrlWrapper('/downloads?qstate=Paused') });
 
-        await waitFor(() => {
-            expect(screen.getByText('Breaking.Bad.S01E01.1080p.BluRay.x264')).toBeInTheDocument();
-        });
+        await waitFor(() =>
+            expect(within(getTable()).getByText('The.Gentlemen.S01E03.1080p.WEB.x264')).toBeInTheDocument(),
+        );
 
-        await user.click(screen.getByRole('tab', { name: /history/i }));
+        const filterBar = getTable().querySelector('[data-component="data-table-filter-bar"]') as HTMLElement;
+        const clearFilters = within(filterBar).getByRole('button', { name: 'Clear filters' });
+        expect(screen.getAllByRole('button', { name: 'Clear filters' })).toEqual([clearFilters]);
 
-        await waitFor(() => {
-            const failedElements = screen.getAllByText('Failed');
-            expect(failedElements.length).toBeGreaterThanOrEqual(1);
-        });
+        await user.click(clearFilters);
+
+        await waitFor(() => expect(within(getTable()).getByText('Breaking Bad')).toBeInTheDocument());
+        expect(getTable().querySelector('[data-component="data-table-filter-bar"]')).not.toBeInTheDocument();
     });
 
-    it('renders output paths for completed downloads', async () => {
+    it('clears an active history filter from the table filter bar', async () => {
         const user = userEvent.setup();
-        const queryClient = createTestQueryClient();
-        render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
+        render(<DownloadsPage />, { wrapper: createUrlWrapper('/downloads?tab=history&hclient=client-1') });
 
-        await waitFor(() => {
-            expect(screen.getByText('Breaking.Bad.S01E01.1080p.BluRay.x264')).toBeInTheDocument();
-        });
+        await waitFor(() => expect(within(getTable()).getByText('The Bear')).toBeInTheDocument());
 
-        await user.click(screen.getByRole('tab', { name: /history/i }));
+        const filterBar = getTable().querySelector('[data-component="data-table-filter-bar"]') as HTMLElement;
+        const clearFilters = within(filterBar).getByRole('button', { name: 'Clear filters' });
+        expect(screen.getAllByRole('button', { name: 'Clear filters' })).toEqual([clearFilters]);
 
-        await waitFor(() => {
-            expect(screen.getByText(/\/media\/tv\/The Bear\/Season 2\//)).toBeInTheDocument();
-        });
+        await user.click(clearFilters);
+
+        await waitFor(() =>
+            expect(within(getTable()).getByText('Oppenheimer.2023.2160p.UHD.BluRay.x265')).toBeInTheDocument(),
+        );
+        expect(getTable().querySelector('[data-component="data-table-filter-bar"]')).not.toBeInTheDocument();
     });
 
-    it('renders error messages for failed downloads', async () => {
+    it('clears an active queue filter from the card-layout list toolbar at a 390px viewport', async () => {
+        vi.stubGlobal('matchMedia', createMatchMedia(390));
         const user = userEvent.setup();
-        const queryClient = createTestQueryClient();
-        render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
+        render(<DownloadsPage />, { wrapper: createUrlWrapper('/downloads?qstate=Paused') });
 
-        await waitFor(() => {
-            expect(screen.getByText('Breaking.Bad.S01E01.1080p.BluRay.x264')).toBeInTheDocument();
-        });
+        const queueCards = await screen.findByRole('list', { name: 'Download queue' });
+        expect(await within(queueCards).findByText('The.Gentlemen.S01E03.1080p.WEB.x264')).toBeInTheDocument();
 
-        await user.click(screen.getByRole('tab', { name: /history/i }));
+        const toolbar = document.querySelector('[data-component="mobile-list-toolbar"]') as HTMLElement;
+        expect(toolbar).toBeInTheDocument();
 
-        await waitFor(() => {
-            expect(screen.getByText('Hash mismatch after download')).toBeInTheDocument();
-        });
+        const clearFilters = within(toolbar).getByRole('button', { name: 'Clear filters' });
+        expect(screen.getAllByRole('button', { name: 'Clear filters' })).toEqual([clearFilters]);
+
+        await user.click(clearFilters);
+
+        await waitFor(() => expect(within(queueCards).getByText('Breaking Bad')).toBeInTheDocument());
+        expect(screen.queryByRole('button', { name: 'Clear filters' })).not.toBeInTheDocument();
     });
 
-    it('applies data-download-id to history items', async () => {
+    it('keeps the card-layout list toolbar reachable when a queue filter matches no rows', async () => {
+        vi.stubGlobal('matchMedia', createMatchMedia(390));
         const user = userEvent.setup();
-        const queryClient = createTestQueryClient();
-        render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
+        render(<DownloadsPage />, { wrapper: createUrlWrapper('/downloads?qclient=client-2&qstate=Paused') });
 
-        await waitFor(() => {
-            expect(screen.getByText('Breaking.Bad.S01E01.1080p.BluRay.x264')).toBeInTheDocument();
-        });
+        const queueCards = await screen.findByRole('list', { name: 'Download queue' });
+        expect(await within(queueCards).findByText('No active downloads')).toBeInTheDocument();
 
-        await user.click(screen.getByRole('tab', { name: /history/i }));
+        const toolbar = document.querySelector('[data-component="mobile-list-toolbar"]') as HTMLElement;
+        expect(toolbar).toBeInTheDocument();
 
-        await waitFor(() => {
-            const historyItems = document.querySelectorAll(
-                '[data-testid="downloads-page__history-item"][data-download-id]',
-            );
-            expect(historyItems.length).toBe(3);
-            expect(historyItems[0]).toHaveAttribute('data-download-id', 'hist-1');
-        });
+        const clearFilters = within(toolbar).getByRole('button', { name: 'Clear filters' });
+        expect(screen.getAllByRole('button', { name: 'Clear filters' })).toEqual([clearFilters]);
+
+        await user.click(clearFilters);
+
+        await waitFor(() => expect(within(queueCards).getByText('Breaking Bad')).toBeInTheDocument());
+        expect(within(queueCards).queryByText('No active downloads')).not.toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: 'Clear filters' })).not.toBeInTheDocument();
     });
 
-    it('renders status icons as decorative', async () => {
+    it('keeps the card-layout list toolbar reachable when a history filter matches no rows', async () => {
+        vi.stubGlobal('matchMedia', createMatchMedia(390));
         const user = userEvent.setup();
+        render(<DownloadsPage />, {
+            wrapper: createUrlWrapper('/downloads?tab=history&hclient=client-2&hstate=Failed'),
+        });
+
+        const historyCards = await screen.findByRole('list', { name: 'Download history' });
+        expect(await within(historyCards).findByText('No download history')).toBeInTheDocument();
+
+        const toolbar = document.querySelector('[data-component="mobile-list-toolbar"]') as HTMLElement;
+        expect(toolbar).toBeInTheDocument();
+
+        const clearFilters = within(toolbar).getByRole('button', { name: 'Clear filters' });
+        expect(screen.getAllByRole('button', { name: 'Clear filters' })).toEqual([clearFilters]);
+
+        await user.click(clearFilters);
+
+        await waitFor(() => expect(within(historyCards).getByText('The Bear')).toBeInTheDocument());
+        expect(within(historyCards).queryByText('No download history')).not.toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: 'Clear filters' })).not.toBeInTheDocument();
+    });
+});
+
+describe('DownloadsPage request fan-out', () => {
+    beforeEach(() => {
+        vi.clearAllMocks();
+        mockUseExtensions.mockReturnValue(defaultExtensionContext);
+        mockUseSlotExtensions.mockReturnValue(noExtensions);
+        setupApiGet();
+    });
+
+    afterEach(() => vi.restoreAllMocks());
+
+    it('loads both tab totals from the grouped list responses with no per-status count request', async () => {
+        const mockApiGet = setupApiGet();
         const queryClient = createTestQueryClient();
         render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
 
+        await waitFor(() => expect(within(getTable()).getByText('Breaking Bad')).toBeInTheDocument());
         await waitFor(() => {
-            expect(screen.getByText('Breaking.Bad.S01E01.1080p.BluRay.x264')).toBeInTheDocument();
+            const counts = screen.getAllByTestId('downloads-page__tab-count').map((el) => el.textContent);
+            expect(counts).toEqual(['6', '3']);
         });
 
-        await user.click(screen.getByRole('tab', { name: /history/i }));
+        const listCalls = mockApiGet.mock.calls
+            .map((call) => String(call[0]))
+            .filter((url) => url.startsWith('/downloads'));
+        expect(listCalls.filter((url) => /[?&]status=/.test(url))).toEqual([]);
+        expect(listCalls.filter((url) => /[?&]pageSize=1(?:&|$)/.test(url))).toEqual([]);
+        expect(new Set(listCalls).size).toBe(2);
+    });
 
-        await waitFor(() => {
-            const statusIcons = screen.getAllByTestId('downloads-page__history-status-icon');
-            expect(statusIcons.length).toBe(3);
-            statusIcons.forEach((icon) => {
-                expect(icon).toHaveAttribute('aria-hidden', 'true');
-            });
-        });
+    it('keeps the full Active total via one grouped count request when a status filter is applied', async () => {
+        const user = userEvent.setup();
+        const mockApiGet = setupApiGet();
+        const queryClient = createTestQueryClient();
+        render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
+
+        await waitFor(() => expect(within(getTable()).getByText('Breaking Bad')).toBeInTheDocument());
+
+        await user.click(within(getTable()).getByRole('button', { name: 'Filter by Status' }));
+        await user.click(await screen.findByRole('menuitemradio', { name: 'Paused' }));
+
+        await waitFor(() => expect(getTableRowIds()).toEqual(['dl-5']));
+        await waitFor(() => expect(screen.getAllByTestId('downloads-page__tab-count')[0]).toHaveTextContent('6'));
+
+        const listCalls = mockApiGet.mock.calls
+            .map((call) => String(call[0]))
+            .filter((url) => url.startsWith('/downloads'));
+        const countCalls = listCalls.filter((url) => /[?&]pageSize=1(?:&|$)/.test(url));
+        expect(countCalls).toHaveLength(1);
+        expect(countCalls[0]).toContain('statuses=');
+        expect(countCalls.filter((url) => /[?&]status=/.test(url))).toEqual([]);
     });
 });
 
 describe('DownloadsPage URL persistence', () => {
-    const mockApiGet = vi.mocked(apiGet);
-
-    function createUrlWrapper(url: string) {
-        const queryClient = createTestQueryClient();
-        return function TestWrapperWithUrl({ children }: { children: ReactNode }) {
-            return (
-                <QueryClientProvider client={queryClient}>
-                    <MemoryRouter initialEntries={[url]}>
-                        <TooltipProvider>
-                            <ToastProvider>
-                                <ToastStateProvider>
-                                    {children}
-                                    <ToastList />
-                                    <ToastViewport />
-                                </ToastStateProvider>
-                            </ToastProvider>
-                        </TooltipProvider>
-                    </MemoryRouter>
-                </QueryClientProvider>
-            );
-        };
-    }
-
     beforeEach(() => {
         vi.clearAllMocks();
         mockUseExtensions.mockReturnValue(defaultExtensionContext);
         mockUseSlotExtensions.mockReturnValue(noExtensions);
-        mockApiGet.mockImplementation((url: string) => {
-            if (url.startsWith('/downloads')) {
-                return Promise.resolve(mockPagedDownloads);
-            }
-            if (url === '/download-clients') {
-                return Promise.resolve(mockApiClients);
-            }
-            return Promise.resolve([]);
-        });
+        setupApiGet();
     });
 
-    afterEach(() => {
-        vi.restoreAllMocks();
-    });
+    afterEach(() => vi.restoreAllMocks());
 
-    it('initializes state filter from URL search params', async () => {
-        render(<DownloadsPage />, { wrapper: createUrlWrapper('/downloads?state=downloading') });
-
-        await waitFor(() => {
-            const queue = screen.getByRole('list', { name: /download queue/i });
-            const items = within(queue).getAllByRole('listitem');
-            expect(items.length).toBe(2);
-        });
-    });
-
-    it('restores history tab from ?tab=history search param', () => {
+    it('restores the history tab from ?tab=history', () => {
         render(<DownloadsPage />, { wrapper: createUrlWrapper('/downloads?tab=history') });
-
-        const historyTab = screen.getByRole('tab', { name: /history/i });
-        expect(historyTab).toHaveAttribute('data-state', 'active');
+        expect(screen.getByRole('tab', { name: /history/i })).toHaveAttribute('data-state', 'active');
     });
 
-    it('defaults to queue tab when no tab param is present', () => {
-        render(<DownloadsPage />, { wrapper: createUrlWrapper('/downloads') });
+    it('falls back to Active and normalizes the URL when ?tab= is invalid', async () => {
+        function UrlObserver() {
+            const [params] = useSearchParams();
+            return <span data-testid="url-params">{params.toString()}</span>;
+        }
 
-        const queueTab = screen.getByRole('tab', { name: /queue/i });
-        expect(queueTab).toHaveAttribute('data-state', 'active');
-    });
+        render(
+            <>
+                <DownloadsPage />
+                <UrlObserver />
+            </>,
+            { wrapper: createUrlWrapper('/downloads?tab=bogus&qstate=Paused') },
+        );
 
-    it('restores queue state filter from ?state=paused', async () => {
-        render(<DownloadsPage />, { wrapper: createUrlWrapper('/downloads?state=paused') });
-
+        expect(screen.getByRole('tab', { name: /active/i })).toHaveAttribute('data-state', 'active');
         await waitFor(() => {
-            const queue = screen.getByRole('list', { name: /download queue/i });
-            const items = within(queue).getAllByRole('listitem');
-            expect(items.length).toBe(1);
+            expect(screen.getByTestId('url-params').textContent).toBe('qstate=Paused');
+        });
+        await waitFor(() => {
+            expect(within(getTable()).getByText('The.Gentlemen.S01E03.1080p.WEB.x264')).toBeInTheDocument();
         });
     });
 
-    it('restores history state filter from ?tab=history&hstate=failed', async () => {
-        render(<DownloadsPage />, { wrapper: createUrlWrapper('/downloads?tab=history&hstate=failed') });
+    it('normalizes invalid download table URL params by replacement', async () => {
+        function UrlObserver() {
+            const [params] = useSearchParams();
+            return <span data-testid="url-params">{params.toString()}</span>;
+        }
+
+        render(
+            <>
+                <DownloadsPage />
+                <UrlObserver />
+            </>,
+            {
+                wrapper: createUrlWrapper(
+                    '/downloads?qstate=Finished&hstate=Paused&qsort=missing:desc&hsort=title:sideways&qpage=0&hpage=nope',
+                ),
+            },
+        );
 
         await waitFor(() => {
-            const historyList = screen.getByRole('list', { name: /download history/i });
-            const items = within(historyList).getAllByRole('listitem');
-            expect(items.length).toBe(1);
+            expect(screen.getByTestId('url-params').textContent).toBe('');
+        });
+        await waitFor(() => {
+            expect(within(getTable()).getByText('Breaking Bad')).toBeInTheDocument();
+        });
+    });
+
+    it('clamps an out-of-range queue page after totals load', async () => {
+        function UrlObserver() {
+            const [params] = useSearchParams();
+            return <span data-testid="url-params">{params.toString()}</span>;
+        }
+
+        render(
+            <>
+                <DownloadsPage />
+                <UrlObserver />
+            </>,
+            { wrapper: createUrlWrapper('/downloads?qpage=99') },
+        );
+
+        await waitFor(() => {
+            expect(screen.getByTestId('url-params').textContent).toBe('');
+        });
+        await waitFor(() => {
+            expect(within(getTable()).getByText('Breaking Bad')).toBeInTheDocument();
+        });
+    });
+
+    it('restores a queue state filter from ?qstate=Paused (single row)', async () => {
+        render(<DownloadsPage />, { wrapper: createUrlWrapper('/downloads?qstate=Paused') });
+
+        await waitFor(() => {
+            const rows = document.querySelectorAll('[data-component="data-table"] .data-table__row');
+            expect(rows.length).toBe(1);
+        });
+    });
+
+    it('restores the queue and history filters independently from their namespaced params', async () => {
+        render(<DownloadsPage />, { wrapper: createUrlWrapper('/downloads?qstate=Paused&hstate=Imported') });
+
+        await waitFor(() => {
+            const rows = document.querySelectorAll('[data-component="data-table"] .data-table__row');
+            expect(rows.length).toBe(1);
+            expect(within(getTable()).getByText('The.Gentlemen.S01E03.1080p.WEB.x264')).toBeInTheDocument();
+        });
+    });
+
+    it('keeps Active and History filter state separate when switching tabs', async () => {
+        const user = userEvent.setup();
+
+        function UrlObserver() {
+            const [params] = useSearchParams();
+            return <span data-testid="url-params">{params.toString()}</span>;
+        }
+
+        const queryClient = createTestQueryClient();
+        render(
+            <QueryClientProvider client={queryClient}>
+                <MemoryRouter initialEntries={['/downloads']}>
+                    <TooltipProvider>
+                        <ToastProvider>
+                            <ToastStateProvider>
+                                <DownloadsPage />
+                                <UrlObserver />
+                                <ToastList />
+                                <ToastViewport />
+                            </ToastStateProvider>
+                        </ToastProvider>
+                    </TooltipProvider>
+                </MemoryRouter>
+            </QueryClientProvider>,
+        );
+
+        await waitFor(() => expect(within(getTable()).getByText('Breaking Bad')).toBeInTheDocument());
+
+        await user.click(within(getTable()).getByRole('button', { name: 'Filter by Status' }));
+        await user.click(await screen.findByRole('menuitemradio', { name: 'Paused' }));
+
+        await waitFor(() => {
+            expect(screen.getByTestId('url-params').textContent).toContain('qstate=Paused');
+        });
+
+        await user.click(screen.getByRole('tab', { name: /history/i }));
+
+        await waitFor(() => expect(within(getTable()).getByText('The Bear')).toBeInTheDocument());
+
+        const historyParams = screen.getByTestId('url-params').textContent ?? '';
+        expect(historyParams).not.toContain('hstate=Paused');
+        expect(within(getTable()).getByRole('button', { name: 'Filter by Status' })).toBeInTheDocument();
+        expect(
+            within(getTable()).queryByRole('button', { name: /Status filtered, edit filter/i }),
+        ).not.toBeInTheDocument();
+
+        expect(historyParams).toContain('qstate=Paused');
+
+        await user.click(screen.getByRole('tab', { name: /active/i }));
+        await waitFor(() => {
+            expect(
+                within(getTable()).getByRole('button', { name: /Status filtered, edit filter/i }),
+            ).toBeInTheDocument();
         });
     });
 
@@ -1218,7 +1532,6 @@ describe('DownloadsPage URL persistence', () => {
         }
 
         const queryClient = createTestQueryClient();
-
         render(
             <QueryClientProvider client={queryClient}>
                 <MemoryRouter initialEntries={['/downloads']}>
@@ -1237,153 +1550,738 @@ describe('DownloadsPage URL persistence', () => {
         );
 
         await user.click(screen.getByRole('tab', { name: /history/i }));
+        expect(screen.getByTestId('url-params').textContent).toContain('tab=history');
+    });
+});
 
-        const urlParams = screen.getByTestId('url-params');
-        expect(urlParams.textContent).toContain('tab=history');
+describe('DownloadsPage paging', () => {
+    const manyActive: ApiDownload[] = Array.from({ length: 30 }, (_, i) => ({
+        id: `q-${i}`,
+        downloadClientId: 'client-1',
+        downloadClientName: 'SABnzbd',
+        externalId: `ext-${i}`,
+        title: `Active Item ${i}`,
+        status: 'Queued' as DownloadStatusValue,
+        canPause: true,
+        canResume: true,
+        createdAt: new Date(Date.UTC(2024, 0, 1, 0, 0, 30 - i)).toISOString(),
+    }));
+
+    beforeEach(() => {
+        vi.clearAllMocks();
+        mockUseExtensions.mockReturnValue(defaultExtensionContext);
+        mockUseSlotExtensions.mockReturnValue(noExtensions);
+        vi.mocked(apiGet).mockImplementation((url: string) => {
+            if (url.startsWith('/downloads')) {
+                return Promise.resolve(respondDownloads(url, manyActive));
+            }
+            if (url === '/download-clients') {
+                return Promise.resolve(mockApiClients);
+            }
+            return Promise.resolve([]);
+        });
     });
 
-    it('removes tab param when switching back to queue', async () => {
-        const user = userEvent.setup();
+    afterEach(() => vi.restoreAllMocks());
 
-        function UrlObserver() {
-            const [params] = useSearchParams();
-            return <span data-testid="url-params">{params.toString()}</span>;
-        }
-
+    it('renders a pager and limits the first page to the page size', async () => {
         const queryClient = createTestQueryClient();
-
-        render(
-            <QueryClientProvider client={queryClient}>
-                <MemoryRouter initialEntries={['/downloads?tab=history']}>
-                    <TooltipProvider>
-                        <ToastProvider>
-                            <ToastStateProvider>
-                                <DownloadsPage />
-                                <UrlObserver />
-                                <ToastList />
-                                <ToastViewport />
-                            </ToastStateProvider>
-                        </ToastProvider>
-                    </TooltipProvider>
-                </MemoryRouter>
-            </QueryClientProvider>,
-        );
-
-        await user.click(screen.getByRole('tab', { name: /queue/i }));
-
-        const urlParams = screen.getByTestId('url-params');
-        expect(urlParams.textContent).not.toContain('tab=');
-    });
-
-    it('writes queue state filter to URL when filter changes', async () => {
-        const user = userEvent.setup();
-
-        function UrlObserver() {
-            const [params] = useSearchParams();
-            return <span data-testid="url-params">{params.toString()}</span>;
-        }
-
-        const queryClient = createTestQueryClient();
-
-        render(
-            <QueryClientProvider client={queryClient}>
-                <MemoryRouter initialEntries={['/downloads']}>
-                    <TooltipProvider>
-                        <ToastProvider>
-                            <ToastStateProvider>
-                                <DownloadsPage />
-                                <UrlObserver />
-                                <ToastList />
-                                <ToastViewport />
-                            </ToastStateProvider>
-                        </ToastProvider>
-                    </TooltipProvider>
-                </MemoryRouter>
-            </QueryClientProvider>,
-        );
+        render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
 
         await waitFor(() => {
-            expect(screen.getByText('Breaking.Bad.S01E01.1080p.BluRay.x264')).toBeInTheDocument();
+            const rows = document.querySelectorAll('[data-component="data-table"] .data-table__row');
+            expect(rows.length).toBe(25);
         });
 
-        const stateFilter = document.querySelector('[data-filter="state"]') as HTMLElement;
-        await user.click(stateFilter);
-        const downloadingOption = await screen.findByRole('option', { name: 'Downloading' });
-        await user.click(downloadingOption);
-
-        const urlParams = screen.getByTestId('url-params');
-        expect(urlParams.textContent).toContain('state=downloading');
+        expect(screen.getByText('Page 1 of 2')).toBeInTheDocument();
     });
 
-    it('writes queue client filter to URL when filter changes', async () => {
+    it('requests the next page server-side', async () => {
         const user = userEvent.setup();
-
-        function UrlObserver() {
-            const [params] = useSearchParams();
-            return <span data-testid="url-params">{params.toString()}</span>;
-        }
-
         const queryClient = createTestQueryClient();
+        render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
 
-        render(
-            <QueryClientProvider client={queryClient}>
-                <MemoryRouter initialEntries={['/downloads']}>
-                    <TooltipProvider>
-                        <ToastProvider>
-                            <ToastStateProvider>
-                                <DownloadsPage />
-                                <UrlObserver />
-                                <ToastList />
-                                <ToastViewport />
-                            </ToastStateProvider>
-                        </ToastProvider>
-                    </TooltipProvider>
-                </MemoryRouter>
-            </QueryClientProvider>,
-        );
+        await waitFor(() => expect(screen.getByText('Page 1 of 2')).toBeInTheDocument());
+
+        await user.click(screen.getByRole('button', { name: /go to next page/i }));
 
         await waitFor(() => {
-            expect(screen.getByText('Breaking.Bad.S01E01.1080p.BluRay.x264')).toBeInTheDocument();
-        });
-
-        const clientFilter = document.querySelector('[data-filter="client"]') as HTMLElement;
-        await user.click(clientFilter);
-        const sabnzbdOption = await screen.findByRole('option', { name: 'SABnzbd' });
-        await user.click(sabnzbdOption);
-
-        const urlParams = screen.getByTestId('url-params');
-        expect(urlParams.textContent).toContain('client=client-1');
-    });
-
-    it('restores queue client filter from ?client= search param', async () => {
-        render(<DownloadsPage />, { wrapper: createUrlWrapper('/downloads?client=client-1') });
-
-        await waitFor(() => {
-            const queue = screen.getByRole('list', { name: /download queue/i });
-            const items = within(queue).getAllByRole('listitem');
-            expect(items.length).toBe(3);
-            items.forEach((item) => {
-                expect(within(item).getByText('SABnzbd')).toBeInTheDocument();
-            });
+            const advanced = vi
+                .mocked(apiGet)
+                .mock.calls.map((c) => String(c[0]))
+                .some((u) => u.startsWith('/downloads') && u.includes('statuses=') && u.includes('pageNumber=2'));
+            expect(advanced).toBe(true);
         });
     });
 });
 
-describe('DownloadsPage empty state', () => {
-    const mockApiGet = vi.mocked(apiGet);
+describe('DownloadsPage bulk selection', () => {
+    beforeEach(() => {
+        vi.clearAllMocks();
+        mockUseExtensions.mockReturnValue(defaultExtensionContext);
+        mockUseSlotExtensions.mockReturnValue(noExtensions);
+        setupApiGet();
+    });
 
+    afterEach(() => vi.restoreAllMocks());
+
+    it('does not render a Clear all control', async () => {
+        const queryClient = createTestQueryClient();
+        render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
+
+        await waitFor(() => expect(within(getTable()).getByText('Breaking Bad')).toBeInTheDocument());
+
+        expect(screen.queryByRole('button', { name: /clear all/i })).not.toBeInTheDocument();
+    });
+
+    it('keeps the bulk-action bar visible with disabled actions when nothing is selected', async () => {
+        const queryClient = createTestQueryClient();
+        render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
+
+        await waitFor(() => expect(within(getTable()).getByText('Breaking Bad')).toBeInTheDocument());
+
+        const bar = document.querySelector('[data-component="downloads-bulk-bar-queue"]') as HTMLElement;
+        expect(bar).toBeInTheDocument();
+        expect(within(bar).getByText('0 selected')).toBeInTheDocument();
+        expect(within(bar).getByRole('button', { name: /forget/i })).toBeDisabled();
+        expect(within(bar).getByRole('button', { name: /remove/i })).toBeDisabled();
+        expect(within(bar).getByRole('button', { name: /^start$/i })).toBeDisabled();
+        expect(within(bar).getByRole('button', { name: /^pause$/i })).toBeDisabled();
+        expect(within(bar).getByRole('button', { name: /^stop$/i })).toBeDisabled();
+    });
+
+    it('enables the actions once a workable row is selected', async () => {
+        const user = userEvent.setup();
+        const queryClient = createTestQueryClient();
+        render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
+
+        await waitFor(() => expect(within(getTable()).getByText('Breaking Bad')).toBeInTheDocument());
+
+        const checkbox = within(getTable()).getByRole('checkbox', { name: /select breaking bad/i });
+        await user.click(checkbox);
+
+        const bar = document.querySelector('[data-component="downloads-bulk-bar-queue"]') as HTMLElement;
+        expect(within(bar).getByText('1 selected')).toBeInTheDocument();
+        expect(within(bar).getByRole('button', { name: /forget/i })).toBeEnabled();
+        expect(within(bar).getByRole('button', { name: /remove/i })).toBeEnabled();
+        expect(within(bar).getByRole('button', { name: /^pause$/i })).toBeEnabled();
+        expect(within(bar).getByRole('button', { name: /^stop$/i })).toBeEnabled();
+        expect(within(bar).getByRole('button', { name: /^start$/i })).toBeEnabled();
+    });
+
+    it('lets a mobile History card select a download for bulk actions', async () => {
+        vi.stubGlobal('matchMedia', createMatchMedia(390));
+        const user = userEvent.setup();
+        const queryClient = createTestQueryClient();
+        render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
+
+        await waitFor(() =>
+            expect(
+                within(screen.getByRole('list', { name: 'Download queue' })).getByText('Breaking Bad'),
+            ).toBeInTheDocument(),
+        );
+        await user.click(screen.getByRole('tab', { name: /history/i }));
+        await waitFor(() =>
+            expect(
+                within(screen.getByRole('list', { name: 'Download history' })).getByText('The Bear'),
+            ).toBeInTheDocument(),
+        );
+
+        const historyCards = screen.getByRole('list', { name: 'Download history' });
+        await user.click(screen.getByRole('button', { name: /^select$/i }));
+        const checkbox = within(historyCards).getByRole('checkbox', { name: /select the bear/i });
+        await user.click(checkbox);
+
+        const bar = document.querySelector('[data-component="downloads-mobile-selection-bar-history"]') as HTMLElement;
+        expect(within(bar).getByText('1 selected')).toBeInTheDocument();
+        expect(within(bar).getByRole('button', { name: /forget/i })).toBeEnabled();
+        expect(within(bar).getByRole('button', { name: /remove/i })).toBeEnabled();
+    });
+
+    it('selects and clears the visible mobile page on each tab', async () => {
+        vi.stubGlobal('matchMedia', createMatchMedia(390));
+        const user = userEvent.setup();
+        const queryClient = createTestQueryClient();
+        render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
+
+        await waitFor(() =>
+            expect(
+                within(screen.getByRole('list', { name: 'Download queue' })).getByText('Breaking Bad'),
+            ).toBeInTheDocument(),
+        );
+
+        await user.click(screen.getByRole('button', { name: /^select$/i }));
+        const queueBar = document.querySelector(
+            '[data-component="downloads-mobile-selection-bar-queue"]',
+        ) as HTMLElement;
+        const queueSelectAll = within(queueBar).getByRole('button', { name: /^select all$/i });
+        await user.click(queueSelectAll);
+
+        expect(within(queueBar).getByText('6 selected')).toBeInTheDocument();
+        await user.click(within(queueBar).getByRole('button', { name: /clear selection/i }));
+        expect(within(queueBar).getByText('0 selected')).toBeInTheDocument();
+        expect(queueSelectAll).toHaveAttribute('aria-pressed', 'false');
+
+        await user.click(screen.getByRole('tab', { name: /history/i }));
+        await waitFor(() =>
+            expect(
+                within(screen.getByRole('list', { name: 'Download history' })).getByText('The Bear'),
+            ).toBeInTheDocument(),
+        );
+
+        await user.click(screen.getByRole('button', { name: /^select$/i }));
+        const historyBar = document.querySelector(
+            '[data-component="downloads-mobile-selection-bar-history"]',
+        ) as HTMLElement;
+        const historySelectAll = within(historyBar).getByRole('button', { name: /^select all$/i });
+        await user.click(historySelectAll);
+
+        expect(within(historyBar).getByText('3 selected')).toBeInTheDocument();
+        await user.click(within(historyBar).getByRole('button', { name: /clear selection/i }));
+        expect(within(historyBar).getByText('0 selected')).toBeInTheDocument();
+        expect(historySelectAll).toHaveAttribute('aria-pressed', 'false');
+    });
+
+    it('preserves independent mobile selections when switching tabs', async () => {
+        vi.stubGlobal('matchMedia', createMatchMedia(390));
+        const user = userEvent.setup();
+        const queryClient = createTestQueryClient();
+        render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
+
+        const queueCards = await screen.findByRole('list', { name: 'Download queue' });
+        await waitFor(() => expect(within(queueCards).getByText('Breaking Bad')).toBeInTheDocument());
+        await user.click(screen.getByRole('button', { name: /^select$/i }));
+        await user.click(within(queueCards).getByRole('checkbox', { name: 'Select Breaking Bad' }));
+
+        await user.click(screen.getByRole('tab', { name: /history/i }));
+        const historyCards = await screen.findByRole('list', { name: 'Download history' });
+        await waitFor(() => expect(within(historyCards).getByText('The Bear')).toBeInTheDocument());
+        await user.click(screen.getByRole('button', { name: /^select$/i }));
+        await user.click(within(historyCards).getByRole('checkbox', { name: 'Select The Bear' }));
+
+        await user.click(screen.getByRole('tab', { name: /active/i }));
+        expect(screen.getByRole('button', { name: /stop selecting/i })).toBeInTheDocument();
+        expect(within(queueCards).getByRole('checkbox', { name: 'Select Breaking Bad' })).toBeChecked();
+        expect(
+            within(
+                document.querySelector('[data-component="downloads-mobile-selection-bar-queue"]') as HTMLElement,
+            ).getByText('1 selected'),
+        ).toBeInTheDocument();
+
+        await user.click(screen.getByRole('tab', { name: /history/i }));
+        expect(screen.getByRole('button', { name: /stop selecting/i })).toBeInTheDocument();
+        expect(within(historyCards).getByRole('checkbox', { name: 'Select The Bear' })).toBeChecked();
+    });
+
+    it('bulk Forget removes each selected row via DELETE /downloads/{id}', async () => {
+        const user = userEvent.setup();
+        const mockApiDelete = vi.mocked(apiDelete);
+        mockApiDelete.mockResolvedValue(undefined);
+
+        const queryClient = createTestQueryClient();
+        render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
+
+        await waitFor(() => expect(within(getTable()).getByText('Breaking Bad')).toBeInTheDocument());
+
+        await user.click(within(getTable()).getByRole('checkbox', { name: /select breaking bad/i }));
+        await user.click(within(getTable()).getByRole('checkbox', { name: /select dune: part two/i }));
+
+        const bar = document.querySelector('[data-component="downloads-bulk-bar-queue"]') as HTMLElement;
+        await user.click(within(bar).getByRole('button', { name: /forget/i }));
+
+        const dialog = await screen.findByRole('dialog');
+        await user.click(within(dialog).getByRole('button', { name: /^forget$/i }));
+
+        await waitFor(() => expect(mockApiDelete).toHaveBeenCalledWith('/downloads/dl-1'));
+        expect(mockApiDelete).toHaveBeenCalledWith('/downloads/dl-3');
+        expect(mockApiDelete).not.toHaveBeenCalledWith('/downloads/dl-1/files');
+    });
+
+    it('keeps only failed bulk Forget rows selected for retry', async () => {
+        const user = userEvent.setup();
+        const mockApiDelete = vi.mocked(apiDelete);
+        let duneAttempts = 0;
+        mockApiDelete.mockImplementation((url: string) => {
+            if (url === '/downloads/dl-3' && duneAttempts++ === 0) {
+                return Promise.reject(new Error('delete failed'));
+            }
+            return Promise.resolve(undefined);
+        });
+
+        render(<DownloadsPage />, { wrapper: createTestWrapper(createTestQueryClient()) });
+
+        await waitFor(() => expect(within(getTable()).getByText('Breaking Bad')).toBeInTheDocument());
+
+        await user.click(within(getTable()).getByRole('checkbox', { name: /select breaking bad/i }));
+        await user.click(within(getTable()).getByRole('checkbox', { name: /select dune: part two/i }));
+
+        const bar = document.querySelector('[data-component="downloads-bulk-bar-queue"]') as HTMLElement;
+        await user.click(within(bar).getByRole('button', { name: /forget/i }));
+        await user.click(within(await screen.findByRole('dialog')).getByRole('button', { name: /^forget$/i }));
+
+        await waitFor(() => expect(screen.getByText('Failed to forget some downloads')).toBeInTheDocument());
+        expect(screen.getByText('1 succeeded and 1 failed. Failed downloads remain selected.')).toBeInTheDocument();
+        expect(within(getTable()).getByRole('checkbox', { name: /select breaking bad/i })).toHaveAttribute(
+            'data-state',
+            'unchecked',
+        );
+        expect(within(getTable()).getByRole('checkbox', { name: /select dune: part two/i })).toHaveAttribute(
+            'data-state',
+            'checked',
+        );
+        expect(within(bar).getByText('1 selected')).toBeInTheDocument();
+
+        await user.click(within(bar).getByRole('button', { name: /forget/i }));
+        await user.click(within(await screen.findByRole('dialog')).getByRole('button', { name: /^forget$/i }));
+
+        await waitFor(() => expect(screen.getByText('Download forgotten')).toBeInTheDocument());
+        expect(mockApiDelete.mock.calls.filter(([url]) => url === '/downloads/dl-1')).toHaveLength(1);
+        expect(mockApiDelete.mock.calls.filter(([url]) => url === '/downloads/dl-3')).toHaveLength(2);
+        expect(within(bar).getByText('0 selected')).toBeInTheDocument();
+    });
+
+    it('bulk Remove removes each selected row via DELETE /downloads/{id}/files', async () => {
+        const user = userEvent.setup();
+        const mockApiDelete = vi.mocked(apiDelete);
+        mockApiDelete.mockResolvedValue(undefined);
+
+        const queryClient = createTestQueryClient();
+        render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
+
+        await waitFor(() => expect(within(getTable()).getByText('Breaking Bad')).toBeInTheDocument());
+
+        await user.click(within(getTable()).getByRole('checkbox', { name: /select breaking bad/i }));
+
+        const bar = document.querySelector('[data-component="downloads-bulk-bar-queue"]') as HTMLElement;
+        await user.click(within(bar).getByRole('button', { name: /remove/i }));
+
+        const dialog = await screen.findByRole('dialog');
+        await user.click(within(dialog).getByRole('button', { name: /^remove$/i }));
+
+        await waitFor(() => expect(mockApiDelete).toHaveBeenCalledWith('/downloads/dl-1/files'));
+    });
+
+    it('reports partial bulk Remove results and leaves only failures selected', async () => {
+        const user = userEvent.setup();
+        const mockApiDelete = vi.mocked(apiDelete);
+        mockApiDelete.mockImplementation((url: string) =>
+            url === '/downloads/dl-3/files' ? Promise.reject(new Error('delete failed')) : Promise.resolve(undefined),
+        );
+
+        render(<DownloadsPage />, { wrapper: createTestWrapper(createTestQueryClient()) });
+
+        await waitFor(() => expect(within(getTable()).getByText('Breaking Bad')).toBeInTheDocument());
+
+        await user.click(within(getTable()).getByRole('checkbox', { name: /select breaking bad/i }));
+        await user.click(within(getTable()).getByRole('checkbox', { name: /select dune: part two/i }));
+
+        const bar = document.querySelector('[data-component="downloads-bulk-bar-queue"]') as HTMLElement;
+        await user.click(within(bar).getByRole('button', { name: /remove/i }));
+        await user.click(within(await screen.findByRole('dialog')).getByRole('button', { name: /^remove$/i }));
+
+        await waitFor(() => expect(screen.getByText('Failed to remove some downloads')).toBeInTheDocument());
+        expect(screen.getByText('1 succeeded and 1 failed. Failed downloads remain selected.')).toBeInTheDocument();
+        expect(within(getTable()).getByRole('checkbox', { name: /select breaking bad/i })).toHaveAttribute(
+            'data-state',
+            'unchecked',
+        );
+        expect(within(getTable()).getByRole('checkbox', { name: /select dune: part two/i })).toHaveAttribute(
+            'data-state',
+            'checked',
+        );
+        expect(within(bar).getByText('1 selected')).toBeInTheDocument();
+    });
+
+    it('reports partial bulk state changes and retries only failed rows', async () => {
+        const user = userEvent.setup();
+        const mockApiPost = vi.mocked(apiPost);
+        let officeAttempts = 0;
+        mockApiPost.mockImplementation((url: string) => {
+            if (url === '/downloads/dl-2/pause' && officeAttempts++ === 0) {
+                return Promise.reject(new Error('pause failed'));
+            }
+            return Promise.resolve(undefined);
+        });
+
+        render(<DownloadsPage />, { wrapper: createTestWrapper(createTestQueryClient()) });
+
+        await waitFor(() => expect(within(getTable()).getByText('Breaking Bad')).toBeInTheDocument());
+
+        await user.click(within(getTable()).getByRole('checkbox', { name: /select breaking bad/i }));
+        await user.click(within(getTable()).getByRole('checkbox', { name: /select the\.office/i }));
+        await user.click(within(getTable()).getByRole('checkbox', { name: /select dune: part two/i }));
+
+        const bar = document.querySelector('[data-component="downloads-bulk-bar-queue"]') as HTMLElement;
+        await user.click(within(bar).getByRole('button', { name: /^pause$/i }));
+
+        await waitFor(() => expect(screen.getByText('Failed to pause some downloads')).toBeInTheDocument());
+        expect(screen.getByText('2 succeeded and 1 failed. Failed downloads remain selected.')).toBeInTheDocument();
+        expect(within(getTable()).getByRole('checkbox', { name: /select breaking bad/i })).toHaveAttribute(
+            'data-state',
+            'unchecked',
+        );
+        expect(within(getTable()).getByRole('checkbox', { name: /select the\.office/i })).toHaveAttribute(
+            'data-state',
+            'checked',
+        );
+        expect(within(getTable()).getByRole('checkbox', { name: /select dune: part two/i })).toHaveAttribute(
+            'data-state',
+            'unchecked',
+        );
+        expect(within(bar).getByText('1 selected')).toBeInTheDocument();
+
+        await user.click(within(bar).getByRole('button', { name: /^pause$/i }));
+
+        await waitFor(() => expect(screen.getByText('Downloads paused')).toBeInTheDocument());
+        expect(mockApiPost.mock.calls.filter(([url]) => url === '/downloads/dl-1/pause')).toHaveLength(1);
+        expect(mockApiPost.mock.calls.filter(([url]) => url === '/downloads/dl-2/pause')).toHaveLength(2);
+        expect(mockApiPost.mock.calls.filter(([url]) => url === '/downloads/dl-3/pause')).toHaveLength(1);
+        expect(within(bar).getByText('0 selected')).toBeInTheDocument();
+    });
+});
+
+describe('DownloadsPage permission gating', () => {
+    function grantRole(role: Role) {
+        mockHasPermission.mockImplementation((permission: string) => testHasPermission(role, permission as Permission));
+    }
+
+    beforeEach(() => {
+        vi.clearAllMocks();
+        mockUseExtensions.mockReturnValue(defaultExtensionContext);
+        mockUseSlotExtensions.mockReturnValue(noExtensions);
+        setupApiGet();
+    });
+
+    afterEach(() => {
+        vi.restoreAllMocks();
+        mockHasPermission.mockImplementation(() => true);
+    });
+
+    it('lets a Requester pause/resume a row but hides the destructive actions', async () => {
+        grantRole(Role.Requester);
+        const user = userEvent.setup();
+        const queryClient = createTestQueryClient();
+        render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
+
+        await waitFor(() => expect(within(getTable()).getByText('Breaking Bad')).toBeInTheDocument());
+
+        await openRowMenu(user, /actions for breaking bad/i);
+        expect(await screen.findByRole('menuitem', { name: /^pause$/i })).toBeInTheDocument();
+        expect(screen.queryByRole('menuitem', { name: /^stop$/i })).not.toBeInTheDocument();
+        expect(screen.queryByRole('menuitem', { name: /force start/i })).not.toBeInTheDocument();
+        expect(screen.queryByRole('menuitem', { name: /^forget$/i })).not.toBeInTheDocument();
+        expect(screen.queryByRole('menuitem', { name: /^remove$/i })).not.toBeInTheDocument();
+        await user.keyboard('{Escape}');
+
+        await openRowMenu(user, /actions for dune: part two/i);
+        expect(await screen.findByRole('menuitem', { name: /^resume$/i })).toBeInTheDocument();
+    });
+
+    it('lets a Requester select queue rows and bulk pause/resume but not stop or delete', async () => {
+        grantRole(Role.Requester);
+        const queryClient = createTestQueryClient();
+        render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
+
+        await waitFor(() => expect(within(getTable()).getByText('Breaking Bad')).toBeInTheDocument());
+
+        expect(within(getTable()).getByRole('checkbox', { name: /select breaking bad/i })).toBeInTheDocument();
+
+        const bar = document.querySelector('[data-component="downloads-bulk-bar-queue"]') as HTMLElement;
+        expect(within(bar).getByRole('button', { name: /^start$/i })).toBeInTheDocument();
+        expect(within(bar).getByRole('button', { name: /^pause$/i })).toBeInTheDocument();
+        expect(within(bar).queryByRole('button', { name: /^stop$/i })).not.toBeInTheDocument();
+        expect(within(bar).queryByRole('button', { name: /forget/i })).not.toBeInTheDocument();
+        expect(within(bar).queryByRole('button', { name: /remove/i })).not.toBeInTheDocument();
+    });
+
+    it('hides the History selection checkbox from a Requester (only manager-tier bulk actions there)', async () => {
+        grantRole(Role.Requester);
+        const user = userEvent.setup();
+        const queryClient = createTestQueryClient();
+        render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
+
+        await waitFor(() => expect(within(getTable()).getByText('Breaking Bad')).toBeInTheDocument());
+
+        await user.click(screen.getByRole('tab', { name: /history/i }));
+
+        await waitFor(() =>
+            expect(within(getTable()).queryByRole('checkbox', { name: /select all/i })).not.toBeInTheDocument(),
+        );
+    });
+
+    it('lets a Manager use every row action including stop, forget, and remove', async () => {
+        grantRole(Role.Manager);
+        const user = userEvent.setup();
+        const queryClient = createTestQueryClient();
+        render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
+
+        await waitFor(() => expect(within(getTable()).getByText('Breaking Bad')).toBeInTheDocument());
+
+        await openRowMenu(user, /actions for breaking bad/i);
+        expect(await screen.findByRole('menuitem', { name: /^pause$/i })).toBeInTheDocument();
+        expect(screen.getByRole('menuitem', { name: /^stop$/i })).toBeInTheDocument();
+        expect(screen.getByRole('menuitem', { name: /^forget$/i })).toBeInTheDocument();
+        expect(screen.getByRole('menuitem', { name: /^remove$/i })).toBeInTheDocument();
+    });
+
+    it('shows a Manager the full bulk-action set and the selection checkboxes', async () => {
+        grantRole(Role.Manager);
+        const queryClient = createTestQueryClient();
+        render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
+
+        await waitFor(() => expect(within(getTable()).getByText('Breaking Bad')).toBeInTheDocument());
+
+        expect(within(getTable()).getByRole('checkbox', { name: /select breaking bad/i })).toBeInTheDocument();
+
+        const bar = document.querySelector('[data-component="downloads-bulk-bar-queue"]') as HTMLElement;
+        expect(within(bar).getByRole('button', { name: /^start$/i })).toBeInTheDocument();
+        expect(within(bar).getByRole('button', { name: /^pause$/i })).toBeInTheDocument();
+        expect(within(bar).getByRole('button', { name: /^stop$/i })).toBeInTheDocument();
+        expect(within(bar).getByRole('button', { name: /forget/i })).toBeInTheDocument();
+        expect(within(bar).getByRole('button', { name: /remove/i })).toBeInTheDocument();
+    });
+
+    it('gives every bulk-action button an aria-label so it keeps an accessible name when its text label is hidden on mobile', async () => {
+        grantRole(Role.Manager);
+        const queryClient = createTestQueryClient();
+        render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
+
+        await waitFor(() => expect(within(getTable()).getByText('Breaking Bad')).toBeInTheDocument());
+
+        const bar = document.querySelector('[data-component="downloads-bulk-bar-queue"]') as HTMLElement;
+        const start = within(bar).getByRole('button', { name: /^start$/i });
+        const pause = within(bar).getByRole('button', { name: /^pause$/i });
+        const stop = within(bar).getByRole('button', { name: /^stop$/i });
+        const forget = within(bar).getByRole('button', { name: /^forget$/i });
+        const remove = within(bar).getByRole('button', { name: /^remove$/i });
+
+        expect(start).toHaveAttribute('aria-label', 'Start');
+        expect(pause).toHaveAttribute('aria-label', 'Pause');
+        expect(stop).toHaveAttribute('aria-label', 'Stop');
+        expect(forget).toHaveAttribute('aria-label', 'Forget');
+        expect(remove).toHaveAttribute('aria-label', 'Remove');
+    });
+
+    it('renders no selection toolbar on either tab for a Viewer (no download bulk actions)', async () => {
+        grantRole(Role.Viewer);
+        const user = userEvent.setup();
+        const queryClient = createTestQueryClient();
+        render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
+
+        await waitFor(() => expect(within(getTable()).getByText('Breaking Bad')).toBeInTheDocument());
+
+        expect(within(getTable()).queryByRole('checkbox', { name: /select breaking bad/i })).not.toBeInTheDocument();
+        expect(document.querySelector('[data-component="downloads-bulk-bar-queue"]')).not.toBeInTheDocument();
+
+        await user.click(screen.getByRole('tab', { name: /history/i }));
+        await waitFor(() => expect(within(getTable()).getByText('The Bear')).toBeInTheDocument());
+        expect(document.querySelector('[data-component="downloads-bulk-bar-history"]')).not.toBeInTheDocument();
+    });
+
+    it('keeps the queue selection toolbar for a Requester but hides it on History', async () => {
+        grantRole(Role.Requester);
+        const user = userEvent.setup();
+        const queryClient = createTestQueryClient();
+        render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
+
+        await waitFor(() => expect(within(getTable()).getByText('Breaking Bad')).toBeInTheDocument());
+        expect(document.querySelector('[data-component="downloads-bulk-bar-queue"]')).toBeInTheDocument();
+
+        await user.click(screen.getByRole('tab', { name: /history/i }));
+        await waitFor(() => expect(within(getTable()).getByText('The Bear')).toBeInTheDocument());
+        expect(document.querySelector('[data-component="downloads-bulk-bar-history"]')).not.toBeInTheDocument();
+    });
+});
+
+describe('DownloadsPage select all across pages', () => {
+    function setupApiGetWithLargeTotal(source: ApiDownload[] = mockApiDownloads) {
+        const mockApiGet = vi.mocked(apiGet);
+        mockApiGet.mockImplementation((url: string) => {
+            if (url === '/download-clients') {
+                return Promise.resolve(mockApiClients);
+            }
+            if (url.startsWith('/downloads')) {
+                if (url.includes('pageSize=25')) {
+                    const page = respondDownloads(url, source);
+                    return Promise.resolve({ ...page, totalItems: 40 });
+                }
+                return Promise.resolve(respondDownloads(url, source));
+            }
+            return Promise.resolve([]);
+        });
+        return mockApiGet;
+    }
+
+    beforeEach(() => {
+        vi.clearAllMocks();
+        mockUseExtensions.mockReturnValue(defaultExtensionContext);
+        mockUseSlotExtensions.mockReturnValue(noExtensions);
+        setupApiGetWithLargeTotal();
+    });
+
+    afterEach(() => vi.restoreAllMocks());
+
+    async function selectWholePage(user: ReturnType<typeof userEvent.setup>, title: string | RegExp = 'Breaking Bad') {
+        await waitFor(() => expect(within(getTable()).getByText(title)).toBeInTheDocument());
+        await user.click(within(getTable()).getByRole('checkbox', { name: /^select all$/i }));
+    }
+
+    it('offers to select all matching rows once the whole page is checked', async () => {
+        const user = userEvent.setup();
+        render(<DownloadsPage />, { wrapper: createTestWrapper(createTestQueryClient()) });
+
+        await selectWholePage(user);
+
+        const banner = document.querySelector('[data-component="select-all-banner"]') as HTMLElement;
+        expect(banner).toBeInTheDocument();
+        expect(within(banner).getByRole('button', { name: /select all 40 across all pages/i })).toBeInTheDocument();
+    });
+
+    it('bulk Forget across pages sends one filtered request, not a per-id delete', async () => {
+        const user = userEvent.setup();
+        const mockApiDelete = vi.mocked(apiDelete);
+        mockApiDelete.mockResolvedValue(undefined);
+        render(<DownloadsPage />, { wrapper: createTestWrapper(createTestQueryClient()) });
+
+        await selectWholePage(user);
+
+        const banner = document.querySelector('[data-component="select-all-banner"]') as HTMLElement;
+        await user.click(within(banner).getByRole('button', { name: /select all 40 across all pages/i }));
+
+        const bar = document.querySelector('[data-component="downloads-bulk-bar-queue"]') as HTMLElement;
+        await user.click(within(bar).getByRole('button', { name: /forget/i }));
+
+        const dialog = await screen.findByRole('dialog');
+        await user.click(within(dialog).getByRole('button', { name: /^forget$/i }));
+
+        await waitFor(() => expect(mockApiDelete).toHaveBeenCalledTimes(1));
+        const url = mockApiDelete.mock.calls[0][0] as string;
+        expect(url).toContain('/downloads?');
+        expect(url).toContain('removeFromClient=false');
+        expect(mockApiDelete).not.toHaveBeenCalledWith('/downloads/dl-1');
+    });
+
+    it('keeps all-pages Start and Pause available when the current page does not support them', async () => {
+        const user = userEvent.setup();
+        setupApiGetWithLargeTotal([
+            {
+                id: 'unsupported-downloading',
+                downloadClientId: 'client-basic',
+                downloadClientName: 'Basic Client',
+                externalId: 'basic-downloading',
+                title: 'Unsupported Downloading',
+                status: 'Downloading',
+                canPause: false,
+                canResume: false,
+                createdAt: '2024-01-15T10:00:00Z',
+            },
+            {
+                id: 'unsupported-paused',
+                downloadClientId: 'client-basic',
+                downloadClientName: 'Basic Client',
+                externalId: 'basic-paused',
+                title: 'Unsupported Paused',
+                status: 'Paused',
+                canPause: false,
+                canResume: false,
+                createdAt: '2024-01-15T10:01:00Z',
+            },
+        ]);
+        render(<DownloadsPage />, { wrapper: createTestWrapper(createTestQueryClient()) });
+
+        await selectWholePage(user, 'Unsupported Downloading');
+
+        const banner = document.querySelector('[data-component="select-all-banner"]') as HTMLElement;
+        await user.click(within(banner).getByRole('button', { name: /select all 40 across all pages/i }));
+
+        const bar = document.querySelector('[data-component="downloads-bulk-bar-queue"]') as HTMLElement;
+        expect(within(bar).getByRole('button', { name: /^start$/i })).toBeEnabled();
+        expect(within(bar).getByRole('button', { name: /^pause$/i })).toBeEnabled();
+    });
+
+    it.each([
+        { action: 'Start', button: /^start$/i, emptyTitle: 'No downloads started', successTitle: 'Downloads resumed' },
+        { action: 'Pause', button: /^pause$/i, emptyTitle: 'No downloads paused', successTitle: 'Downloads paused' },
+    ])('does not report all-pages $action as successful when the backend affects no rows', async (config) => {
+        const user = userEvent.setup();
+        const mockApiPost = vi.mocked(apiPost);
+        mockApiPost.mockResolvedValue({ affected: 0 });
+        render(<DownloadsPage />, { wrapper: createTestWrapper(createTestQueryClient()) });
+
+        await selectWholePage(user);
+
+        const banner = document.querySelector('[data-component="select-all-banner"]') as HTMLElement;
+        await user.click(within(banner).getByRole('button', { name: /select all 40 across all pages/i }));
+
+        const bar = document.querySelector('[data-component="downloads-bulk-bar-queue"]') as HTMLElement;
+        await user.click(within(bar).getByRole('button', { name: config.button }));
+
+        await waitFor(() => expect(mockApiPost).toHaveBeenCalledTimes(1));
+        await waitFor(() => expect(screen.getByText(config.emptyTitle)).toBeInTheDocument());
+        expect(screen.queryByText(config.successTitle)).not.toBeInTheDocument();
+    });
+
+    it('excludes a hand-deselected row from the across-pages request', async () => {
+        const user = userEvent.setup();
+        const mockApiPost = vi.mocked(apiPost);
+        mockApiPost.mockResolvedValue(undefined);
+        render(<DownloadsPage />, { wrapper: createTestWrapper(createTestQueryClient()) });
+
+        await selectWholePage(user);
+
+        const banner = document.querySelector('[data-component="select-all-banner"]') as HTMLElement;
+        await user.click(within(banner).getByRole('button', { name: /select all 40 across all pages/i }));
+
+        await user.click(within(getTable()).getByRole('checkbox', { name: /select breaking bad/i }));
+
+        const bar = document.querySelector('[data-component="downloads-bulk-bar-queue"]') as HTMLElement;
+        await user.click(within(bar).getByRole('button', { name: /^stop$/i }));
+
+        await waitFor(() => expect(mockApiPost).toHaveBeenCalledTimes(1));
+        const url = mockApiPost.mock.calls[0][0] as string;
+        expect(url).toContain('/downloads/bulk/stop?');
+        expect(url).toContain('excludeIds=dl-1');
+    });
+});
+
+describe('DownloadsPage empty state', () => {
     beforeEach(() => {
         vi.clearAllMocks();
         mockUseExtensions.mockReturnValue(defaultExtensionContext);
         mockUseSlotExtensions.mockReturnValue(noExtensions);
     });
 
-    afterEach(() => {
-        vi.restoreAllMocks();
+    afterEach(() => vi.restoreAllMocks());
+
+    it('shows a loading skeleton (not the empty state) while the first load is in flight', async () => {
+        const resolvers: ((value: PagedDownloads) => void)[] = [];
+        vi.mocked(apiGet).mockImplementation((url: string) => {
+            if (url.startsWith('/downloads')) {
+                return new Promise<PagedDownloads>((resolve) => {
+                    resolvers.push(resolve);
+                });
+            }
+            if (url === '/download-clients') {
+                return Promise.resolve(mockApiClients);
+            }
+            return Promise.resolve([]);
+        });
+
+        const queryClient = createTestQueryClient();
+        render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
+
+        expect(await screen.findAllByTestId('downloads-page__loading')).not.toHaveLength(0);
+        expect(screen.queryByText('No active downloads')).not.toBeInTheDocument();
+
+        resolvers.forEach((resolve) => resolve({ items: [], pageNumber: 1, pageSize: 25, totalItems: 0 }));
+
+        await waitFor(() => {
+            expect(within(getTable()).getByText('No active downloads')).toBeInTheDocument();
+        });
     });
 
-    it('shows empty state when no downloads', async () => {
-        mockApiGet.mockImplementation((url: string) => {
+    it('shows the active empty state when there are no downloads', async () => {
+        vi.mocked(apiGet).mockImplementation((url: string) => {
             if (url.startsWith('/downloads')) {
                 return Promise.resolve({ items: [], pageNumber: 1, pageSize: 25, totalItems: 0 });
             }
@@ -1397,13 +2295,12 @@ describe('DownloadsPage empty state', () => {
         render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
 
         await waitFor(() => {
-            expect(screen.getByText('No active downloads')).toBeInTheDocument();
-            expect(screen.getByText('Downloads will appear here when items are grabbed')).toBeInTheDocument();
+            expect(within(getTable()).getByText('No active downloads')).toBeInTheDocument();
         });
     });
 
-    it('shows empty state icon as decorative', async () => {
-        mockApiGet.mockImplementation((url: string) => {
+    it('hides the column headers on the cold-start empty (no filters active)', async () => {
+        vi.mocked(apiGet).mockImplementation((url: string) => {
             if (url.startsWith('/downloads')) {
                 return Promise.resolve({ items: [], pageNumber: 1, pageSize: 25, totalItems: 0 });
             }
@@ -1417,10 +2314,96 @@ describe('DownloadsPage empty state', () => {
         render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
 
         await waitFor(() => {
-            expect(screen.getByText('No active downloads')).toBeInTheDocument();
+            expect(within(getTable()).getByText('No active downloads')).toBeInTheDocument();
+        });
+        expect(within(getTable()).queryByRole('button', { name: 'Filter by Status' })).not.toBeInTheDocument();
+    });
+
+    it('keeps the Status funnel live above the empty message when a status filter matches nothing', async () => {
+        const user = userEvent.setup();
+        vi.mocked(apiGet).mockImplementation((url: string) => {
+            if (url.startsWith('/downloads')) {
+                if (url.includes('status=Paused')) {
+                    return Promise.resolve({ items: [], pageNumber: 1, pageSize: 25, totalItems: 0 });
+                }
+                return Promise.resolve(respondDownloads(url));
+            }
+            if (url === '/download-clients') {
+                return Promise.resolve(mockApiClients);
+            }
+            return Promise.resolve([]);
         });
 
-        const emptyIcon = screen.getByTestId('empty-state__icon');
-        expect(emptyIcon).toHaveAttribute('aria-hidden', 'true');
+        const queryClient = createTestQueryClient();
+        render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
+
+        await waitFor(() => expect(within(getTable()).getByText('Breaking Bad')).toBeInTheDocument());
+
+        await user.click(within(getTable()).getByRole('button', { name: 'Filter by Status' }));
+        await user.click(await screen.findByRole('menuitemradio', { name: 'Paused' }));
+
+        await waitFor(() => {
+            expect(within(getTable()).getByText('No active downloads')).toBeInTheDocument();
+        });
+        expect(within(getTable()).getByRole('button', { name: /Status filtered, edit filter/i })).toBeInTheDocument();
+    });
+
+    it('does not render the bulk toolbar when there are no active downloads', async () => {
+        vi.mocked(apiGet).mockImplementation((url: string) => {
+            if (url.startsWith('/downloads')) {
+                return Promise.resolve({ items: [], pageNumber: 1, pageSize: 25, totalItems: 0 });
+            }
+            if (url === '/download-clients') {
+                return Promise.resolve(mockApiClients);
+            }
+            return Promise.resolve([]);
+        });
+
+        const queryClient = createTestQueryClient();
+        render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
+
+        await waitFor(() => {
+            expect(within(getTable()).getByText('No active downloads')).toBeInTheDocument();
+        });
+        expect(document.querySelector('[data-component="downloads-bulk-bar-queue"]')).not.toBeInTheDocument();
+    });
+
+    it('does not render the bulk toolbar when there is no download history', async () => {
+        const user = userEvent.setup();
+        vi.mocked(apiGet).mockImplementation((url: string) => {
+            if (url.startsWith('/downloads')) {
+                return Promise.resolve({ items: [], pageNumber: 1, pageSize: 25, totalItems: 0 });
+            }
+            if (url === '/download-clients') {
+                return Promise.resolve(mockApiClients);
+            }
+            return Promise.resolve([]);
+        });
+
+        const queryClient = createTestQueryClient();
+        render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
+
+        await user.click(screen.getByRole('tab', { name: /history/i }));
+
+        await waitFor(() => {
+            expect(within(getTable()).getByText('No download history')).toBeInTheDocument();
+        });
+        expect(document.querySelector('[data-component="downloads-bulk-bar-history"]')).not.toBeInTheDocument();
+    });
+
+    it('renders the bulk toolbar for each tab once rows are present', async () => {
+        const user = userEvent.setup();
+        setupApiGet();
+
+        const queryClient = createTestQueryClient();
+        render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
+
+        await waitFor(() => expect(within(getTable()).getByText('Breaking Bad')).toBeInTheDocument());
+        expect(document.querySelector('[data-component="downloads-bulk-bar-queue"]')).toBeInTheDocument();
+
+        await user.click(screen.getByRole('tab', { name: /history/i }));
+
+        await waitFor(() => expect(within(getTable()).getByText('The Bear')).toBeInTheDocument());
+        expect(document.querySelector('[data-component="downloads-bulk-bar-history"]')).toBeInTheDocument();
     });
 });

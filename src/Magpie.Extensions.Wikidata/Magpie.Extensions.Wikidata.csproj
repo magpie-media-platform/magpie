@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>netstandard2.1</TargetFramework>
+    <OutputType>Library</OutputType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="DynamicProxyGenAssembly2" />
+    <InternalsVisibleTo Include="Magpie.Test.Extensions.Wikidata" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Bcl.TimeProvider" />
+    <PackageReference Include="Microsoft.Extensions.Caching.Memory" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Http" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    <PackageReference Include="System.Text.Json" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Magpie.Sdk\Magpie.Sdk.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Assets\metadata-settings.js" LogicalName="Magpie.Extensions.Wikidata.Assets.metadata-settings.js" />
+    <EmbeddedResource Include="Assets\metadata-settings.html" LogicalName="Magpie.Extensions.Wikidata.Assets.metadata-settings.html" />
+    <EmbeddedResource Include="Assets\wikidata-settings.js" LogicalName="Magpie.Extensions.Wikidata.Assets.wikidata-settings.js" />
+  </ItemGroup>
+
+</Project>

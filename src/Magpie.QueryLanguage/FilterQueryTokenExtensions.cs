@@ -28,12 +28,7 @@ internal static class FilterQueryTokenExtensions
         return AttributeCache.TryGetValue(token, out var attr) ? attr.Text : null;
     }
 
-    public static TokenCategory? GetCategory(this FilterQueryToken token)
-    {
-        return AttributeCache.TryGetValue(token, out var attr) ? attr.Category : null;
-    }
-
-    internal static IReadOnlyList<(FilterQueryToken Token, string Text)> GetTokensByCategory(TokenCategory category)
+    internal static IReadOnlyList<(FilterQueryToken Token, string Text)> GetTokens(this TokenCategory category)
     {
         return AttributeCache
             .Where(kvp => kvp.Value.Category == category)

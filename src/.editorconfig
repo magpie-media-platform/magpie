@@ -66,7 +66,7 @@ dotnet_style_explicit_tuple_names = true:suggestion
 dotnet_style_namespace_match_folder = true:suggestion
 dotnet_style_null_propagation = true:suggestion
 dotnet_style_object_initializer = true:suggestion
-dotnet_style_operator_placement_when_wrapping = beginning_of_line
+dotnet_style_operator_placement_when_wrapping = end_of_line
 dotnet_style_prefer_auto_properties = true:suggestion
 dotnet_style_prefer_collection_expression = when_types_loosely_match:suggestion
 dotnet_style_prefer_compound_assignment = true:suggestion
@@ -92,9 +92,11 @@ dotnet_remove_unnecessary_suppression_exclusions = none
 [*.cs]
 
 # var preferences
-csharp_style_var_elsewhere = true:suggestion
-csharp_style_var_for_built_in_types = true:suggestion
-csharp_style_var_when_type_is_apparent = true:suggestion
+csharp_style_var_elsewhere = true:warning
+csharp_style_var_for_built_in_types = true:warning
+csharp_style_var_when_type_is_apparent = true:warning
+dotnet_diagnostic.IDE0007.severity = error
+dotnet_diagnostic.IDE0008.severity = error
 
 # Expression-bodied members
 csharp_style_expression_bodied_accessors = true:silent
@@ -125,11 +127,11 @@ csharp_style_prefer_readonly_struct = true:suggestion
 csharp_style_prefer_readonly_struct_member = true:suggestion
 
 # Code-block preferences
-csharp_prefer_braces = true:silent
+csharp_prefer_braces = true:warning
 csharp_prefer_simple_using_statement = true:suggestion
-csharp_style_namespace_declarations = file_scoped:suggestion
+csharp_style_namespace_declarations = file_scoped:warning
 csharp_style_prefer_method_group_conversion = true:silent
-csharp_style_prefer_primary_constructors = true:suggestion
+csharp_style_prefer_primary_constructors = true:warning
 csharp_style_prefer_top_level_statements = true:silent
 
 # Expression-level preferences
@@ -154,6 +156,150 @@ dotnet_diagnostic.IDE0005.severity = warning
 # Disable logging performance analyzers
 dotnet_diagnostic.CA1873.severity = none
 dotnet_diagnostic.CA1859.severity = none
+
+# House analyzers
+dotnet_diagnostic.CA2007.severity = warning
+dotnet_diagnostic.CA1727.severity = warning
+dotnet_diagnostic.CA2254.severity = warning
+dotnet_diagnostic.CA1852.severity = warning
+dotnet_diagnostic.CA2016.severity = warning
+dotnet_diagnostic.CA1849.severity = warning
+dotnet_diagnostic.CA2012.severity = warning
+dotnet_diagnostic.CA1305.severity = warning
+dotnet_diagnostic.CA1307.severity = none
+dotnet_diagnostic.CA1310.severity = warning
+dotnet_style_require_accessibility_modifiers = always:suggestion
+dotnet_diagnostic.IDE0040.severity = suggestion
+dotnet_diagnostic.MA0053.severity = warning
+MA0053.public_class_should_be_sealed = false
+MA0053.class_with_virtual_member_should_be_sealed = false
+MA0053.exceptions_should_be_sealed = false
+dotnet_diagnostic.RS0030.severity = warning
+dotnet_diagnostic.RCS0056.severity = warning
+roslynator_max_line_length = 120
+
+# StyleCop analyzers
+dotnet_analyzer_diagnostic.category-StyleCop.CSharp.DocumentationRules.severity = none
+dotnet_analyzer_diagnostic.category-StyleCop.CSharp.LayoutRules.severity = none
+dotnet_analyzer_diagnostic.category-StyleCop.CSharp.MaintainabilityRules.severity = none
+dotnet_analyzer_diagnostic.category-StyleCop.CSharp.NamingRules.severity = none
+dotnet_analyzer_diagnostic.category-StyleCop.CSharp.OrderingRules.severity = none
+dotnet_analyzer_diagnostic.category-StyleCop.CSharp.ReadabilityRules.severity = none
+dotnet_analyzer_diagnostic.category-StyleCop.CSharp.SpacingRules.severity = none
+dotnet_analyzer_diagnostic.category-StyleCop.CSharp.SpecialRules.severity = none
+dotnet_diagnostic.SA0001.severity = none
+dotnet_diagnostic.SA1201.severity = warning
+dotnet_diagnostic.SA1204.severity = warning
+dotnet_diagnostic.SA1402.severity = warning
+dotnet_diagnostic.SA1649.severity = warning
+
+# NUnit assertion rules
+dotnet_diagnostic.NUnit1032.severity = warning
+dotnet_diagnostic.NUnit2001.severity = warning
+dotnet_diagnostic.NUnit2002.severity = warning
+dotnet_diagnostic.NUnit2003.severity = warning
+dotnet_diagnostic.NUnit2004.severity = warning
+dotnet_diagnostic.NUnit2005.severity = warning
+dotnet_diagnostic.NUnit2006.severity = warning
+dotnet_diagnostic.NUnit2010.severity = warning
+dotnet_diagnostic.NUnit2011.severity = warning
+dotnet_diagnostic.NUnit2012.severity = warning
+dotnet_diagnostic.NUnit2013.severity = warning
+dotnet_diagnostic.NUnit2014.severity = warning
+dotnet_diagnostic.NUnit2015.severity = warning
+dotnet_diagnostic.NUnit2016.severity = warning
+dotnet_diagnostic.NUnit2017.severity = warning
+dotnet_diagnostic.NUnit2018.severity = warning
+dotnet_diagnostic.NUnit2019.severity = warning
+dotnet_diagnostic.NUnit2027.severity = warning
+dotnet_diagnostic.NUnit2028.severity = warning
+dotnet_diagnostic.NUnit2029.severity = warning
+dotnet_diagnostic.NUnit2030.severity = warning
+dotnet_diagnostic.NUnit2031.severity = warning
+dotnet_diagnostic.NUnit2032.severity = warning
+dotnet_diagnostic.NUnit2033.severity = warning
+dotnet_diagnostic.NUnit2034.severity = warning
+dotnet_diagnostic.NUnit2035.severity = warning
+dotnet_diagnostic.NUnit2036.severity = warning
+dotnet_diagnostic.NUnit2037.severity = warning
+dotnet_diagnostic.NUnit2038.severity = warning
+dotnet_diagnostic.NUnit2039.severity = warning
+dotnet_diagnostic.NUnit2043.severity = warning
+dotnet_diagnostic.NUnit2045.severity = warning
+dotnet_diagnostic.NUnit2046.severity = warning
+dotnet_diagnostic.NUnit2048.severity = warning
+dotnet_diagnostic.NUnit2049.severity = warning
+dotnet_diagnostic.NUnit2051.severity = warning
+dotnet_diagnostic.NUnit2052.severity = warning
+dotnet_diagnostic.NUnit2053.severity = warning
+dotnet_diagnostic.NUnit2054.severity = warning
+
+# House style rules, verified auto-fixable by dotnet format.
+# Rules whose only fixer produces the wrong shape are deliberately absent:
+# SA1117 (no fixer at all) and IDE2006 (fixer pulls the expression onto the
+# arrow line instead of converting to a block body).
+
+# spacing
+dotnet_diagnostic.IDE0055.severity = warning
+dotnet_diagnostic.SA1000.severity = warning
+dotnet_diagnostic.SA1003.severity = warning
+dotnet_diagnostic.SA1010.severity = warning
+dotnet_diagnostic.SA1028.severity = warning
+
+# blank lines
+dotnet_style_allow_multiple_blank_lines_experimental = false
+dotnet_style_allow_statement_immediately_after_block_experimental = false
+dotnet_diagnostic.IDE2000.severity = warning
+dotnet_diagnostic.IDE2003.severity = warning
+dotnet_diagnostic.SA1505.severity = warning
+dotnet_diagnostic.SA1508.severity = warning
+dotnet_diagnostic.SA1515.severity = warning
+dotnet_diagnostic.RCS0010.severity = warning
+
+# trailing binary operators
+roslynator_binary_operator_new_line = after
+dotnet_diagnostic.RCS0027.severity = warning
+
+# One indent level per wrap and all-or-none argument lists stay OFF.
+# RCS0053/RCS0055 and SA1137 fight the Roslyn formatter: their code fixes and
+# IDE0055's undo each other, and the violation count grows on every pass
+# (IDE0055 measured 392 -> 0 -> 830 across one whitespace then one analyzer
+# pass). Enforcing these means giving up IDE0055, so they are prose-only.
+dotnet_diagnostic.RCS0053.severity = none
+dotnet_diagnostic.RCS0055.severity = none
+
+# bracket placement when wrapping
+dotnet_diagnostic.SA1009.severity = warning
+dotnet_diagnostic.SA1110.severity = warning
+dotnet_diagnostic.SA1111.severity = warning
+dotnet_diagnostic.SA1112.severity = warning
+dotnet_diagnostic.SA1113.severity = warning
+# SA1137 oscillates with IDE0055 the same way RCS0053 does. Off.
+dotnet_diagnostic.SA1137.severity = none
+
+# target-typed construction.
+# IDE0028 stays OFF: under LangVersion=preview its fixer rewrites new(arg) into
+# the unshipped collection-expression-arguments syntax [with(arg)], which does
+# not compile.
+dotnet_diagnostic.IDE0028.severity = none
+dotnet_diagnostic.IDE0090.severity = warning
+dotnet_diagnostic.IDE0300.severity = warning
+dotnet_diagnostic.IDE0301.severity = warning
+
+# pattern matching over chained equality
+dotnet_diagnostic.IDE0078.severity = warning
+
+# These enforce the OPPOSITE of house style. Pinned so a bulk enable cannot
+# silently invert a rule.
+dotnet_diagnostic.MA0002.severity = none
+dotnet_diagnostic.MA0006.severity = none
+dotnet_diagnostic.MA0148.severity = none
+dotnet_diagnostic.RCS0021.severity = none
+dotnet_diagnostic.RCS0032.severity = none
+dotnet_diagnostic.RCS0048.severity = none
+dotnet_diagnostic.SA1025.severity = none
+dotnet_diagnostic.SA1118.severity = none
+dotnet_diagnostic.SA1413.severity = none
 
 #### C# Formatting Rules ####
 
@@ -203,83 +349,89 @@ csharp_preserve_single_line_blocks = true
 csharp_preserve_single_line_statements = true
 
 #### Naming styles ####
+
 [*.{cs,vb}]
 
 # Naming rules
+dotnet_diagnostic.IDE1006.severity = warning
 
-dotnet_naming_rule.types_and_namespaces_should_be_pascalcase.severity = suggestion
+dotnet_naming_rule.types_and_namespaces_should_be_pascalcase.severity = warning
 dotnet_naming_rule.types_and_namespaces_should_be_pascalcase.symbols = types_and_namespaces
 dotnet_naming_rule.types_and_namespaces_should_be_pascalcase.style = pascalcase
 
-dotnet_naming_rule.interfaces_should_be_ipascalcase.severity = suggestion
+dotnet_naming_rule.interfaces_should_be_ipascalcase.severity = warning
 dotnet_naming_rule.interfaces_should_be_ipascalcase.symbols = interfaces
 dotnet_naming_rule.interfaces_should_be_ipascalcase.style = ipascalcase
 
-dotnet_naming_rule.type_parameters_should_be_tpascalcase.severity = suggestion
+dotnet_naming_rule.type_parameters_should_be_tpascalcase.severity = warning
 dotnet_naming_rule.type_parameters_should_be_tpascalcase.symbols = type_parameters
 dotnet_naming_rule.type_parameters_should_be_tpascalcase.style = tpascalcase
 
-dotnet_naming_rule.methods_should_be_pascalcase.severity = suggestion
+dotnet_naming_rule.methods_should_be_pascalcase.severity = warning
 dotnet_naming_rule.methods_should_be_pascalcase.symbols = methods
 dotnet_naming_rule.methods_should_be_pascalcase.style = pascalcase
 
-dotnet_naming_rule.properties_should_be_pascalcase.severity = suggestion
+dotnet_naming_rule.async_methods_should_have_async_suffix.severity = warning
+dotnet_naming_rule.async_methods_should_have_async_suffix.symbols = async_methods
+dotnet_naming_rule.async_methods_should_have_async_suffix.style = async_pascalcase
+
+dotnet_naming_rule.properties_should_be_pascalcase.severity = warning
 dotnet_naming_rule.properties_should_be_pascalcase.symbols = properties
 dotnet_naming_rule.properties_should_be_pascalcase.style = pascalcase
 
-dotnet_naming_rule.events_should_be_pascalcase.severity = suggestion
+dotnet_naming_rule.events_should_be_pascalcase.severity = warning
 dotnet_naming_rule.events_should_be_pascalcase.symbols = events
 dotnet_naming_rule.events_should_be_pascalcase.style = pascalcase
 
-dotnet_naming_rule.local_variables_should_be_camelcase.severity = suggestion
+dotnet_naming_rule.local_variables_should_be_camelcase.severity = warning
 dotnet_naming_rule.local_variables_should_be_camelcase.symbols = local_variables
 dotnet_naming_rule.local_variables_should_be_camelcase.style = camelcase
 
-dotnet_naming_rule.local_constants_should_be_camelcase.severity = suggestion
+dotnet_naming_rule.local_constants_should_be_camelcase.severity = warning
 dotnet_naming_rule.local_constants_should_be_camelcase.symbols = local_constants
 dotnet_naming_rule.local_constants_should_be_camelcase.style = camelcase
 
-dotnet_naming_rule.parameters_should_be_camelcase.severity = suggestion
+dotnet_naming_rule.parameters_should_be_camelcase.severity = warning
 dotnet_naming_rule.parameters_should_be_camelcase.symbols = parameters
 dotnet_naming_rule.parameters_should_be_camelcase.style = camelcase
 
-dotnet_naming_rule.public_fields_should_be_pascalcase.severity = suggestion
+dotnet_naming_rule.public_fields_should_be_pascalcase.severity = warning
 dotnet_naming_rule.public_fields_should_be_pascalcase.symbols = public_fields
 dotnet_naming_rule.public_fields_should_be_pascalcase.style = pascalcase
 
-dotnet_naming_rule.private_fields_should_be__camelcase.severity = suggestion
+dotnet_naming_rule.private_fields_should_be__camelcase.severity = warning
 dotnet_naming_rule.private_fields_should_be__camelcase.symbols = private_fields
 dotnet_naming_rule.private_fields_should_be__camelcase.style = _camelcase
 
-dotnet_naming_rule.private_static_fields_should_be_s_camelcase.severity = suggestion
+dotnet_naming_rule.private_static_fields_should_be_s_camelcase.severity = warning
 dotnet_naming_rule.private_static_fields_should_be_s_camelcase.symbols = private_static_fields
 dotnet_naming_rule.private_static_fields_should_be_s_camelcase.style = _camelcase
 
-dotnet_naming_rule.public_constant_fields_should_be_pascalcase.severity = suggestion
+dotnet_naming_rule.public_constant_fields_should_be_pascalcase.severity = warning
 dotnet_naming_rule.public_constant_fields_should_be_pascalcase.symbols = public_constant_fields
 dotnet_naming_rule.public_constant_fields_should_be_pascalcase.style = pascalcase
 
-dotnet_naming_rule.private_constant_fields_should_be_pascalcase.severity = suggestion
+dotnet_naming_rule.private_constant_fields_should_be_pascalcase.severity = warning
 dotnet_naming_rule.private_constant_fields_should_be_pascalcase.symbols = private_constant_fields
 dotnet_naming_rule.private_constant_fields_should_be_pascalcase.style = pascalcase
 
-dotnet_naming_rule.public_static_readonly_fields_should_be_pascalcase.severity = suggestion
+dotnet_naming_rule.public_static_readonly_fields_should_be_pascalcase.severity = warning
 dotnet_naming_rule.public_static_readonly_fields_should_be_pascalcase.symbols = public_static_readonly_fields
 dotnet_naming_rule.public_static_readonly_fields_should_be_pascalcase.style = pascalcase
 
-dotnet_naming_rule.private_static_readonly_fields_should_be_pascalcase.severity = suggestion
+dotnet_naming_rule.private_static_readonly_fields_should_be_pascalcase.severity = warning
 dotnet_naming_rule.private_static_readonly_fields_should_be_pascalcase.symbols = private_static_readonly_fields
 dotnet_naming_rule.private_static_readonly_fields_should_be_pascalcase.style = pascalcase
 
-dotnet_naming_rule.enums_should_be_pascalcase.severity = suggestion
+dotnet_naming_rule.enums_should_be_pascalcase.severity = warning
 dotnet_naming_rule.enums_should_be_pascalcase.symbols = enums
 dotnet_naming_rule.enums_should_be_pascalcase.style = pascalcase
 
-dotnet_naming_rule.local_functions_should_be_pascalcase.severity = suggestion
+dotnet_naming_rule.local_functions_should_be_pascalcase.severity = warning
 dotnet_naming_rule.local_functions_should_be_pascalcase.symbols = local_functions
 dotnet_naming_rule.local_functions_should_be_pascalcase.style = pascalcase
 
-dotnet_naming_rule.non_field_members_should_be_pascalcase.severity = suggestion
+dotnet_naming_rule.non_field_members_should_be_pascalcase.severity = warning
 dotnet_naming_rule.non_field_members_should_be_pascalcase.symbols = non_field_members
 dotnet_naming_rule.non_field_members_should_be_pascalcase.style = pascalcase
 
@@ -300,6 +452,10 @@ dotnet_naming_symbols.events.required_modifiers =
 dotnet_naming_symbols.methods.applicable_kinds = method
 dotnet_naming_symbols.methods.applicable_accessibilities = public, internal, private, protected, protected_internal, private_protected
 dotnet_naming_symbols.methods.required_modifiers = 
+
+dotnet_naming_symbols.async_methods.applicable_kinds = method
+dotnet_naming_symbols.async_methods.applicable_accessibilities = public, internal, private, protected, protected_internal, private_protected
+dotnet_naming_symbols.async_methods.required_modifiers = async
 
 dotnet_naming_symbols.properties.applicable_kinds = property
 dotnet_naming_symbols.properties.applicable_accessibilities = public, internal, private, protected, protected_internal, private_protected
@@ -325,7 +481,7 @@ dotnet_naming_symbols.non_field_members.applicable_kinds = property, event, meth
 dotnet_naming_symbols.non_field_members.applicable_accessibilities = public, internal, private, protected, protected_internal, private_protected
 dotnet_naming_symbols.non_field_members.required_modifiers = 
 
-dotnet_naming_symbols.type_parameters.applicable_kinds = namespace
+dotnet_naming_symbols.type_parameters.applicable_kinds = type_parameter
 dotnet_naming_symbols.type_parameters.applicable_accessibilities = *
 dotnet_naming_symbols.type_parameters.required_modifiers = 
 
@@ -368,6 +524,11 @@ dotnet_naming_style.pascalcase.required_suffix =
 dotnet_naming_style.pascalcase.word_separator = 
 dotnet_naming_style.pascalcase.capitalization = pascal_case
 
+dotnet_naming_style.async_pascalcase.required_prefix =
+dotnet_naming_style.async_pascalcase.required_suffix = Async
+dotnet_naming_style.async_pascalcase.word_separator =
+dotnet_naming_style.async_pascalcase.capitalization = pascal_case
+
 dotnet_naming_style.ipascalcase.required_prefix = I
 dotnet_naming_style.ipascalcase.required_suffix = 
 dotnet_naming_style.ipascalcase.word_separator = 
@@ -392,4 +553,3 @@ dotnet_naming_style.s_camelcase.required_prefix = s_
 dotnet_naming_style.s_camelcase.required_suffix = 
 dotnet_naming_style.s_camelcase.word_separator = 
 dotnet_naming_style.s_camelcase.capitalization = camel_case
-

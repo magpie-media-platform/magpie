@@ -1,14 +1,16 @@
-/* eslint-disable react-refresh/only-export-components */
 import {
     createContext,
     forwardRef,
     useCallback,
     useContext,
     useEffect,
+    useMemo,
     useRef,
     useState,
     type ComponentPropsWithoutRef,
 } from 'react';
+
+import { Button } from '../Button';
 
 import './Shell.css';
 
@@ -71,26 +73,26 @@ const Shell = forwardRef<HTMLDivElement, ShellProps>(
         }, []);
 
         const toggleSidebarCollapsed = useCallback(() => {
-            setInternalCollapsed((prev) => {
-                const next = !prev;
-                onSidebarCollapsedChange?.(next);
-                return next;
-            });
-        }, [onSidebarCollapsedChange]);
+            const next = !sidebarCollapsed;
+            setInternalCollapsed(next);
+            onSidebarCollapsedChange?.(next);
+        }, [sidebarCollapsed, onSidebarCollapsedChange]);
 
         const classes = [classPrefix, className].filter(Boolean).join(' ');
+        const contextValue = useMemo<ShellContextValue>(
+            () => ({
+                sidebarOpen,
+                setSidebarOpen,
+                sidebarCollapsed,
+                setSidebarCollapsed,
+                toggleSidebarOpen,
+                toggleSidebarCollapsed,
+            }),
+            [sidebarOpen, sidebarCollapsed, setSidebarCollapsed, toggleSidebarOpen, toggleSidebarCollapsed],
+        );
 
         return (
-            <ShellContext.Provider
-                value={{
-                    sidebarOpen,
-                    setSidebarOpen,
-                    sidebarCollapsed,
-                    setSidebarCollapsed,
-                    toggleSidebarOpen,
-                    toggleSidebarCollapsed,
-                }}
-            >
+            <ShellContext.Provider value={contextValue}>
                 <div
                     ref={ref}
                     className={classes}
@@ -140,11 +142,11 @@ const ShellHeader = forwardRef<HTMLDivElement, ShellHeaderProps>(
         return (
             <div
                 ref={(node) => {
-                    (innerRef as React.MutableRefObject<HTMLDivElement | null>).current = node;
+                    (innerRef as React.RefObject<HTMLDivElement | null>).current = node;
                     if (typeof ref === 'function') {
                         ref(node);
                     } else if (ref) {
-                        (ref as React.MutableRefObject<HTMLDivElement | null>).current = node;
+                        (ref as React.RefObject<HTMLDivElement | null>).current = node;
                     }
                 }}
                 className={classes}
@@ -171,12 +173,114 @@ const ShellSidebar = forwardRef<HTMLElement, ShellSidebarProps>(
             navId = 'navigation-menu',
             classPrefix = 'shell',
             children,
+            onKeyDown,
             ...props
         },
         ref,
     ) => {
         const { sidebarOpen, setSidebarOpen, sidebarCollapsed } = useShellContext();
         const classes = [`${classPrefix}__sidebar`, className].filter(Boolean).join(' ');
+        const navRef = useRef<HTMLElement | null>(null);
+        const invocationTargetRef = useRef<HTMLElement | null>(null);
+        const [isMobile, setIsMobile] = useState(
+            () => typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches,
+        );
+
+        useEffect(() => {
+            const query = window.matchMedia('(max-width: 767px)');
+            const handleChange = (event: MediaQueryListEvent) => setIsMobile(event.matches);
+            setIsMobile(query.matches);
+            query.addEventListener('change', handleChange);
+            return () => query.removeEventListener('change', handleChange);
+        }, []);
+
+        useEffect(() => {
+            if (!sidebarOpen || !isMobile) {
+                return;
+            }
+
+            const nav = navRef.current;
+            if (!nav) {
+                return;
+            }
+
+            invocationTargetRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+            const shell = nav.closest<HTMLElement>(`.${classPrefix}`);
+            const background = shell
+                ? Array.from(
+                      shell.querySelectorAll<HTMLElement>(
+                          `[data-component="${classPrefix}-header"], ` +
+                              `[data-component="${classPrefix}-main"], ` +
+                              `[data-component="${classPrefix}-bottom-nav"]`,
+                      ),
+                  )
+                : [];
+            const previousOverflow = document.body.style.overflow;
+
+            for (const element of background) {
+                element.inert = true;
+            }
+            document.body.style.overflow = 'hidden';
+
+            const firstFocusable = nav.querySelector<HTMLElement>(
+                'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), ' +
+                    'textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+            );
+            (firstFocusable ?? nav).focus();
+
+            const handleEscape = (event: globalThis.KeyboardEvent) => {
+                if (event.key === 'Escape') {
+                    event.preventDefault();
+                    setSidebarOpen(false);
+                }
+            };
+            document.addEventListener('keydown', handleEscape);
+
+            return () => {
+                document.removeEventListener('keydown', handleEscape);
+                for (const element of background) {
+                    element.inert = false;
+                }
+                document.body.style.overflow = previousOverflow;
+                if (invocationTargetRef.current?.isConnected) {
+                    invocationTargetRef.current.focus();
+                }
+                invocationTargetRef.current = null;
+            };
+        }, [classPrefix, isMobile, setSidebarOpen, sidebarOpen]);
+
+        const handleKeyDown: ComponentPropsWithoutRef<'nav'>['onKeyDown'] = (event) => {
+            onKeyDown?.(event);
+            if (event.defaultPrevented || !sidebarOpen || !isMobile || event.key !== 'Tab') {
+                return;
+            }
+
+            const nav = navRef.current;
+            if (!nav) {
+                return;
+            }
+            const focusable = Array.from(
+                nav.querySelectorAll<HTMLElement>(
+                    'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), ' +
+                        'textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+                ),
+            );
+            if (focusable.length === 0) {
+                event.preventDefault();
+                nav.focus();
+                return;
+            }
+
+            const first = focusable[0];
+            const last = focusable[focusable.length - 1];
+            if (event.shiftKey && document.activeElement === first) {
+                event.preventDefault();
+                last.focus();
+            } else if (!event.shiftKey && document.activeElement === last) {
+                event.preventDefault();
+                first.focus();
+            }
+        };
 
         return (
             <>
@@ -187,7 +291,14 @@ const ShellSidebar = forwardRef<HTMLElement, ShellSidebarProps>(
                     aria-hidden="true"
                 />
                 <nav
-                    ref={ref}
+                    ref={(node) => {
+                        navRef.current = node;
+                        if (typeof ref === 'function') {
+                            ref(node);
+                        } else if (ref) {
+                            ref.current = node;
+                        }
+                    }}
                     className={classes}
                     data-component={`${classPrefix}-sidebar`}
                     id={navId}
@@ -195,7 +306,21 @@ const ShellSidebar = forwardRef<HTMLElement, ShellSidebarProps>(
                     data-open={sidebarOpen}
                     data-collapsed={sidebarCollapsed}
                     {...props}
+                    role={isMobile && sidebarOpen ? 'dialog' : undefined}
+                    aria-modal={isMobile && sidebarOpen ? true : undefined}
+                    tabIndex={isMobile && sidebarOpen ? -1 : undefined}
+                    onKeyDown={handleKeyDown}
                 >
+                    {isMobile && sidebarOpen && (
+                        <Button
+                            variant="ghost"
+                            size="md"
+                            className={`${classPrefix}__sidebar-close`}
+                            onClick={() => setSidebarOpen(false)}
+                        >
+                            Collapse sidebar
+                        </Button>
+                    )}
                     {children}
                 </nav>
             </>

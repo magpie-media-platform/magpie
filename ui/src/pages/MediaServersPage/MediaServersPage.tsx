@@ -1,14 +1,20 @@
-import { useState, useMemo, useCallback, useRef } from 'react';
-import { useSearchParams } from 'react-router-dom';
-import { Television, Trash, PencilSimple, Clock, Power, Plus } from '@phosphor-icons/react';
+import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
+import { TelevisionIcon, PlusIcon, WarningCircleIcon } from '@phosphor-icons/react';
+import { type ColumnDef, type SortingState } from '@tanstack/react-table';
 
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
+import { ClearFiltersButton } from '@/components/ui/ClearFiltersButton';
+import { ColumnHeaderFilter, type FacetOption } from '@/components/ui/ColumnHeaderFilter';
+import { DataTable } from '@/components/ui/DataTable';
+import { EmptyState } from '@/components/ui/EmptyState';
+import { Pager } from '@/components/ui/Pager';
+import { MultiSelectColumnFilter, encodeMultiValue, decodeMultiValue } from '@/components/ui/MultiSelectColumnFilter';
+import { PageHeader } from '@/components/ui/PageHeader';
 import { QuickActionsButton, type QuickAction } from '@/components/ui/QuickActionsButton';
-import { Switch } from '@/components/ui/Switch';
 import { PullToRefresh } from '@/components/ui/PullToRefresh';
-import { Tooltip } from '@/components/ui/Tooltip';
-import { Select, SelectTrigger, SelectContent, SelectItem } from '@/components/ui/Select';
+import { IntegrationEmptyState } from '@/components/integrations/IntegrationEmptyState';
+import { IntegrationRowActions } from '@/components/integrations/IntegrationRowActions';
 import { useToast } from '@/components/ui/Toast';
 import {
     useMediaServers,
@@ -17,21 +23,27 @@ import {
     mediaServerStatusLabels,
     mediaServerStatusVariants,
 } from '@/hooks/useMediaServers';
-import { useTestMediaServer } from '@/hooks/useTestConnection';
+import {
+    useTestMediaServer,
+    useTestMediaServerSettings,
+    type IntegrationSettingsTestRequest,
+} from '@/hooks/useTestConnection';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { useToggle } from '@/hooks/useToggle';
+import { useUrlTableState } from '@/hooks/useUrlTableState';
+import { isAbortError } from '@/lib/api';
+import { getErrorMessage } from '@/lib/errors';
 import { formatRelativeTime } from '@/lib/formatTime';
+import { buildSettingsPatch, toStringSettings } from '@/lib/integrationSettings';
 import { mapStatusParam } from '@/lib/urlParams';
 
 import { DeleteConfirmDialog } from '@/components/ui/DeleteConfirmDialog/DeleteConfirmDialog';
-import { EmptyState } from '@/components/ui/EmptyState';
-import { MediaServerForm, type MediaServerFormValues } from './MediaServerForm';
+import { MediaServerForm, type MediaServerFormValues } from '@/components/configuration/MediaServerForm';
 
 import './MediaServersPage.css';
 import '@/styles/card-actions.css';
-import '@/styles/list-toolbar.css';
 
-export interface MediaServerItem {
+interface MediaServerItem {
     id: string;
     name: string;
     provider: string;
@@ -41,14 +53,6 @@ export interface MediaServerItem {
     settings: Record<string, string | number | boolean | undefined>;
     createdAt: string;
 }
-
-interface ServerFilterState {
-    status: string;
-
-    enabled: string;
-}
-
-const ALL_VALUE = '__all__';
 
 function transformServer(server: ApiMediaServer): MediaServerItem {
     return {
@@ -63,38 +67,48 @@ function transformServer(server: ApiMediaServer): MediaServerItem {
     };
 }
 
-const statusOptions = [
-    { value: 'all', label: 'All Status' },
-    { value: '0', label: 'Unknown' },
-    { value: '1', label: 'Healthy' },
-    { value: '2', label: 'Unhealthy' },
-    { value: '3', label: 'Stale' },
-];
+function toMediaServerFormValues(server: MediaServerItem): MediaServerFormValues {
+    return {
+        id: server.id,
+        name: server.name,
+        provider: server.provider,
+        enabled: server.enabled,
+        settings: server.settings,
+    };
+}
 
-const enabledOptions = [
-    { value: 'all', label: 'All Enabled' },
+const PAGE_SIZE = 25;
+
+const DEFAULT_SORTING: SortingState = [{ id: 'name', desc: false }];
+
+const SORT_KEYS = ['name', 'provider', 'status', 'enabled', 'checked'] as const;
+
+const DEFAULT_FILTERS = { provider: '', status: '', enabled: '' };
+
+const enabledOptions: FacetOption[] = [
     { value: 'true', label: 'Enabled' },
     { value: 'false', label: 'Disabled' },
 ];
 
-const initialFilters: ServerFilterState = { status: '', enabled: '' };
-
 export function MediaServersPage() {
     useDocumentTitle('Media Servers');
-    const [searchParams] = useSearchParams();
 
-    const [filters, setFilters] = useState<ServerFilterState>(() => {
-        const statusParam = searchParams.get('status');
-        return {
-            status: mapStatusParam(statusParam),
-            enabled: '',
-        };
+    const { sorting, filters, page, setSorting, setFilters, setPage } = useUrlTableState({
+        defaultSort: DEFAULT_SORTING,
+        defaultFilters: DEFAULT_FILTERS,
+        sortKeys: SORT_KEYS,
     });
+
+    const provider = useMemo(() => decodeMultiValue(filters.provider), [filters.provider]);
+    const status = useMemo(() => mapStatusParam(filters.status), [filters.status]);
+    const enabled = filters.enabled;
+
     const [formOpen, , openForm, closeForm] = useToggle();
     const returnFocusRef = useRef<HTMLElement | null>(null);
     const [editingServer, setEditingServer] = useState<MediaServerFormValues | null>(null);
     const [deletingServer, setDeletingServer] = useState<MediaServerItem | null>(null);
     const [isDeleting, setIsDeleting] = useState(false);
+    const [testingId, setTestingId] = useState<string | null>(null);
     const { toast } = useToast();
 
     const {
@@ -105,65 +119,70 @@ export function MediaServersPage() {
         deleteServer,
         isCreating,
         isUpdating,
+        isLoading,
+        error,
         refetch,
     } = useMediaServers();
 
-    const { test: testServer, isPending: isTesting } = useTestMediaServer();
+    const { test: testServer } = useTestMediaServer();
+    const {
+        test: testServerSettings,
+        cancel: cancelTestServerSettings,
+        isPending: isTestingSettings,
+    } = useTestMediaServerSettings();
+    const testClosedRef = useRef(false);
+
+    useEffect(() => () => cancelTestServerSettings(), [cancelTestServerSettings]);
 
     const servers = useMemo(() => apiServers.map(transformServer), [apiServers]);
+    const currentEditingServer = useMemo(() => {
+        if (!editingServer?.id) {
+            return editingServer;
+        }
+        const server = servers.find((candidate) => candidate.id === editingServer.id);
+        return server ? toMediaServerFormValues(server) : editingServer;
+    }, [editingServer, servers]);
 
     const filteredServers = useMemo(() => {
-        let items = [...servers];
+        return servers.filter((s) => {
+            if (provider.length > 0 && !provider.includes(s.provider)) {
+                return false;
+            }
+            if (status && s.status !== status) {
+                return false;
+            }
+            if (enabled && s.enabled !== (enabled === 'true')) {
+                return false;
+            }
+            return true;
+        });
+    }, [servers, provider, status, enabled]);
 
-        if (filters.status) {
-            items = items.filter((s) => s.status === Number(filters.status));
-        }
+    const providerOptions = useMemo(() => [...new Set(servers.map((s) => s.provider))].sort(), [servers]);
+    const statusOptions = useMemo<FacetOption[]>(() => {
+        const present = [...new Set(servers.map((s) => s.status))];
+        return present.map((s) => ({ value: s, label: mediaServerStatusLabels[s] }));
+    }, [servers]);
 
-        if (filters.enabled) {
-            items = items.filter((s) => s.enabled === (filters.enabled === 'true'));
-        }
-
-        return items;
-    }, [servers, filters]);
-
-    const statusCounts = useMemo(
-        () => ({
-            unknown: servers.filter((s) => s.status === 0).length,
-            healthy: servers.filter((s) => s.status === 1).length,
-            unhealthy: servers.filter((s) => s.status === 2).length,
-            stale: servers.filter((s) => s.status === 3).length,
-        }),
-        [servers],
+    const setMulti = useCallback(
+        (key: 'provider', next: string[]) => {
+            setFilters({ [key]: encodeMultiValue(next) });
+        },
+        [setFilters],
     );
 
-    const totalServers = servers.length;
-
-    const handleStatusChange = useCallback((value: string) => {
-        setFilters((prev) => ({
-            ...prev,
-            status: value === ALL_VALUE ? '' : value,
-        }));
-    }, []);
-
-    const handleEnabledChange = useCallback((value: string) => {
-        setFilters((prev) => ({
-            ...prev,
-            enabled: value === ALL_VALUE ? '' : value,
-        }));
-    }, []);
-
     const handleClearFilters = useCallback(() => {
-        setFilters(initialFilters);
-    }, []);
+        setFilters({ provider: '', status: '', enabled: '' });
+    }, [setFilters]);
 
     const handleToggleServerEnabled = useCallback(
-        async (id: string, enabled: boolean) => {
+        async (id: string, isEnabled: boolean) => {
             try {
-                await toggleServerEnabled(id, enabled);
-            } catch {
+                await toggleServerEnabled(id, isEnabled);
+            } catch (error) {
                 toast({
                     title: 'Error',
-                    description: `Failed to ${enabled ? 'enable' : 'disable'} server`,
+                    description: getErrorMessage(error, `Failed to ${isEnabled ? 'enable' : 'disable'} server`),
                     variant: 'error',
                 });
             }
@@ -175,6 +194,7 @@ export function MediaServersPage() {
         async (id: string) => {
             const server = servers.find((s) => s.id === id);
             const name = server?.name ?? 'Media server';
+            setTestingId(id);
             try {
                 const result = await testServer(id);
                 toast({
@@ -188,9 +208,39 @@ export function MediaServersPage() {
                     description: error instanceof Error ? error.message : 'Failed to test connection',
                     variant: 'error',
                 });
+            } finally {
+                setTestingId(null);
             }
         },
         [servers, testServer, toast],
+    );
+
+    const handleFormTest = useCallback(
+        async (request: IntegrationSettingsTestRequest) => {
+            const name = currentEditingServer?.name || 'Media server';
+            testClosedRef.current = false;
+            try {
+                const result = await testServerSettings(request);
+                if (testClosedRef.current) {
+                    return;
+                }
+                toast({
+                    title: name,
+                    description: result.message,
+                    variant: result.success ? 'success' : 'error',
+                });
+            } catch (error) {
+                if (testClosedRef.current || isAbortError(error)) {
+                    return;
+                }
+                toast({
+                    title: name,
+                    description: error instanceof Error ? error.message : 'Failed to test connection',
+                    variant: 'error',
+                });
+            }
+        },
+        [currentEditingServer, testServerSettings, toast],
     );
 
     const handleAddServer = useCallback(() => {
@@ -204,13 +254,7 @@ export function MediaServersPage() {
             returnFocusRef.current = document.activeElement as HTMLElement;
             const server = servers.find((s) => s.id === id);
             if (server) {
-                setEditingServer({
-                    id: server.id,
-                    name: server.name,
-                    provider: server.provider,
-                    enabled: server.enabled,
-                    settings: server.settings,
-                });
+                setEditingServer(toMediaServerFormValues(server));
                 openForm();
             }
         },
@@ -220,32 +264,13 @@ export function MediaServersPage() {
     const handleFormSubmit = useCallback(
         async (values: MediaServerFormValues) => {
             try {
-                const stringSettings: Record<string, string> = {};
-                for (const [key, value] of Object.entries(values.settings)) {
-                    if (value !== undefined && value !== null) {
-                        stringSettings[key] = String(value);
-                    }
-                }
+                const stringSettings = toStringSettings(values.settings);
 
                 if (values.id) {
-                    const existing = apiServers.find((s) => s.id === values.id);
-                    const existingKeys = new Set(Object.keys(existing?.settings ?? {}));
-                    const add: Record<string, string> = {};
-                    const update: Record<string, string> = {};
-                    for (const [key, value] of Object.entries(stringSettings)) {
-                        if (existingKeys.has(key)) {
-                            update[key] = value;
-                        } else {
-                            add[key] = value;
-                        }
-                    }
-                    const settings: { add?: Record<string, string>; update?: Record<string, string> } = {};
-                    if (Object.keys(add).length > 0) {
-                        settings.add = add;
-                    }
-                    if (Object.keys(update).length > 0) {
-                        settings.update = update;
-                    }
+                    const settings = buildSettingsPatch(
+                        stringSettings,
+                        toStringSettings(currentEditingServer?.settings ?? {}),
+                    );
 
                     await updateServer(values.id, {
                         name: { value: values.name },
@@ -272,25 +297,28 @@ export function MediaServersPage() {
                 }
                 closeForm();
                 setEditingServer(null);
-            } catch {
+            } catch (error) {
                 toast({
                     title: values.name || 'Error',
                     description: `Failed to ${values.id ? 'update' : 'create'} media server`,
                     variant: 'error',
                 });
+                throw error;
             }
         },
-        [apiServers, createServer, updateServer, toast, closeForm],
+        [createServer, currentEditingServer, updateServer, toast, closeForm],
     );
 
     const handleFormClose = useCallback(
         (open: boolean) => {
             if (!open) {
+                testClosedRef.current = true;
+                cancelTestServerSettings();
                 closeForm();
                 setEditingServer(null);
             }
         },
-        [closeForm],
+        [closeForm, cancelTestServerSettings],
     );
 
     const handleDeleteServer = useCallback(
@@ -339,151 +367,212 @@ export function MediaServersPage() {
     }, [refetch]);
 
     const addServerActions: QuickAction[] = useMemo(
-        () => [{ id: 'add-server', label: 'Add Server', icon: <Plus weight="bold" />, onClick: handleAddServer }],
+        () => [{ id: 'add-server', label: 'Add Server', icon: <PlusIcon weight="bold" />, onClick: handleAddServer }],
         [handleAddServer],
     );
 
-    const hasActiveFilters = filters.status !== '' || filters.enabled !== '';
+    const columns = useMemo<ColumnDef<MediaServerItem>[]>(
+        () => [
+            {
+                id: 'name',
+                accessorFn: (row) => row.name,
+                header: 'Name',
+                size: 240,
+                cell: ({ row }) => (
+                    <span className="media-servers-table__name" title={row.original.name}>
+                        {row.original.name}
+                    </span>
+                ),
+            },
+            {
+                id: 'provider',
+                accessorFn: (row) => row.provider,
+                header: () => (
+                    <MultiSelectColumnFilter
+                        label="Provider"
+                        options={providerOptions}
+                        value={provider}
+                        onChange={(next) => setMulti('provider', next)}
+                    />
+                ),
+                meta: { headerLabel: 'Provider' },
+                size: 200,
+                cell: ({ row }) => <span className="media-servers-table__provider">{row.original.provider}</span>,
+            },
+            {
+                id: 'status',
+                accessorFn: (row) => row.status,
+                header: () => (
+                    <ColumnHeaderFilter
+                        type="facet"
+                        label="Status"
+                        active={status !== ''}
+                        options={statusOptions}
+                        value={status}
+                        onChange={(value) => setFilters({ status: value })}
+                    />
+                ),
+                meta: { headerLabel: 'Status' },
+                size: 140,
+                cell: ({ row }) => {
+                    const variant = mediaServerStatusVariants[row.original.status];
+                    return (
+                        <Badge variant={variant as Parameters<typeof Badge>[0]['variant']} size="sm" dot>
+                            {mediaServerStatusLabels[row.original.status]}
+                        </Badge>
+                    );
+                },
+            },
+            {
+                id: 'enabled',
+                accessorFn: (row) => row.enabled,
+                header: () => (
+                    <ColumnHeaderFilter
+                        type="facet"
+                        label="Enabled"
+                        active={enabled !== ''}
+                        options={enabledOptions}
+                        value={enabled}
+                        onChange={(value) => setFilters({ enabled: value })}
+                    />
+                ),
+                meta: { headerLabel: 'Enabled' },
+                size: 140,
+                cell: ({ row }) => (
+                    <Badge variant={row.original.enabled ? 'healthy' : 'unknown'} size="sm">
+                        {row.original.enabled ? 'Enabled' : 'Disabled'}
+                    </Badge>
+                ),
+            },
+            {
+                id: 'checked',
+                accessorFn: (row) => {
+                    const time = row.lastCheckedAt ? new Date(row.lastCheckedAt).getTime() : NaN;
+                    return isNaN(time) ? undefined : time;
+                },
+                sortUndefined: 'last',
+                header: 'Checked',
+                size: 150,
+                cell: ({ row }) => (
+                    <span className="media-servers-table__checked">
+                        {formatRelativeTime(row.original.lastCheckedAt)}
+                    </span>
+                ),
+            },
+            {
+                id: 'actions',
+                header: '',
+                enableSorting: false,
+                size: 180,
+                cell: ({ row }) => (
+                    <IntegrationRowActions
+                        prefix="media-servers-page"
+                        name={row.original.name}
+                        id={row.original.id}
+                        enabled={row.original.enabled}
+                        isTesting={testingId === row.original.id}
+                        onTest={() => handleTestServer(row.original.id)}
+                        onToggleEnabled={(value) => handleToggleServerEnabled(row.original.id, value)}
+                        onEdit={() => handleEditServer(row.original.id)}
+                        onDelete={() => handleDeleteServer(row.original.id)}
+                    />
+                ),
+            },
+        ],
+        [
+            providerOptions,
+            statusOptions,
+            provider,
+            status,
+            enabled,
+            setMulti,
+            setFilters,
+            testingId,
+            handleTestServer,
+            handleToggleServerEnabled,
+            handleEditServer,
+            handleDeleteServer,
+        ],
+    );
 
-    const statusLabel = filters.status
-        ? (statusOptions.find((o) => o.value === filters.status)?.label ?? 'Unknown')
-        : 'All Status';
+    const hasActiveFilters = provider.length > 0 || status !== '' || enabled !== '';
 
-    const enabledLabel = filters.enabled
-        ? (enabledOptions.find((o) => o.value === filters.enabled)?.label ?? 'Unknown')
-        : 'All Enabled';
+    const pageCount = Math.max(1, Math.ceil(filteredServers.length / PAGE_SIZE));
+    const currentPage = Math.min(page, pageCount);
+    const pagination = useMemo(() => ({ pageIndex: currentPage - 1, pageSize: PAGE_SIZE }), [currentPage]);
+
+    const getRowId = useCallback((row: MediaServerItem) => row.id, []);
+
+    const emptyState = (
+        <IntegrationEmptyState
+            icon={<TelevisionIcon weight="duotone" />}
+            entity="media servers"
+            hasActiveFilters={hasActiveFilters}
+            addDescription="Add a media server to integrate with your library"
+            onClearFilters={handleClearFilters}
+        />
+    );
+
+    const errorState = (
+        <EmptyState
+            icon={<WarningCircleIcon weight="duotone" />}
+            title="Failed to load media servers"
+            action={
+                <Button variant="secondary" size="sm" onClick={() => refetch()}>
+                    Retry
+                </Button>
+            }
+        />
+    );
 
     return (
         <div className="media-servers-page" data-page="media-servers">
             <PullToRefresh onRefresh={handleRefresh} className="media-servers-page__pull-to-refresh">
-                <header className="media-servers-page__header">
-                    <div className="media-servers-page__header-left">
-                        <Television
-                            weight="duotone"
-                            className="media-servers-page__icon"
-                            aria-hidden="true"
-                            data-testid="media-servers-page__icon"
-                        />
-                        <h1 className="media-servers-page__title">Media Servers</h1>
-                        <span className="page-count media-servers-page__count" data-testid="media-servers-page__count">
-                            {totalServers}
-                        </span>
-                    </div>
-                    <div className="media-servers-page__header-actions">
-                        <Button variant="primary" size="sm" data-action="add-server" onClick={handleAddServer}>
-                            <Plus weight="bold" aria-hidden="true" />
-                            <span className="media-servers-page__add-label">Add Server</span>
-                        </Button>
-                    </div>
-                </header>
-
-                <div className="list-toolbar__summary" aria-label="Health summary">
-                    <Badge variant="healthy" size="sm" badgeStyle="outline" dot count={statusCounts.healthy}>
-                        Healthy
-                    </Badge>
-                    <Badge variant="unhealthy" size="sm" badgeStyle="outline" dot count={statusCounts.unhealthy}>
-                        Unhealthy
-                    </Badge>
-                    <Badge variant="stale" size="sm" badgeStyle="outline" dot count={statusCounts.stale}>
-                        Stale
-                    </Badge>
-                    <Badge variant="unknown" size="sm" badgeStyle="outline" dot count={statusCounts.unknown}>
-                        Unknown
-                    </Badge>
-                </div>
-
-                <div className="list-toolbar__filters" data-component="server-filters">
-                    <div className="list-toolbar__filters-controls">
-                        <Select value={filters.status || ALL_VALUE} onValueChange={handleStatusChange}>
-                            <SelectTrigger
-                                size="sm"
-                                placeholder="All Status"
-                                aria-label="Filter by status"
-                                data-filter="status"
-                            >
-                                {statusLabel}
-                            </SelectTrigger>
-                            <SelectContent>
-                                <SelectItem value={ALL_VALUE}>All Status</SelectItem>
-                                {statusOptions
-                                    .filter((o) => o.value !== 'all')
-                                    .map((opt) => (
-                                        <SelectItem key={opt.value} value={opt.value}>
-                                            {opt.label}
-                                        </SelectItem>
-                                    ))}
-                            </SelectContent>
-                        </Select>
-
-                        <Select value={filters.enabled || ALL_VALUE} onValueChange={handleEnabledChange}>
-                            <SelectTrigger
-                                size="sm"
-                                placeholder="All"
-                                aria-label="Filter by enabled state"
-                                data-filter="enabled"
-                            >
-                                {enabledLabel}
-                            </SelectTrigger>
-                            <SelectContent>
-                                <SelectItem value={ALL_VALUE}>All</SelectItem>
-                                {enabledOptions
-                                    .filter((o) => o.value !== 'all')
-                                    .map((opt) => (
-                                        <SelectItem key={opt.value} value={opt.value}>
-                                            {opt.label}
-                                        </SelectItem>
-                                    ))}
-                            </SelectContent>
-                        </Select>
-
-                        {hasActiveFilters && (
-                            <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={handleClearFilters}
-                                className="list-toolbar__clear-filters"
-                                data-action="clear-filters"
-                            >
-                                Clear
+                <PageHeader
+                    className="media-servers-page__header"
+                    title="Media Servers"
+                    description="Media server connections used for library refreshes and links."
+                    icon={<TelevisionIcon weight="duotone" aria-hidden="true" data-testid="media-servers-page__icon" />}
+                    actions={
+                        <div className="media-servers-page__header-actions">
+                            {hasActiveFilters && <ClearFiltersButton onClick={handleClearFilters} />}
+                            <Button variant="primary" size="sm" data-action="add-server" onClick={handleAddServer}>
+                                <PlusIcon weight="bold" aria-hidden="true" />
+                                <span className="media-servers-page__add-label">Add Server</span>
                             </Button>
-                        )}
-                    </div>
-                </div>
+                        </div>
+                    }
+                />
 
-                <div className="media-servers-page__list" role="list" aria-label="Media servers">
-                    {filteredServers.length === 0 ? (
-                        <EmptyState
-                            icon={<Television weight="duotone" />}
-                            title="No media servers found"
-                            description={
-                                hasActiveFilters
-                                    ? 'Try adjusting your filters'
-                                    : 'Add a media server to integrate with your library'
-                            }
-                            action={
-                                !hasActiveFilters ? (
-                                    <Button
-                                        variant="primary"
-                                        size="sm"
-                                        onClick={handleAddServer}
-                                        data-action="add-server-empty"
-                                    >
-                                        <Plus weight="bold" aria-hidden="true" />
-                                        <span>Add Server</span>
-                                    </Button>
-                                ) : undefined
-                            }
+                <div className="media-servers-table" data-area="servers">
+                    <DataTable<MediaServerItem>
+                        columns={columns}
+                        data={filteredServers}
+                        enableSorting
+                        sorting={sorting}
+                        onSortingChange={(updater) =>
+                            setSorting(typeof updater === 'function' ? updater(sorting) : updater)
+                        }
+                        enablePagination={filteredServers.length > PAGE_SIZE}
+                        hidePagination
+                        pageSize={PAGE_SIZE}
+                        pagination={pagination}
+                        getRowId={getRowId}
+                        loading={isLoading}
+                        emptyState={error ? errorState : emptyState}
+                        keepHeaderWhenEmpty={hasActiveFilters}
+                        aria-label="Media servers"
+                    />
+                    {filteredServers.length > PAGE_SIZE && (
+                        <Pager
+                            className="media-servers-table__pager"
+                            page={currentPage}
+                            pageCount={pageCount}
+                            onFirst={() => setPage(1)}
+                            onPrevious={() => setPage(Math.max(1, currentPage - 1))}
+                            onNext={() => setPage(Math.min(pageCount, currentPage + 1))}
+                            onLast={() => setPage(pageCount)}
                         />
-                    ) : (
-                        filteredServers.map((server) => (
-                            <ServerRow
-                                key={server.id}
-                                server={server}
-                                onToggleEnabled={handleToggleServerEnabled}
-                                onEdit={handleEditServer}
-                                onDelete={handleDeleteServer}
-                            />
-                        ))
                     )}
                 </div>
             </PullToRefresh>
@@ -502,11 +591,11 @@ export function MediaServersPage() {
             <MediaServerForm
                 open={formOpen}
                 onOpenChange={handleFormClose}
-                initialValues={editingServer}
+                initialValues={currentEditingServer}
                 onSubmit={handleFormSubmit}
                 isSubmitting={isCreating || isUpdating}
-                onTest={editingServer?.id ? () => handleTestServer(editingServer.id!) : undefined}
-                isTesting={isTesting}
+                onTest={handleFormTest}
+                isTesting={isTestingSettings}
                 returnFocusRef={returnFocusRef}
             />
         </div>
@@ -514,84 +603,5 @@ export function MediaServersPage() {
 }
 
 MediaServersPage.displayName = 'MediaServersPage';
-
-interface ServerRowProps {
-    server: MediaServerItem;
-    onToggleEnabled: (id: string, enabled: boolean) => void;
-    onEdit: (id: string) => void;
-    onDelete: (id: string) => void;
-}
-
-function ServerRow({ server, onToggleEnabled, onEdit, onDelete }: ServerRowProps) {
-    const variant = mediaServerStatusVariants[server.status];
-    const statusLabel = mediaServerStatusLabels[server.status];
-
-    return (
-        <div
-            className={`media-servers-page__item${server.enabled ? '' : ' media-servers-page__item--disabled'}`}
-            role="listitem"
-            data-testid="media-servers-page__item"
-            data-server-id={server.id}
-            data-status={variant}
-            data-enabled={server.enabled}
-        >
-            <div className="media-servers-page__item-main">
-                <div className="media-servers-page__item-info">
-                    <div className="media-servers-page__item-header">
-                        <span className="media-servers-page__item-name">{server.name}</span>
-                        <Badge variant={variant as Parameters<typeof Badge>[0]['variant']} size="sm" dot>
-                            {statusLabel}
-                        </Badge>
-                    </div>
-                    <div className="media-servers-page__item-meta">
-                        <span className="media-servers-page__item-provider">{server.provider}</span>
-                        <span className="media-servers-page__item-checked">
-                            <Clock weight="regular" aria-hidden="true" />
-                            Checked {formatRelativeTime(server.lastCheckedAt)}
-                        </span>
-                    </div>
-                </div>
-                <div className="media-servers-page__item-actions card-actions">
-                    <div className="media-servers-page__item-toggle" title={server.enabled ? 'Disable' : 'Enable'}>
-                        <Power weight="bold" className="media-servers-page__toggle-icon" aria-hidden="true" />
-                        <Switch
-                            checked={server.enabled}
-                            onCheckedChange={(checked) => onToggleEnabled(server.id, checked)}
-                            aria-label={`${server.enabled ? 'Disable' : 'Enable'} ${server.name}`}
-                            data-action="toggle-enabled"
-                            data-target={server.id}
-                        />
-                    </div>
-                    <Tooltip content="Edit">
-                        <button
-                            type="button"
-                            className="media-servers-page__action-btn card-actions__btn"
-                            data-testid="media-servers-page__action-btn"
-                            onClick={() => onEdit(server.id)}
-                            aria-label={`Edit ${server.name}`}
-                            data-action="edit"
-                            data-target={server.id}
-                        >
-                            <PencilSimple weight="bold" />
-                        </button>
-                    </Tooltip>
-                    <Tooltip content="Delete">
-                        <button
-                            type="button"
-                            className="media-servers-page__action-btn media-servers-page__action-btn--danger card-actions__btn card-actions__btn--danger"
-                            data-testid="media-servers-page__action-btn"
-                            onClick={() => onDelete(server.id)}
-                            aria-label={`Delete ${server.name}`}
-                            data-action="delete"
-                            data-target={server.id}
-                        >
-                            <Trash weight="bold" />
-                        </button>
-                    </Tooltip>
-                </div>
-            </div>
-        </div>
-    );
-}
 
 export default MediaServersPage;

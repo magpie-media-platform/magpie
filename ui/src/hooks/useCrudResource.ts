@@ -3,18 +3,24 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiGet, apiPost, apiPatch, apiDelete } from '@/lib/api';
 import { POLLING_INTERVALS } from '@/lib/queryClient';
 import { queryErrorOrNull } from '@/lib/utils';
+import { useInvalidateQueriesOnEvents } from './useInvalidateQueriesOnEvents';
 
 interface CrudResourceConfig {
     basePath: string;
+    eventNames?: readonly string[];
 }
 
-export interface CrudQueryKeys {
+interface EnabledPatch {
+    enabled?: { value: boolean };
+}
+
+interface CrudQueryKeys {
     all: readonly string[];
     list: () => readonly string[];
     detail: (id: string) => readonly string[];
 }
 
-export interface CrudResourceResult<TItem, TCreate, TPatch> {
+interface CrudResourceResult<TItem, TCreate, TPatch> {
     items: TItem[];
     isLoading: boolean;
     error: Error | null;
@@ -31,7 +37,7 @@ export interface CrudResourceResult<TItem, TCreate, TPatch> {
     deleteItem: (id: string) => Promise<void>;
     isDeleting: boolean;
 
-    refetch: () => void;
+    refetch: () => Promise<void>;
 }
 
 export function buildQueryKeys(prefix: string): CrudQueryKeys {
@@ -42,22 +48,25 @@ export function buildQueryKeys(prefix: string): CrudQueryKeys {
     };
 }
 
-export function useCrudResource<TItem, TCreate, TPatch>(
+export function useCrudResource<TItem, TCreate, TPatch extends EnabledPatch>(
     config: CrudResourceConfig,
     queryKeys: CrudQueryKeys,
 ): CrudResourceResult<TItem, TCreate, TPatch> {
     const { basePath } = config;
     const queryClient = useQueryClient();
+    useInvalidateQueriesOnEvents(config.eventNames ?? [], [[...queryKeys.list(), basePath]], {
+        exact: true,
+        owner: `crud:${basePath}`,
+    });
 
     const listQuery = useQuery({
-        queryKey: queryKeys.list(),
+        queryKey: [...queryKeys.list(), basePath],
         queryFn: () => apiGet<TItem[]>(basePath),
-        refetchInterval: POLLING_INTERVALS.normal,
         staleTime: POLLING_INTERVALS.normal / 2,
     });
 
     const invalidateList = () => {
-        queryClient.invalidateQueries({ queryKey: queryKeys.list() });
+        void queryClient.invalidateQueries({ queryKey: queryKeys.list() });
     };
 
     const createMutation = useMutation({
@@ -70,13 +79,9 @@ export function useCrudResource<TItem, TCreate, TPatch>(
         onSuccess: invalidateList,
     });
 
-    const enableMutation = useMutation({
-        mutationFn: (id: string) => apiPost<TItem>(`${basePath}/${id}/enable`),
-        onSuccess: invalidateList,
-    });
-
-    const disableMutation = useMutation({
-        mutationFn: (id: string) => apiPost<TItem>(`${basePath}/${id}/disable`),
+    const toggleMutation = useMutation({
+        mutationFn: ({ id, enabled }: { id: string; enabled: boolean }) =>
+            apiPatch(`${basePath}/${id}`, { enabled: { value: enabled } }),
         onSuccess: invalidateList,
     });
 
@@ -86,15 +91,15 @@ export function useCrudResource<TItem, TCreate, TPatch>(
     });
 
     const toggleEnabled = async (id: string, enabled: boolean): Promise<void> => {
-        if (enabled) {
-            await enableMutation.mutateAsync(id);
-        } else {
-            await disableMutation.mutateAsync(id);
-        }
+        await toggleMutation.mutateAsync({ id, enabled });
     };
 
     const update = async (id: string, patch: TPatch): Promise<void> => {
         await patchMutation.mutateAsync({ id, patch });
+    };
+
+    const refetch = async (): Promise<void> => {
+        await listQuery.refetch();
     };
 
     return {
@@ -109,11 +114,11 @@ export function useCrudResource<TItem, TCreate, TPatch>(
         isUpdating: patchMutation.isPending,
 
         toggleEnabled,
-        isToggling: enableMutation.isPending || disableMutation.isPending,
+        isToggling: toggleMutation.isPending,
 
         deleteItem: deleteMutation.mutateAsync,
         isDeleting: deleteMutation.isPending,
 
-        refetch: listQuery.refetch,
+        refetch,
     };
 }

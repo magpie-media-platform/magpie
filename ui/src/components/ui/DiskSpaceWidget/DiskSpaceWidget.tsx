@@ -1,10 +1,12 @@
 import { forwardRef, type HTMLAttributes, type ReactNode } from 'react';
 
-import type { DiskSpaceInfo } from '@/types/system';
+import type { DiskSpaceInfo, DiskSpaceTotals } from '@/types/system';
+
+import { formatDiskSpaceSize } from '@/lib/formatSize';
 
 import './DiskSpaceWidget.css';
 
-export type { DiskSpaceInfo };
+export type { DiskSpaceInfo, DiskSpaceTotals };
 
 export interface DiskSpaceWidgetProps extends HTMLAttributes<HTMLDivElement> {
     heading?: string;
@@ -13,6 +15,12 @@ export interface DiskSpaceWidgetProps extends HTMLAttributes<HTMLDivElement> {
 
     folders: DiskSpaceInfo[];
 
+    /**
+     * Pre-computed grand totals, with each underlying volume counted once. When omitted, totals
+     * fall back to summing the per-folder figures, which double-counts folders sharing a volume.
+     */
+    totals?: DiskSpaceTotals;
+
     loading?: boolean;
 
     onFolderClick?: (folder: DiskSpaceInfo) => void;
@@ -20,21 +28,6 @@ export interface DiskSpaceWidgetProps extends HTMLAttributes<HTMLDivElement> {
     onViewAllClick?: () => void;
 
     headingLevel?: 2 | 3;
-}
-
-function formatBytes(bytes: number): string {
-    if (bytes === 0) {
-        return '0 B';
-    }
-
-    const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
-    const k = 1024;
-    const i = Math.min(Math.floor(Math.log(bytes) / Math.log(k)), units.length - 1);
-    const value = bytes / Math.pow(k, i);
-
-    const decimals = i >= 3 ? 2 : i >= 2 ? 1 : 0;
-
-    return `${value.toFixed(decimals)} ${units[i]}`;
 }
 
 function calculateUsagePercent(usedBytes: number, totalBytes: number): number {
@@ -103,12 +96,12 @@ const DiskSpaceRow = ({ folder, onClick }: DiskSpaceRowProps) => {
                 />
             </div>
             <div className="disk-space-widget__row-details">
-                <span className="disk-space-widget__used">{formatBytes(folder.usedBytes)} used</span>
-                <span className="disk-space-widget__free">{formatBytes(folder.freeBytes)} free</span>
-                <span className="disk-space-widget__total">{formatBytes(folder.totalBytes)} total</span>
+                <span className="disk-space-widget__used">{formatDiskSpaceSize(folder.usedBytes)} used</span>
+                <span className="disk-space-widget__free">{formatDiskSpaceSize(folder.freeBytes)} free</span>
+                <span className="disk-space-widget__total">{formatDiskSpaceSize(folder.totalBytes)} total</span>
             </div>
             <div className="disk-space-widget__row-compact">
-                {formatBytes(folder.usedBytes)} / {formatBytes(folder.totalBytes)}
+                {formatDiskSpaceSize(folder.usedBytes)} / {formatDiskSpaceSize(folder.totalBytes)}
             </div>
             <div className="disk-space-widget__path" title={folder.path}>
                 {folder.path}
@@ -139,6 +132,7 @@ export const DiskSpaceWidget = forwardRef<HTMLDivElement, DiskSpaceWidgetProps>(
             heading = 'Disk Space',
             icon,
             folders,
+            totals,
             loading = false,
             onFolderClick,
             onViewAllClick,
@@ -151,9 +145,9 @@ export const DiskSpaceWidget = forwardRef<HTMLDivElement, DiskSpaceWidgetProps>(
         const classes = ['disk-space-widget', className].filter(Boolean).join(' ');
         const HeadingTag = `h${headingLevel}` as const;
 
-        const totalUsed = folders.reduce((sum, f) => sum + f.usedBytes, 0);
-        const totalSpace = folders.reduce((sum, f) => sum + f.totalBytes, 0);
-        const totalFree = folders.reduce((sum, f) => sum + f.freeBytes, 0);
+        const totalUsed = totals?.usedBytes ?? folders.reduce((sum, f) => sum + f.usedBytes, 0);
+        const totalSpace = totals?.totalBytes ?? folders.reduce((sum, f) => sum + f.totalBytes, 0);
+        const totalFree = totals?.freeBytes ?? folders.reduce((sum, f) => sum + f.freeBytes, 0);
 
         return (
             <div ref={ref} className={classes} data-component="disk-space-widget" {...props}>
@@ -174,19 +168,25 @@ export const DiskSpaceWidget = forwardRef<HTMLDivElement, DiskSpaceWidgetProps>(
                         <div className="disk-space-widget__summary">
                             <div className="disk-space-widget__summary-item">
                                 <span className="disk-space-widget__summary-label">Total Used</span>
-                                <span className="disk-space-widget__summary-value">{formatBytes(totalUsed)}</span>
+                                <span className="disk-space-widget__summary-value">
+                                    {formatDiskSpaceSize(totalUsed)}
+                                </span>
                             </div>
                             <div className="disk-space-widget__summary-item">
                                 <span className="disk-space-widget__summary-label">Total Free</span>
-                                <span className="disk-space-widget__summary-value">{formatBytes(totalFree)}</span>
+                                <span className="disk-space-widget__summary-value">
+                                    {formatDiskSpaceSize(totalFree)}
+                                </span>
                             </div>
                             <div className="disk-space-widget__summary-item">
                                 <span className="disk-space-widget__summary-label">Total Capacity</span>
-                                <span className="disk-space-widget__summary-value">{formatBytes(totalSpace)}</span>
+                                <span className="disk-space-widget__summary-value">
+                                    {formatDiskSpaceSize(totalSpace)}
+                                </span>
                             </div>
                         </div>
                         <div className="disk-space-widget__summary-compact">
-                            {formatBytes(totalUsed)} / {formatBytes(totalSpace)}
+                            {formatDiskSpaceSize(totalUsed)} / {formatDiskSpaceSize(totalSpace)}
                         </div>
                     </>
                 )}

@@ -1,132 +1,125 @@
 using System;
-using System.Linq;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 
-using Magpie.Abstractions.Api;
-using Magpie.Abstractions.Jobs;
-using Magpie.Abstractions.Repositories;
-using Magpie.Abstractions.Security;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
+using Magpie.Models.Enums;
+using Magpie.Sdk.Api;
+using Magpie.Sdk.Services;
 
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
 
 namespace Magpie.Api.EndpointGroups;
 
-internal sealed class EventTriggersEndpointGroup(
-    IEventTriggerRepository eventTriggerRepository,
-    IJobManager jobManager) : IApiEndpointGroup
+[MagpieCommandGroup("event-triggers", "event-triggers", "Manage event triggers")]
+internal sealed class EventTriggersEndpointGroup : IApiEndpointGroup
 {
     public string Name => "event-triggers";
 
     public void MapEndpoints(IEndpointRouteBuilder builder)
     {
-        builder.MapGet("", GetEventTriggers)
-            .WithName(nameof(GetEventTriggers))
-            .Produces<EventTrigger[]>()
+        builder.MapGet("", GetEventTriggersAsync)
+            .WithName(nameof(GetEventTriggersAsync))
+            .Produces<IReadOnlyList<EventTrigger>>()
             .RequireViewer();
 
-        builder.MapGet("{id:guid}", GetEventTriggerById)
-            .WithName(nameof(GetEventTriggerById))
+        builder.MapGet("{id:guid}", GetEventTriggerAsync)
+            .WithName(nameof(GetEventTriggerAsync))
             .Produces<EventTrigger>()
             .ProducesProblem(StatusCodes.Status404NotFound)
             .RequireViewer();
 
-        builder.MapPost("", CreateEventTrigger)
-            .WithName(nameof(CreateEventTrigger))
+        builder.MapPost("", CreateEventTriggerAsync)
+            .WithName(nameof(CreateEventTriggerAsync))
             .Produces<EventTrigger>(StatusCodes.Status201Created)
             .ProducesProblem(StatusCodes.Status400BadRequest)
-            .RequireManager();
+            .RequireRequester();
 
-        builder.MapPatch("{id:guid}", PatchEventTrigger)
-            .WithName(nameof(PatchEventTrigger))
+        builder.MapPatch("{id:guid}", PatchEventTriggerAsync)
+            .WithName(nameof(PatchEventTriggerAsync))
             .Produces(StatusCodes.Status204NoContent)
-            .ProducesProblem(StatusCodes.Status404NotFound)
             .ProducesProblem(StatusCodes.Status400BadRequest)
-            .RequireManager();
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .RequireRequester();
 
-        builder.MapDelete("{id:guid}", DeleteEventTrigger)
-            .WithName(nameof(DeleteEventTrigger))
+        builder.MapDelete("{id:guid}", DeleteEventTriggerAsync)
+            .WithName(nameof(DeleteEventTriggerAsync))
             .Produces(StatusCodes.Status204NoContent)
             .ProducesProblem(StatusCodes.Status404NotFound)
-            .RequireManager();
+            .RequireRequester();
     }
 
-    private async Task<IResult> GetEventTriggers(
+    [MagpieCommand("list", "GET", "", "List event triggers")]
+    internal async Task<IResult> GetEventTriggersAsync(
+        [FromServices] IJobManager jobManager,
+        AuthenticatedUser user,
         Guid? extensionId,
         bool? enabled,
+        bool? mine,
         CancellationToken cancellationToken)
     {
-        if (extensionId is not null)
-        {
-            var triggersByExtension = await eventTriggerRepository
-                .ListByExtensionIdAsync(extensionId.Value, cancellationToken)
-                .ConfigureAwait(false);
-            return Results.Ok(triggersByExtension.ToArray());
-        }
+        var triggers = await jobManager
+            .ListEventTriggersAsync(extensionId, enabled, mine ?? false, user.Id, cancellationToken)
+            .ConfigureAwait(false);
 
-        if (enabled is true)
-        {
-            var enabledTriggers = await eventTriggerRepository.ListEnabledAsync(cancellationToken)
-                .ConfigureAwait(false);
-            return Results.Ok(enabledTriggers.ToArray());
-        }
-
-        var triggers = await eventTriggerRepository.ListAllAsync(cancellationToken).ConfigureAwait(false);
-        return Results.Ok(triggers.ToArray());
+        return Results.Ok(triggers);
     }
 
-    private async Task<IResult> GetEventTriggerById(Guid id, CancellationToken cancellationToken)
-    {
-        var trigger = await eventTriggerRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
-
-        return trigger is null
-            ? Results.NotFound()
-            : Results.Ok(trigger);
-    }
-
-    private async Task<IResult> CreateEventTrigger(
-        HttpContext httpContext,
-        EventTriggerCreate request,
+    [MagpieCommand("get", "GET", "{id:guid}", "Show an event trigger")]
+    internal async Task<IResult> GetEventTriggerAsync(
+        [FromServices] IJobManager jobManager,
+        Guid id,
         CancellationToken cancellationToken)
     {
-        var currentUserId = httpContext.User.GetUserId();
-        var trigger = await jobManager.CreateEventTriggerAsync(request, currentUserId, cancellationToken)
+        var trigger = await jobManager.GetEventTriggerAsync(id, cancellationToken).ConfigureAwait(false);
+
+        return trigger is null ? Results.NotFound() : Results.Ok(trigger);
+    }
+
+    [MagpieCommand("create", "POST", "", "Create an event trigger")]
+    internal async Task<IResult> CreateEventTriggerAsync(
+        [FromServices] IJobManager jobManager,
+        AuthenticatedUser user,
+        [FromBody] EventTriggerCreate create,
+        CancellationToken cancellationToken)
+    {
+        var trigger = await jobManager.CreateEventTriggerAsync(create, user.Id, user.Role, cancellationToken)
             .ConfigureAwait(false);
 
         return Results.Created($"api/{Name}/{trigger.Id}", trigger);
     }
 
-    private async Task<IResult> PatchEventTrigger(
-        HttpContext httpContext,
+    [MagpieCommand("patch", "PATCH", "{id:guid}", "Update fields on an event trigger")]
+    internal async Task<IResult> PatchEventTriggerAsync(
+        [FromServices] IJobManager jobManager,
+        AuthenticatedUser user,
         Guid id,
-        EventTriggerPatch request,
+        [FromBody] EventTriggerPatch patch,
         CancellationToken cancellationToken)
     {
-        var currentUserId = httpContext.User.GetUserId();
-        var patch = request with { Id = id };
-        var updated = await jobManager.UpdateEventTriggerAsync(patch, currentUserId, cancellationToken)
+        var patched = await jobManager
+            .PatchEventTriggerAsync(id, patch, user.Id, user.IsInRole(Role.Admin), cancellationToken)
             .ConfigureAwait(false);
 
-        return updated
-            ? Results.NoContent()
-            : Results.NotFound();
+        return patched ? Results.NoContent() : Results.NotFound();
     }
 
-    private async Task<IResult> DeleteEventTrigger(
-        HttpContext httpContext,
+    [MagpieCommand("delete", "DELETE", "{id:guid}", "Delete an event trigger")]
+    internal async Task<IResult> DeleteEventTriggerAsync(
+        [FromServices] IJobManager jobManager,
+        AuthenticatedUser user,
         Guid id,
         CancellationToken cancellationToken)
     {
-        var currentUserId = httpContext.User.GetUserId();
-        var deleted = await eventTriggerRepository.DeleteAsync(id, currentUserId, cancellationToken)
+        var deleted = await jobManager
+            .DeleteEventTriggerAsync(id, user.Id, user.IsInRole(Role.Admin), cancellationToken)
             .ConfigureAwait(false);
 
-        return deleted
-            ? Results.NoContent()
-            : Results.NotFound();
+        return deleted ? Results.NoContent() : Results.NotFound();
     }
 }

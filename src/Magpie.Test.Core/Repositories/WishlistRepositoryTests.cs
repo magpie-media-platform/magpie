@@ -6,13 +6,14 @@ using Magpie.Abstractions.Repositories;
 using Magpie.Core;
 using Magpie.Core.Repositories;
 using Magpie.Data;
+using Magpie.Models;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
-using Magpie.Test.Shared;
 
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 using NUnit.Framework;
 
@@ -60,18 +61,21 @@ public class WishlistRepositoryTests
         _userId = user.Id;
         _contentFilterId = contentFilter.Id;
 
-        var loggerFactory = LoggerFactory.Create(builder => builder.AddTestLogger());
+        var loggerFactory = NullLoggerFactory.Instance;
 
         var auditRecordRepository = new AuditRecordRepository(
             _context,
-            loggerFactory.CreateLogger<AuditRecordRepository>());
+            Moq.Mock.Of<Sdk.Services.IEventBus>(),
+            loggerFactory.CreateLogger<AuditRecordRepository>(),
+            new TransactionManager(_context, NullLogger<TransactionManager>.Instance));
 
-        var transactionManager = new TransactionManager(_context);
+        var transactionManager = new TransactionManager(_context, NullLogger<TransactionManager>.Instance);
 
         _subject = new WishlistRepository(
             _context,
             auditRecordRepository,
             transactionManager,
+            Moq.Mock.Of<Sdk.Services.IEventBus>(),
             loggerFactory.CreateLogger<WishlistRepository>());
     }
 
@@ -95,10 +99,10 @@ public class WishlistRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.Wishlists.Add(wishlist);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        var result = await _subject.GetByIdAsync(wishlist.Id);
+        var result = await _subject.GetByIdAsync(wishlist.Id).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -113,14 +117,50 @@ public class WishlistRepositoryTests
     public async Task GetByIdAsync_ReturnsNull_WhenNotExists()
     {
         // Act
-        var result = await _subject.GetByIdAsync(Guid.NewGuid());
+        var result = await _subject.GetByIdAsync(Guid.NewGuid()).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.Null);
     }
 
     [Test]
-    public async Task ListAllAsync_ReturnsAllWishlists()
+    public async Task GetByIdAsync_LoadsBackingFilterCriteria_WhenWishlistHasBackingFilter()
+    {
+        // Arrange
+        var backingFilter = new ContentFilter
+        {
+            Name = "Backing (wishlist)",
+            Criteria = new ContentFilterCriteria(),
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.ContentFilters.Add(backingFilter);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        var wishlist = new Wishlist
+        {
+            Name = "Seeded",
+            ContentFilterId = backingFilter.Id,
+            OwnerUserId = _userId,
+            Enabled = true,
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.Wishlists.Add(wishlist);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        var result = await _subject.GetByIdAsync(wishlist.Id).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result!.ContentFilter, Is.Not.Null);
+            Assert.That(result.ContentFilter!.Id, Is.EqualTo(backingFilter.Id));
+            Assert.That(result.ContentFilter.Criteria, Is.Not.Null);
+        }
+    }
+
+    [Test]
+    public async Task ListAllAsync_ReturnsAllWishlists_WhenWishlistsExist()
     {
         // Arrange
         var wishlist1 = new Wishlist
@@ -140,10 +180,10 @@ public class WishlistRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.Wishlists.AddRange(wishlist1, wishlist2);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        var result = await _subject.ListAllAsync(default);
+        var result = await _subject.ListAllAsync(default).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Has.Exactly(2).Items);
@@ -153,14 +193,14 @@ public class WishlistRepositoryTests
     public async Task ListAllAsync_ReturnsEmptyList_WhenNoWishlists()
     {
         // Act
-        var result = await _subject.ListAllAsync(default);
+        var result = await _subject.ListAllAsync(default).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.Empty);
     }
 
     [Test]
-    public async Task GetByUserIdAsync_ReturnsUserWishlists()
+    public async Task GetByUserIdAsync_ReturnsUserWishlists_WhenUserOwnsWishlists()
     {
         // Arrange
         var otherUser = new User
@@ -172,7 +212,7 @@ public class WishlistRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.Users.Add(otherUser);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         var wishlist1 = new Wishlist
         {
@@ -199,10 +239,14 @@ public class WishlistRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.Wishlists.AddRange(wishlist1, wishlist2, wishlist3);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        var result = await _subject.GetByUserIdAsync(_userId);
+        var result = (await _subject.QueryAsync(new() { OwnerUserId = _userId },
+            new() { PageNumber = 1, PageSize = 100 },
+            null).ConfigureAwait(false))
+            .Items
+            .ToList();
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -213,7 +257,7 @@ public class WishlistRepositoryTests
     }
 
     [Test]
-    public async Task GetMonitoredAsync_ReturnsEnabledWishlists()
+    public async Task GetMonitoredAsync_ReturnsEnabledWishlists_WhenEnabledWishlistsExist()
     {
         // Arrange
         var enabled1 = new Wishlist
@@ -241,10 +285,13 @@ public class WishlistRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.Wishlists.AddRange(enabled1, enabled2, disabled);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        var result = await _subject.GetMonitoredAsync(default);
+        var result = (await _subject.QueryAsync(new() { Monitored = true },
+            new() { PageNumber = 1, PageSize = 100 },
+            null).ConfigureAwait(false)).Items
+            .ToList();
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -255,7 +302,61 @@ public class WishlistRepositoryTests
     }
 
     [Test]
-    public async Task CreateAsync_CreatesWishlist()
+    public async Task GetMonitoredAsync_ReturnsTagNames_WhenWishlistsHaveTags()
+    {
+        // Arrange
+        var wishlist = new Wishlist
+        {
+            Name = "TaggedWishlist",
+            ContentFilterId = _contentFilterId,
+            OwnerUserId = _userId,
+            Enabled = true,
+            CreatedAt = DateTime.UtcNow
+        };
+        wishlist.Tags.Add(new Tag { Name = "action" });
+        wishlist.Tags.Add(new Tag { Name = "4k" });
+        _context.Wishlists.Add(wishlist);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
+
+        // Act
+        var result = (await _subject.QueryAsync(new() { Monitored = true },
+            new() { PageNumber = 1, PageSize = 100 },
+            null).ConfigureAwait(false)).Items
+            .ToList();
+
+        // Assert
+        var loaded = result.Single(w => w.Id == wishlist.Id);
+        Assert.That(loaded.Tags.Select(t => t.Name), Is.EquivalentTo(["action", "4k"]));
+    }
+
+    [Test]
+    public async Task GetByIdAsync_ReturnsTagNames_WhenWishlistHasTags()
+    {
+        // Arrange
+        var wishlist = new Wishlist
+        {
+            Name = "TaggedWishlist",
+            ContentFilterId = _contentFilterId,
+            OwnerUserId = _userId,
+            Enabled = true,
+            CreatedAt = DateTime.UtcNow
+        };
+        wishlist.Tags.Add(new Tag { Name = "horror" });
+        _context.Wishlists.Add(wishlist);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
+
+        // Act
+        var loaded = await _subject.GetByIdAsync(wishlist.Id, default).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(loaded, Is.Not.Null);
+        Assert.That(loaded!.Tags.Select(t => t.Name), Is.EquivalentTo(["horror"]));
+    }
+
+    [Test]
+    public async Task CreateAsync_CreatesWishlist_WhenRequestIsValid()
     {
         // Arrange
         var wishlist = new Wishlist
@@ -267,7 +368,7 @@ public class WishlistRepositoryTests
         };
 
         // Act
-        var result = await _subject.CreateAsync(wishlist, _userId);
+        var result = await _subject.CreateAsync(wishlist, _userId).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -280,7 +381,7 @@ public class WishlistRepositoryTests
     }
 
     [Test]
-    public async Task CreateAsync_CreatesAuditRecord()
+    public async Task CreateAsync_CreatesAuditRecord_WhenWishlistIsCreated()
     {
         // Arrange
         var wishlist = new Wishlist
@@ -292,16 +393,23 @@ public class WishlistRepositoryTests
         };
 
         // Act
-        await _subject.CreateAsync(wishlist, _userId);
+        await _subject.CreateAsync(wishlist, _userId).ConfigureAwait(false);
 
         // Assert
-        var auditRecords = await _context.AuditRecords.ToListAsync();
+        var auditRecords = await _context.AuditRecords.ToListAsync().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(auditRecords, Has.Count.EqualTo(1));
-            Assert.That(auditRecords, Has.One.With.Property(nameof(AuditRecord.Operation)).EqualTo("Create"));
-            Assert.That(auditRecords, Has.One.With.Property(nameof(AuditRecord.EntityType)).EqualTo("Wishlist"));
-            Assert.That(auditRecords, Has.One.With.Property(nameof(AuditRecord.UserId)).EqualTo(_userId));
+
+            Assert.That(
+                auditRecords,
+                Has.One.With.Property(nameof(AuditRecord.Operation)).EqualTo("Create")
+                    .And.Property(nameof(AuditRecord.EntityType)).EqualTo("Wishlist"));
+            Assert.That(
+                auditRecords,
+                Has.One.With.Property(nameof(AuditRecord.EntityType)).EqualTo("Wishlist")
+                    .And.Property(nameof(AuditRecord.Category)).EqualTo(AuditCategories.System)
+                    .And.Property(nameof(AuditRecord.UserId)).EqualTo(_userId));
         }
     }
 
@@ -318,18 +426,18 @@ public class WishlistRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.Wishlists.Add(wishlist);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         wishlist.Name = "UpdatedWishlist";
         wishlist.Enabled = false;
 
         // Act
-        var result = await _subject.UpdateAsync(wishlist, _userId);
+        var result = await _subject.UpdateAsync(wishlist, _userId).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.True);
 
-        var updated = await _subject.GetByIdAsync(wishlist.Id);
+        var updated = await _subject.GetByIdAsync(wishlist.Id).ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(updated, Has.Property(nameof(updated.Name)).EqualTo("UpdatedWishlist"));
@@ -353,14 +461,14 @@ public class WishlistRepositoryTests
         };
 
         // Act
-        var result = await _subject.UpdateAsync(wishlist, _userId);
+        var result = await _subject.UpdateAsync(wishlist, _userId).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.False);
     }
 
     [Test]
-    public async Task UpdateAsync_CreatesAuditRecord()
+    public async Task UpdateAsync_CreatesAuditRecord_WhenWishlistExists()
     {
         // Arrange
         var wishlist = new Wishlist
@@ -372,15 +480,15 @@ public class WishlistRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.Wishlists.Add(wishlist);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         wishlist.Name = "Updated";
 
         // Act
-        await _subject.UpdateAsync(wishlist, _userId);
+        await _subject.UpdateAsync(wishlist, _userId).ConfigureAwait(false);
 
         // Assert
-        var auditRecords = await _context.AuditRecords.ToListAsync();
+        var auditRecords = await _context.AuditRecords.ToListAsync().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(auditRecords, Has.Count.EqualTo(1));
@@ -402,15 +510,15 @@ public class WishlistRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.Wishlists.Add(wishlist);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        var result = await _subject.DeleteAsync(wishlist.Id, _userId);
+        var result = await _subject.DeleteAsync(wishlist.Id, _userId).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.True);
 
-        var deleted = await _subject.GetByIdAsync(wishlist.Id);
+        var deleted = await _subject.GetByIdAsync(wishlist.Id).ConfigureAwait(false);
         Assert.That(deleted, Is.Null);
     }
 
@@ -418,14 +526,14 @@ public class WishlistRepositoryTests
     public async Task DeleteAsync_ReturnsFalse_WhenNotExists()
     {
         // Act
-        var result = await _subject.DeleteAsync(Guid.NewGuid(), _userId);
+        var result = await _subject.DeleteAsync(Guid.NewGuid(), _userId).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.False);
     }
 
     [Test]
-    public async Task DeleteAsync_CreatesAuditRecord()
+    public async Task DeleteAsync_CreatesAuditRecord_WhenWishlistExists()
     {
         // Arrange
         var wishlist = new Wishlist
@@ -437,13 +545,13 @@ public class WishlistRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.Wishlists.Add(wishlist);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        await _subject.DeleteAsync(wishlist.Id, _userId);
+        await _subject.DeleteAsync(wishlist.Id, _userId).ConfigureAwait(false);
 
         // Assert
-        var auditRecords = await _context.AuditRecords.ToListAsync();
+        var auditRecords = await _context.AuditRecords.ToListAsync().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(auditRecords, Has.Count.EqualTo(1));
@@ -454,7 +562,7 @@ public class WishlistRepositoryTests
     }
 
     [Test]
-    public async Task PatchAsync_PatchesNameField()
+    public async Task PatchAsync_UpdatesName_WhenNameIsProvided()
     {
         // Arrange
         var wishlist = new Wishlist
@@ -466,17 +574,17 @@ public class WishlistRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.Wishlists.Add(wishlist);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         var patch = new WishlistPatch { Id = wishlist.Id, Name = new() { Value = "PatchedName" } };
 
         // Act
-        var result = await _subject.PatchAsync(patch, _userId);
+        var result = await _subject.PatchAsync(patch, _userId).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.True);
 
-        var patched = await _subject.GetByIdAsync(wishlist.Id);
+        var patched = await _subject.GetByIdAsync(wishlist.Id).ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(patched, Has.Property(nameof(patched.Name)).EqualTo("PatchedName"));
@@ -485,7 +593,7 @@ public class WishlistRepositoryTests
     }
 
     [Test]
-    public async Task PatchAsync_PatchesEnabledField()
+    public async Task PatchAsync_UpdatesEnabledState_WhenEnabledStateIsProvided()
     {
         // Arrange
         var wishlist = new Wishlist
@@ -497,17 +605,17 @@ public class WishlistRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.Wishlists.Add(wishlist);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         var patch = new WishlistPatch { Id = wishlist.Id, Enabled = new() { Value = false } };
 
         // Act
-        var result = await _subject.PatchAsync(patch, _userId);
+        var result = await _subject.PatchAsync(patch, _userId).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.True);
 
-        var patched = await _subject.GetByIdAsync(wishlist.Id);
+        var patched = await _subject.GetByIdAsync(wishlist.Id).ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(patched, Has.Property(nameof(patched.Enabled)).False);
@@ -522,14 +630,14 @@ public class WishlistRepositoryTests
         var patch = new WishlistPatch { Id = Guid.NewGuid(), Name = new() { Value = "Test" } };
 
         // Act
-        var result = await _subject.PatchAsync(patch, _userId);
+        var result = await _subject.PatchAsync(patch, _userId).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.False);
     }
 
     [Test]
-    public async Task PatchAsync_CreatesAuditRecord()
+    public async Task PatchAsync_CreatesAuditRecord_WhenPatchSucceeds()
     {
         // Arrange
         var wishlist = new Wishlist
@@ -541,15 +649,15 @@ public class WishlistRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.Wishlists.Add(wishlist);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         var patch = new WishlistPatch { Id = wishlist.Id, Name = new() { Value = "Patched" } };
 
         // Act
-        await _subject.PatchAsync(patch, _userId);
+        await _subject.PatchAsync(patch, _userId).ConfigureAwait(false);
 
         // Assert
-        var auditRecords = await _context.AuditRecords.ToListAsync();
+        var auditRecords = await _context.AuditRecords.ToListAsync().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(auditRecords, Has.Count.EqualTo(1));

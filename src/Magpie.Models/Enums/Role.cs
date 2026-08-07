@@ -1,27 +1,27 @@
 namespace Magpie.Models.Enums;
 
 /// <summary>
-/// User roles.
+/// The access role of a user.
 /// </summary>
 public enum Role
 {
     /// <summary>
-    /// Allows read-only access.
+    /// Read-only access.
     /// </summary>
     Viewer = 0,
 
     /// <summary>
-    /// Allows requesting content.
+    /// The right to request content.
     /// </summary>
     Requester,
 
     /// <summary>
-    /// Allows managing content.
+    /// The right to manage content.
     /// </summary>
     Manager,
 
     /// <summary>
-    /// Allows full administrative access.
+    /// Full administrative access.
     /// </summary>
     Admin
 }

@@ -12,6 +12,7 @@
         margin: 0;
         list-style: none;
         outline: none;
+        pointer-events: none;
     }
 
     .toast-viewport--top-right {
@@ -50,7 +51,6 @@
         border-radius: var(--radius-md);
         box-shadow: var(--shadow-lg);
         pointer-events: auto;
-
         animation-duration: var(--duration-normal);
         animation-timing-function: var(--easing-default);
         animation-fill-mode: forwards;
@@ -214,6 +214,62 @@
 
     .toast-list__icon--error {
         color: var(--status-unhealthy);
+    }
+
+    .toast-tray {
+        display: flex;
+        justify-content: flex-end;
+        order: 1;
+        margin: 0;
+        list-style: none;
+        pointer-events: none;
+    }
+
+    .toast-viewport--bottom-right .toast-tray,
+    .toast-viewport--bottom-left .toast-tray {
+        order: -1;
+    }
+
+    .toast-viewport--top-left .toast-tray,
+    .toast-viewport--bottom-left .toast-tray {
+        justify-content: flex-start;
+    }
+
+    .toast-tray__clear {
+        pointer-events: auto;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: var(--space-xs) var(--space-sm);
+        background-color: var(--bg-secondary);
+        border: 1px solid var(--border-default);
+        border-radius: var(--radius-full);
+        box-shadow: var(--shadow-md);
+        font-family: var(--font-sans);
+        font-size: var(--text-sm);
+        font-weight: var(--weight-medium);
+        color: var(--text-secondary);
+        cursor: pointer;
+        white-space: nowrap;
+        transition:
+            background-color var(--duration-fast) var(--easing-default),
+            border-color var(--duration-fast) var(--easing-default),
+            color var(--duration-fast) var(--easing-default);
+
+        &:hover {
+            background-color: var(--bg-tertiary);
+            border-color: var(--border-accent);
+            color: var(--text-primary);
+        }
+
+        &:focus-visible {
+            outline: var(--focus-ring-width) solid var(--focus-ring-color);
+            outline-offset: var(--focus-ring-offset);
+        }
+
+        @media (pointer: coarse) {
+            min-height: var(--touch-target-min);
+        }
     }
 
     @keyframes toast-slide-in {

@@ -8,12 +8,12 @@ namespace Magpie.Models.Data;
 public sealed record EventFilter
 {
     /// <summary>
-    /// The criterion for matching the event name.
+    /// Criteria for the name of the event.
     /// </summary>
     public PropertyCriterion<string>? EventName { get; init; }
 
     /// <summary>
-    /// The criteria for matching the event context.
+    /// Criteria for the context values of the event.
     /// </summary>
     public DictionaryCriteria<PropertyCriterion<string>>? EventContext { get; init; }
 }

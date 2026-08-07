@@ -25,10 +25,11 @@
         align-items: center;
     }
 
-    .list-toolbar__clear-filters {
-        font-size: var(--text-xs);
-        text-transform: uppercase;
-        letter-spacing: var(--tracking-wide);
+    .list-toolbar__filters-action {
+        margin-inline-start: auto;
+        display: flex;
+        align-items: center;
+        gap: var(--space-sm);
     }
 
     @media (min-width: 480px) and (max-width: 767px) {
@@ -41,10 +42,6 @@
     }
 
     @media (max-width: 480px) {
-        .list-toolbar__filters {
-            padding: var(--space-sm);
-        }
-
         .list-toolbar__filters-controls {
             width: 100%;
 

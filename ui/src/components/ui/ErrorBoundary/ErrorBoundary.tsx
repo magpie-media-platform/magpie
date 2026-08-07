@@ -1,8 +1,8 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react';
 
-import { WarningCircle, ArrowCounterClockwise } from '@phosphor-icons/react';
+import { WarningCircleIcon, ArrowCounterClockwiseIcon } from '@phosphor-icons/react';
 
-import { Button } from '../Button/Button';
+import { Button } from '../Button';
 
 import './ErrorBoundary.css';
 
@@ -11,12 +11,6 @@ export interface ErrorBoundaryProps {
     fallback?: ReactNode | ((props: FallbackProps) => ReactNode);
     onError?: (error: Error, errorInfo: ErrorInfo) => void;
     onReset?: () => void;
-    /**
-     * When any element in this array changes between renders, the boundary
-     * clears its error state so the children can mount again. Useful for
-     * resetting on route changes without remounting the boundary itself
-     * (which would re-trigger Suspense fallback flashes).
-     */
     resetKeys?: unknown[];
 }
 
@@ -98,14 +92,14 @@ export function ErrorFallback({ error, resetErrorBoundary }: FallbackProps) {
     return (
         <div className="error-boundary" role="alert" data-component="error-boundary">
             <div className="error-boundary__icon" aria-hidden="true">
-                <WarningCircle size={48} weight="fill" />
+                <WarningCircleIcon size={48} weight="fill" />
             </div>
             <div className="error-boundary__content">
-                <h2 className="error-boundary__title">Something went wrong</h2>
+                <h2 className="error-boundary__title">Failed to render page</h2>
                 <p className="error-boundary__message">{error.message}</p>
             </div>
             <Button variant="secondary" onClick={resetErrorBoundary} data-action="reset-error">
-                <ArrowCounterClockwise size={16} weight="bold" aria-hidden="true" />
+                <ArrowCounterClockwiseIcon size={16} weight="bold" aria-hidden="true" />
                 Try again
             </Button>
         </div>

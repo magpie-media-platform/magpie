@@ -3,7 +3,7 @@ using System;
 namespace Magpie.Auth;
 
 /// <summary>
-/// Configuration options for the token service.
+/// The options for the Magpie token service.
 /// </summary>
 public sealed class TokenServiceOptions
 {
@@ -18,12 +18,17 @@ public sealed class TokenServiceOptions
     public string Audience { get; set; } = "magpie";
 
     /// <summary>
-    /// The lifetime of access tokens.
+    /// The access token lifetime.
     /// </summary>
     public TimeSpan AccessTokenLifetime { get; set; } = TimeSpan.FromMinutes(15);
 
     /// <summary>
-    /// The lifetime of refresh tokens.
+    /// The refresh token lifetime.
     /// </summary>
     public TimeSpan RefreshTokenLifetime { get; set; } = TimeSpan.FromDays(7);
+
+    /// <summary>
+    /// The lockout options for user accounts.
+    /// </summary>
+    public AccountLockoutOptions LockoutOptions { get; set; } = new AccountLockoutOptions();
 }

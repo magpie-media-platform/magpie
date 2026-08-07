@@ -58,12 +58,12 @@
         color: var(--bg-primary);
         border-color: var(--accent-primary);
 
-        &:hover:not(:disabled):not([aria-disabled='true']) {
+        &:hover:not(:disabled, [aria-disabled='true']) {
             background-color: color-mix(in srgb, var(--accent-primary) 85%, white);
             box-shadow: var(--shadow-glow);
         }
 
-        &:active:not(:disabled):not([aria-disabled='true']) {
+        &:active:not(:disabled, [aria-disabled='true']) {
             background-color: color-mix(in srgb, var(--accent-primary) 90%, black);
         }
     }
@@ -73,12 +73,12 @@
         color: var(--text-primary);
         border-color: var(--border-default);
 
-        &:hover:not(:disabled):not([aria-disabled='true']) {
+        &:hover:not(:disabled, [aria-disabled='true']) {
             background-color: color-mix(in srgb, var(--bg-tertiary) 80%, white);
             border-color: var(--border-accent);
         }
 
-        &:active:not(:disabled):not([aria-disabled='true']) {
+        &:active:not(:disabled, [aria-disabled='true']) {
             background-color: var(--bg-secondary);
         }
     }
@@ -88,11 +88,11 @@
         color: var(--text-primary);
         border-color: transparent;
 
-        &:hover:not(:disabled):not([aria-disabled='true']) {
+        &:hover:not(:disabled, [aria-disabled='true']) {
             background-color: var(--bg-tertiary);
         }
 
-        &:active:not(:disabled):not([aria-disabled='true']) {
+        &:active:not(:disabled, [aria-disabled='true']) {
             background-color: var(--bg-secondary);
         }
     }
@@ -102,13 +102,27 @@
         color: var(--bg-primary);
         border-color: var(--status-unhealthy);
 
-        &:hover:not(:disabled):not([aria-disabled='true']) {
+        &:hover:not(:disabled, [aria-disabled='true']) {
             background-color: color-mix(in srgb, var(--status-unhealthy) 85%, white);
             box-shadow: var(--glow-error);
         }
 
-        &:active:not(:disabled):not([aria-disabled='true']) {
+        &:active:not(:disabled, [aria-disabled='true']) {
             background-color: color-mix(in srgb, var(--status-unhealthy) 90%, black);
+        }
+    }
+
+    .button--warning {
+        background-color: var(--status-degraded);
+        color: var(--bg-primary);
+        border-color: var(--status-degraded);
+
+        &:hover:not(:disabled, [aria-disabled='true']) {
+            background-color: color-mix(in srgb, var(--status-degraded) 85%, white);
+        }
+
+        &:active:not(:disabled, [aria-disabled='true']) {
+            background-color: color-mix(in srgb, var(--status-degraded) 90%, black);
         }
     }
 
@@ -117,14 +131,21 @@
         color: var(--text-primary);
         border-color: var(--border-default);
 
-        &:hover:not(:disabled):not([aria-disabled='true']) {
+        &:hover:not(:disabled, [aria-disabled='true']) {
             background-color: var(--bg-tertiary);
             border-color: var(--border-accent);
         }
 
-        &:active:not(:disabled):not([aria-disabled='true']) {
+        &:active:not(:disabled, [aria-disabled='true']) {
             background-color: var(--bg-secondary);
         }
+    }
+
+    :is(.button--primary, .button--destructive, .button--warning):disabled,
+    :is(.button--primary, .button--destructive, .button--warning)[aria-disabled='true'] {
+        background-color: var(--bg-tertiary);
+        color: var(--text-muted);
+        border-color: var(--border-default);
     }
 
     .button--loading {
@@ -135,7 +156,7 @@
         position: absolute;
         width: 1em;
         height: 1em;
-        border: 2px solid currentColor;
+        border: 2px solid currentcolor;
         border-radius: var(--radius-full);
         border-right-color: transparent;
         animation: spin var(--duration-spinner) linear infinite;

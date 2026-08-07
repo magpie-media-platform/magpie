@@ -1,21 +1,26 @@
 using System.Collections.Generic;
+using System.Linq;
 
 namespace Magpie.Models.Filtering;
 
 /// <summary>
-/// Criteria for collections of criteria
+/// The criteria for a collection of values.
 /// </summary>
+/// <typeparam name="TCriteria">The type of criterion for one item of the collection.</typeparam>
 public record CollectionCriteria<TCriteria>
 {
     /// <summary>
-    /// Items that must be present (OR within Some, AND between Some and None).
-    /// Each item represents a set of conditions that at least one collection item must match.
+    /// The criteria groups that must all match. One match in a group is sufficient for that group.
     /// </summary>
-    public List<TCriteria> Some { get; init; } = [];
+    public List<List<TCriteria>> Some { get; init; } = [];
 
     /// <summary>
-    /// Items that must not be present.
-    /// Each item represents a set of conditions that no collection item should match.
+    /// The criteria that must not match.
     /// </summary>
     public List<TCriteria> None { get; init; } = [];
+
+    /// <summary>
+    /// All criteria of <see cref="Some"/> as one sequence.
+    /// </summary>
+    public IEnumerable<TCriteria> SomeFlat => Some.SelectMany(group => group);
 }

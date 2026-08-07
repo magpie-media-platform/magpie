@@ -1,13 +1,7 @@
 import { render } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import {
-    AdminBackupsSlot,
-    AdminExtensionSettingsSlot,
-    AdminExtensionsSlot,
-    AdminProvidersSlot,
-    AdminUsersSlot,
-} from './AdminSlots';
+import { AdminBackupsSlot, AdminExtensionsSlot, AdminProvidersSlot, AdminUsersSlot } from './AdminSlots';
 import { CalendarMainSlot } from './CalendarSlots';
 import {
     ContentDetailsActionsSlot,
@@ -24,7 +18,7 @@ import {
 import { DashboardMainSlot, DashboardWidgetsSlot } from './DashboardSlots';
 import { DownloadQueueActionsSlot, DownloadQueueSlot } from './DownloadSlots';
 import { FiltersEditorSlot, FiltersListSlot } from './FiltersSlots';
-import { HeaderLeftSlot, HeaderRightSlot, HeaderSlot, NavMainSlot, OverlaySlot } from './GlobalSlots';
+import { HeaderLeftSlot, HeaderRightSlot, HeaderSlot, OverlaySlot } from './GlobalSlots';
 import { SubjectDetailsHeaderSlot, SubjectDetailsTabsSlot, SubjectListSlot } from './SubjectSlots';
 import { SystemLogsSlot, SystemStatusSlot } from './SystemSlots';
 
@@ -61,7 +55,6 @@ const slotWrappers: [string, React.ComponentType<{ children?: React.ReactNode; c
     ['admin.users', AdminUsersSlot],
     ['admin.providers', AdminProvidersSlot],
     ['admin.extensions', AdminExtensionsSlot],
-    ['admin.extensions.settings', AdminExtensionSettingsSlot],
     ['admin.backups', AdminBackupsSlot],
 
     ['calendar.main', CalendarMainSlot],
@@ -74,7 +67,6 @@ const slotWrappers: [string, React.ComponentType<{ children?: React.ReactNode; c
 
     ['global.header', HeaderSlot],
     ['global.overlay', OverlaySlot],
-    ['nav.main', NavMainSlot],
     ['header.left', HeaderLeftSlot],
     ['header.right', HeaderRightSlot],
 ];

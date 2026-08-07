@@ -61,6 +61,12 @@ describe('Checkbox', () => {
         expect(screen.getByRole('checkbox')).toHaveAttribute('data-size', 'md');
     });
 
+    it('keeps the visual control separate from the responsive tap target', () => {
+        render(<Checkbox aria-label="Responsive checkbox" />);
+
+        expect(screen.getByRole('checkbox')).toContainElement(document.querySelector('.checkbox__control'));
+    });
+
     it('applies error state', () => {
         render(<Checkbox aria-label="Error" error />);
         expect(screen.getByRole('checkbox')).toHaveAttribute('data-error', 'true');

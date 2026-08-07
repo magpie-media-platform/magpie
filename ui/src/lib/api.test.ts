@@ -13,7 +13,7 @@ import {
     AUTH_FAILURE_EVENT,
     ApiError,
 } from './api';
-import { refreshTokenStorage, tokenExpirationStorage, clearAuthStorage } from './authApi';
+import { tokenExpirationStorage, clearAuthStorage } from './authApi';
 
 describe('tokenStorage', () => {
     beforeEach(() => {
@@ -253,6 +253,19 @@ describe('apiFetch', () => {
         expect(result).toBeUndefined();
     });
 
+    it('returns undefined for an empty-body 202 Accepted response', async () => {
+        mockFetch.mockResolvedValue({
+            ok: true,
+            status: 202,
+            headers: new Headers(),
+            text: () => Promise.resolve(''),
+        });
+
+        const result = await apiFetch('/notification-rules/x/test', { method: 'POST' });
+
+        expect(result).toBeUndefined();
+    });
+
     it('throws ApiError for non-JSON success response', async () => {
         mockFetch.mockResolvedValue({
             ok: true,
@@ -298,15 +311,71 @@ describe('apiFetch', () => {
         });
     });
 
-    it('handles 401 response with no refresh token and dispatches auth failure event', async () => {
-        tokenStorage.set('expired-token');
-
+    it('parses application/problem+json body into structured details (RFC 7807)', async () => {
         mockFetch.mockResolvedValue({
             ok: false,
-            status: 401,
-            headers: new Headers({ 'content-type': 'application/json' }),
-            json: () => Promise.resolve({ message: 'Token expired' }),
+            status: 502,
+            headers: new Headers({ 'content-type': 'application/problem+json' }),
+            json: () =>
+                Promise.resolve({
+                    type: 'https://tools.ietf.org/html/rfc9110#section-15.6.3',
+                    title: 'Notification test delivery failed',
+                    status: 502,
+                    detail: 'Webhook delivery failed due to a transport error.',
+                }),
         });
+
+        await expect(apiFetch('/notification-rules/x/test', { method: 'POST' })).rejects.toMatchObject({
+            status: 502,
+            message: 'Notification test delivery failed',
+            details: { detail: 'Webhook delivery failed due to a transport error.' },
+        });
+    });
+
+    it('preserves the reason and clusterMode from the install-file ProblemDetails body', async () => {
+        mockFetch.mockResolvedValue({
+            ok: false,
+            status: 400,
+            headers: new Headers({ 'content-type': 'application/problem+json' }),
+            json: () =>
+                Promise.resolve({
+                    type: 'https://tools.ietf.org/html/rfc9110#section-15.5.1',
+                    title: 'Bad Request',
+                    status: 400,
+                    detail:
+                        'Direct local extension package uploads are disabled in MultiNodeLocalExtensions mode. ' +
+                        'Install extensions from a configured NuGet package source instead.',
+                    clusterMode: 'MultiNodeLocalExtensions',
+                }),
+        });
+
+        await expect(apiFetch('/extensions/install-file', { method: 'POST' })).rejects.toMatchObject({
+            status: 400,
+            details: {
+                detail:
+                    'Direct local extension package uploads are disabled in MultiNodeLocalExtensions mode. ' +
+                    'Install extensions from a configured NuGet package source instead.',
+                clusterMode: 'MultiNodeLocalExtensions',
+            },
+        });
+    });
+
+    it('handles 401 response by attempting refresh, then dispatches auth failure when refresh also fails', async () => {
+        tokenStorage.set('expired-token');
+
+        mockFetch
+            .mockResolvedValueOnce({
+                ok: false,
+                status: 401,
+                headers: new Headers({ 'content-type': 'application/json' }),
+                json: () => Promise.resolve({ message: 'Token expired' }),
+            })
+            .mockResolvedValueOnce({
+                ok: false,
+                status: 401,
+                headers: new Headers({ 'content-type': 'application/json' }),
+                json: () => Promise.resolve({ title: 'Refresh rejected' }),
+            });
 
         const eventHandler = vi.fn();
         window.addEventListener(AUTH_FAILURE_EVENT, eventHandler);
@@ -315,7 +384,6 @@ describe('apiFetch', () => {
 
         expect(eventHandler).toHaveBeenCalled();
         expect(tokenStorage.exists()).toBe(false);
-        expect(refreshTokenStorage.get()).toBeNull();
         expect(tokenExpirationStorage.get()).toBeNull();
 
         window.removeEventListener(AUTH_FAILURE_EVENT, eventHandler);
@@ -392,8 +460,6 @@ describe('apiFetch 401 refresh behavior', () => {
     const mockFetch = vi.fn();
 
     function makeJwt(claims: Record<string, unknown>): string {
-        // Default to a far-future `exp` so callers don't have to specify one. decodeJwtUser
-        // strictly requires a numeric `exp` claim.
         const claimsWithExp: Record<string, unknown> = {
             exp: Math.floor(Date.now() / 1000) + 3600,
             ...claims,
@@ -431,25 +497,20 @@ describe('apiFetch 401 refresh behavior', () => {
         clearAuthStorage();
     });
 
-    it('refreshes and retries the original request on 401 when refresh token is present', async () => {
+    it('refreshes and retries the original request on 401', async () => {
         const newAccessToken = makeJwt({ sub: 'user-1', name: 'alice', role: '2' });
 
         tokenStorage.set('stale-access-token');
-        refreshTokenStorage.set('valid-refresh-token');
         tokenExpirationStorage.set(new Date(Date.now() - 1000));
 
         mockFetch
-            // 1) Original request -> 401
             .mockResolvedValueOnce(jsonResponse(401, { title: 'Unauthorized' }, false))
-            // 2) Refresh -> 200
             .mockResolvedValueOnce(
                 jsonResponse(200, {
                     accessToken: newAccessToken,
                     accessTokenExpiresAt: new Date(Date.now() + 3600_000).toISOString(),
-                    refreshToken: 'rotated-refresh-token',
                 }),
             )
-            // 3) Retry of original -> 200
             .mockResolvedValueOnce(jsonResponse(200, { ok: true }));
 
         const result = await apiFetch<{ ok: boolean }>('/users/me');
@@ -457,31 +518,25 @@ describe('apiFetch 401 refresh behavior', () => {
         expect(result).toEqual({ ok: true });
         expect(mockFetch).toHaveBeenCalledTimes(3);
 
-        // First call used the stale token
         const firstHeaders = mockFetch.mock.calls[0][1].headers as Headers;
         expect(firstHeaders.get('Authorization')).toBe('Bearer stale-access-token');
 
-        // Second call hits /auth/refresh
         expect(mockFetch.mock.calls[1][0]).toContain('/auth/refresh');
+        expect(mockFetch.mock.calls[1][1].credentials).toBe('include');
+        expect(mockFetch.mock.calls[1][1].body).toBeUndefined();
 
-        // Third call uses the rotated access token
         const retryHeaders = mockFetch.mock.calls[2][1].headers as Headers;
         expect(retryHeaders.get('Authorization')).toBe(`Bearer ${newAccessToken}`);
 
-        // Storage was updated by refreshAccessToken
         expect(tokenStorage.get()).toBe(newAccessToken);
-        expect(refreshTokenStorage.get()).toBe('rotated-refresh-token');
     });
 
     it('clears all storage and dispatches auth failure when refresh itself returns 401', async () => {
         tokenStorage.set('stale-access-token');
-        refreshTokenStorage.set('rejected-refresh-token');
         tokenExpirationStorage.set(new Date(Date.now() + 60_000));
 
         mockFetch
-            // 1) Original -> 401
             .mockResolvedValueOnce(jsonResponse(401, { title: 'Unauthorized' }, false))
-            // 2) Refresh -> 401
             .mockResolvedValueOnce(jsonResponse(401, { title: 'Refresh rejected' }, false));
 
         const eventHandler = vi.fn();
@@ -492,27 +547,6 @@ describe('apiFetch 401 refresh behavior', () => {
         expect(mockFetch).toHaveBeenCalledTimes(2);
         expect(eventHandler).toHaveBeenCalledTimes(1);
         expect(tokenStorage.get()).toBeNull();
-        expect(refreshTokenStorage.get()).toBeNull();
-        expect(tokenExpirationStorage.get()).toBeNull();
-
-        window.removeEventListener(AUTH_FAILURE_EVENT, eventHandler);
-    });
-
-    it('does not attempt refresh when no refresh token is stored', async () => {
-        tokenStorage.set('orphan-access-token');
-
-        mockFetch.mockResolvedValueOnce(jsonResponse(401, { title: 'Unauthorized' }, false));
-
-        const eventHandler = vi.fn();
-        window.addEventListener(AUTH_FAILURE_EVENT, eventHandler);
-
-        await expect(apiFetch('/users/me')).rejects.toMatchObject({ status: 401 });
-
-        // Only the original call - no /auth/refresh attempt
-        expect(mockFetch).toHaveBeenCalledTimes(1);
-        expect(eventHandler).toHaveBeenCalled();
-        expect(tokenStorage.get()).toBeNull();
-        expect(refreshTokenStorage.get()).toBeNull();
         expect(tokenExpirationStorage.get()).toBeNull();
 
         window.removeEventListener(AUTH_FAILURE_EVENT, eventHandler);
@@ -522,14 +556,11 @@ describe('apiFetch 401 refresh behavior', () => {
         const newAccessToken = makeJwt({ sub: 'user-1', name: 'alice', role: '2' });
 
         tokenStorage.set('stale-access-token');
-        refreshTokenStorage.set('valid-refresh-token');
         tokenExpirationStorage.set(new Date(Date.now() - 1000));
 
-        // Use mockImplementation to route by URL/method since order is racy.
         const refreshBody = {
             accessToken: newAccessToken,
             accessTokenExpiresAt: new Date(Date.now() + 3600_000).toISOString(),
-            refreshToken: 'rotated-refresh-token',
         };
         let refreshCalls = 0;
         const retriedTokens: (string | null)[] = [];
@@ -547,7 +578,6 @@ describe('apiFetch 401 refresh behavior', () => {
                 return jsonResponse(401, { title: 'Unauthorized' }, false);
             }
 
-            // Retry path with new token
             retriedTokens.push(auth);
             return jsonResponse(200, { url });
         });
@@ -570,9 +600,6 @@ describe('apiFetch 401 refresh behavior', () => {
     });
 
     it('does not recurse when 401 comes from /auth/refresh itself', async () => {
-        // Even with skipAuth: true and a refresh token in storage, a 401 on /auth/refresh
-        // must go straight to the failure path instead of triggering another refresh.
-        refreshTokenStorage.set('rejected-refresh-token');
         tokenExpirationStorage.set(new Date(Date.now() + 60_000));
 
         mockFetch.mockResolvedValueOnce(jsonResponse(401, { title: 'Refresh rejected' }, false));
@@ -583,24 +610,18 @@ describe('apiFetch 401 refresh behavior', () => {
         await expect(
             apiFetch('/auth/refresh', {
                 method: 'POST',
-                body: { refreshToken: 'rejected-refresh-token' },
                 skipAuth: true,
             }),
         ).rejects.toMatchObject({ status: 401 });
 
-        // Only the single direct call, no recursion
         expect(mockFetch).toHaveBeenCalledTimes(1);
         expect(eventHandler).toHaveBeenCalled();
-        expect(refreshTokenStorage.get()).toBeNull();
         expect(tokenExpirationStorage.get()).toBeNull();
 
         window.removeEventListener(AUTH_FAILURE_EVENT, eventHandler);
     });
 
     it('does not recurse when 401 comes from /auth/refresh/ with trailing slash', async () => {
-        // The refresh-endpoint detection must normalise trailing slashes so a request
-        // to /auth/refresh/ also avoids recursion.
-        refreshTokenStorage.set('rejected-refresh-token');
         tokenExpirationStorage.set(new Date(Date.now() + 60_000));
 
         mockFetch.mockResolvedValueOnce(jsonResponse(401, { title: 'Refresh rejected' }, false));
@@ -611,14 +632,12 @@ describe('apiFetch 401 refresh behavior', () => {
         await expect(
             apiFetch('/auth/refresh/', {
                 method: 'POST',
-                body: { refreshToken: 'rejected-refresh-token' },
                 skipAuth: true,
             }),
         ).rejects.toMatchObject({ status: 401 });
 
         expect(mockFetch).toHaveBeenCalledTimes(1);
         expect(eventHandler).toHaveBeenCalledTimes(1);
-        expect(refreshTokenStorage.get()).toBeNull();
         expect(tokenExpirationStorage.get()).toBeNull();
 
         window.removeEventListener(AUTH_FAILURE_EVENT, eventHandler);
@@ -628,7 +647,6 @@ describe('apiFetch 401 refresh behavior', () => {
         const newAccessToken = makeJwt({ sub: 'user-1', name: 'alice', role: '2' });
 
         tokenStorage.set('stale-access-token');
-        refreshTokenStorage.set('valid-refresh-token');
         tokenExpirationStorage.set(new Date(Date.now() - 1000));
 
         mockFetch
@@ -637,7 +655,6 @@ describe('apiFetch 401 refresh behavior', () => {
                 jsonResponse(200, {
                     accessToken: newAccessToken,
                     accessTokenExpiresAt: new Date(Date.now() + 3600_000).toISOString(),
-                    refreshToken: 'rotated-refresh-token',
                 }),
             )
             .mockResolvedValueOnce(emptyResponse(204));
@@ -759,5 +776,20 @@ describe('buildUrl', () => {
             deleted: null,
         });
         expect(result).toBe('/search?q=test&page=1&active=true');
+    });
+
+    it('appends one entry per array element as a repeated key', () => {
+        const result = buildUrl('/jobs', { status: ['Running', 'CancellationRequested'] });
+        expect(result).toBe('/jobs?status=Running&status=CancellationRequested');
+    });
+
+    it('skips empty arrays', () => {
+        const result = buildUrl('/jobs', { page: 1, status: [] });
+        expect(result).toBe('/jobs?page=1');
+    });
+
+    it('skips null and undefined elements within arrays', () => {
+        const result = buildUrl('/jobs', { status: ['Running', null, undefined, 'Failed'] });
+        expect(result).toBe('/jobs?status=Running&status=Failed');
     });
 });

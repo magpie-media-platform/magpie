@@ -1,6 +1,6 @@
 import { forwardRef, type HTMLAttributes, type ReactNode } from 'react';
 
-import { X } from '@phosphor-icons/react';
+import { XIcon } from '@phosphor-icons/react';
 
 import './Alert.css';
 
@@ -33,7 +33,7 @@ export const Alert = forwardRef<HTMLDivElement, AlertProps>(
                 </div>
                 {dismissible && (
                     <button type="button" className="alert__dismiss" onClick={onDismiss} aria-label="Dismiss alert">
-                        <X size={16} weight="bold" aria-hidden="true" />
+                        <XIcon size={16} weight="bold" aria-hidden="true" />
                     </button>
                 )}
             </div>

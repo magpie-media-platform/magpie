@@ -2,7 +2,7 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
-import { Info, Warning } from '@phosphor-icons/react';
+import { InfoIcon, WarningIcon } from '@phosphor-icons/react';
 
 import { Alert } from './Alert';
 
@@ -47,12 +47,12 @@ describe('Alert', () => {
     });
 
     it('renders icon when provided', () => {
-        render(<Alert icon={<Info data-testid="alert-icon" />}>With icon</Alert>);
+        render(<Alert icon={<InfoIcon data-testid="alert-icon" />}>With icon</Alert>);
         expect(screen.getByTestId('alert-icon')).toBeInTheDocument();
     });
 
     it('hides icon from screen readers', () => {
-        render(<Alert icon={<Warning data-testid="warning-icon" />}>With warning</Alert>);
+        render(<Alert icon={<WarningIcon data-testid="warning-icon" />}>With warning</Alert>);
         const iconContainer = screen.getByTestId('warning-icon').parentElement;
         expect(iconContainer).toHaveAttribute('aria-hidden', 'true');
     });

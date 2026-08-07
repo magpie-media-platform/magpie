@@ -1,97 +1,96 @@
-import { useCallback } from 'react';
-import { useSearchParams } from 'react-router-dom';
-import { Users, Key } from '@phosphor-icons/react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { UsersIcon, KeyIcon } from '@phosphor-icons/react';
 
+import { useAuth, Role } from '@/auth';
+import { PageHeader } from '@/components/ui/PageHeader';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/Tabs';
 import { PullToRefresh } from '@/components/ui/PullToRefresh';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
+import { useUrlTabState } from '@/hooks/useUrlTabState';
 import { useUsers } from '@/hooks/useUsers';
-import { useApiKeys } from '@/hooks/useApiKeys';
+import { useApiKeys, useAllApiKeys } from '@/hooks/useApiKeys';
 
 import { UserManagement } from './UserManagement';
-import { ApiKeyManagement } from './ApiKeyManagement';
+import { ApiKeyManagement, type ApiKeyScope } from './ApiKeyManagement';
 
 import './UsersPage.css';
 import '@/styles/card-actions.css';
 import '@/styles/list-toolbar.css';
 
+const USER_TABS = ['users', 'api-keys'] as const;
+const USERS_PAGE_SIZE = 25;
+
 export function UsersPage() {
     useDocumentTitle('Users');
-    const [searchParams, setSearchParams] = useSearchParams();
+    const [activeTab, setUrlActiveTab] = useUrlTabState({ defaultTab: 'users', allowedTabs: USER_TABS });
+    const setActiveTab = useCallback((tab: string) => setUrlActiveTab(tab, { replace: true }), [setUrlActiveTab]);
+    const [apiKeyScope, setApiKeyScope] = useState<ApiKeyScope>('mine');
 
-    const activeTab = searchParams.get('tab') || 'users';
-    const setActiveTab = useCallback(
-        (tab: string) => {
-            setSearchParams(
-                (prev) => {
-                    const next = new URLSearchParams(prev);
-                    if (tab === 'users') {
-                        next.delete('tab');
-                    } else {
-                        next.set('tab', tab);
-                    }
-                    if (tab !== 'users') {
-                        next.delete('role');
-                        next.delete('enabled');
-                    }
-                    return next;
-                },
-                { replace: true },
-            );
-        },
-        [setSearchParams],
-    );
-
-    const { users, refetch: refetchUsers } = useUsers();
+    const { hasRole } = useAuth();
+    const canViewAllApiKeys = hasRole(Role.Admin);
+    const isViewingAllApiKeys = canViewAllApiKeys && apiKeyScope === 'all';
+    const [usersPage, setUsersPage] = useState(1);
+    const userQueryParams = useMemo(() => ({ pageNumber: usersPage, pageSize: USERS_PAGE_SIZE }), [usersPage]);
+    const usersQuery = useUsers(userQueryParams);
+    const { totalItems: totalUsers, isLoading: areUsersLoading, refetch: refetchUsers } = usersQuery;
+    const usersPageCount = Math.max(1, Math.ceil(totalUsers / USERS_PAGE_SIZE));
     const { apiKeys: myApiKeys, refetch: refetchMyKeys } = useApiKeys();
+    const { apiKeys: allApiKeys, refetch: refetchAllKeys } = useAllApiKeys(isViewingAllApiKeys);
+    const apiKeyTabCount = isViewingAllApiKeys ? allApiKeys.length : myApiKeys.length;
+
+    useEffect(() => {
+        if (!areUsersLoading && usersPage > usersPageCount) {
+            setUsersPage(usersPageCount);
+        }
+    }, [areUsersLoading, usersPage, usersPageCount]);
 
     const handleRefresh = useCallback(async () => {
         await refetchUsers();
-        await refetchMyKeys();
-    }, [refetchUsers, refetchMyKeys]);
+        if (isViewingAllApiKeys) {
+            await refetchAllKeys();
+        } else {
+            await refetchMyKeys();
+        }
+    }, [refetchUsers, isViewingAllApiKeys, refetchAllKeys, refetchMyKeys]);
 
     return (
         <div className="users-page" data-page="users">
             <PullToRefresh onRefresh={handleRefresh} className="users-page__pull-to-refresh">
-                <header className="users-page__header">
-                    <div className="users-page__header-left">
-                        <Users
-                            weight="duotone"
-                            className="users-page__icon"
-                            aria-hidden="true"
-                            data-testid="users-page__icon"
-                        />
-                        <h1 className="users-page__title">Users</h1>
-                        <span className="page-count users-page__count" data-testid="users-page__count">
-                            {users.length}
-                        </span>
-                    </div>
-                </header>
+                <PageHeader
+                    className="users-page__header"
+                    title="Users"
+                    icon={<UsersIcon weight="duotone" aria-hidden="true" data-testid="users-page__icon" />}
+                />
 
                 <Tabs value={activeTab} onValueChange={setActiveTab} className="users-page__tabs">
                     <TabsList>
                         <TabsTrigger value="users" data-tab="users">
-                            <Users weight="duotone" aria-hidden="true" />
+                            <UsersIcon weight="duotone" aria-hidden="true" />
                             Users
                             <span className="tab-count users-page__tab-count" data-testid="users-page__tab-count">
-                                {users.length}
+                                {totalUsers}
                             </span>
                         </TabsTrigger>
                         <TabsTrigger value="api-keys" data-tab="api-keys">
-                            <Key weight="duotone" aria-hidden="true" />
+                            <KeyIcon weight="duotone" aria-hidden="true" />
                             API Keys
                             <span className="tab-count users-page__tab-count" data-testid="users-page__tab-count">
-                                {myApiKeys.length}
+                                {apiKeyTabCount}
                             </span>
                         </TabsTrigger>
                     </TabsList>
 
                     <TabsContent value="users" className="users-page__tab-content">
-                        <UserManagement />
+                        <UserManagement
+                            queryParams={userQueryParams}
+                            page={usersPage}
+                            pageCount={usersPageCount}
+                            onPageChange={setUsersPage}
+                        />
                     </TabsContent>
 
                     <TabsContent value="api-keys" className="users-page__tab-content">
-                        <ApiKeyManagement />
+                        <ApiKeyManagement scope={apiKeyScope} onScopeChange={setApiKeyScope} />
                     </TabsContent>
                 </Tabs>
             </PullToRefresh>

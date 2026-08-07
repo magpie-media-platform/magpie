@@ -6,7 +6,7 @@ using Magpie.Models.Data;
 namespace Magpie.Abstractions.Repositories;
 
 /// <summary>
-/// Repository for managing download client configurations.
+/// The repository contract for download clients.
 /// </summary>
 public interface IDownloadClientRepository :
     ICrudRepository<Guid, DownloadClient>,

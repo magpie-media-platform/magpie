@@ -1,4 +1,5 @@
 import { buildQueryKeys, useCrudResource } from './useCrudResource';
+import { useInvalidateQueriesOnEvents } from './useInvalidateQueriesOnEvents';
 import { healthStatusLabels, healthStatusVariants } from '@/types/healthStatus';
 import type { HealthStatusValue } from '@/types/healthStatus';
 
@@ -22,8 +23,6 @@ export interface ApiMediaServer {
 
     lastChecked?: string | null;
 
-    settings: Record<string, string>;
-
     createdAt: string;
 
     createdByUserId?: string | null;
@@ -31,9 +30,11 @@ export interface ApiMediaServer {
     modifiedAt?: string | null;
 
     modifiedByUserId?: string | null;
+
+    settings?: Record<string, string>;
 }
 
-export interface MediaServerPatch {
+interface MediaServerPatch {
     name?: { value: string };
     enabled?: { value: boolean };
     settings?: {
@@ -47,7 +48,7 @@ export interface MediaServerPatch {
     };
 }
 
-export interface MediaServerCreate {
+interface MediaServerCreate {
     providerType: string;
 
     name: string;
@@ -57,11 +58,21 @@ export interface MediaServerCreate {
     settings?: Record<string, string>;
 }
 
-export const mediaServerQueryKeys = buildQueryKeys('media-servers');
+const mediaServerQueryKeys = buildQueryKeys('media-servers');
 
 export function useMediaServers() {
+    useInvalidateQueriesOnEvents(['integration.health.changed'], [[...mediaServerQueryKeys.list(), '/media-servers']], {
+        context: { 'integration.type': 'mediaServer' },
+        debounceMs: 150,
+        exact: true,
+        maxWaitMs: 600,
+        owner: 'media-server-settings',
+    });
     const resource = useCrudResource<ApiMediaServer, MediaServerCreate, MediaServerPatch>(
-        { basePath: '/media-servers' },
+        {
+            basePath: '/media-servers',
+            eventNames: ['mediaServer.created', 'mediaServer.updated', 'mediaServer.deleted'],
+        },
         mediaServerQueryKeys,
     );
 

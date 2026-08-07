@@ -1,7 +1,7 @@
 import { render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
-import { House } from '@phosphor-icons/react';
+import { HouseIcon } from '@phosphor-icons/react';
 
 import { Breadcrumb, type BreadcrumbItem } from './Breadcrumb';
 
@@ -89,7 +89,7 @@ describe('Breadcrumb', () => {
 
     it('renders item icons when provided', () => {
         const itemsWithIcon: BreadcrumbItem[] = [
-            { id: 'home', label: 'Home', to: '/', icon: <House data-testid="home-icon" /> },
+            { id: 'home', label: 'Home', to: '/', icon: <HouseIcon data-testid="home-icon" /> },
             { id: 'page', label: 'Page', to: '/page' },
         ];
         renderWithRouter(<Breadcrumb items={itemsWithIcon} />);

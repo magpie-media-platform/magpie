@@ -6,42 +6,52 @@ namespace Magpie.Models.Enums;
 public enum DownloadStatus
 {
     /// <summary>
-    /// The download was grabbed and sent to the client.
+    /// The grab is complete and the client has the download.
     /// </summary>
     Grabbed = 0,
 
     /// <summary>
-    /// The download is queued in the client.
+    /// The download waits in the client queue.
     /// </summary>
-    Queued,
+    Queued = 1,
 
     /// <summary>
-    /// The download is actively downloading.
+    /// The download is in progress.
     /// </summary>
-    Downloading,
+    Downloading = 2,
 
     /// <summary>
     /// The download is paused.
     /// </summary>
-    Paused,
+    Paused = 3,
 
     /// <summary>
-    /// The download is stalled with no progress.
+    /// The download makes no progress.
     /// </summary>
-    Stalled,
+    Stalled = 4,
 
     /// <summary>
-    /// The download completed successfully.
+    /// The download is complete.
     /// </summary>
-    Downloaded,
+    Downloaded = 5,
 
     /// <summary>
-    /// The download was imported into the library.
+    /// The library import of the download is complete.
     /// </summary>
-    Imported,
+    Imported = 6,
 
     /// <summary>
-    /// The download failed.
+    /// A terminal failure stopped the grab, the download, or the import.
     /// </summary>
-    Failed
+    Failed = 7,
+
+    /// <summary>
+    /// A user stopped the download.
+    /// </summary>
+    Cancelled = 8,
+
+    /// <summary>
+    /// The library import of the download is in progress.
+    /// </summary>
+    Importing = 9
 }

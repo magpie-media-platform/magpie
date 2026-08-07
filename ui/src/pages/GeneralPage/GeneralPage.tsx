@@ -1,26 +1,27 @@
-import { useState, useCallback, useEffect } from 'react';
-import { Gear, FloppyDisk, CircleNotch, WarningCircle } from '@phosphor-icons/react';
+import { useState, useCallback } from 'react';
+import { GearIcon, FloppyDiskIcon, CircleNotchIcon, WarningCircleIcon } from '@phosphor-icons/react';
 
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
-import { useUnsavedChangesGuard } from '@/hooks/useUnsavedChangesGuard';
 
 import { Alert } from '@/components/ui/Alert';
 import { Button } from '@/components/ui/Button';
+import { ExternalChangeConflictWarning, StaleSaveConfirmationDialog } from '@/components/ui/ExternalChangeConflict';
 import { Input } from '@/components/ui/Input';
 import { Label } from '@/components/ui/Label';
+import { PageHeader } from '@/components/ui/PageHeader';
 import { Skeleton } from '@/components/ui/Skeleton';
-import { useToast } from '@/components/ui/Toast';
-import { isApiError } from '@/lib/api';
-import { useSystemSettingsGroup, useUpdateSystemSettingsGroup, settingsToRecord } from '@/hooks/useSettings';
+import { useSettingsGroupForm } from '@/hooks/useSettingsGroupForm';
+
+import { JobRetryPolicyPanel } from './JobRetryPolicyPanel';
 
 import './GeneralPage.css';
 
 const SETTINGS_GROUP = 'general';
 
-interface GeneralFormValues {
+type GeneralFormValues = {
     instanceName: string;
     baseUrl: string;
-}
+};
 
 const defaultValues: GeneralFormValues = {
     instanceName: '',
@@ -28,73 +29,43 @@ const defaultValues: GeneralFormValues = {
 };
 
 export function GeneralPage() {
-    useDocumentTitle('General Settings');
-    const { group, isLoading, error: rawLoadError } = useSystemSettingsGroup(SETTINGS_GROUP);
-
-    const is404 = isApiError(rawLoadError) && rawLoadError.status === 404;
-    const loadError = is404 ? null : rawLoadError;
-    const { updateSettings, isUpdating } = useUpdateSystemSettingsGroup(SETTINGS_GROUP);
-    const { toast } = useToast();
-
-    const [values, setValues] = useState<GeneralFormValues>(defaultValues);
-    const [hasChanges, setHasChanges] = useState(false);
-
-    useUnsavedChangesGuard(hasChanges);
-
-    useEffect(() => {
-        if (group) {
-            const record = settingsToRecord(group.settings);
-            setValues({
+    useDocumentTitle('Advanced Settings');
+    const [showStaleSaveConfirmation, setShowStaleSaveConfirmation] = useState(false);
+    const { values, handleChange, hasChanges, isLoading, loadError, isUncreated, isUpdating, conflictState, save } =
+        useSettingsGroupForm<GeneralFormValues>({
+            settingsGroup: SETTINGS_GROUP,
+            defaultValues,
+            fromRecord: (record) => ({
                 instanceName: record.instanceName ?? '',
                 baseUrl: record.baseUrl ?? '',
-            });
-            setHasChanges(false);
-        }
-    }, [group]);
+            }),
+        });
 
-    const handleChange = useCallback((key: keyof GeneralFormValues, value: string) => {
-        setValues((prev) => ({ ...prev, [key]: value }));
-        setHasChanges(true);
-    }, []);
+    const saveSettings = useCallback(() => {
+        void save(
+            {
+                instanceName: values.instanceName,
+                baseUrl: values.baseUrl,
+            },
+            { successDescription: 'Magpie updated the general settings.' },
+        );
+    }, [save, values]);
 
-    const handleSave = useCallback(async () => {
-        const existingKeys = new Set(group?.settings.map((s) => s.key) ?? []);
-        try {
-            await updateSettings({
-                values: {
-                    instanceName: values.instanceName,
-                    baseUrl: values.baseUrl,
-                },
-                existingKeys,
-            });
-            setHasChanges(false);
-            toast({
-                title: 'Settings Saved',
-                description: 'General settings have been updated successfully.',
-                variant: 'success',
-            });
-        } catch (err) {
-            toast({
-                title: 'Save Failed',
-                description: err instanceof Error ? err.message : 'Failed to save settings. Please try again.',
-                variant: 'error',
-            });
+    const handleSave = useCallback(() => {
+        if (conflictState === 'stale') {
+            setShowStaleSaveConfirmation(true);
+            return;
         }
-    }, [group, values, updateSettings, toast]);
+        saveSettings();
+    }, [conflictState, saveSettings]);
 
     return (
         <div className="general-page" data-page="general">
-            <header className="general-page__header">
-                <div className="general-page__header-left">
-                    <Gear
-                        weight="duotone"
-                        className="general-page__icon"
-                        aria-hidden="true"
-                        data-testid="general-page__icon"
-                    />
-                    <h1 className="general-page__title">General</h1>
-                </div>
-            </header>
+            <PageHeader
+                className="general-page__header"
+                title="Advanced"
+                icon={<GearIcon weight="duotone" aria-hidden="true" data-testid="general-page__icon" />}
+            />
 
             <section
                 className="general-page__settings"
@@ -102,7 +73,7 @@ export function GeneralPage() {
                 data-component="general-settings"
             >
                 <header className="general-page__settings-header">
-                    <Gear weight="duotone" className="general-page__settings-icon" aria-hidden="true" />
+                    <GearIcon weight="duotone" className="general-page__settings-icon" aria-hidden="true" />
                     <h2 id="general-settings-title" className="general-page__settings-title">
                         Instance Settings
                     </h2>
@@ -127,16 +98,28 @@ export function GeneralPage() {
                             </div>
                         </div>
                     ) : loadError ? (
-                        <Alert variant="warning" icon={<WarningCircle weight="duotone" />} data-testid="settings-error">
-                            Failed to load settings. The settings group may not exist yet and will be created on first
-                            save.
+                        <Alert
+                            variant="warning"
+                            icon={<WarningCircleIcon weight="duotone" />}
+                            data-testid="settings-error"
+                        >
+                            Failed to load settings. If the settings group does not exist, save the settings to create
+                            it.
                         </Alert>
                     ) : (
                         <>
-                            {is404 && (
+                            {isUncreated && (
                                 <div className="general-page__info" data-testid="settings-info">
                                     <p className="general-page__info-text">Settings will be created on first save.</p>
                                 </div>
+                            )}
+
+                            {conflictState && (
+                                <ExternalChangeConflictWarning
+                                    state={conflictState}
+                                    entityLabel="Settings"
+                                    id="general-settings-external-change"
+                                />
                             )}
 
                             <div className="general-page__settings-row">
@@ -182,7 +165,7 @@ export function GeneralPage() {
                                 >
                                     {isUpdating ? (
                                         <>
-                                            <CircleNotch
+                                            <CircleNotchIcon
                                                 weight="bold"
                                                 className="general-page__spinner"
                                                 aria-hidden="true"
@@ -191,7 +174,7 @@ export function GeneralPage() {
                                         </>
                                     ) : (
                                         <>
-                                            <FloppyDisk weight="bold" aria-hidden="true" />
+                                            <FloppyDiskIcon weight="bold" aria-hidden="true" />
                                             Save Settings
                                         </>
                                     )}
@@ -201,6 +184,19 @@ export function GeneralPage() {
                     )}
                 </div>
             </section>
+
+            <JobRetryPolicyPanel />
+
+            <StaleSaveConfirmationDialog
+                open={showStaleSaveConfirmation}
+                entityLabel="settings"
+                saving={isUpdating}
+                onCancel={() => setShowStaleSaveConfirmation(false)}
+                onConfirm={() => {
+                    setShowStaleSaveConfirmation(false);
+                    saveSettings();
+                }}
+            />
         </div>
     );
 }

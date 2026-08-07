@@ -30,9 +30,11 @@ const Checkbox = forwardRef<HTMLButtonElement, CheckboxProps>(
                 aria-describedby={ariaDescribedBy}
                 {...props}
             >
-                <CheckboxPrimitive.Indicator className="checkbox__indicator">
-                    <CheckIcon />
-                </CheckboxPrimitive.Indicator>
+                <span className="checkbox__control" aria-hidden="true">
+                    <CheckboxPrimitive.Indicator className="checkbox__indicator">
+                        <CheckIcon />
+                    </CheckboxPrimitive.Indicator>
+                </span>
             </CheckboxPrimitive.Root>
         );
     },

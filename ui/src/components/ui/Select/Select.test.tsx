@@ -71,6 +71,16 @@ describe('Select', () => {
         expect(screen.getByRole('option', { name: 'Cherry' })).toBeInTheDocument();
     });
 
+    it('renders the dropdown on the themed select-content surface', async () => {
+        const user = userEvent.setup();
+        renderSelect({});
+
+        await user.click(screen.getByRole('combobox'));
+
+        const content = screen.getByRole('listbox').closest('.select-content');
+        expect(content).not.toBeNull();
+    });
+
     it('selects an option on click', async () => {
         const user = userEvent.setup();
         const handleValueChange = vi.fn();

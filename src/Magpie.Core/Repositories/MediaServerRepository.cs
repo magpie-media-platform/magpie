@@ -6,26 +6,79 @@ using System.Threading.Tasks;
 
 using Magpie.Abstractions;
 using Magpie.Abstractions.Repositories;
+using Magpie.Core.Events;
 using Magpie.Data;
 using Magpie.Models;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
+using Magpie.Sdk.Services;
 
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 
 namespace Magpie.Core.Repositories;
 
-/// <summary>
-/// Repository for managing media server configurations.
-/// </summary>
-public sealed class MediaServerRepository(
+internal sealed class MediaServerRepository(
     MagpieDbContext context,
     IAuditRecordRepository auditRecordRepository,
     ITransactionManager transactionManager,
-    ILogger<MediaServerRepository> logger) : IMediaServerRepository
+    IEventBus eventBus,
+    ILogger<MediaServerRepository> logger,
+    TimeProvider? timeProvider = null) : IMediaServerRepository
 {
-    /// <inheritdoc />
+    private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
+
+    private static IReadOnlyCollection<string> ChangedFields(MediaServerPatch patch)
+    {
+        var fields = new List<string>();
+        if (patch.Name is not null)
+        {
+            fields.Add("name");
+        }
+
+        if (patch.Enabled is not null)
+        {
+            fields.Add("enabled");
+        }
+
+        if (patch.ContentTypes is not null)
+        {
+            fields.Add("contentTypes");
+        }
+
+        if (patch.Settings is not null)
+        {
+            fields.Add("settings");
+        }
+
+        if (patch.Status is not null)
+        {
+            fields.Add("status");
+        }
+
+        if (patch.LastChecked is not null)
+        {
+            fields.Add("lastChecked");
+        }
+
+        if (patch.LastError is not null)
+        {
+            fields.Add("lastError");
+        }
+
+        if (patch.ConsecutiveFailures is not null)
+        {
+            fields.Add("consecutiveFailures");
+        }
+
+        if (patch.Tags is not null)
+        {
+            fields.Add("tags");
+        }
+
+        return fields;
+    }
+
     public async Task<IEnumerable<MediaServer>> ListAllAsync(CancellationToken cancellationToken)
     {
         try
@@ -37,12 +90,11 @@ public sealed class MediaServerRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Error listing media servers");
+            logger.LogError(ex, "The media server repository failed to list media servers.");
             throw;
         }
     }
 
-    /// <inheritdoc />
     public async Task<MediaServer?> GetByIdAsync(Guid id, CancellationToken cancellationToken)
     {
         try
@@ -54,12 +106,11 @@ public sealed class MediaServerRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Error getting media server {MediaServerId}", id);
+            logger.LogError(ex, "The media server repository failed to read media server {MediaServerId}.", id);
             throw;
         }
     }
 
-    /// <inheritdoc />
     public async Task<MediaServer> CreateAsync(
         MediaServer model,
         Guid? createdByUserId,
@@ -67,136 +118,159 @@ public sealed class MediaServerRepository(
     {
         try
         {
-            return await transactionManager.ExecuteWithTransactionAsync(async _ =>
-            {
-                var now = DateTime.UtcNow;
-                model.CreatedAt = now;
-                model.CreatedByUserId = createdByUserId;
-
-                context.MediaServers.Add(model);
-                await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
-
-                await auditRecordRepository.CreateAsync(new()
+            var created = await transactionManager.ExecuteWithTransactionAsync(
+                async _ =>
                 {
-                    Category = AuditCategories.Integrations,
-                    Operation = "Create",
-                    EntityId = model.Id.ToString(),
-                    EntityType = nameof(MediaServer),
-                    Detail = $"Created media server {model.Name}",
-                    Timestamp = now,
-                    UserId = createdByUserId
-                }, cancellationToken).ConfigureAwait(false);
+                    var now = _time.GetUtcNow().UtcDateTime;
+                    model.CreatedAt = now;
+                    model.CreatedByUserId = createdByUserId;
 
-                return model;
-            }, cancellationToken);
+                    context.MediaServers.Add(model);
+                    await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+
+                    await auditRecordRepository.CreateAsync(
+                        new()
+                        {
+                            Category = AuditCategories.Integrations,
+                            Operation = "Create",
+                            EntityId = model.Id.ToString(),
+                            EntityType = nameof(MediaServer),
+                            Detail = $"Created media server {model.Name}",
+                            Timestamp = now,
+                            UserId = createdByUserId
+                        },
+                        cancellationToken).ConfigureAwait(false);
+
+                    return model;
+                },
+                cancellationToken).ConfigureAwait(false);
+
+            await transactionManager.OnCommittedAsync(
+                token => eventBus.PublishAsync(IntegrationEventBuilder.BuildMediaServerCreatedEvent(created.Id), token),
+                cancellationToken).ConfigureAwait(false);
+
+            return created;
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Error creating media server {MediaServerName}", model.Name);
+            logger.LogError(ex, "The media server repository failed to create media server " +
+                "{MediaServerName}.", model.Name);
             throw;
         }
     }
 
-    /// <inheritdoc />
     public async Task<bool> UpdateAsync(MediaServer model, Guid? modifiedByUserId, CancellationToken cancellationToken)
     {
         try
         {
-            return await transactionManager.ExecuteWithTransactionAsync(async _ =>
-            {
-                var now = DateTime.UtcNow;
-                var updated = await context.MediaServers
-                    .Where(s => s.Id == model.Id)
-                    .ExecuteUpdateAsync(
-                        s => s
-                            .SetProperty(m => m.Name, model.Name)
-                            .SetProperty(m => m.ExtensionId, model.ExtensionId)
-                            .SetProperty(m => m.ProviderType, model.ProviderType)
-                            .SetProperty(m => m.Enabled, model.Enabled)
-                            .SetProperty(m => m.Status, model.Status)
-                            .SetProperty(m => m.LastChecked, model.LastChecked)
-                            .SetProperty(m => m.Settings, model.Settings)
-                            .SetProperty(m => m.ModifiedAt, now)
-                            .SetProperty(m => m.ModifiedByUserId, modifiedByUserId),
-                        cancellationToken)
-                    .ConfigureAwait(false);
-
-                if (updated > 0)
+            return await transactionManager.ExecuteWithTransactionAsync(
+                async _ =>
                 {
-                    await auditRecordRepository.CreateAsync(new()
-                    {
-                        Category = AuditCategories.Integrations,
-                        Operation = "Update",
-                        EntityId = model.Id.ToString(),
-                        EntityType = nameof(MediaServer),
-                        Detail = $"Updated media server {model.Name}",
-                        Timestamp = now,
-                        UserId = modifiedByUserId
-                    }, cancellationToken).ConfigureAwait(false);
-                }
+                    var now = _time.GetUtcNow().UtcDateTime;
+                    var updated = await context.MediaServers
+                        .Where(s => s.Id == model.Id)
+                        .ExecuteUpdateAsync(
+                            s => s
+                                .SetProperty(m => m.Name, model.Name)
+                                .SetProperty(m => m.ExtensionId, model.ExtensionId)
+                                .SetProperty(m => m.ProviderType, model.ProviderType)
+                                .SetProperty(m => m.Enabled, model.Enabled)
+                                .SetProperty(m => m.Status, model.Status)
+                                .SetProperty(m => m.ContentTypes, model.ContentTypes)
+                                .SetProperty(m => m.LastChecked, model.LastChecked)
+                                .SetProperty(m => m.Settings, model.Settings)
+                                .SetProperty(m => m.ModifiedAt, now)
+                                .SetProperty(m => m.ModifiedByUserId, modifiedByUserId),
+                            cancellationToken)
+                        .ConfigureAwait(false);
 
-                return updated > 0;
-            }, cancellationToken);
+                    if (updated > 0)
+                    {
+                        await auditRecordRepository.CreateAsync(
+                            new()
+                            {
+                                Category = AuditCategories.Integrations,
+                                Operation = "Update",
+                                EntityId = model.Id.ToString(),
+                                EntityType = nameof(MediaServer),
+                                Detail = $"Updated media server {model.Name}",
+                                Timestamp = now,
+                                UserId = modifiedByUserId
+                            },
+                            cancellationToken).ConfigureAwait(false);
+                    }
+
+                    return updated > 0;
+                },
+                cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Error updating media server {MediaServerId}", model.Id);
+            logger.LogError(ex, "The media server repository failed to update media server {MediaServerId}.", model.Id);
             throw;
         }
     }
 
-    /// <inheritdoc />
-    public async Task<bool> DeleteAsync(
-        Guid id,
-        Guid? deletedByUserId,
-        CancellationToken cancellationToken)
+    public async Task<bool> DeleteAsync(Guid id, Guid? deletedByUserId, CancellationToken cancellationToken)
     {
         try
         {
-            return await transactionManager.ExecuteWithTransactionAsync(async _ =>
-            {
-                var now = DateTime.UtcNow;
-                var model = await context.MediaServers
-                    .AsNoTracking()
-                    .Where(s => s.Id == id)
-                    .Select(s => new { s.Name })
-                    .FirstOrDefaultAsync(cancellationToken)
-                    .ConfigureAwait(false);
-
-                if (model is null)
+            var removed = await transactionManager.ExecuteWithTransactionAsync(
+                async _ =>
                 {
-                    return false;
-                }
+                    var now = _time.GetUtcNow().UtcDateTime;
+                    var model = await (
+                        from s in context.MediaServers.AsNoTracking()
+                        where s.Id == id
+                        select new { s.Name })
+                        .FirstOrDefaultAsync(cancellationToken)
+                        .ConfigureAwait(false);
 
-                var deleted = await context.MediaServers
-                    .Where(s => s.Id == id)
-                    .ExecuteDeleteAsync(cancellationToken)
-                    .ConfigureAwait(false);
-                if (deleted > 0)
-                {
-                    await auditRecordRepository.CreateAsync(new()
+                    if (model is null)
                     {
-                        Category = AuditCategories.Integrations,
-                        Operation = "Delete",
-                        EntityId = id.ToString(),
-                        EntityType = nameof(MediaServer),
-                        Detail = $"Deleted media server {model.Name}",
-                        Timestamp = now,
-                        UserId = deletedByUserId
-                    }, cancellationToken).ConfigureAwait(false);
-                }
+                        return false;
+                    }
 
-                return deleted > 0;
-            }, cancellationToken);
+                    var deleted = await context.MediaServers
+                        .Where(s => s.Id == id)
+                        .ExecuteDeleteAsync(cancellationToken)
+                        .ConfigureAwait(false);
+                    if (deleted > 0)
+                    {
+                        await auditRecordRepository.CreateAsync(
+                            new()
+                            {
+                                Category = AuditCategories.Integrations,
+                                Operation = "Delete",
+                                EntityId = id.ToString(),
+                                EntityType = nameof(MediaServer),
+                                Detail = $"Deleted media server {model.Name}",
+                                Timestamp = now,
+                                UserId = deletedByUserId
+                            },
+                            cancellationToken).ConfigureAwait(false);
+                    }
+
+                    return deleted > 0;
+                },
+                cancellationToken).ConfigureAwait(false);
+
+            if (removed)
+            {
+                await transactionManager.OnCommittedAsync(
+                    token => eventBus.PublishAsync(IntegrationEventBuilder.BuildMediaServerDeletedEvent(id), token),
+                    cancellationToken).ConfigureAwait(false);
+            }
+
+            return removed;
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Error deleting media server {MediaServerId}", id);
+            logger.LogError(ex, "The media server repository failed to delete media server {MediaServerId}.", id);
             throw;
         }
     }
 
-    /// <inheritdoc />
     public async Task<bool> PatchAsync(
         MediaServerPatch patch,
         Guid? modifiedByUserId,
@@ -204,149 +278,202 @@ public sealed class MediaServerRepository(
     {
         try
         {
-            return await transactionManager.ExecuteWithTransactionAsync(async _ =>
-            {
-                var model = await context.MediaServers
-                    .FirstOrDefaultAsync(s => s.Id == patch.Id, cancellationToken)
-                    .ConfigureAwait(false);
+            var patched = await transactionManager.ExecuteWithTransactionAsync(
+                async _ =>
+                {
+                    var model = await context.MediaServers
+                        .FirstOrDefaultAsync(s => s.Id == patch.Id, cancellationToken)
+                        .ConfigureAwait(false);
 
-                if (model is null)
-                {
-                    return false;
-                }
-
-                var now = DateTime.UtcNow;
-                if (patch.Name is not null)
-                {
-                    model.Name = patch.Name.Value;
-                }
-                if (patch.Enabled is not null)
-                {
-                    model.Enabled = patch.Enabled.Value;
-                }
-                if (patch.Settings is not null)
-                {
-                    if (patch.Settings.Add is not null)
+                    if (model is null)
                     {
-                        foreach (var (key, value) in patch.Settings.Add)
-                        {
-                            model.Settings[key] = value ?? string.Empty;
-                        }
+                        return false;
                     }
-                    if (patch.Settings.Update is not null)
+
+                    var now = _time.GetUtcNow().UtcDateTime;
+                    if (patch.Name is not null)
                     {
-                        foreach (var (key, value) in patch.Settings.Update)
+                        model.Name = patch.Name.Value;
+                    }
+
+                    if (patch.Enabled is not null)
+                    {
+                        model.Enabled = patch.Enabled.Value;
+                    }
+
+                    if (patch.ContentTypes is not null)
+                    {
+                        model.ContentTypes = [.. patch.ContentTypes];
+                        context.Entry(model).Property(s => s.ContentTypes).IsModified = true;
+                    }
+
+                    if (patch.Status is not null)
+                    {
+                        model.Status = patch.Status.Value;
+                    }
+
+                    if (patch.LastChecked is not null)
+                    {
+                        model.LastChecked = patch.LastChecked.Value;
+                    }
+
+                    if (patch.LastError is not null)
+                    {
+                        var error = patch.LastError.Value;
+                        model.LastError = error is { Length: > 1024 } ? error[..1024] : error;
+                    }
+
+                    if (patch.ConsecutiveFailures is not null)
+                    {
+                        model.ConsecutiveFailures = patch.ConsecutiveFailures.Value;
+                    }
+
+                    if (patch.Settings is not null)
+                    {
+                        if (patch.Settings.Add is not null)
                         {
-                            if (model.Settings.ContainsKey(key))
+                            foreach (var (key, value) in patch.Settings.Add)
                             {
                                 model.Settings[key] = value ?? string.Empty;
                             }
                         }
-                    }
-                    if (patch.Settings.Remove is not null)
-                    {
-                        foreach (var key in patch.Settings.Remove)
+
+                        if (patch.Settings.Update is not null)
                         {
-                            model.Settings.Remove(key);
-                        }
-                    }
-                    context.Entry(model).Property(s => s.Settings).IsModified = true;
-                }
-
-                var tagsAdded = new List<string>();
-                var tagsRemoved = new List<string>();
-
-                if (patch.Tags is not null)
-                {
-                    if (patch.Tags.Add is not null)
-                    {
-                        foreach (var tagName in patch.Tags.Add)
-                        {
-                            var tag = await context.Tags
-                                .Include(t => t.MediaServers)
-                                .FirstOrDefaultAsync(t => t.Name == tagName, cancellationToken)
-                                .ConfigureAwait(false);
-
-                            if (tag is null)
+                            foreach (var (key, value) in patch.Settings.Update)
                             {
-                                tag = new() { Name = tagName };
-                                context.Tags.Add(tag);
-                            }
-                            if (!tag.MediaServers.Contains(model))
-                            {
-                                tag.MediaServers.Add(model);
-                                tagsAdded.Add(tagName);
+                                if (model.Settings.ContainsKey(key))
+                                {
+                                    model.Settings[key] = value ?? string.Empty;
+                                }
                             }
                         }
-                    }
-                    if (patch.Tags.Remove is not null)
-                    {
-                        foreach (var tagName in patch.Tags.Remove)
-                        {
-                            var tag = await context.Tags
-                                .Include(t => t.MediaServers)
-                                .FirstOrDefaultAsync(t => t.Name == tagName, cancellationToken)
-                                .ConfigureAwait(false);
 
-                            if (tag is not null && tag.MediaServers.Remove(model))
+                        if (patch.Settings.Remove is not null)
+                        {
+                            foreach (var key in patch.Settings.Remove)
                             {
-                                tagsRemoved.Add(tagName);
+                                model.Settings.Remove(key);
+                            }
+                        }
+
+                        context.Entry(model).Property(s => s.Settings).IsModified = true;
+                    }
+
+                    var tagsAdded = new List<string>();
+                    var tagsRemoved = new List<string>();
+
+                    if (patch.Tags is not null)
+                    {
+                        if (patch.Tags.Add is not null)
+                        {
+                            foreach (var tagName in patch.Tags.Add)
+                            {
+                                var tag = await context.Tags
+                                    .Include(t => t.MediaServers)
+                                    .FirstOrDefaultAsync(t => t.Name == tagName, cancellationToken)
+                                    .ConfigureAwait(false);
+
+                                if (tag is null)
+                                {
+                                    tag = new() { Name = tagName };
+                                    context.Tags.Add(tag);
+                                }
+
+                                if (!tag.MediaServers.Contains(model))
+                                {
+                                    tag.MediaServers.Add(model);
+                                    tagsAdded.Add(tagName);
+                                }
+                            }
+                        }
+
+                        if (patch.Tags.Remove is not null)
+                        {
+                            foreach (var tagName in patch.Tags.Remove)
+                            {
+                                var tag = await context.Tags
+                                    .Include(t => t.MediaServers)
+                                    .FirstOrDefaultAsync(t => t.Name == tagName, cancellationToken)
+                                    .ConfigureAwait(false);
+
+                                if (tag is not null && tag.MediaServers.Remove(model))
+                                {
+                                    tagsRemoved.Add(tagName);
+                                }
                             }
                         }
                     }
-                }
 
-                model.ModifiedAt = now;
-                model.ModifiedByUserId = modifiedByUserId;
+                    model.ModifiedAt = now;
+                    model.ModifiedByUserId = modifiedByUserId;
 
-                var updated = await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
-                if (updated > 0)
-                {
-                    await auditRecordRepository.CreateAsync(new()
+                    var updated = await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+                    if (updated > 0)
                     {
-                        Category = AuditCategories.Integrations,
-                        Operation = "Patch",
-                        EntityId = patch.Id.ToString(),
-                        EntityType = nameof(MediaServer),
-                        Detail = $"Patched media server {model.Name}",
-                        Timestamp = now,
-                        UserId = modifiedByUserId
-                    }, cancellationToken).ConfigureAwait(false);
+                        await auditRecordRepository.CreateAsync(
+                            new()
+                            {
+                                Category = AuditCategories.Integrations,
+                                Operation = "Patch",
+                                EntityId = patch.Id.ToString(),
+                                EntityType = nameof(MediaServer),
+                                Detail = $"Updated media server {model.Name}.",
+                                Timestamp = now,
+                                UserId = modifiedByUserId
+                            },
+                            cancellationToken).ConfigureAwait(false);
 
-                    foreach (var tagName in tagsAdded)
-                    {
-                        await auditRecordRepository.CreateAsync(new()
+                        foreach (var tagName in tagsAdded)
                         {
-                            Category = AuditCategories.Integrations,
-                            Operation = "AddTag",
-                            EntityId = patch.Id.ToString(),
-                            EntityType = nameof(MediaServer),
-                            Detail = $"Added tag '{tagName}' to media server {model.Name}",
-                            Timestamp = now,
-                            UserId = modifiedByUserId
-                        }, cancellationToken).ConfigureAwait(false);
-                    }
-                    foreach (var tagName in tagsRemoved)
-                    {
-                        await auditRecordRepository.CreateAsync(new()
-                        {
-                            Category = AuditCategories.Integrations,
-                            Operation = "RemoveTag",
-                            EntityId = patch.Id.ToString(),
-                            EntityType = nameof(MediaServer),
-                            Detail = $"Removed tag '{tagName}' from media server {model.Name}",
-                            Timestamp = now,
-                            UserId = modifiedByUserId
-                        }, cancellationToken).ConfigureAwait(false);
-                    }
-                }
+                            await auditRecordRepository.CreateAsync(
+                                new()
+                                {
+                                    Category = AuditCategories.Integrations,
+                                    Operation = "AddTag",
+                                    EntityId = patch.Id.ToString(),
+                                    EntityType = nameof(MediaServer),
+                                    Detail = $"Added tag {tagName} to media server {model.Name}",
+                                    Timestamp = now,
+                                    UserId = modifiedByUserId
+                                },
+                                cancellationToken).ConfigureAwait(false);
+                        }
 
-                return updated > 0;
-            }, cancellationToken);
+                        foreach (var tagName in tagsRemoved)
+                        {
+                            await auditRecordRepository.CreateAsync(
+                                new()
+                                {
+                                    Category = AuditCategories.Integrations,
+                                    Operation = "RemoveTag",
+                                    EntityId = patch.Id.ToString(),
+                                    EntityType = nameof(MediaServer),
+                                    Detail = $"Removed tag {tagName} from media server {model.Name}",
+                                    Timestamp = now,
+                                    UserId = modifiedByUserId
+                                },
+                                cancellationToken).ConfigureAwait(false);
+                        }
+                    }
+
+                    return updated > 0;
+                },
+                cancellationToken).ConfigureAwait(false);
+
+            if (patched)
+            {
+                await transactionManager.OnCommittedAsync(
+                    token => eventBus.PublishAsync(
+                        IntegrationEventBuilder.BuildMediaServerUpdatedEvent(patch.Id, ChangedFields(patch)), token),
+                    cancellationToken).ConfigureAwait(false);
+            }
+
+            return patched;
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Error patching media server {MediaServerId}", patch.Id);
+            logger.LogError(ex, "The media server repository failed to patch media server {MediaServerId}.", patch.Id);
             throw;
         }
     }

@@ -25,10 +25,17 @@ vi.mock('@/lib/api', () => ({
     }),
 }));
 
+vi.mock('@/hooks/useInvalidateQueriesOnEvents', () => ({
+    useInvalidateQueriesOnEvents: vi.fn(),
+}));
+
 import { apiGet, apiPost, apiDelete } from '@/lib/api';
+import { useInvalidateQueriesOnEvents } from '@/hooks/useInvalidateQueriesOnEvents';
 import {
     useDownloads,
     useDownload,
+    useDownloadStatusCounts,
+    useDownloadStatusTotal,
     isTerminalDownloadStatus,
     terminalDownloadStatuses,
     downloadQueryKeys,
@@ -36,7 +43,6 @@ import {
     type DownloadStatusValue,
     type PagedDownloads,
 } from './useDownloads';
-import { POLLING_INTERVALS } from '@/lib/queryClient';
 
 const mockApiDownloads: ApiDownload[] = [
     {
@@ -44,7 +50,7 @@ const mockApiDownloads: ApiDownload[] = [
         downloadClientId: 'client-1',
         externalId: 'sab_123',
         title: 'Movie.2024.1080p.BluRay.x264',
-        status: 2,
+        status: 'Downloading',
         createdAt: '2024-01-15T10:00:00Z',
     },
     {
@@ -52,7 +58,7 @@ const mockApiDownloads: ApiDownload[] = [
         downloadClientId: 'client-2',
         externalId: 'qbt_456',
         title: 'Show.S01E01.720p.WEB.x264',
-        status: 1,
+        status: 'Queued',
         createdAt: '2024-01-15T10:05:00Z',
     },
     {
@@ -60,7 +66,7 @@ const mockApiDownloads: ApiDownload[] = [
         downloadClientId: 'client-1',
         externalId: 'sab_789',
         title: 'Another.Movie.2023.2160p.UHD',
-        status: 5,
+        status: 'Downloaded',
         outputPath: '/media/movies/Another Movie (2023)/Another.Movie.2023.2160p.UHD.mkv',
         dateCompleted: '2024-01-15T08:30:00Z',
         createdAt: '2024-01-14T22:00:00Z',
@@ -110,10 +116,6 @@ function createWrapperWithClient() {
     return { queryClient, Wrapper };
 }
 
-// Read the refetchInterval option that React Query stores on the active query
-// observer. The hook passes a function (query) => 5000 | false; we invoke it
-// directly with a fake Query whose data carries the status under test, so the
-// gating logic is exercised without timers or real polling.
 function getRefetchIntervalForDownload(queryClient: QueryClient, id: string) {
     const cache = queryClient.getQueryCache();
     const query = cache.find({ queryKey: downloadQueryKeys.detail(id) });
@@ -134,6 +136,36 @@ describe('useDownloads', () => {
 
     beforeEach(() => {
         vi.clearAllMocks();
+    });
+
+    it('fails open on download creation for a filtered list', async () => {
+        mockApiGet.mockResolvedValue(mockPagedResponse);
+
+        const { result } = renderHook(() => useDownloads({ status: 'Downloading' }), {
+            wrapper: createWrapper(),
+        });
+        await waitFor(() => expect(result.current.isLoading).toBe(false));
+        const listOptions = vi
+            .mocked(useInvalidateQueriesOnEvents)
+            .mock.calls.find(([, , options]) => options.owner === 'downloads-query')?.[2];
+
+        expect(listOptions?.failOpenEventNames).toEqual(['download.created']);
+        expect(listOptions?.unprovableMembership).toBe(true);
+    });
+
+    it('fails open on download creation for client-filtered status counts', async () => {
+        mockApiGet.mockResolvedValue(mockPagedResponse);
+
+        const { result } = renderHook(() => useDownloadStatusCounts(['Downloading'], 'client-1'), {
+            wrapper: createWrapper(),
+        });
+        await waitFor(() => expect(result.current.isLoading).toBe(false));
+        const countOptions = vi
+            .mocked(useInvalidateQueriesOnEvents)
+            .mock.calls.find(([, , options]) => options.owner === 'downloads:status-counts')?.[2];
+
+        expect(countOptions?.failOpenEventNames).toEqual(['download.created']);
+        expect(countOptions?.unprovableMembership).toBe(true);
     });
 
     afterEach(() => {
@@ -195,7 +227,7 @@ describe('useDownloads', () => {
         it('should pass query parameters to the API', async () => {
             mockApiGet.mockResolvedValue({ ...mockPagedResponse, items: [mockApiDownloads[0]] });
 
-            const { result } = renderHook(() => useDownloads({ status: 2, downloadClientId: 'client-1' }), {
+            const { result } = renderHook(() => useDownloads({ status: 'Downloading', downloadClientId: 'client-1' }), {
                 wrapper: createWrapper(),
             });
 
@@ -203,7 +235,7 @@ describe('useDownloads', () => {
                 expect(result.current.isLoading).toBe(false);
             });
 
-            expect(mockApiGet).toHaveBeenCalledWith('/downloads?status=2&downloadClientId=client-1');
+            expect(mockApiGet).toHaveBeenCalledWith('/downloads?status=Downloading&downloadClientId=client-1');
         });
 
         it('should return empty array on error', async () => {
@@ -275,7 +307,7 @@ describe('useDownloads', () => {
             });
 
             act(() => {
-                result.current.removeDownload('download-1');
+                void result.current.removeDownload('download-1');
             });
 
             await waitFor(() => {
@@ -288,6 +320,61 @@ describe('useDownloads', () => {
 
             await waitFor(() => {
                 expect(result.current.isRemoving).toBe(false);
+            });
+        });
+    });
+
+    describe('cancelling downloads', () => {
+        it('should cancel a download via POST /downloads/{id}/cancel', async () => {
+            mockApiGet.mockResolvedValue(mockPagedResponse);
+            mockApiPost.mockResolvedValue(undefined);
+
+            const { result } = renderHook(() => useDownloads(), {
+                wrapper: createWrapper(),
+            });
+
+            await waitFor(() => {
+                expect(result.current.isLoading).toBe(false);
+            });
+
+            await act(async () => {
+                await result.current.cancelDownload('download-1');
+            });
+
+            expect(mockApiPost).toHaveBeenCalledWith('/downloads/download-1/cancel');
+        });
+
+        it('should set isCancelling while cancelling', async () => {
+            mockApiGet.mockResolvedValue(mockPagedResponse);
+
+            let resolveCancel: () => void;
+            const cancelPromise = new Promise<void>((resolve) => {
+                resolveCancel = resolve;
+            });
+            mockApiPost.mockReturnValue(cancelPromise);
+
+            const { result } = renderHook(() => useDownloads(), {
+                wrapper: createWrapper(),
+            });
+
+            await waitFor(() => {
+                expect(result.current.isLoading).toBe(false);
+            });
+
+            act(() => {
+                void result.current.cancelDownload('download-1');
+            });
+
+            await waitFor(() => {
+                expect(result.current.isCancelling).toBe(true);
+            });
+
+            act(() => {
+                resolveCancel!();
+            });
+
+            await waitFor(() => {
+                expect(result.current.isCancelling).toBe(false);
             });
         });
     });
@@ -330,7 +417,7 @@ describe('useDownloads', () => {
             });
 
             act(() => {
-                result.current.pauseDownload('download-1');
+                void result.current.pauseDownload('download-1');
             });
 
             await waitFor(() => {
@@ -385,7 +472,7 @@ describe('useDownloads', () => {
             });
 
             act(() => {
-                result.current.resumeDownload('download-2');
+                void result.current.resumeDownload('download-2');
             });
 
             await waitFor(() => {
@@ -419,7 +506,7 @@ describe('useDownloads', () => {
             expect(download.downloadClientId).toBe('client-1');
             expect(download.externalId).toBe('sab_789');
             expect(download.title).toBe('Another.Movie.2023.2160p.UHD');
-            expect(download.status).toBe(5);
+            expect(download.status).toBe('Downloaded');
             expect(download.outputPath).toBe('/media/movies/Another Movie (2023)/Another.Movie.2023.2160p.UHD.mkv');
             expect(download.dateCompleted).toBe('2024-01-15T08:30:00Z');
             expect(download.createdAt).toBe('2024-01-14T22:00:00Z');
@@ -444,27 +531,31 @@ describe('useDownloads', () => {
         it('should export status labels for all values', async () => {
             const { downloadStatusLabels } = await import('./useDownloads');
 
-            expect(downloadStatusLabels[0]).toBe('Grabbed');
-            expect(downloadStatusLabels[1]).toBe('Queued');
-            expect(downloadStatusLabels[2]).toBe('Downloading');
-            expect(downloadStatusLabels[3]).toBe('Paused');
-            expect(downloadStatusLabels[4]).toBe('Stalled');
-            expect(downloadStatusLabels[5]).toBe('Downloaded');
-            expect(downloadStatusLabels[6]).toBe('Imported');
-            expect(downloadStatusLabels[7]).toBe('Failed');
+            expect(downloadStatusLabels.Grabbed).toBe('Grabbed');
+            expect(downloadStatusLabels.Queued).toBe('Queued');
+            expect(downloadStatusLabels.Downloading).toBe('Downloading');
+            expect(downloadStatusLabels.Paused).toBe('Paused');
+            expect(downloadStatusLabels.Stalled).toBe('Stalled');
+            expect(downloadStatusLabels.Downloaded).toBe('Downloaded');
+            expect(downloadStatusLabels.Importing).toBe('Importing');
+            expect(downloadStatusLabels.Imported).toBe('Imported');
+            expect(downloadStatusLabels.Failed).toBe('Failed');
+            expect(downloadStatusLabels.Cancelled).toBe('Cancelled');
         });
 
         it('should export status variants for all values', async () => {
             const { downloadStatusVariants } = await import('./useDownloads');
 
-            expect(downloadStatusVariants[0]).toBe('grabbed');
-            expect(downloadStatusVariants[1]).toBe('queued');
-            expect(downloadStatusVariants[2]).toBe('downloading');
-            expect(downloadStatusVariants[3]).toBe('paused');
-            expect(downloadStatusVariants[4]).toBe('stalled');
-            expect(downloadStatusVariants[5]).toBe('downloaded');
-            expect(downloadStatusVariants[6]).toBe('imported');
-            expect(downloadStatusVariants[7]).toBe('failed');
+            expect(downloadStatusVariants.Grabbed).toBe('grabbed');
+            expect(downloadStatusVariants.Queued).toBe('queued');
+            expect(downloadStatusVariants.Downloading).toBe('downloading');
+            expect(downloadStatusVariants.Paused).toBe('paused');
+            expect(downloadStatusVariants.Stalled).toBe('stalled');
+            expect(downloadStatusVariants.Downloaded).toBe('downloaded');
+            expect(downloadStatusVariants.Importing).toBe('importing');
+            expect(downloadStatusVariants.Imported).toBe('imported');
+            expect(downloadStatusVariants.Failed).toBe('failed');
+            expect(downloadStatusVariants.Cancelled).toBe('cancelled');
         });
     });
 });
@@ -537,20 +628,19 @@ describe('useDownload', () => {
 
     describe('polling gating', () => {
         it('exposes the terminal-status set drawn from the DownloadStatus enum', () => {
-            // Mirrors Magpie.Models.Enums.DownloadStatus terminal members:
-            // Imported (6), Failed (7).
-            expect(Array.from(terminalDownloadStatuses).sort()).toEqual([6, 7]);
+            expect(Array.from(terminalDownloadStatuses).sort()).toEqual(['Cancelled', 'Failed', 'Imported']);
         });
 
         it.each<[string, DownloadStatusValue, boolean]>([
-            ['Grabbed (0)', 0, false],
-            ['Queued (1)', 1, false],
-            ['Downloading (2)', 2, false],
-            ['Paused (3)', 3, false],
-            ['Stalled (4)', 4, false],
-            ['Downloaded (5)', 5, false],
-            ['Imported (6)', 6, true],
-            ['Failed (7)', 7, true],
+            ['Grabbed', 'Grabbed', false],
+            ['Queued', 'Queued', false],
+            ['Downloading', 'Downloading', false],
+            ['Paused', 'Paused', false],
+            ['Stalled', 'Stalled', false],
+            ['Downloaded', 'Downloaded', false],
+            ['Imported', 'Imported', true],
+            ['Failed', 'Failed', true],
+            ['Cancelled', 'Cancelled', true],
         ])('isTerminalDownloadStatus(%s) === %s', (_label, status, expected) => {
             expect(isTerminalDownloadStatus(status)).toBe(expected);
         });
@@ -559,8 +649,8 @@ describe('useDownload', () => {
             expect(isTerminalDownloadStatus(undefined)).toBe(false);
         });
 
-        it('refetchInterval evaluates to fast polling for in-flight downloads', async () => {
-            const inflight: ApiDownload = { ...mockApiDownloads[0], status: 2 };
+        it('does not poll in-flight downloads', async () => {
+            const inflight: ApiDownload = { ...mockApiDownloads[0], status: 'Downloading' };
             mockApiGet.mockResolvedValue(inflight);
 
             const { queryClient, Wrapper } = createWrapperWithClient();
@@ -571,17 +661,13 @@ describe('useDownload', () => {
             });
 
             const refetchInterval = getRefetchIntervalForDownload(queryClient, 'download-1');
-            expect(typeof refetchInterval).toBe('function');
-            const fakeQuery = { state: { data: inflight } } as unknown as Query<ApiDownload, Error>;
-            expect((refetchInterval as (q: Query<ApiDownload, Error>) => number | false)(fakeQuery)).toBe(
-                POLLING_INTERVALS.fast,
-            );
+            expect(refetchInterval).toBeUndefined();
         });
 
         it.each<[string, DownloadStatusValue]>([
-            ['Imported', 6],
-            ['Failed', 7],
-        ])('refetchInterval evaluates to false for terminal status %s', async (_label, status) => {
+            ['Imported', 'Imported'],
+            ['Failed', 'Failed'],
+        ])('does not poll terminal status %s', async (_label, status) => {
             const terminal: ApiDownload = { ...mockApiDownloads[0], status };
             mockApiGet.mockResolvedValue(terminal);
 
@@ -593,9 +679,69 @@ describe('useDownload', () => {
             });
 
             const refetchInterval = getRefetchIntervalForDownload(queryClient, 'download-1');
-            expect(typeof refetchInterval).toBe('function');
-            const fakeQuery = { state: { data: terminal } } as unknown as Query<ApiDownload, Error>;
-            expect((refetchInterval as (q: Query<ApiDownload, Error>) => number | false)(fakeQuery)).toBe(false);
+            expect(refetchInterval).toBeUndefined();
         });
+    });
+});
+
+describe('useDownloadStatusTotal', () => {
+    const mockApiGet = vi.mocked(apiGet);
+    const activeStatuses: DownloadStatusValue[] = ['Grabbed', 'Queued', 'Downloading', 'Paused', 'Stalled'];
+
+    beforeEach(() => {
+        vi.clearAllMocks();
+    });
+
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    it('issues a single grouped request and returns the aggregate total', async () => {
+        mockApiGet.mockResolvedValue({ items: [], pageNumber: 1, pageSize: 1, totalItems: 6 });
+
+        const { result } = renderHook(() => useDownloadStatusTotal(activeStatuses), {
+            wrapper: createWrapper(),
+        });
+
+        await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+        expect(result.current.total).toBe(6);
+        const calls = mockApiGet.mock.calls.map((call) => String(call[0]));
+        expect(calls).toHaveLength(1);
+        expect(calls[0]).toContain('statuses=');
+        expect(calls[0]).toContain('pageSize=1');
+        expect(calls.some((url) => /[?&]status=/.test(url))).toBe(false);
+    });
+
+    it('subscribes one query key so a status event triggers one refetch, not one per status', () => {
+        mockApiGet.mockResolvedValue({ items: [], pageNumber: 1, pageSize: 1, totalItems: 3 });
+
+        renderHook(() => useDownloadStatusTotal(activeStatuses), { wrapper: createWrapper() });
+
+        const call = vi
+            .mocked(useInvalidateQueriesOnEvents)
+            .mock.calls.find(([, , options]) => options.owner === 'downloads-query');
+        expect(call).toBeDefined();
+        expect(call![1]).toHaveLength(1);
+    });
+
+    it('does not fetch when disabled', async () => {
+        renderHook(() => useDownloadStatusTotal(activeStatuses, undefined, false), {
+            wrapper: createWrapper(),
+        });
+
+        await waitFor(() => expect(mockApiGet).not.toHaveBeenCalled());
+    });
+
+    it('scopes the count to the given download client', async () => {
+        mockApiGet.mockResolvedValue({ items: [], pageNumber: 1, pageSize: 1, totalItems: 2 });
+
+        const { result } = renderHook(() => useDownloadStatusTotal(['Grabbed', 'Queued'], 'client-1'), {
+            wrapper: createWrapper(),
+        });
+
+        await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+        expect(String(mockApiGet.mock.calls[0][0])).toContain('downloadClientId=client-1');
     });
 });

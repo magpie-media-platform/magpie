@@ -1,57 +1,56 @@
 using System;
 
-using Magpie.Models.Data;
 using Magpie.Models.Patch;
 
 namespace Magpie.Models.Arguments;
 
 /// <summary>
-/// Patch for <see cref="Award"/>.
+/// The partial-update arguments for an award.
 /// </summary>
 public sealed record AwardPatch
 {
     /// <summary>
-    /// The <see cref="Award.Id"/> of the item to patch.
+    /// The id of the award to patch.
     /// </summary>
     public Guid Id { get; init; }
 
     /// <summary>
-    /// The <see cref="Award.Ordinal"/> to patch.
+    /// The patch for the position in the display order.
     /// </summary>
     public ScalarPatch<int>? Ordinal { get; init; }
 
     /// <summary>
-    /// The <see cref="Award.Body"/> to patch.
+    /// The patch for the name of the body that gives the award.
     /// </summary>
     public ScalarPatch<string>? Body { get; init; }
 
     /// <summary>
-    /// The <see cref="Award.Name"/> to patch.
+    /// The patch for the display name of the award.
     /// </summary>
     public ScalarPatch<string>? Name { get; init; }
 
     /// <summary>
-    /// The <see cref="Award.Category"/> to patch.
+    /// The patch for the category of the award.
     /// </summary>
     public ScalarPatch<string?>? Category { get; init; }
 
     /// <summary>
-    /// The <see cref="Award.Status"/> to patch.
+    /// The patch for the status of the award.
     /// </summary>
     public ScalarPatch<string?>? Status { get; init; }
 
     /// <summary>
-    /// The <see cref="Award.Year"/> to patch.
+    /// The patch for the year of the award.
     /// </summary>
     public ScalarPatch<int?>? Year { get; init; }
 
     /// <summary>
-    /// The <see cref="Award.Language"/> to patch.
+    /// The patch for the language code of the award.
     /// </summary>
     public ScalarPatch<string?>? Language { get; init; }
 
     /// <summary>
-    /// The <see cref="Award.Country"/> to patch.
+    /// The patch for the country code of the award.
     /// </summary>
     public ScalarPatch<string?>? Country { get; init; }
 }

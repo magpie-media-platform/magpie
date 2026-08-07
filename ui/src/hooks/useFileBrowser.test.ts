@@ -3,11 +3,15 @@ import { renderHook, waitFor, act } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createElement } from 'react';
 
-vi.mock('@/lib/api', () => ({
-    apiPost: vi.fn(),
-}));
+vi.mock('@/lib/api', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('@/lib/api')>();
+    return {
+        ...actual,
+        apiGet: vi.fn(),
+    };
+});
 
-import { apiPost } from '@/lib/api';
+import { apiGet } from '@/lib/api';
 import { useFileBrowser, type FileSystemEntry } from './useFileBrowser';
 
 const mockEntries: FileSystemEntry[] = [
@@ -34,7 +38,7 @@ function createWrapper() {
 }
 
 describe('useFileBrowser', () => {
-    const mockApiPost = vi.mocked(apiPost);
+    const mockApiGet = vi.mocked(apiGet);
 
     beforeEach(() => {
         vi.clearAllMocks();
@@ -55,21 +59,21 @@ describe('useFileBrowser', () => {
     });
 
     it('should browse a directory', async () => {
-        mockApiPost.mockResolvedValue(mockEntries);
+        mockApiGet.mockResolvedValue(mockEntries);
 
         const { result } = renderHook(() => useFileBrowser(), {
             wrapper: createWrapper(),
         });
 
         act(() => {
-            result.current.browse('/home/user');
+            result.current.navigate('/home/user');
         });
 
         await waitFor(() => {
             expect(result.current.isLoading).toBe(false);
         });
 
-        expect(mockApiPost).toHaveBeenCalledWith('/file-browser/contents', { path: '/home/user' });
+        expect(mockApiGet).toHaveBeenCalledWith('/system/files?path=%2Fhome%2Fuser');
         expect(result.current.entries).toEqual(mockEntries);
     });
 
@@ -78,14 +82,14 @@ describe('useFileBrowser', () => {
         const pendingPromise = new Promise<FileSystemEntry[]>((resolve) => {
             resolvePromise = resolve;
         });
-        mockApiPost.mockReturnValue(pendingPromise);
+        mockApiGet.mockReturnValue(pendingPromise);
 
         const { result } = renderHook(() => useFileBrowser(), {
             wrapper: createWrapper(),
         });
 
         act(() => {
-            result.current.browse('/home/user');
+            result.current.navigate('/home/user');
         });
 
         await waitFor(() => {
@@ -103,14 +107,14 @@ describe('useFileBrowser', () => {
 
     it('should set error on failure', async () => {
         const error = new Error('Access denied');
-        mockApiPost.mockRejectedValue(error);
+        mockApiGet.mockRejectedValue(error);
 
         const { result } = renderHook(() => useFileBrowser(), {
             wrapper: createWrapper(),
         });
 
         act(() => {
-            result.current.browse('/root');
+            result.current.navigate('/root');
         });
 
         await waitFor(() => {
@@ -121,8 +125,8 @@ describe('useFileBrowser', () => {
         expect(result.current.error?.message).toBe('Access denied');
     });
 
-    it('should use browseAsync for promise-based browsing', async () => {
-        mockApiPost.mockResolvedValue(mockEntries);
+    it('should use navigateAsync for promise-based browsing', async () => {
+        mockApiGet.mockResolvedValue(mockEntries);
 
         const { result } = renderHook(() => useFileBrowser(), {
             wrapper: createWrapper(),
@@ -130,21 +134,21 @@ describe('useFileBrowser', () => {
 
         let entries: FileSystemEntry[] | undefined;
         await act(async () => {
-            entries = await result.current.browseAsync('/home/user');
+            entries = await result.current.navigateAsync('/home/user');
         });
 
         expect(entries).toEqual(mockEntries);
     });
 
     it('should reset state', async () => {
-        mockApiPost.mockResolvedValue(mockEntries);
+        mockApiGet.mockResolvedValue(mockEntries);
 
         const { result } = renderHook(() => useFileBrowser(), {
             wrapper: createWrapper(),
         });
 
         await act(async () => {
-            await result.current.browseAsync('/home/user');
+            await result.current.navigateAsync('/home/user');
         });
 
         await waitFor(() => {
@@ -161,24 +165,21 @@ describe('useFileBrowser', () => {
     });
 
     it('should handle empty directory', async () => {
-        mockApiPost.mockResolvedValue([]);
+        mockApiGet.mockResolvedValue([]);
 
         const { result } = renderHook(() => useFileBrowser(), {
             wrapper: createWrapper(),
         });
 
         await act(async () => {
-            await result.current.browseAsync('/empty');
+            await result.current.navigateAsync('/empty');
         });
 
         expect(result.current.entries).toEqual([]);
         expect(result.current.error).toBeNull();
     });
 
-    it('should show entries for the most recently navigated path even when an earlier slow request resolves later', async () => {
-        // Simulate a race: first navigate to /slow, which resolves slowly,
-        // then navigate to /fast, which resolves quickly. The hook must
-        // ultimately reflect /fast's entries, not /slow's.
+    it('keeps latest navigation results when an earlier request resolves later', async () => {
         const slowEntries: FileSystemEntry[] = [{ name: 'slow', path: '/slow/slow', type: 'folder' }];
         const fastEntries: FileSystemEntry[] = [{ name: 'fast', path: '/fast/fast', type: 'folder' }];
 
@@ -187,8 +188,8 @@ describe('useFileBrowser', () => {
             resolveSlow = resolve;
         });
 
-        mockApiPost.mockImplementation((_url: string, body?: unknown) => {
-            const path = (body as { path?: string } | undefined)?.path;
+        mockApiGet.mockImplementation((url: string) => {
+            const path = new URLSearchParams(url.split('?')[1]).get('path');
             if (path === '/slow') {
                 return slowPromise;
             }
@@ -203,24 +204,21 @@ describe('useFileBrowser', () => {
         });
 
         act(() => {
-            result.current.browse('/slow');
+            result.current.navigate('/slow');
         });
 
-        // Switch to /fast before /slow has resolved.
         act(() => {
-            result.current.browse('/fast');
+            result.current.navigate('/fast');
         });
 
         await waitFor(() => {
             expect(result.current.entries).toEqual(fastEntries);
         });
 
-        // Now resolve the slower request -- the hook must NOT switch back to /slow.
         act(() => {
             resolveSlow!(slowEntries);
         });
 
-        // Give react-query a tick to settle, then reassert.
         await waitFor(() => {
             expect(result.current.entries).toEqual(fastEntries);
         });

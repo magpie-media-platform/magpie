@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import { Avatar } from './Avatar';
@@ -85,7 +85,7 @@ describe('Avatar', () => {
         render(<Avatar src="invalid-url" alt="User" fallback="FB" data-testid="avatar" />);
 
         const img = screen.getByRole('img');
-        img.dispatchEvent(new Event('error'));
+        fireEvent.error(img);
 
         await waitFor(() => {
             expect(screen.getByText('FB')).toBeInTheDocument();

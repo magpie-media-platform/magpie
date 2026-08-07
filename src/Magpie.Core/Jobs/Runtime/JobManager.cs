@@ -1,0 +1,587 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
+
+using Magpie.Abstractions;
+using Magpie.Abstractions.Jobs;
+using Magpie.Abstractions.Repositories;
+using Magpie.Models;
+using Magpie.Models.Arguments;
+using Magpie.Models.Data;
+using Magpie.Models.Enums;
+using Magpie.Models.Jobs;
+using Magpie.Models.Paging;
+using Magpie.Sdk.Jobs;
+using Magpie.Sdk.Services;
+
+using Microsoft.Extensions.Logging;
+
+using JobScopeKind = Magpie.Models.Enums.JobScope;
+
+namespace Magpie.Core.Jobs.Runtime;
+
+internal sealed class JobManager(
+    IJobRuntime runtime,
+    IJobRegistry jobRegistry,
+    IJobExecutionRepository executionRepository,
+    IScheduleTriggerRepository scheduleTriggerRepository,
+    IEventTriggerRepository eventTriggerRepository,
+    IJobConcurrencyScheduler scheduler,
+    IJobExecutionScopeFactory jobExecutionScopes,
+    TimeProvider timeProvider,
+    ILogger<JobManager> logger) : IJobManager
+{
+    private readonly IReadOnlyList<JobSpec> _specs = jobRegistry.ListJobSpecs();
+
+    private const string GlobalPartition = "global";
+
+    private static JobSpec? GetRegisteredSpec(IReadOnlyList<JobSpec> specs, string jobType)
+    {
+        if (string.IsNullOrWhiteSpace(jobType))
+        {
+            return null;
+        }
+
+        return specs.FirstOrDefault(spec => string.Equals(spec.JobType, jobType, StringComparison.Ordinal));
+    }
+
+    private static void AuthorizeManualRun(JobSpec? spec, Role callerRole)
+    {
+        if (spec is null || !spec.OnDemand || !spec.SupportedTriggerModes.Contains(JobTriggerMode.Manual))
+        {
+            throw new MagpieException("This job type cannot be run on demand.");
+        }
+
+        AuthorizeRequiredRole(spec, callerRole);
+    }
+
+    private static string? ResolveLockPartition(
+        ConcurrencyScope scope,
+        string jobType,
+        IReadOnlyDictionary<string, string?> parameters,
+        IReadOnlyList<string> lockPartitionFields)
+    {
+        return scope switch
+        {
+            ConcurrencyScope.Parallel => null,
+            ConcurrencyScope.PerType => $"type:{jobType}",
+            ConcurrencyScope.Global => GlobalPartition,
+            ConcurrencyScope.PerTypeAndTarget => BuildTargetKey(parameters, lockPartitionFields) is { } targetKey
+                ? $"type:{jobType}|{targetKey}"
+                : UniquePartition(),
+            ConcurrencyScope.PerTarget => BuildTargetKey(parameters, lockPartitionFields) ?? UniquePartition(),
+            _ => throw new ArgumentOutOfRangeException(nameof(scope), scope, "Unknown concurrency scope.")
+        };
+    }
+
+    private static string? BuildTargetKey(
+        IReadOnlyDictionary<string, string?> parameters,
+        IReadOnlyList<string> lockPartitionFields)
+    {
+        if (lockPartitionFields.Count == 0)
+        {
+            return null;
+        }
+
+        var parts = new List<string>(lockPartitionFields.Count);
+        foreach (var field in lockPartitionFields.OrderBy(f => f, StringComparer.Ordinal))
+        {
+            if (!parameters.TryGetValue(field, out var value) || string.IsNullOrWhiteSpace(value))
+            {
+                return null;
+            }
+
+            parts.Add($"{field}={value}");
+        }
+
+        return string.Join("&", parts);
+    }
+
+    private static string UniquePartition() => $"unique:{Guid.NewGuid():N}";
+
+    private static void AuthorizeRequiredRole(JobSpec spec, Role callerRole)
+    {
+        if (callerRole < GetRequiredRole(spec.Scope))
+        {
+            throw new MagpieException("You do not have permission to run this job type.");
+        }
+    }
+
+    private static void ValidateRequiredParameters(JobSpec spec, IReadOnlyDictionary<string, string>? parameters)
+    {
+        foreach (var parameter in spec.Parameters)
+        {
+            if (!parameter.Required)
+            {
+                continue;
+            }
+
+            if (parameters is null ||
+                !parameters.TryGetValue(parameter.Name, out var value) ||
+                string.IsNullOrWhiteSpace(value))
+            {
+                throw new MagpieException($"Required parameter {parameter.Name} is missing.");
+            }
+        }
+    }
+
+    private static Role GetRequiredRole(JobScopeKind scope)
+    {
+        return scope switch
+        {
+            JobScopeKind.User => Role.Requester,
+            JobScopeKind.Content => Role.Manager,
+            JobScopeKind.Administrative or JobScopeKind.System => Role.Admin,
+            _ => Role.Admin
+        };
+    }
+
+    private static void AuthorizeTriggerMutation(
+        JobSpec? spec,
+        JobScopeKind scope,
+        Guid? ownerUserId,
+        Guid callerUserId,
+        bool callerIsAdmin)
+    {
+        if (spec?.Scope == JobScopeKind.System)
+        {
+            throw new MagpieException("Only Magpie can create, change, or delete built-in triggers.");
+        }
+
+        if (!callerIsAdmin && (scope != JobScopeKind.User || ownerUserId != callerUserId))
+        {
+            throw new MagpieException("You can only modify your own triggers.");
+        }
+    }
+
+    private static void AuthorizeTriggerCreate(JobSpec? spec, JobTriggerMode mode, Role ownerRole)
+    {
+        if (spec is null || !spec.SupportedTriggerModes.Contains(mode))
+        {
+            throw new MagpieException("This job type does not support this trigger mode.");
+        }
+
+        if (spec.Scope == JobScopeKind.System)
+        {
+            throw new MagpieException("Only Magpie can create, change, or delete built-in triggers.");
+        }
+
+        AuthorizeRequiredRole(spec, ownerRole);
+    }
+
+    private static JobExecutionNode BuildExecutionNode(
+        JobExecution execution,
+        IReadOnlyDictionary<Guid, List<JobExecution>> byParent,
+        HashSet<Guid> visited,
+        DateTime utcNow)
+    {
+        visited.Add(execution.Id);
+
+        var children = byParent.TryGetValue(execution.Id, out var rows)
+            ? rows
+                .Where(child => !visited.Contains(child.Id))
+                .Select(child => BuildExecutionNode(child, byParent, visited, utcNow))
+                .ToList()
+            : [];
+
+        return new JobExecutionNode
+        {
+            Id = execution.Id,
+            ParentExecutionId = execution.ParentExecutionId,
+            CorrelationId = execution.CorrelationId,
+            JobType = execution.JobType,
+            Status = execution.Status is JobExecutionStatus.Queued &&
+                execution.NotBeforeAt is { } notBeforeAt &&
+                notBeforeAt > utcNow
+                    ? "Pending"
+                    : execution.Status.ToString(),
+            CreatedAt = execution.CreatedAt,
+            StartedAt = execution.StartedAt,
+            CompletedAt = execution.CompletedAt,
+            Children = children
+        };
+    }
+
+    public async Task<Guid> EnqueueAsync(
+        JobEnqueueRequest request,
+        Guid callerUserId,
+        Role callerRole,
+        CancellationToken cancellationToken)
+    {
+        var spec = GetSpec(request.JobType);
+        AuthorizeManualRun(spec, callerRole);
+        ValidateRequiredParameters(spec!, request.Parameters);
+
+        var authorized = request with { UserId = callerUserId, Mode = JobExecutionMode.Queue };
+        return await ExecuteAsync(authorized, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<JobExecution> ExecuteImmediateAsync(
+        JobEnqueueRequest request,
+        Guid callerUserId,
+        Role callerRole,
+        CancellationToken cancellationToken)
+    {
+        var spec = GetSpec(request.JobType);
+        AuthorizeManualRun(spec, callerRole);
+        ValidateRequiredParameters(spec!, request.Parameters);
+
+        if (!spec!.SupportsImmediate)
+        {
+            throw new MagpieException("This job type cannot be run immediately.");
+        }
+
+        var authorized = request with { UserId = callerUserId, Mode = JobExecutionMode.Immediate };
+        var executionId = await ExecuteAsync(authorized, cancellationToken).ConfigureAwait(false);
+
+        return await executionRepository.GetByIdAsync(executionId, cancellationToken).ConfigureAwait(false)
+            ?? throw new MagpieException("The job execution could not be found after running.");
+    }
+
+    public async Task<Guid> ExecuteAsync(JobEnqueueRequest request, CancellationToken cancellationToken)
+    {
+        var effectiveCorrelationId = request.CorrelationId ?? Guid.NewGuid();
+
+        logger.LogDebug(
+            "The job manager will run job {JobType} for user {UserId} with mode {Mode} (correlation {CorrelationId})",
+            request.JobType,
+            request.UserId,
+            request.Mode,
+            effectiveCorrelationId);
+
+        var spec = GetSpec(request.JobType);
+
+        var effectiveParameters = request.Parameters is not null
+            ? new Dictionary<string, string>(request.Parameters)
+            : [];
+
+        string? dedupKey = null;
+        if (effectiveParameters.Remove(JobExecutionDedup.ParameterKey, out var rawDedupKey) &&
+            !string.IsNullOrWhiteSpace(rawDedupKey))
+        {
+            dedupKey = rawDedupKey;
+        }
+
+        var execution = new JobExecution
+        {
+            ExtensionId = request.ExtensionId,
+            EventTriggerId = request.EventTriggerId,
+            JobType = request.JobType,
+            Scope = spec?.Scope ?? JobScopeKind.System,
+            Parameters = effectiveParameters,
+            TriggerContext = request.TriggerContext is not null
+                ? new Dictionary<string, string>(request.TriggerContext)
+                : [],
+            ExecutionMode = request.Mode,
+            Status = JobExecutionStatus.Queued,
+            CorrelationId = effectiveCorrelationId,
+            ParentExecutionId = jobExecutionScopes.CurrentExecutionId,
+            DedupKey = dedupKey,
+            NotBeforeAt = request.NotBeforeAt,
+        };
+
+        execution.LockPartition = ResolveLockPartition(
+            spec?.ConcurrencyScope ?? ConcurrencyScope.PerType,
+            execution.JobType,
+            execution.GetLockPartitionFor(spec),
+            spec?.LockPartitionFields ?? []);
+
+        var created = await executionRepository.CreateAsync(
+            execution,
+            request.UserId,
+            request.ClearDeferralOnCoalesce,
+            cancellationToken)
+            .ConfigureAwait(false);
+
+        if (request.Mode is JobExecutionMode.Immediate && created.Status is JobExecutionStatus.Queued)
+        {
+            using var reservation = await scheduler.AcquireImmediateSlotAsync(cancellationToken).ConfigureAwait(false);
+
+            await runtime.ExecuteAsync(created.Id, default).ConfigureAwait(false);
+        }
+
+        return created.Id;
+    }
+
+    public string? ResolveLockPartition(string jobType, IReadOnlyDictionary<string, string?> parameters)
+    {
+        var spec = GetSpec(jobType);
+        return ResolveLockPartition(
+            spec?.ConcurrencyScope ?? ConcurrencyScope.PerType,
+            jobType,
+            parameters,
+            spec?.LockPartitionFields ?? []);
+    }
+
+    public async Task<PagedList<JobExecution>> QueryExecutionsAsync(
+        JobExecutionQuery query,
+        PagingParameter paging,
+        SortParameter? sort,
+        CancellationToken cancellationToken)
+    {
+        return await executionRepository.QueryAsync(query, paging, sort, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    public async Task<JobExecution?> GetExecutionAsync(Guid executionId, CancellationToken cancellationToken)
+    {
+        return await executionRepository.GetByIdAsync(executionId, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    public async Task<JobExecutionTree?> GetExecutionTreeAsync(
+        Guid executionId,
+        bool includeSiblings,
+        CancellationToken cancellationToken)
+    {
+        var lineage = await executionRepository.GetLineageAsync(executionId, 500, cancellationToken)
+            .ConfigureAwait(false);
+        if (lineage.Count == 0)
+        {
+            return null;
+        }
+
+        var byId = lineage.ToDictionary(e => e.Id);
+        if (!byId.TryGetValue(executionId, out var target))
+        {
+            return new JobExecutionTree { Root = null, TotalCount = 0 };
+        }
+
+        var root = target;
+        if (includeSiblings)
+        {
+            var ancestors = new HashSet<Guid> { root.Id };
+            while (root.ParentExecutionId is { } parentId &&
+                byId.TryGetValue(parentId, out var parent) &&
+                ancestors.Add(parent.Id))
+            {
+                root = parent;
+            }
+        }
+
+        var byParent = lineage
+            .Where(e => e.ParentExecutionId is not null)
+            .GroupBy(e => e.ParentExecutionId!.Value)
+            .ToDictionary(g => g.Key, g => g.OrderBy(e => e.CreatedAt).ThenBy(e => e.Id).ToList());
+
+        var visited = new HashSet<Guid>();
+        var rootNode = BuildExecutionNode(root, byParent, visited, timeProvider.GetUtcNow().UtcDateTime);
+        return new JobExecutionTree { Root = rootNode, TotalCount = visited.Count };
+    }
+
+    public async Task<bool> RequestCancellationAsync(Guid executionId, CancellationToken cancellationToken)
+    {
+        logger.LogDebug("The job manager will ask the runtime to cancel execution {ExecutionId}", executionId);
+
+        return await runtime.TryCancelAsync(executionId, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    public IReadOnlyList<JobSpec> GetSpecs(JobTriggerMode? userTriggerMode)
+    {
+        var specs = _specs;
+        if (userTriggerMode is not { } mode)
+        {
+            return specs;
+        }
+
+        return mode is JobTriggerMode.Manual
+            ? specs.Where(s => s.OnDemand && s.SupportedTriggerModes.Contains(JobTriggerMode.Manual)).ToList()
+            : [.. specs.Where(s => s.SupportedTriggerModes.Contains(mode) && s.RequesterTriggerModes.Contains(mode))];
+    }
+
+    public async Task<IReadOnlyList<ScheduleTrigger>> ListScheduleTriggersAsync(
+        bool mineOnly,
+        Guid callerUserId,
+        CancellationToken cancellationToken)
+    {
+        var triggers = await scheduleTriggerRepository.ListAllAsync(cancellationToken).ConfigureAwait(false);
+        return mineOnly ? [.. triggers.Where(trigger => trigger.CreatedByUserId == callerUserId)] : [.. triggers];
+    }
+
+    public Task<ScheduleTrigger?> GetScheduleTriggerAsync(Guid triggerId, CancellationToken cancellationToken)
+    {
+        return scheduleTriggerRepository.GetByIdAsync(triggerId, cancellationToken);
+    }
+
+    public async Task<ScheduleTrigger> CreateScheduleTriggerAsync(
+        ScheduleTriggerCreate create,
+        Guid ownerUserId,
+        Role ownerRole,
+        CancellationToken cancellationToken)
+    {
+        AuthorizeTriggerCreate(GetSpec(create.JobType), JobTriggerMode.Schedule, ownerRole);
+        if (!CronSchedule.TryParse(create.Schedule, out var schedule, out var error))
+        {
+            throw new ArgumentException(error, nameof(create));
+        }
+
+        return await scheduleTriggerRepository.CreateAsync(
+            new ScheduleTrigger
+            {
+                ExtensionId = create.ExtensionId,
+                JobType = create.JobType,
+                Scope = create.Scope,
+                Name = create.Name,
+                Schedule = create.Schedule,
+                ExecutionMode = create.ExecutionMode,
+                Enabled = create.Enabled,
+                Parameters = create.Parameters,
+                CreatedByUserId = ownerUserId,
+                NextRunAt = create.Enabled ? schedule.NextOccurrence(timeProvider.GetUtcNow().UtcDateTime) : null
+            },
+            ownerUserId,
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<bool> PatchScheduleTriggerAsync(
+        Guid triggerId,
+        ScheduleTriggerPatch patch,
+        Guid callerUserId,
+        bool callerIsAdmin,
+        CancellationToken cancellationToken)
+    {
+        var trigger = await scheduleTriggerRepository.GetByIdAsync(triggerId, cancellationToken)
+            .ConfigureAwait(false);
+        if (trigger is null)
+        {
+            return false;
+        }
+
+        AuthorizeTriggerMutation(GetSpec(trigger.JobType), trigger.Scope, trigger.CreatedByUserId, callerUserId,
+            callerIsAdmin);
+        if (patch.Schedule is not null && !CronSchedule.TryParse(patch.Schedule.Value, out _, out var error))
+        {
+            throw new ArgumentException(error, nameof(patch));
+        }
+
+        if (!await scheduleTriggerRepository.PatchAsync(
+            patch with { Id = triggerId }, callerUserId, cancellationToken).ConfigureAwait(false))
+        {
+            return false;
+        }
+
+        if (patch.Schedule is null && patch.Enabled is null)
+        {
+            return true;
+        }
+
+        var updated = await scheduleTriggerRepository.GetByIdAsync(triggerId, cancellationToken)
+            .ConfigureAwait(false);
+        if (updated is not null)
+        {
+            updated.NextRunAt = updated.Enabled && CronSchedule.TryParse(updated.Schedule, out var schedule, out _)
+                ? schedule.NextOccurrence(timeProvider.GetUtcNow().UtcDateTime)
+                : null;
+            await scheduleTriggerRepository.UpdateAsync(updated, callerUserId, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        return true;
+    }
+
+    public async Task<bool> DeleteScheduleTriggerAsync(
+        Guid triggerId,
+        Guid callerUserId,
+        bool callerIsAdmin,
+        CancellationToken cancellationToken)
+    {
+        var trigger = await scheduleTriggerRepository.GetByIdAsync(triggerId, cancellationToken)
+            .ConfigureAwait(false);
+        if (trigger is null)
+        {
+            return false;
+        }
+
+        AuthorizeTriggerMutation(GetSpec(trigger.JobType), trigger.Scope, trigger.CreatedByUserId, callerUserId,
+            callerIsAdmin);
+        return await scheduleTriggerRepository.DeleteAsync(triggerId, callerUserId, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    public async Task<IReadOnlyList<EventTrigger>> ListEventTriggersAsync(
+        Guid? extensionId,
+        bool? enabled,
+        bool mineOnly,
+        Guid callerUserId,
+        CancellationToken cancellationToken)
+    {
+        var triggers = await eventTriggerRepository.ListAllAsync(cancellationToken).ConfigureAwait(false);
+        return [.. triggers
+            .Where(trigger => extensionId is null || trigger.ExtensionId == extensionId)
+            .Where(trigger => enabled is null || trigger.Enabled == enabled)
+            .Where(trigger => !mineOnly || trigger.CreatedByUserId == callerUserId)];
+    }
+
+    public Task<EventTrigger?> GetEventTriggerAsync(Guid triggerId, CancellationToken cancellationToken)
+    {
+        return eventTriggerRepository.GetByIdAsync(triggerId, cancellationToken);
+    }
+
+    public async Task<EventTrigger> CreateEventTriggerAsync(
+        EventTriggerCreate create,
+        Guid ownerUserId,
+        Role ownerRole,
+        CancellationToken cancellationToken)
+    {
+        AuthorizeTriggerCreate(GetSpec(create.JobType), JobTriggerMode.Event, ownerRole);
+        return await eventTriggerRepository.CreateAsync(
+            new EventTrigger
+            {
+                ExtensionId = create.ExtensionId,
+                JobType = create.JobType,
+                Scope = create.Scope,
+                Name = create.Name,
+                EventFilter = create.EventFilter,
+                DelaySeconds = create.DelaySeconds,
+                Enabled = create.Enabled,
+                Parameters = create.Parameters,
+                CreatedByUserId = ownerUserId
+            },
+            ownerUserId,
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<bool> PatchEventTriggerAsync(
+        Guid triggerId,
+        EventTriggerPatch patch,
+        Guid callerUserId,
+        bool callerIsAdmin,
+        CancellationToken cancellationToken)
+    {
+        var trigger = await eventTriggerRepository.GetByIdAsync(triggerId, cancellationToken)
+            .ConfigureAwait(false);
+        if (trigger is null)
+        {
+            return false;
+        }
+
+        AuthorizeTriggerMutation(GetSpec(trigger.JobType), trigger.Scope, trigger.CreatedByUserId, callerUserId,
+            callerIsAdmin);
+        return await eventTriggerRepository.PatchAsync(
+            patch with { Id = triggerId }, callerUserId, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<bool> DeleteEventTriggerAsync(
+        Guid triggerId,
+        Guid callerUserId,
+        bool callerIsAdmin,
+        CancellationToken cancellationToken)
+    {
+        var trigger = await eventTriggerRepository.GetByIdAsync(triggerId, cancellationToken)
+            .ConfigureAwait(false);
+        if (trigger is null)
+        {
+            return false;
+        }
+
+        AuthorizeTriggerMutation(GetSpec(trigger.JobType), trigger.Scope, trigger.CreatedByUserId, callerUserId,
+            callerIsAdmin);
+        return await eventTriggerRepository.DeleteAsync(triggerId, callerUserId, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    private JobSpec? GetSpec(string jobType) => GetRegisteredSpec(_specs, jobType);
+}

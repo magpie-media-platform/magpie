@@ -21,21 +21,33 @@ const mockApiFolders: ApiRootFolder[] = [
         id: 'folder-1',
         name: 'Movies',
         path: '/media/movies',
-        contentTypeId: 'ct-movies',
+        contentType: 'ct-movies',
+        isDefault: true,
+        defaultMonitoring: true,
+        upgradeFileHandling: 'Replace',
+        defaults: { movie: { qualityTierListId: 'quality-default' } },
         createdAt: '2024-01-01T00:00:00Z',
     },
     {
         id: 'folder-2',
         name: 'TV Shows',
         path: '/media/tv',
-        contentTypeId: 'ct-shows',
+        contentType: 'ct-shows',
+        isDefault: true,
+        defaultMonitoring: true,
+        upgradeFileHandling: 'Replace',
+        defaults: { series: { qualityTierListId: 'quality-default' } },
         createdAt: '2024-01-02T00:00:00Z',
     },
     {
         id: 'folder-3',
         name: 'Music',
         path: '/media/music',
-        contentTypeId: 'ct-music',
+        contentType: 'ct-music',
+        isDefault: false,
+        defaultMonitoring: true,
+        upgradeFileHandling: 'Replace',
+        defaults: { album: { qualityTierListId: 'quality-default' } },
         createdAt: '2024-01-03T00:00:00Z',
         modifiedAt: '2024-01-10T00:00:00Z',
         modifiedByUserId: 'user-123',
@@ -145,7 +157,11 @@ describe('useRootFolders', () => {
                 id: 'folder-4',
                 name: 'Books',
                 path: '/media/books',
-                contentTypeId: 'ct-books',
+                contentType: 'ct-books',
+                isDefault: false,
+                defaultMonitoring: true,
+                upgradeFileHandling: 'Replace',
+                defaults: { book: { qualityTierListId: 'quality-default' } },
                 createdAt: '2024-01-04T00:00:00Z',
             });
 
@@ -161,14 +177,20 @@ describe('useRootFolders', () => {
                 await result.current.createFolder({
                     name: 'Books',
                     path: '/media/books',
-                    contentTypeId: 'ct-books',
+                    contentType: 'ct-books',
+                    defaultMonitoring: true,
+                    upgradeFileHandling: 'Replace',
+                    defaults: { book: { qualityTierListId: 'quality-default' } },
                 });
             });
 
             expect(mockApiPost).toHaveBeenCalledWith('/root-folders', {
                 name: 'Books',
                 path: '/media/books',
-                contentTypeId: 'ct-books',
+                contentType: 'ct-books',
+                defaultMonitoring: true,
+                upgradeFileHandling: 'Replace',
+                defaults: { book: { qualityTierListId: 'quality-default' } },
             });
         });
 
@@ -190,10 +212,13 @@ describe('useRootFolders', () => {
             });
 
             act(() => {
-                result.current.createFolder({
+                void result.current.createFolder({
                     name: 'Books',
                     path: '/media/books',
-                    contentTypeId: 'ct-books',
+                    contentType: 'ct-books',
+                    defaultMonitoring: true,
+                    upgradeFileHandling: 'Replace',
+                    defaults: { book: { qualityTierListId: 'quality-default' } },
                 });
             });
 
@@ -206,7 +231,11 @@ describe('useRootFolders', () => {
                     id: 'folder-4',
                     name: 'Books',
                     path: '/media/books',
-                    contentTypeId: 'ct-books',
+                    contentType: 'ct-books',
+                    isDefault: false,
+                    defaultMonitoring: true,
+                    upgradeFileHandling: 'Replace',
+                    defaults: { book: { qualityTierListId: 'quality-default' } },
                     createdAt: '2024-01-04T00:00:00Z',
                 });
             });
@@ -234,14 +263,18 @@ describe('useRootFolders', () => {
                 await result.current.updateFolder('folder-1', {
                     name: 'Movies Updated',
                     path: '/media/movies-new',
-                    contentTypeId: 'ct-movies',
+                    contentType: 'ct-movies',
+                    defaultMonitoring: { value: true },
+                    upgradeFileHandling: 'Replace',
                 });
             });
 
             expect(mockApiPatch).toHaveBeenCalledWith('/root-folders/folder-1', {
                 name: 'Movies Updated',
                 path: '/media/movies-new',
-                contentTypeId: 'ct-movies',
+                contentType: 'ct-movies',
+                defaultMonitoring: { value: true },
+                upgradeFileHandling: 'Replace',
             });
         });
 
@@ -263,10 +296,12 @@ describe('useRootFolders', () => {
             });
 
             act(() => {
-                result.current.updateFolder('folder-1', {
+                void result.current.updateFolder('folder-1', {
                     name: 'Updated',
                     path: '/updated',
-                    contentTypeId: 'ct-movies',
+                    contentType: 'ct-movies',
+                    defaultMonitoring: { value: true },
+                    upgradeFileHandling: 'Replace',
                 });
             });
 
@@ -322,7 +357,7 @@ describe('useRootFolders', () => {
             });
 
             act(() => {
-                result.current.deleteFolder('folder-1');
+                void result.current.deleteFolder('folder-1');
             });
 
             await waitFor(() => {
@@ -355,7 +390,7 @@ describe('useRootFolders', () => {
             expect(folder.id).toBe('folder-3');
             expect(folder.name).toBe('Music');
             expect(folder.path).toBe('/media/music');
-            expect(folder.contentTypeId).toBe('ct-music');
+            expect(folder.contentType).toBe('ct-music');
             expect(folder.createdAt).toBe('2024-01-03T00:00:00Z');
             expect(folder.modifiedAt).toBe('2024-01-10T00:00:00Z');
             expect(folder.modifiedByUserId).toBe('user-123');

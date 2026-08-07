@@ -1,4 +1,10 @@
 @layer components {
+    .filter-query-editor-field {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-2xs, 0.25rem);
+    }
+
     .filter-query-editor {
         border: 1px solid var(--border-default);
         border-radius: var(--radius-md);
@@ -10,6 +16,21 @@
     .filter-query-editor:focus-within {
         border-color: var(--accent-primary);
         box-shadow: var(--shadow-glow);
+    }
+
+    .filter-query-editor--invalid {
+        border-color: var(--status-unhealthy);
+
+        &:focus-within {
+            border-color: var(--status-unhealthy);
+            box-shadow: var(--glow-error);
+        }
+    }
+
+    .filter-query-editor__error {
+        margin: 0;
+        font-size: var(--text-sm);
+        color: var(--status-unhealthy);
     }
 
     .filter-query-editor--readonly {
@@ -26,7 +47,11 @@
     }
 
     .filter-query-editor .cm-scroller {
-        overflow-x: auto;
+        overflow-x: hidden;
+    }
+
+    .filter-query-editor .cm-content {
+        min-height: calc(3 * 1.4em);
     }
 
     .filter-query-editor .cm-line {
@@ -50,7 +75,7 @@
     }
 
     .cm-tooltip.cm-tooltip-autocomplete > ul {
-        font-family: var(--font-mono, 'JetBrains Mono', monospace);
+        font-family: var(--font-mono);
         font-size: var(--text-sm);
         max-height: 200px;
     }

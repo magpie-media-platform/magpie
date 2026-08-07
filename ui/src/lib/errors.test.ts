@@ -3,11 +3,11 @@ import { describe, it, expect } from 'vitest';
 import {
     isNetworkError,
     isAuthError,
-    isPermissionError,
     isNotFoundError,
     isValidationError,
     isServerError,
     isRetryableError,
+    isNoDownloadClientError,
     getErrorMessage,
     getValidationErrors,
     getFieldError,
@@ -56,16 +56,6 @@ describe('Error type checks', () => {
 
         it('returns false for non-ApiError', () => {
             expect(isAuthError(new Error('Unauthorized'))).toBe(false);
-        });
-    });
-
-    describe('isPermissionError', () => {
-        it('returns true for 403 status', () => {
-            expect(isPermissionError({ name: 'ApiError', status: 403, message: 'Forbidden' })).toBe(true);
-        });
-
-        it('returns false for other statuses', () => {
-            expect(isPermissionError({ name: 'ApiError', status: 401, message: 'Unauthorized' })).toBe(false);
         });
     });
 
@@ -125,6 +115,20 @@ describe('Error type checks', () => {
             expect(isRetryableError({ name: 'ApiError', status: 404, message: 'Not found' })).toBe(false);
         });
     });
+
+    describe('isNoDownloadClientError', () => {
+        it('returns true when the message mentions a download client', () => {
+            expect(
+                isNoDownloadClientError({ name: 'ApiError', status: 400, message: 'No download client configured' }),
+            ).toBe(true);
+            expect(isNoDownloadClientError(new Error('The Download Client is missing'))).toBe(true);
+        });
+
+        it('returns false for unrelated errors', () => {
+            expect(isNoDownloadClientError({ name: 'ApiError', status: 500, message: 'Server error' })).toBe(false);
+            expect(isNoDownloadClientError(null)).toBe(false);
+        });
+    });
 });
 
 describe('getErrorMessage', () => {
@@ -135,12 +139,12 @@ describe('getErrorMessage', () => {
 
     it('returns status-based message for generic API error message', () => {
         const error = { name: 'ApiError', status: 404, message: 'Request failed with status 404' };
-        expect(getErrorMessage(error)).toBe('The requested resource was not found.');
+        expect(getErrorMessage(error)).toBe('The requested resource does not exist.');
     });
 
     it('returns status-based message for network error with generic message', () => {
         const error = { name: 'ApiError', status: 0, message: 'Request failed with status 0' };
-        expect(getErrorMessage(error)).toBe('Unable to connect to the server. Check your network connection.');
+        expect(getErrorMessage(error)).toBe('Failed to connect to the server. Check the network connection.');
     });
 
     it('returns API error message for network error with specific message', () => {
@@ -157,9 +161,9 @@ describe('getErrorMessage', () => {
     });
 
     it('returns fallback for unknown error types', () => {
-        expect(getErrorMessage(null)).toBe('An unexpected error occurred.');
-        expect(getErrorMessage(undefined)).toBe('An unexpected error occurred.');
-        expect(getErrorMessage({})).toBe('An unexpected error occurred.');
+        expect(getErrorMessage(null)).toBe('The request failed.');
+        expect(getErrorMessage(undefined)).toBe('The request failed.');
+        expect(getErrorMessage({})).toBe('The request failed.');
     });
 
     it('uses custom fallback', () => {
@@ -362,11 +366,6 @@ describe('Constants', () => {
     it('HTTP_STATUS.UNAUTHORIZED triggers isAuthError', () => {
         const error = createApiError(HTTP_STATUS.UNAUTHORIZED, 'Unauthorized');
         expect(isAuthError(error)).toBe(true);
-    });
-
-    it('HTTP_STATUS.FORBIDDEN triggers isPermissionError', () => {
-        const error = createApiError(HTTP_STATUS.FORBIDDEN, 'Forbidden');
-        expect(isPermissionError(error)).toBe(true);
     });
 
     it('HTTP_STATUS.NOT_FOUND triggers isNotFoundError', () => {

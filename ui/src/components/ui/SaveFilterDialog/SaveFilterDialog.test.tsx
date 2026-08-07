@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -67,6 +67,23 @@ describe('SaveFilterDialog', () => {
         expect(onSave).toHaveBeenCalledWith('My Filter');
     });
 
+    it('blocks save and warns when the name duplicates an existing filter', async () => {
+        const onSave = vi.fn();
+        const user = userEvent.setup();
+
+        render(<SaveFilterDialog {...defaultProps} onSave={onSave} existingNames={['Action Movies']} />);
+
+        await waitFor(() => {
+            expect(screen.getByRole('dialog')).toBeInTheDocument();
+        });
+
+        await user.type(screen.getByLabelText('Filter Name'), 'action movies');
+        await user.click(screen.getByRole('button', { name: /save filter/i }));
+
+        expect(onSave).not.toHaveBeenCalled();
+        expect(screen.getByText(/already exists/i)).toBeInTheDocument();
+    });
+
     it('shows validation error when name is empty', async () => {
         const onSave = vi.fn();
         const user = userEvent.setup();
@@ -82,5 +99,71 @@ describe('SaveFilterDialog', () => {
         expect(screen.getByRole('button', { name: /save filter/i })).toBeDisabled();
 
         expect(onSave).not.toHaveBeenCalled();
+    });
+
+    describe('update vs new (applied saved filter)', () => {
+        it('is create-only when no update target is provided', async () => {
+            render(<SaveFilterDialog {...defaultProps} />);
+
+            await waitFor(() => {
+                expect(screen.getByRole('dialog')).toBeInTheDocument();
+            });
+
+            expect(document.querySelector('[data-action="update-saved-filter"]')).not.toBeInTheDocument();
+            expect(screen.getByRole('button', { name: /save filter/i })).toBeInTheDocument();
+        });
+
+        it('offers an Update action labelled with the target name, plus Save as New', async () => {
+            render(<SaveFilterDialog {...defaultProps} onUpdate={vi.fn()} updateTargetName="Action Movies" />);
+
+            await waitFor(() => {
+                expect(screen.getByRole('dialog')).toBeInTheDocument();
+            });
+
+            const updateButton = document.querySelector('[data-action="update-saved-filter"]') as HTMLElement;
+            expect(updateButton).toBeInTheDocument();
+            expect(updateButton).toHaveTextContent('Update "Action Movies"');
+
+            const saveNewButton = document.querySelector('[data-action="save-new-filter"]') as HTMLElement;
+            expect(saveNewButton).toHaveTextContent('Save as New');
+        });
+
+        it('keeps the update-mode Cancel action inside the dialog footer and closes from it', async () => {
+            const onOpenChange = vi.fn();
+            const user = userEvent.setup();
+
+            render(
+                <SaveFilterDialog
+                    {...defaultProps}
+                    onOpenChange={onOpenChange}
+                    onUpdate={vi.fn()}
+                    updateTargetName="qa-routeforms modified saved filter with a longer display name"
+                />,
+            );
+
+            const dialog = await screen.findByRole('dialog');
+            const footer = dialog.querySelector('.save-filter-dialog__footer');
+            expect(footer).toBeInTheDocument();
+
+            const cancelButton = within(footer as HTMLElement).getByRole('button', { name: 'Cancel' });
+            await user.click(cancelButton);
+
+            expect(onOpenChange).toHaveBeenCalledWith(false);
+        });
+
+        it('calls onUpdate when the Update action is clicked, without requiring a name', async () => {
+            const onUpdate = vi.fn();
+            const user = userEvent.setup();
+
+            render(<SaveFilterDialog {...defaultProps} onUpdate={onUpdate} updateTargetName="Action Movies" />);
+
+            await waitFor(() => {
+                expect(screen.getByRole('dialog')).toBeInTheDocument();
+            });
+
+            await user.click(document.querySelector('[data-action="update-saved-filter"]') as HTMLElement);
+
+            expect(onUpdate).toHaveBeenCalledTimes(1);
+        });
     });
 });

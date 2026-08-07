@@ -4,232 +4,185 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
-using Magpie.Abstractions.Api;
-using Magpie.Abstractions.Integrations;
-using Magpie.Abstractions.Repositories;
-using Magpie.Abstractions.Security;
 using Magpie.Models;
+using Magpie.Models.Api;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
-using Magpie.Models.Enums;
+using Magpie.Sdk.Api;
+using Magpie.Sdk.Services;
 
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
 
 namespace Magpie.Api.EndpointGroups;
 
-internal sealed class DownloadClientsEndpointGroup(
-    IDownloadClientRepository downloadClientRepository,
-    IEnumerable<IDownloadClientIntegration> downloadClientIntegrations) : IApiEndpointGroup
+[MagpieCommandGroup("download-clients", "download-clients", "Manage download clients")]
+internal sealed class DownloadClientsEndpointGroup : IApiEndpointGroup
 {
     public string Name => "download-clients";
 
     public void MapEndpoints(IEndpointRouteBuilder builder)
     {
-        builder.MapGet("", GetAllDownloadClients)
-            .WithName(nameof(GetAllDownloadClients))
-            .Produces<DownloadClient[]>()
+        builder.MapGet("", GetDownloadClientsAsync)
+            .WithName(nameof(GetDownloadClientsAsync))
+            .Produces<IReadOnlyList<DownloadClient>>()
             .RequireViewer();
 
-        builder.MapGet("{id:guid}", GetDownloadClientById)
-            .WithName(nameof(GetDownloadClientById))
-            .Produces<DownloadClient>()
-            .ProducesProblem(StatusCodes.Status404NotFound)
-            .RequireViewer();
-
-        builder.MapPost("", CreateDownloadClient)
-            .WithName(nameof(CreateDownloadClient))
+        builder.MapPost("", CreateDownloadClientAsync)
+            .WithName(nameof(CreateDownloadClientAsync))
             .Produces<DownloadClient>(StatusCodes.Status201Created)
             .ProducesProblem(StatusCodes.Status400BadRequest)
-            .RequireManager();
+            .RequireAdmin();
 
-        builder.MapPatch("{id:guid}", PatchDownloadClient)
-            .WithName(nameof(PatchDownloadClient))
-            .Produces(StatusCodes.Status204NoContent)
+        builder.MapPost("test", TestDownloadClientSettingsAsync)
+            .WithName(nameof(TestDownloadClientSettingsAsync))
+            .Produces<ConfigurationTestResult>()
+            .RequireAdmin();
+
+        builder.MapGet("{id:guid}", GetDownloadClientAsync)
+            .WithName(nameof(GetDownloadClientAsync))
+            .Produces<DownloadClient>()
             .ProducesProblem(StatusCodes.Status404NotFound)
+            .RequireViewer();
+
+        builder.MapPatch("{id:guid}", PatchDownloadClientAsync)
+            .WithName(nameof(PatchDownloadClientAsync))
+            .Produces(StatusCodes.Status204NoContent)
             .ProducesProblem(StatusCodes.Status400BadRequest)
-            .RequireManager();
-
-        builder.MapPost("{id:guid}/enable", EnableDownloadClient)
-            .WithName(nameof(EnableDownloadClient))
-            .Produces<DownloadClient>()
             .ProducesProblem(StatusCodes.Status404NotFound)
-            .RequireManager();
+            .RequireAdmin();
 
-        builder.MapPost("{id:guid}/disable", DisableDownloadClient)
-            .WithName(nameof(DisableDownloadClient))
-            .Produces<DownloadClient>()
-            .ProducesProblem(StatusCodes.Status404NotFound)
-            .RequireManager();
-
-        builder.MapPost("{id:guid}/test", TestDownloadClient)
-            .WithName(nameof(TestDownloadClient))
-            .Produces<ConnectionTestResult>()
-            .ProducesProblem(StatusCodes.Status404NotFound)
-            .RequireManager();
-
-        builder.MapDelete("{id:guid}", DeleteDownloadClient)
-            .WithName(nameof(DeleteDownloadClient))
+        builder.MapDelete("{id:guid}", DeleteDownloadClientAsync)
+            .WithName(nameof(DeleteDownloadClientAsync))
             .Produces(StatusCodes.Status204NoContent)
             .ProducesProblem(StatusCodes.Status404NotFound)
-            .RequireManager();
+            .RequireAdmin();
+
+        builder.MapPost("{id:guid}/test", TestDownloadClientAsync)
+            .WithName(nameof(TestDownloadClientAsync))
+            .Produces<ConfigurationTestResult>()
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .RequireAdmin();
     }
 
-    private async Task<IResult> GetAllDownloadClients(CancellationToken cancellationToken)
-    {
-        var downloadClients = await downloadClientRepository.ListAllAsync(cancellationToken)
-            .ConfigureAwait(false);
-
-        return Results.Ok(downloadClients);
-    }
-
-    private async Task<IResult> GetDownloadClientById(Guid id, CancellationToken cancellationToken)
-    {
-        var downloadClient = await downloadClientRepository.GetByIdAsync(id, cancellationToken)
-            .ConfigureAwait(false);
-
-        return downloadClient is null
-            ? Results.NotFound()
-            : Results.Ok(downloadClient);
-    }
-
-    private async Task<IResult> CreateDownloadClient(
-        HttpContext httpContext,
-        DownloadClient request,
+    [MagpieCommand("list", "GET", "", "List download clients")]
+    internal async Task<IResult> GetDownloadClientsAsync(
+        [FromServices] IDownloadClientService downloadClientService,
         CancellationToken cancellationToken)
     {
-        var currentUserId = httpContext.User.GetUserId();
-        var downloadClient = request with
+        var clients = await downloadClientService.ListAsync(cancellationToken).ConfigureAwait(false);
+
+        var schemas = new Dictionary<string, IReadOnlyList<SettingSchemaDefinition>>(StringComparer.Ordinal);
+        foreach (var providerType in clients.Select(c => c.ProviderType).Distinct(StringComparer.Ordinal))
         {
-            Id = Guid.NewGuid(),
-            Status = DownloadClientStatus.Unknown,
-            LastChecked = null,
-            CreatedAt = DateTime.UtcNow,
-            CreatedByUserId = currentUserId,
-            ModifiedAt = null,
-            ModifiedByUserId = null
-        };
+            schemas[providerType] = await downloadClientService
+                .GetSettingsSchemaAsync(providerType, cancellationToken)
+                .ConfigureAwait(false);
+        }
 
-        var created = await downloadClientRepository.CreateAsync(downloadClient, currentUserId, cancellationToken)
-            .ConfigureAwait(false);
-
-        return Results.Created($"api/{Name}/{created.Id}", created);
+        return Results.Ok<IReadOnlyList<DownloadClient>>(
+            [.. clients.Select(c => RedactSecrets(c, schemas[c.ProviderType]))]);
     }
 
-    private async Task<IResult> PatchDownloadClient(
-        HttpContext httpContext,
-        Guid id,
-        DownloadClientPatch request,
+    [MagpieCommand("create", "POST", "", "Create a download client")]
+    internal async Task<IResult> CreateDownloadClientAsync(
+        [FromServices] IDownloadClientService downloadClientService,
+        AuthenticatedUser user,
+        [FromBody] DownloadClient client,
         CancellationToken cancellationToken)
     {
-        var currentUserId = httpContext.User.GetUserId();
-        var patch = request with { Id = id };
-
-        var updated = await downloadClientRepository.PatchAsync(patch, currentUserId, cancellationToken)
+        var created = await downloadClientService.CreateAsync(client, user.Id, cancellationToken)
+            .ConfigureAwait(false);
+        var schema = await downloadClientService.GetSettingsSchemaAsync(created.ProviderType, cancellationToken)
             .ConfigureAwait(false);
 
-        return updated
-            ? Results.NoContent()
-            : Results.NotFound();
+        return Results.Created($"api/{Name}/{created.Id}", RedactSecrets(created, schema));
     }
 
-    private async Task<IResult> EnableDownloadClient(
-        HttpContext httpContext,
-        Guid id,
+    [MagpieCommand("test-settings", "POST", "test", "Test download client settings")]
+    internal async Task<IResult> TestDownloadClientSettingsAsync(
+        [FromServices] IDownloadClientService downloadClientService,
+        [FromBody] IntegrationSettingsTestRequest request,
         CancellationToken cancellationToken)
     {
-        var existing = await downloadClientRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
-
-        if (existing is null)
-        {
-            return Results.NotFound();
-        }
-
-        var currentUserId = httpContext.User.GetUserId();
-
-        var downloadClient = existing with
-        {
-            Enabled = true,
-            ModifiedAt = DateTime.UtcNow,
-            ModifiedByUserId = currentUserId
-        };
-
-        await downloadClientRepository.UpdateAsync(downloadClient, currentUserId, cancellationToken)
-            .ConfigureAwait(false);
-
-        return Results.Ok(downloadClient);
-    }
-
-    private async Task<IResult> DisableDownloadClient(
-        HttpContext httpContext,
-        Guid id,
-        CancellationToken cancellationToken)
-    {
-        var existing = await downloadClientRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
-
-        if (existing is null)
-        {
-            return Results.NotFound();
-        }
-
-        var currentUserId = httpContext.User.GetUserId();
-
-        var downloadClient = existing with
-        {
-            Enabled = false,
-            ModifiedAt = DateTime.UtcNow,
-            ModifiedByUserId = currentUserId
-        };
-
-        await downloadClientRepository.UpdateAsync(downloadClient, currentUserId, cancellationToken)
-            .ConfigureAwait(false);
-
-        return Results.Ok(downloadClient);
-    }
-
-    private async Task<IResult> TestDownloadClient(Guid id, CancellationToken cancellationToken)
-    {
-        var downloadClient = await downloadClientRepository.GetByIdAsync(id, cancellationToken)
-            .ConfigureAwait(false);
-
-        if (downloadClient is null)
-        {
-            return Results.NotFound();
-        }
-
-        var integration = downloadClientIntegrations
-            .FirstOrDefault(i => string.Equals(
-                i.ProviderType,
-                downloadClient.ProviderType,
-                StringComparison.OrdinalIgnoreCase));
-
-        if (integration is null)
-        {
-            return Results.Ok(new ConnectionTestResult
-            {
-                Success = false,
-                Message = $"No integration registered for type '{downloadClient.ProviderType}'."
-            });
-        }
-
-        var result = await integration.TestConnectionAsync(downloadClient.Settings, cancellationToken)
+        var result = await downloadClientService.TestSettingsAsync(
+            request.ProviderType,
+            request.Id,
+            request.Settings ?? new Dictionary<string, string>(),
+            cancellationToken)
             .ConfigureAwait(false);
 
         return Results.Ok(result);
     }
 
-    private async Task<IResult> DeleteDownloadClient(
-        HttpContext httpContext,
+    [MagpieCommand("get", "GET", "{id:guid}", "Show a download client")]
+    internal async Task<IResult> GetDownloadClientAsync(
+        [FromServices] IDownloadClientService downloadClientService,
         Guid id,
         CancellationToken cancellationToken)
     {
-        var currentUserId = httpContext.User.GetUserId();
-        var deleted = await downloadClientRepository.DeleteAsync(id, currentUserId, cancellationToken)
+        var client = await downloadClientService.GetAsync(id, cancellationToken).ConfigureAwait(false);
+        if (client is null)
+        {
+            return Results.NotFound();
+        }
+
+        var schema = await downloadClientService.GetSettingsSchemaAsync(client.ProviderType, cancellationToken)
             .ConfigureAwait(false);
 
-        return deleted
-            ? Results.NoContent()
-            : Results.NotFound();
+        return Results.Ok(RedactSecrets(client, schema));
+    }
+
+    [MagpieCommand("patch", "PATCH", "{id:guid}", "Update fields on a download client")]
+    internal async Task<IResult> PatchDownloadClientAsync(
+        [FromServices] IDownloadClientService downloadClientService,
+        AuthenticatedUser user,
+        Guid id,
+        [FromBody] DownloadClientPatch patch,
+        CancellationToken cancellationToken)
+    {
+        var patched = await downloadClientService.PatchAsync(id, patch, user.Id, cancellationToken)
+            .ConfigureAwait(false);
+
+        return patched ? Results.NoContent() : Results.NotFound();
+    }
+
+    [MagpieCommand("delete", "DELETE", "{id:guid}", "Delete a download client")]
+    internal async Task<IResult> DeleteDownloadClientAsync(
+        [FromServices] IDownloadClientService downloadClientService,
+        AuthenticatedUser user,
+        Guid id,
+        CancellationToken cancellationToken)
+    {
+        var deleted = await downloadClientService.DeleteAsync(id, user.Id, cancellationToken)
+            .ConfigureAwait(false);
+
+        return deleted ? Results.NoContent() : Results.NotFound();
+    }
+
+    [MagpieCommand("test", "POST", "{id:guid}/test", "Test a download client")]
+    internal async Task<IResult> TestDownloadClientAsync(
+        [FromServices] IDownloadClientService downloadClientService,
+        Guid id,
+        CancellationToken cancellationToken)
+    {
+        var result = await downloadClientService.TestAsync(id, cancellationToken: cancellationToken)
+            .ConfigureAwait(false);
+
+        return Results.Ok(result);
+    }
+
+    private static DownloadClient RedactSecrets(
+        DownloadClient client,
+        IReadOnlyList<SettingSchemaDefinition> schema)
+    {
+        return client with
+        {
+            Settings = schema is { Count: 0 }
+                ? []
+                : client.Settings.RedactSecrets(schema)
+        };
     }
 }

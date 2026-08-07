@@ -22,8 +22,8 @@ mono_crash.*
 # Build results
 [Dd]ebug/
 [Dd]ebugPublic/
-[Rr]elease/
-[Rr]eleases/
+/[Rr]elease/
+/[Rr]eleases/
 x64/
 x86/
 [Ww][Ii][Nn]32/
@@ -496,10 +496,9 @@ $RECYCLE.BIN/
 
 # Data
 data/*
-src/Magpie.App/data
 
 # Windows NUL device artifact
 nul
 
-# Claude Code local settings
-.claude/
+# Encryption keys
+*.key

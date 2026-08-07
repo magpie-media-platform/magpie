@@ -1,34 +1,65 @@
 using System;
 using System.Collections.Generic;
-using System.Security.Claims;
+using System.Globalization;
 using System.Threading;
 using System.Threading.Tasks;
 
-using Magpie.Abstractions.Auth;
+using Magpie.Abstractions.Repositories;
+using Magpie.Models;
 using Magpie.Models.Data;
+using Magpie.Sdk.Auth;
+using Magpie.Sdk.Events;
+using Magpie.Sdk.Services;
 
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
 
 namespace Magpie.Auth;
 
-/// <summary>
-/// Default credential authentication provider for local username/password accounts.
-/// </summary>
-/// <remarks>
-/// Implements both <see cref="ICredentialAuthenticationProvider"/> for the
-/// <c>POST /api/auth/login</c> flow and <see cref="ICredentialManagementAuthenticationProvider"/>
-/// so administrators can reset passwords through the same provider.
-/// Verification delegates to <see cref="UserManager"/> which owns the password hash format.
-/// </remarks>
 internal sealed class LocalCredentialAuthenticationProvider(
-    UserManager userManager,
+    IUserService userService,
+    IUserRepository userRepository,
+    AccountLockoutOptions lockoutOptions,
+    IEventBus eventBus,
+    TimeProvider timeProvider,
     ILogger<LocalCredentialAuthenticationProvider> logger) : ICredentialManagementAuthenticationProvider
 {
-    /// <inheritdoc />
-    public string ProviderType => UserManager.LocalProviderType;
+    private static readonly User DummyVerificationUser = new()
+    {
+        Username = "\0",
+        ProviderType = CredentialProviderTypes.Local,
+        PasswordHash = "i=600000$" + Convert.ToBase64String(new byte[32]),
+        PasswordSalt = Convert.ToBase64String(new byte[32]),
+    };
 
-    /// <inheritdoc />
+    private const string UnlockReasonExpiry = "expiry";
+
+    public string ProviderType => CredentialProviderTypes.Local;
+
+    private static MagpieEvent BuildUserUnlocked(Guid userId, string username, string unlockReason)
+    {
+        var context = new Dictionary<string, string>
+        {
+            [MagpieEvents.Keys.UserId] = userId.ToString("D", CultureInfo.InvariantCulture),
+            [MagpieEvents.Keys.UserUsername] = username ?? string.Empty,
+            [MagpieEvents.Keys.UserUnlockReason] = unlockReason,
+        };
+
+        return new MagpieEvent(Guid.Empty, MagpieEvents.Names.UserUnlocked, context, default, default, null);
+    }
+
+    public Task<AuthenticationAttempt> TryAuthenticateAsync(
+        HttpContext context,
+        CancellationToken cancellationToken = default)
+    {
+        return Task.FromResult(AuthenticationAttempt.None);
+    }
+
+    public Task ChallengeAsync(HttpContext context, CancellationToken cancellationToken = default)
+    {
+        return Task.CompletedTask;
+    }
+
     public async Task<User?> VerifyCredentialsAsync(
         string username,
         string password,
@@ -39,64 +70,110 @@ internal sealed class LocalCredentialAuthenticationProvider(
             return null;
         }
 
-        var user = await userManager.GetUserAsync(username, cancellationToken).ConfigureAwait(false);
+        var user = await userService.GetAuthenticationUserAsync(username, cancellationToken).ConfigureAwait(false);
         if (user is null)
         {
-            logger.LogDebug("Credential authentication failed: user '{Username}' not found", username);
+            logger.LogDebug("User {Username} does not exist, so credential authentication failed", username);
+            await RunDummyVerificationAsync(password, cancellationToken).ConfigureAwait(false);
             return null;
         }
 
         if (!user.Enabled)
         {
-            logger.LogDebug("Credential authentication failed: user '{Username}' is disabled", username);
+            logger.LogDebug("User {Username} is disabled, so credential authentication failed", username);
+            await RunDummyVerificationAsync(password, cancellationToken).ConfigureAwait(false);
             return null;
         }
 
         if (!string.Equals(user.ProviderType, ProviderType, StringComparison.OrdinalIgnoreCase))
         {
             logger.LogDebug(
-                "Credential authentication skipped: user '{Username}' uses provider '{ProviderType}'",
+                "User {Username} uses provider {ProviderType}, so credential authentication did not run",
                 username,
                 user.ProviderType);
+            await RunDummyVerificationAsync(password, cancellationToken).ConfigureAwait(false);
             return null;
         }
 
-        var verified = await userManager.VerifyPasswordAsync(user, password, cancellationToken).ConfigureAwait(false);
+        if (lockoutOptions.Enabled && user.LockedUntil is { } lockedUntil)
+        {
+            if (lockedUntil > timeProvider.GetUtcNow().UtcDateTime)
+            {
+                logger.LogWarning(
+                    "User {Username} is locked until {LockedUntil}, so the provider denied credential authentication",
+                    username,
+                    lockedUntil);
+                return null;
+            }
+
+            await userRepository.ResetLockoutAsync(user.Id, cancellationToken: cancellationToken).ConfigureAwait(false);
+
+            user.FailedLoginAttempts = 0;
+            user.LockedUntil = null;
+
+            await eventBus
+                .PublishAsync(BuildUserUnlocked(user.Id, user.Username, UnlockReasonExpiry), cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        var verified = await userService.VerifyPasswordAsync(user, password, cancellationToken).ConfigureAwait(false);
         if (!verified)
         {
-            logger.LogDebug("Credential authentication failed: bad password for user '{Username}'", username);
+            await RecordFailureAsync(user, username, cancellationToken).ConfigureAwait(false);
             return null;
         }
 
+        await userRepository.ClearFailedLoginsAsync(user.Id, cancellationToken).ConfigureAwait(false);
         return user;
     }
 
-    /// <inheritdoc />
-    public Task<ClaimsPrincipal?> TryAuthenticateAsync(
-        HttpContext context,
-        CancellationToken cancellationToken = default)
+    private Task RunDummyVerificationAsync(string password, CancellationToken cancellationToken)
     {
-        // Per-request authentication runs through the bearer provider; this provider only
-        // handles the explicit POST /api/auth/login call.
-        return Task.FromResult<ClaimsPrincipal?>(null);
+        return userService.VerifyPasswordAsync(DummyVerificationUser, password, cancellationToken);
     }
 
-    /// <inheritdoc />
-    public Task ChallengeAsync(HttpContext context, CancellationToken cancellationToken = default)
+    private async Task RecordFailureAsync(User user, string username, CancellationToken cancellationToken)
     {
-        return Task.CompletedTask;
+        if (!lockoutOptions.Enabled)
+        {
+            logger.LogDebug("User {Username} gave a bad password, so credential authentication failed", username);
+            return;
+        }
+
+        var lockedUntil = user.FailedLoginAttempts + 1 >= lockoutOptions.MaxFailedAttempts
+            ? timeProvider.GetUtcNow().UtcDateTime + lockoutOptions.LockoutDuration
+            : (DateTime?)null;
+
+        var result = await userRepository
+            .RecordFailedLoginAsync(user.Id, lockedUntil, cancellationToken)
+            .ConfigureAwait(false);
+
+        if (result.LockedUntil is not null)
+        {
+            logger.LogInformation(
+                "The provider locked user {Username} until {LockedUntil} after {Attempts} failed attempts",
+                username,
+                result.LockedUntil,
+                result.FailedAttempts);
+        }
+        else
+        {
+            logger.LogDebug(
+                "User {Username} gave a bad password ({Attempts}/{Max}), so credential authentication failed",
+                username,
+                result.FailedAttempts,
+                lockoutOptions.MaxFailedAttempts);
+        }
     }
 
-    /// <inheritdoc />
     public Task<bool> ResetPasswordAsync(
         Guid userId,
         string newPassword,
         Guid requestingUserId,
-        IReadOnlyDictionary<string, string> verificationPayload,
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(newPassword);
 
-        return userManager.SetPasswordAsync(userId, newPassword, requestingUserId, cancellationToken);
+        return userService.SetPasswordAsync(userId, newPassword, requestingUserId, cancellationToken);
     }
 }

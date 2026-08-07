@@ -28,16 +28,6 @@ export function OverlaySlot({ children, className }: GlobalSlotProps) {
 
 OverlaySlot.displayName = 'OverlaySlot';
 
-export function NavMainSlot({ children, className }: GlobalSlotProps) {
-    return (
-        <Slot slot="nav.main" className={className}>
-            {children}
-        </Slot>
-    );
-}
-
-NavMainSlot.displayName = 'NavMainSlot';
-
 export function HeaderLeftSlot({ children, className }: GlobalSlotProps) {
     return (
         <Slot slot="header.left" className={className}>

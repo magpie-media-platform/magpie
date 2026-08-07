@@ -25,50 +25,19 @@
         margin-bottom: var(--space-md);
     }
 
-    .filters-page__header-left {
-        display: flex;
-        align-items: center;
-        gap: var(--space-sm);
-    }
-
     .filters-page__icon {
         font-size: var(--text-2xl);
         color: var(--accent-primary);
     }
 
-    .filters-page__title {
-        margin: 0;
-        font-size: var(--text-2xl);
-        font-weight: var(--weight-semibold);
-        color: var(--text-primary);
-    }
-
-    .filters-page__header-actions {
-        display: flex;
-        align-items: center;
-        gap: var(--space-sm);
+    .filters-page__ownership {
+        margin-bottom: var(--space-md);
     }
 
     .filters-page__list {
         display: flex;
         flex-direction: column;
         gap: var(--space-sm);
-    }
-
-    .filters-page .list-toolbar__filters-controls {
-        flex: 1;
-    }
-
-    .filters-page__item {
-        background-color: var(--bg-secondary);
-        border: 1px solid var(--border-default);
-        border-radius: var(--radius-md);
-        padding: var(--space-md);
-        transition: border-color var(--duration-fast) var(--easing-default);
-
-        &:hover {
-            border-color: var(--border-accent);
-        }
     }
 
     .filters-page__item-main {
@@ -121,6 +90,36 @@
         &:hover {
             color: var(--status-degraded);
         }
+    }
+
+    .filters-page__wishlist-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: var(--space-xs);
+        max-width: 100%;
+        min-width: 0;
+        text-decoration: none;
+        transition: border-color var(--duration-fast) var(--easing-default);
+
+        & > svg {
+            flex-shrink: 0;
+        }
+
+        &:hover {
+            border-color: var(--border-accent);
+        }
+
+        &:focus-visible {
+            outline: var(--focus-ring-width) solid var(--focus-ring-color);
+            outline-offset: var(--focus-ring-offset);
+        }
+    }
+
+    .filters-page__wishlist-badge-label {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        min-width: 0;
     }
 
     .filters-page__item-meta {
@@ -231,10 +230,6 @@
             margin-bottom: var(--space-md);
         }
 
-        .filters-page__title {
-            font-size: var(--text-xl);
-        }
-
         .filters-page__header [data-action='add-filter'] {
             display: none;
         }
@@ -243,6 +238,10 @@
             flex-direction: column;
             align-items: flex-start;
             gap: var(--space-sm);
+        }
+
+        .filters-page__item-info {
+            width: 100%;
         }
 
         .filters-page__item-actions.card-actions {

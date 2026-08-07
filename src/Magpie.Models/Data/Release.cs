@@ -9,96 +9,107 @@ namespace Magpie.Models.Data;
 public record Release
 {
     /// <summary>
-    /// The release id.
+    /// The unique id of the release.
     /// </summary>
     public Guid Id { get; set; }
 
     /// <summary>
-    /// The indexer this release came from.
+    /// The id of the indexer that reported the release.
     /// </summary>
     public Guid? IndexerId { get; set; }
 
     /// <summary>
-    /// The content item this release is associated with.
-    /// </summary>
-    public Guid? ContentItemId { get; set; }
-
-    /// <summary>
-    /// Protocol used to download the release.
+    /// The transfer protocol of the release, such as torrent or usenet.
     /// </summary>
     public required string Protocol { get; set; }
 
     /// <summary>
-    /// The external release identifier from the indexer.
+    /// The id of the release at the indexer.
     /// </summary>
     public string? ExternalId { get; set; }
 
     /// <summary>
-    /// The release title.
+    /// The release title as the indexer reports it.
     /// </summary>
     public required string Title { get; set; }
 
     /// <summary>
-    /// When the release was published.
+    /// The date when the indexer published the release.
     /// </summary>
     public DateTime PublishDate { get; set; }
 
     /// <summary>
-    /// The release size in bytes.
+    /// The size of the release in bytes.
     /// </summary>
     public long? Size { get; set; }
 
     /// <summary>
-    /// The URL to view release information.
+    /// The URL of the details page at the indexer.
     /// </summary>
     public Uri? InfoUrl { get; set; }
 
     /// <summary>
-    /// A list of categories associated with this release.
+    /// The indexer categories of the release.
     /// </summary>
-    /// <remarks>
-    /// The list of categories is stored as serialized JSON.
-    /// </remarks>
     public List<string> Categories { get; set; } = [];
 
     /// <summary>
-    /// An ordered list of languages associated with this release.
+    /// The languages of the release.
     /// </summary>
-    /// <remarks>
-    /// The list of languages is stored as serialized JSON.
-    /// </remarks>
     public List<string> Languages { get; set; } = [];
 
     /// <summary>
-    /// Provider-specific properties for the release.
+    /// The provider-specific properties of the release.
     /// </summary>
-    /// <remarks>
-    /// The properties are stored as serialized JSON.
-    /// </remarks>
     public string? Properties { get; set; }
 
     /// <summary>
-    /// When the record was created.
+    /// The UTC time when the record was created.
     /// </summary>
     public DateTime CreatedAt { get; set; }
 
     /// <summary>
-    /// The id of the user that created the record.
+    /// The UTC time when an indexer search last saw the release.
+    /// </summary>
+    public DateTime ObservedAt { get; set; }
+
+    /// <summary>
+    /// The id of the user who created the record.
     /// </summary>
     public Guid? CreatedByUserId { get; set; }
 
     /// <summary>
-    /// When the record was last modified.
+    /// The UTC time when the record last changed.
     /// </summary>
     public DateTime? ModifiedAt { get; set; }
 
     /// <summary>
-    /// The id of the user that last modified the record.
+    /// The id of the user who last changed the record.
     /// </summary>
     public Guid? ModifiedByUserId { get; set; }
 
     /// <summary>
-    /// The <see cref="Download"/> entries associated with the release.
+    /// The downloads that grabbed the release.
     /// </summary>
     public ICollection<Download> Downloads { get; } = [];
+
+    /// <summary>
+    /// The ids at external providers.
+    /// </summary>
+    public ICollection<ExternalId> ExternalIds { get; } = [];
+
+    /// <summary>
+    /// The keys that identify the release across providers.
+    /// </summary>
+    public ICollection<ReleaseIdentityKey> IdentityKeys { get; } = [];
+
+    /// <summary>
+    /// The indexer observations that can supply the release.
+    /// </summary>
+    public ICollection<ReleaseSource> Sources { get; } = [];
+
+    /// <summary>
+    /// The content hierarchy nodes that the release covers.
+    /// </summary>
+    public ICollection<ReleaseScope> Scope { get; } = [];
 }

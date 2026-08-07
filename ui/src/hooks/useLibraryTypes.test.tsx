@@ -1,22 +1,41 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { renderHook, waitFor } from '@testing-library/react';
+import { act, renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
+
+vi.mock('./useEventStream', () => ({
+    useEventStream: vi.fn(),
+    useGlobalEventStreamConnection: vi.fn(),
+}));
 
 import {
     useLibraryTypes,
     useLibraryCounts,
+    useTypeIconName,
+    getRootLevels,
     libraryTypesQueryKeys,
     libraryCountsQueryKeys,
+    STANDARD_METADATA_FIELDS,
     type LibraryTypeDefinition,
 } from './useLibraryTypes';
 import * as api from '@/lib/api';
+import { useEventStream } from './useEventStream';
+
+const mockedUseEventStream = vi.mocked(useEventStream);
 
 vi.mock('@/lib/api', async (importOriginal) => {
     const original = await importOriginal<typeof import('@/lib/api')>();
     return {
         ...original,
         apiGet: vi.fn(),
+    };
+});
+
+vi.mock('@/auth', async (importOriginal) => {
+    const original = await importOriginal<typeof import('@/auth')>();
+    return {
+        ...original,
+        useAuth: () => ({ isAuthenticated: true }) as ReturnType<typeof original.useAuth>,
     };
 });
 
@@ -39,13 +58,13 @@ function createWrapper(queryClient: QueryClient) {
 }
 
 const mockContentTypesResponse = [
-    { slug: 'movies', displayName: 'Movies', levelDefinitions: [] },
-    { slug: 'shows', displayName: 'TV Shows', levelDefinitions: [] },
+    { slug: 'movies', displayName: 'Movie', pluralDisplayName: 'Movies', levelDefinitions: [] },
+    { slug: 'shows', displayName: 'TV', pluralDisplayName: 'TV Shows', levelDefinitions: [] },
 ];
 
 const mockSubjectTypesResponse = [
-    { slug: 'actors', displayName: 'Actors', customMetadataFields: [] },
-    { slug: 'studios', displayName: 'Studios', customMetadataFields: [] },
+    { slug: 'actors', displayName: 'Person', pluralDisplayName: 'People', customMetadataFields: [] },
+    { slug: 'studios', displayName: 'Studio', pluralDisplayName: 'Studios', customMetadataFields: [] },
 ];
 
 describe('useLibraryTypes', () => {
@@ -110,8 +129,28 @@ describe('useLibraryTypes', () => {
             await waitFor(() => expect(result.current.isLoading).toBe(false));
 
             expect(result.current.contentTypes).toEqual([
-                { id: 'movies', name: 'Movies', slug: 'movies' },
-                { id: 'shows', name: 'TV Shows', slug: 'shows' },
+                {
+                    id: 'movies',
+                    name: 'Movie',
+                    pluralName: 'Movies',
+                    slug: 'movies',
+                    iconName: null,
+                    levels: [],
+                    supportedMetadataFields: 0x3fffff,
+                    customMetadataFields: [],
+                    standardMetadataFields: STANDARD_METADATA_FIELDS,
+                },
+                {
+                    id: 'shows',
+                    name: 'TV',
+                    pluralName: 'TV Shows',
+                    slug: 'shows',
+                    iconName: null,
+                    levels: [],
+                    supportedMetadataFields: 0x3fffff,
+                    customMetadataFields: [],
+                    standardMetadataFields: STANDARD_METADATA_FIELDS,
+                },
             ]);
         });
 
@@ -133,8 +172,28 @@ describe('useLibraryTypes', () => {
             await waitFor(() => expect(result.current.isLoading).toBe(false));
 
             expect(result.current.subjectTypes).toEqual([
-                { id: 'actors', name: 'Actors', slug: 'actors' },
-                { id: 'studios', name: 'Studios', slug: 'studios' },
+                {
+                    id: 'actors',
+                    name: 'Person',
+                    pluralName: 'People',
+                    slug: 'actors',
+                    iconName: null,
+                    levels: [],
+                    supportedMetadataFields: 0x3fffff,
+                    customMetadataFields: [],
+                    standardMetadataFields: STANDARD_METADATA_FIELDS,
+                },
+                {
+                    id: 'studios',
+                    name: 'Studio',
+                    pluralName: 'Studios',
+                    slug: 'studios',
+                    iconName: null,
+                    levels: [],
+                    supportedMetadataFields: 0x3fffff,
+                    customMetadataFields: [],
+                    standardMetadataFields: STANDARD_METADATA_FIELDS,
+                },
             ]);
         });
 
@@ -156,7 +215,17 @@ describe('useLibraryTypes', () => {
             await waitFor(() => expect(result.current.isLoading).toBe(false));
 
             expect(result.current.subjectTypes).toEqual([
-                { id: 'custom-kind', name: 'custom-kind', slug: 'custom-kind' },
+                {
+                    id: 'custom-kind',
+                    name: 'custom-kind',
+                    pluralName: 'custom-kind',
+                    slug: 'custom-kind',
+                    iconName: null,
+                    levels: [],
+                    supportedMetadataFields: 0x3fffff,
+                    customMetadataFields: [],
+                    standardMetadataFields: STANDARD_METADATA_FIELDS,
+                },
             ]);
         });
 
@@ -236,8 +305,146 @@ describe('useLibraryTypes', () => {
             expect(result.current.contentTypes[0]).toEqual({
                 id: 'custom',
                 name: 'Custom',
+                pluralName: 'Custom',
                 slug: 'custom',
+                iconName: null,
+                levels: [],
+                supportedMetadataFields: 0x3fffff,
+                customMetadataFields: [],
+                standardMetadataFields: STANDARD_METADATA_FIELDS,
             });
+        });
+
+        it('carries level definitions instead of discarding them', async () => {
+            vi.mocked(api.apiGet).mockImplementation((url: string) => {
+                if (url === '/content-types') {
+                    return Promise.resolve([
+                        {
+                            slug: 'foo',
+                            displayName: 'Foo',
+                            levelDefinitions: [
+                                { slug: 'foo-a', displayName: 'A', parentSlug: null, subfolder: '' },
+                                { slug: 'foo-b', displayName: 'B', parentSlug: null },
+                                { slug: 'foo-c', displayName: 'C', parentSlug: null },
+                            ],
+                        },
+                    ]);
+                }
+                if (url === '/subject-types') {
+                    return Promise.resolve([]);
+                }
+                return Promise.reject(new Error(`Unexpected API call: ${url}`));
+            });
+
+            const { result } = renderHook(() => useLibraryTypes(), {
+                wrapper: createWrapper(queryClient),
+            });
+
+            await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+            const foo = result.current.contentTypes[0];
+            expect(foo.levels).toHaveLength(3);
+            expect(getRootLevels(foo).map((l) => l.slug)).toEqual(['foo-a', 'foo-b', 'foo-c']);
+            expect(foo.levels.map((level) => level.subfolder)).toEqual(['', null, null]);
+        });
+
+        it('carries level file contracts and subfolders', async () => {
+            vi.mocked(api.apiGet).mockImplementation((url: string) => {
+                if (url === '/content-types') {
+                    return Promise.resolve([
+                        {
+                            slug: 'tv',
+                            displayName: 'TV',
+                            levelDefinitions: [
+                                { slug: 'show', displayName: 'Show', parentSlug: null, subfolder: 'shows' },
+                                { slug: 'season', displayName: 'Season', parentSlug: 'show' },
+                                {
+                                    slug: 'episode',
+                                    displayName: 'Episode',
+                                    parentSlug: 'season',
+                                    acceptedFileTypes: ['video/*'],
+                                    acceptedSidecarTypes: ['.srt'],
+                                },
+                                {
+                                    slug: 'audiobook',
+                                    displayName: 'Audiobook',
+                                    parentSlug: null,
+                                    acceptedFileTypes: ['audio/*'],
+                                    subfolder: 'audiobooks',
+                                },
+                            ],
+                        },
+                    ]);
+                }
+                if (url === '/subject-types') {
+                    return Promise.resolve([]);
+                }
+                return Promise.reject(new Error(`Unexpected API call: ${url}`));
+            });
+
+            const { result } = renderHook(() => useLibraryTypes(), {
+                wrapper: createWrapper(queryClient),
+            });
+
+            await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+            const levels = result.current.contentTypes[0].levels;
+            expect(levels.map((level) => level.acceptedFileTypes)).toEqual([[], [], ['video/*'], ['audio/*']]);
+            expect(levels.map((level) => level.acceptedSidecarTypes)).toEqual([[], [], ['.srt'], []]);
+            expect(levels.map((level) => level.subfolder)).toEqual(['shows', null, null, 'audiobooks']);
+        });
+
+        it('carries supported metadata fields from content levels and subject kinds', async () => {
+            vi.mocked(api.apiGet).mockImplementation((url: string) => {
+                if (url === '/content-types') {
+                    return Promise.resolve([
+                        {
+                            slug: 'books',
+                            displayName: 'Book',
+                            levelDefinitions: [
+                                {
+                                    slug: 'book',
+                                    displayName: 'Book',
+                                    parentSlug: null,
+                                    supportedMetadataFields: 'Title, PublishDate',
+                                    customMetadataFields: [{ key: 'isbn', displayName: 'ISBN' }],
+                                },
+                            ],
+                        },
+                    ]);
+                }
+                if (url === '/subject-types') {
+                    return Promise.resolve([
+                        {
+                            slug: 'publisher',
+                            displayName: 'Publisher',
+                            customMetadataFields: [{ key: 'country', displayName: 'Country' }],
+                            supportedMetadataFields: 'Title',
+                        },
+                    ]);
+                }
+                return Promise.reject(new Error(`Unexpected API call: ${url}`));
+            });
+
+            const { result } = renderHook(() => useLibraryTypes(), {
+                wrapper: createWrapper(queryClient),
+            });
+
+            await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+            const contentType = result.current.contentTypes[0];
+            const subjectType = result.current.subjectTypes[0];
+            expect(contentType.standardMetadataFields?.map((field) => field.field)).toEqual(['Title', 'PublishDate']);
+            expect(contentType.customMetadataFields).toEqual([
+                { key: 'isbn', displayName: 'ISBN', dataType: null, format: null },
+            ]);
+            expect(contentType.levels[0].customMetadataFields).toEqual([
+                { key: 'isbn', displayName: 'ISBN', dataType: null, format: null },
+            ]);
+            expect(subjectType.standardMetadataFields?.map((field) => field.field)).toEqual(['Title']);
+            expect(subjectType.customMetadataFields).toEqual([
+                { key: 'country', displayName: 'Country', dataType: null, format: null },
+            ]);
         });
 
         it('provides refetch function that calls both endpoints', async () => {
@@ -275,6 +482,51 @@ describe('useLibraryTypes', () => {
         });
     });
 
+    describe('useTypeIconName', () => {
+        it('resolves declared icon names for content types, levels, and subject kinds', async () => {
+            vi.mocked(api.apiGet).mockImplementation((url: string) => {
+                if (url === '/content-types') {
+                    return Promise.resolve([
+                        {
+                            slug: 'foo',
+                            displayName: 'Foo',
+                            iconName: 'film-strip',
+                            levelDefinitions: [
+                                {
+                                    slug: 'foo-a',
+                                    displayName: 'A',
+                                    parentSlug: null,
+                                    iconName: 'video-camera',
+                                },
+                                { slug: 'foo-b', displayName: 'B', parentSlug: null, iconName: 'film-reel' },
+                            ],
+                        },
+                    ]);
+                }
+                if (url === '/subject-types') {
+                    return Promise.resolve([
+                        { slug: 'person', displayName: 'Person', iconName: 'person', customMetadataFields: [] },
+                    ]);
+                }
+                return Promise.reject(new Error(`Unexpected API call: ${url}`));
+            });
+
+            const { result } = renderHook(() => useTypeIconName(), { wrapper: createWrapper(queryClient) });
+
+            await waitFor(() => {
+                expect(result.current('foo-a')).toBe('video-camera');
+            });
+
+            const resolve = result.current;
+            expect(resolve('foo')).toBe('film-strip');
+            expect(resolve('foo-b')).toBe('film-reel');
+            expect(resolve('FOO-A')).toBe('video-camera');
+            expect(resolve('person', { subject: true })).toBe('person');
+            expect(resolve('unmapped')).toBeUndefined();
+            expect(resolve('unmapped', { subject: true })).toBeUndefined();
+        });
+    });
+
     describe('libraryCountsQueryKeys', () => {
         it('generates correct query keys', () => {
             expect(libraryCountsQueryKeys.counts(['movies', 'shows'], ['actors'])).toEqual([
@@ -288,11 +540,13 @@ describe('useLibraryTypes', () => {
 
     describe('useLibraryCounts', () => {
         const contentTypes: LibraryTypeDefinition[] = [
-            { id: 'movies', name: 'Movies', slug: 'movies' },
-            { id: 'shows', name: 'TV Shows', slug: 'shows' },
+            { id: 'movies', name: 'Movie', pluralName: 'Movies', slug: 'movies', levels: [] },
+            { id: 'shows', name: 'TV', pluralName: 'TV Shows', slug: 'shows', levels: [] },
         ];
 
-        const subjectTypes: LibraryTypeDefinition[] = [{ id: 'actors', name: 'Actors', slug: 'actors' }];
+        const subjectTypes: LibraryTypeDefinition[] = [
+            { id: 'actors', name: 'Person', pluralName: 'People', slug: 'actors', levels: [] },
+        ];
 
         it('fetches all content type counts in a single batched query', async () => {
             vi.mocked(api.apiGet).mockImplementation((url: string) => {
@@ -315,7 +569,71 @@ describe('useLibraryTypes', () => {
             await waitFor(() => {
                 expect(result.current.counts.movies).toBe(42);
                 expect(result.current.counts.shows).toBe(150);
+                expect(result.current.counts.actors).toBe(5);
             });
+        });
+
+        it('coalesces a burst of content events into a single refetch cycle', async () => {
+            vi.mocked(api.apiGet).mockImplementation((url: string) => {
+                if (url.startsWith('/content') && url.includes('contentType=movies')) {
+                    return Promise.resolve({ totalItems: 1 });
+                }
+                if (url.startsWith('/content') && url.includes('contentType=shows')) {
+                    return Promise.resolve({ totalItems: 2 });
+                }
+                if (url.startsWith('/subjects') && url.includes('kind=actors')) {
+                    return Promise.resolve({ totalItems: 3 });
+                }
+                return Promise.reject(new Error(`Unexpected API call: ${url}`));
+            });
+
+            const { result } = renderHook(() => useLibraryCounts(contentTypes, subjectTypes), {
+                wrapper: createWrapper(queryClient),
+            });
+            await waitFor(() => expect(result.current.counts.movies).toBe(1));
+
+            vi.useFakeTimers();
+            vi.mocked(api.apiGet).mockClear();
+            const handler = mockedUseEventStream.mock.calls[0]?.[0];
+            for (let index = 0; index < 100; index += 1) {
+                handler?.({
+                    name: 'content.hierarchyItem.created',
+                    context: { 'content.hierarchyItemId': `content-${index}` },
+                });
+            }
+            await act(async () => {
+                await vi.advanceTimersByTimeAsync(300);
+            });
+
+            expect(vi.mocked(api.apiGet)).toHaveBeenCalledTimes(3);
+            vi.useRealTimers();
+        });
+
+        it('counts only top-level content so the total matches the linked list', async () => {
+            const seen: string[] = [];
+            vi.mocked(api.apiGet).mockImplementation((url: string) => {
+                if (url.startsWith('/content')) {
+                    seen.push(url);
+                    return Promise.resolve({ totalItems: 3 });
+                }
+                if (url.startsWith('/subjects')) {
+                    return Promise.resolve([]);
+                }
+                return Promise.reject(new Error(`Unexpected API call: ${url}`));
+            });
+
+            const { result } = renderHook(() => useLibraryCounts(contentTypes, subjectTypes), {
+                wrapper: createWrapper(queryClient),
+            });
+
+            await waitFor(() => {
+                expect(result.current.counts.shows).toBe(3);
+            });
+
+            expect(seen.length).toBeGreaterThan(0);
+            for (const url of seen) {
+                expect(url).toContain('topLevelOnly=true');
+            }
         });
 
         it('fetches subject type counts in the same batched query', async () => {
@@ -324,7 +642,7 @@ describe('useLibraryTypes', () => {
                     return Promise.resolve({ totalItems: 0 });
                 }
                 if (url.startsWith('/subjects') && url.includes('kind=actors')) {
-                    return Promise.resolve(Array.from({ length: 5 }, (_, i) => ({ id: String(i) })));
+                    return Promise.resolve({ totalItems: 5 });
                 }
                 return Promise.reject(new Error(`Unexpected API call: ${url}`));
             });
@@ -336,6 +654,8 @@ describe('useLibraryTypes', () => {
             await waitFor(() => {
                 expect(result.current.counts.actors).toBe(5);
             });
+
+            expect(api.apiGet).toHaveBeenCalledWith(expect.stringContaining('pageSize=1'));
         });
 
         it('returns empty counts while loading', () => {

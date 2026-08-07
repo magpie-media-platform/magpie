@@ -38,6 +38,7 @@ describe('Badge', () => {
             'paused',
             'stalled',
             'downloaded',
+            'importing',
             'imported',
             'failed',
             'running',

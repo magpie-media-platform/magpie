@@ -1,59 +1,135 @@
-import { useMemo, useCallback } from 'react';
-import { useUrlFilterState } from '@/hooks/useUrlFilterState';
-import { ClockCountdown, ClockCounterClockwise, CalendarBlank, Lightning } from '@phosphor-icons/react';
+import { useMemo, useCallback, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
+import { ClockCountdownIcon, ClockCounterClockwiseIcon, CalendarBlankIcon, LightningIcon } from '@phosphor-icons/react';
 
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/Tabs';
-import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
+import { Switch } from '@/components/ui/Switch';
+import { Pager } from '@/components/ui/Pager';
+import { PageHeader } from '@/components/ui/PageHeader';
 import { PullToRefresh } from '@/components/ui/PullToRefresh';
-import { QuickActionsButton, type QuickAction } from '@/components/ui/QuickActionsButton';
 import { JobExecutionFilters, type JobExecutionFilterState } from '@/components/ui/JobExecutionFilters';
-import { ExecutionRow } from '@/components/ui/ExecutionRow';
+import { ExecutionRow } from '@/components/jobs/ExecutionRow';
 import { EmptyState } from '@/components/ui/EmptyState';
-import { useAuth, Role } from '@/auth';
+import { Skeleton } from '@/components/ui/Skeleton';
+import { DisabledTooltip, useAuth, Role } from '@/auth';
+import { EventTriggersTab } from '@/components/jobs/EventTriggersTab';
+import { RunJobDialog } from '@/components/jobs/RunJobDialog';
+import { ScheduleTriggersTab } from '@/components/jobs/ScheduleTriggersTab';
+import { useEventTriggerCrud } from '@/components/jobs/useEventTriggerCrud';
+import { useScheduleTriggerCrud } from '@/components/jobs/useScheduleTriggerCrud';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
-import { useJobs } from '@/hooks/useJobs';
-import { mapStatusToDisplay, statusFilterOptions, type TemplateOption } from '@/lib/jobExecution';
-import { useScheduleTriggerCrud } from './useScheduleTriggerCrud';
-import { useEventTriggerCrud } from './useEventTriggerCrud';
-import { ScheduleTriggersTab } from './ScheduleTriggersTab';
-import { EventTriggersTab } from './EventTriggersTab';
-
-import '@/styles/list-toolbar.css';
+import { useUrlTableState } from '@/hooks/useUrlTableState';
+import { useUrlTabState } from '@/hooks/useUrlTabState';
+import {
+    useJobExecution,
+    useJobSpecs,
+    useJobs,
+    displayStatusToWireStatuses,
+    type JobExecutionQueryParams,
+} from '@/hooks/useJobs';
+import { canRunJobOnDemand, statusFilterOptions, type TemplateOption } from '@/lib/jobExecution';
 import './JobsPage.css';
 
-export function JobsPage() {
-    useDocumentTitle('Jobs');
-    const [urlState, setUrlState] = useUrlFilterState({ tab: 'executions', template: '', status: '' });
+const SCHEDULE_TRIGGER_MODE = 'Schedule';
+const EVENT_TRIGGER_MODE = 'Event';
+const SYSTEM_SCOPE = 'System';
 
-    const activeTab = urlState.tab;
+const EXECUTIONS_PAGE_SIZE = 50;
+const JOB_TABS = ['executions', 'schedules', 'events'] as const;
+type JobTab = (typeof JOB_TABS)[number];
+
+type JobsFilters = JobExecutionFilterState & {
+    rootsOnly: string;
+    [key: string]: string;
+};
+
+const DEFAULT_FILTERS: JobsFilters = { template: '', status: '', rootsOnly: '1' };
+
+function isJobTab(tab: string): tab is JobTab {
+    return JOB_TABS.includes(tab as JobTab);
+}
+
+export function JobsPage() {
+    useDocumentTitle('System Jobs');
+    const [searchParams] = useSearchParams();
+    const linkedJobId = searchParams.get('job');
+
+    const { filters, page, setFilters, setPage } = useUrlTableState<JobsFilters>({
+        defaultSort: [],
+        sortKeys: [],
+        defaultFilters: DEFAULT_FILTERS,
+    });
+
+    const [activeTab, setUrlActiveTab] = useUrlTabState({ defaultTab: 'executions', allowedTabs: JOB_TABS });
+    const rootsOnly = filters.rootsOnly !== '0';
     const executionFilters: JobExecutionFilterState = useMemo(
-        () => ({ template: urlState.template, status: urlState.status }),
-        [urlState.template, urlState.status],
+        () => ({ template: filters.template, status: filters.status }),
+        [filters.template, filters.status],
     );
 
     const setActiveTab = useCallback(
         (tab: string) => {
-            setUrlState({
-                tab,
-                ...(tab !== 'executions' ? { template: '', status: '' } : {}),
+            if (!isJobTab(tab)) {
+                return;
+            }
+
+            setUrlActiveTab(tab, {
+                update: (params, nextTab) => {
+                    if (activeTab === 'executions' && nextTab !== 'executions') {
+                        params.delete('template');
+                        params.delete('status');
+                        params.delete('rootsOnly');
+                        params.delete('page');
+                    }
+                },
             });
         },
-        [setUrlState],
+        [activeTab, setUrlActiveTab],
     );
 
     const setExecutionFilters = useCallback(
-        (filters: JobExecutionFilterState) => {
-            setUrlState(filters);
+        (next: JobExecutionFilterState) => {
+            setFilters({ template: next.template, status: next.status });
         },
-        [setUrlState],
+        [setFilters],
     );
 
-    const { hasRole } = useAuth();
+    const setRootsOnly = useCallback(
+        (next: boolean) => {
+            setFilters({ rootsOnly: next ? '1' : '0' });
+        },
+        [setFilters],
+    );
+
+    const { hasRole, user } = useAuth();
     const canRunJobs = hasRole(Role.Manager);
     const canManageTriggers = hasRole(Role.Admin);
 
-    const { jobs, runJob, isLoading: isLoadingJobs, refetch: refetchJobs } = useJobs();
+    const [runDialogOpen, setRunDialogOpen] = useState(false);
+
+    const { specs } = useJobSpecs();
+
+    const executionQueryParams: JobExecutionQueryParams = useMemo(() => {
+        const params: JobExecutionQueryParams = {
+            rootsOnly,
+            pageNumber: page,
+            pageSize: EXECUTIONS_PAGE_SIZE,
+        };
+        if (executionFilters.template) {
+            params.jobType = executionFilters.template;
+        }
+        const wireStatuses = executionFilters.status ? displayStatusToWireStatuses[executionFilters.status] : undefined;
+        if (wireStatuses && wireStatuses.length > 0) {
+            params.status = wireStatuses;
+        }
+        return params;
+    }, [rootsOnly, page, executionFilters.template, executionFilters.status]);
+
+    const { jobs, pagination, isLoading: isLoadingJobs, runJob, refetch: refetchJobs } = useJobs(executionQueryParams);
+    const linkedJobIsListed = linkedJobId !== null && jobs.some((execution) => execution.id === linkedJobId);
+    const { job: linkedJob } = useJobExecution(linkedJobId ?? '', linkedJobId !== null && !linkedJobIsListed);
+    const displayedJobs = linkedJob && !linkedJobIsListed ? [linkedJob, ...jobs] : jobs;
 
     const schedCrud = useScheduleTriggerCrud({ runJob, refetchJobs });
     const eventCrud = useEventTriggerCrud();
@@ -61,77 +137,144 @@ export function JobsPage() {
     const templateOptions: TemplateOption[] = useMemo(() => {
         const seen = new Set<string>();
         const options: TemplateOption[] = [];
+        const historicalUsage = new Map<string, { execution: boolean; schedule: boolean; event: boolean }>();
+
+        const ensureUsage = (jobType: string) => {
+            const usage = historicalUsage.get(jobType) ?? { execution: false, schedule: false, event: false };
+            historicalUsage.set(jobType, usage);
+            return usage;
+        };
+
+        const getHistoricalTriggerModes = (jobType: string) => {
+            const usage = historicalUsage.get(jobType);
+            if (!usage) {
+                return undefined;
+            }
+
+            const modes: NonNullable<TemplateOption['supportedTriggerModes']> = [];
+            if (usage.schedule) {
+                modes.push(SCHEDULE_TRIGGER_MODE);
+            }
+            if (usage.event) {
+                modes.push(EVENT_TRIGGER_MODE);
+            }
+
+            return modes.length > 0 ? modes : undefined;
+        };
+
+        for (const job of jobs) {
+            ensureUsage(job.jobType).execution = true;
+        }
+
+        for (const trigger of schedCrud.triggers) {
+            ensureUsage(trigger.jobType).schedule = true;
+        }
+
+        for (const trigger of eventCrud.triggers) {
+            ensureUsage(trigger.jobType).event = true;
+        }
+
+        for (const spec of specs) {
+            const historicalTriggerModes = getHistoricalTriggerModes(spec.jobType);
+            const supportedTriggerModes = [...spec.supportedTriggerModes];
+
+            for (const mode of historicalTriggerModes ?? []) {
+                if (!supportedTriggerModes.includes(mode)) {
+                    supportedTriggerModes.push(mode);
+                }
+            }
+
+            seen.add(spec.jobType);
+            options.push({
+                id: spec.jobType,
+                name: spec.displayName || spec.jobType,
+                enabled: spec.enabled,
+                onDemand: spec.onDemand,
+                scope: spec.scope,
+                supportedTriggerModes,
+                defaultSchedule: spec.defaultSchedule,
+                parameters: spec.parameters,
+            });
+        }
 
         for (const job of jobs) {
             if (!seen.has(job.jobType)) {
                 seen.add(job.jobType);
-                options.push({ id: job.jobType, name: job.jobType });
+                options.push({
+                    id: job.jobType,
+                    name: job.jobType,
+                    supportedTriggerModes: getHistoricalTriggerModes(job.jobType),
+                });
             }
         }
 
         for (const trigger of schedCrud.triggers) {
             if (!seen.has(trigger.jobType)) {
                 seen.add(trigger.jobType);
-                options.push({ id: trigger.jobType, name: trigger.jobType });
+                options.push({
+                    id: trigger.jobType,
+                    name: trigger.jobType,
+                    supportedTriggerModes: getHistoricalTriggerModes(trigger.jobType),
+                });
             }
         }
 
         for (const trigger of eventCrud.triggers) {
             if (!seen.has(trigger.jobType)) {
                 seen.add(trigger.jobType);
-                options.push({ id: trigger.jobType, name: trigger.jobType });
+                options.push({
+                    id: trigger.jobType,
+                    name: trigger.jobType,
+                    supportedTriggerModes: getHistoricalTriggerModes(trigger.jobType),
+                });
             }
         }
 
         return options.sort((a, b) => a.name.localeCompare(b.name));
-    }, [jobs, schedCrud.triggers, eventCrud.triggers]);
+    }, [specs, jobs, schedCrud.triggers, eventCrud.triggers]);
 
-    const totalJobs = jobs.length;
-    const totalScheduleTriggers = schedCrud.triggers.length;
-    const enabledScheduleTriggers = schedCrud.triggers.filter((t) => t.enabled).length;
-    const totalEventTriggers = eventCrud.triggers.length;
-    const enabledEventTriggers = eventCrud.triggers.filter((t) => t.enabled).length;
-    const totalAllTriggers = totalScheduleTriggers + totalEventTriggers;
-    const enabledAllTriggers = enabledScheduleTriggers + enabledEventTriggers;
-
-    const titleCount = activeTab === 'triggers' ? totalAllTriggers : totalJobs;
-
-    const executionStatusCounts = useMemo(() => {
-        const counts = {
-            running: 0,
-            pending: 0,
-            completed: 0,
-            failed: 0,
-            cancelled: 0,
-        };
-        for (const job of jobs) {
-            const displayStatus = mapStatusToDisplay(job.status);
-            counts[displayStatus]++;
+    const systemJobTypes = useMemo(() => {
+        const result = new Set<string>();
+        for (const option of templateOptions) {
+            if (option.scope === SYSTEM_SCOPE) {
+                result.add(option.id);
+            }
         }
-        return counts;
-    }, [jobs]);
+        return result;
+    }, [templateOptions]);
 
-    const totalActiveExecutions = executionStatusCounts.running + executionStatusCounts.pending;
+    const scheduleTemplateOptions = useMemo(
+        () =>
+            templateOptions.filter(
+                (option) =>
+                    option.scope !== SYSTEM_SCOPE &&
+                    (!option.supportedTriggerModes || option.supportedTriggerModes.includes(SCHEDULE_TRIGGER_MODE)),
+            ),
+        [templateOptions],
+    );
 
-    const filteredExecutions = useMemo(() => {
-        let items = [...jobs];
+    const eventTemplateOptions = useMemo(
+        () =>
+            templateOptions.filter(
+                (option) =>
+                    option.scope !== SYSTEM_SCOPE &&
+                    (!option.supportedTriggerModes || option.supportedTriggerModes.includes(EVENT_TRIGGER_MODE)),
+            ),
+        [templateOptions],
+    );
 
-        if (executionFilters.template) {
-            items = items.filter((e) => e.jobType === executionFilters.template);
-        }
+    const runnableJobOptions = useMemo(
+        () => templateOptions.filter((option) => canRunJobOnDemand(option, user?.role)),
+        [templateOptions, user?.role],
+    );
+    const hasRunnableJobs = runnableJobOptions.length > 0;
 
-        if (executionFilters.status) {
-            items = items.filter((e) => mapStatusToDisplay(e.status) === executionFilters.status);
-        }
+    const totalSchedules = schedCrud.triggers.length;
+    const totalEvents = eventCrud.triggers.length;
 
-        items.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-
-        return items;
-    }, [jobs, executionFilters]);
-
+    const totalExecutions = pagination?.totalItems ?? 0;
+    const totalPages = Math.max(1, Math.ceil(totalExecutions / EXECUTIONS_PAGE_SIZE));
     const hasActiveFilters = executionFilters.template !== '' || executionFilters.status !== '';
-
-    const isLoading = isLoadingJobs || schedCrud.isLoading || eventCrud.isLoading;
 
     const { refetch: refetchSched } = schedCrud;
     const { refetch: refetchEvent } = eventCrud;
@@ -139,215 +282,203 @@ export function JobsPage() {
         await Promise.all([refetchJobs(), refetchSched(), refetchEvent()]);
     }, [refetchJobs, refetchSched, refetchEvent]);
 
-    const triggerFabActions: QuickAction[] = useMemo(
-        () => [
-            {
-                id: 'add-schedule',
-                label: 'Add Schedule',
-                icon: <CalendarBlank weight="bold" />,
-                onClick: schedCrud.handleAdd,
-            },
-            {
-                id: 'add-event-trigger',
-                label: 'Add Event Trigger',
-                icon: <Lightning weight="bold" />,
-                onClick: eventCrud.handleAdd,
-            },
-        ],
-        [schedCrud.handleAdd, eventCrud.handleAdd],
-    );
+    const runButtonDisabled = !canRunJobs || !hasRunnableJobs;
+    const runButtonMessage = !canRunJobs
+        ? 'Requires Manager role'
+        : !hasRunnableJobs
+          ? 'No on-demand jobs are available to run'
+          : undefined;
 
     return (
         <div className="jobs-page" data-page="jobs">
             <PullToRefresh onRefresh={handleRefresh} className="jobs-page__pull-to-refresh">
-                <header className="jobs-page__header">
-                    <div className="jobs-page__header-left">
-                        <ClockCountdown
-                            weight="duotone"
-                            className="jobs-page__icon"
-                            aria-hidden="true"
-                            data-testid="jobs-page__icon"
-                        />
-                        <h1 className="jobs-page__title">Jobs</h1>
-                        {!isLoading && (
-                            <span className="page-count jobs-page__count" data-testid="jobs-page__count">
-                                {titleCount}
-                            </span>
-                        )}
-                    </div>
-                </header>
+                <PageHeader
+                    className="jobs-page__header"
+                    title="System Jobs"
+                    description="View job history and configure automatic triggers."
+                    icon={<ClockCountdownIcon weight="duotone" aria-hidden="true" data-testid="jobs-page__icon" />}
+                />
 
                 <Tabs value={activeTab} onValueChange={setActiveTab} className="jobs-page__tabs">
                     <TabsList>
                         <TabsTrigger value="executions">
-                            <ClockCounterClockwise weight="bold" aria-hidden="true" />
-                            <span>Executions</span>
-                            {totalActiveExecutions > 0 && (
-                                <span className="tab-count tab-count--running">{totalActiveExecutions}</span>
-                            )}
+                            <ClockCounterClockwiseIcon weight="bold" aria-hidden="true" />
+                            <span>History</span>
                         </TabsTrigger>
-                        <TabsTrigger value="triggers">
-                            <Lightning weight="bold" aria-hidden="true" />
-                            <span>Triggers</span>
-                            {totalAllTriggers > 0 && <span className="tab-count">{totalAllTriggers}</span>}
+                        <TabsTrigger value="schedules">
+                            <CalendarBlankIcon weight="bold" aria-hidden="true" />
+                            <span>Scheduled Jobs</span>
+                        </TabsTrigger>
+                        <TabsTrigger value="events">
+                            <LightningIcon weight="bold" aria-hidden="true" />
+                            <span>Event Triggers</span>
                         </TabsTrigger>
                     </TabsList>
 
                     <TabsContent value="executions">
-                        <div className="list-toolbar__summary" aria-label="Executions by status">
-                            <Badge
-                                variant="running"
-                                size="sm"
-                                badgeStyle="outline"
-                                dot
-                                count={executionStatusCounts.running}
-                            >
-                                Running
-                            </Badge>
-                            <Badge
-                                variant="pending"
-                                size="sm"
-                                badgeStyle="outline"
-                                dot
-                                count={executionStatusCounts.pending}
-                            >
-                                Pending
-                            </Badge>
-                            <Badge
-                                variant="completed"
-                                size="sm"
-                                badgeStyle="outline"
-                                dot
-                                count={executionStatusCounts.completed}
-                            >
-                                Completed
-                            </Badge>
-                            <Badge
-                                variant="failed"
-                                size="sm"
-                                badgeStyle="outline"
-                                dot
-                                count={executionStatusCounts.failed}
-                            >
-                                Failed
-                            </Badge>
-                            <Badge
-                                variant="cancelled"
-                                size="sm"
-                                badgeStyle="outline"
-                                dot
-                                count={executionStatusCounts.cancelled}
-                            >
-                                Cancelled
-                            </Badge>
+                        <div className="jobs-page__section-header">
+                            <DisabledTooltip minRole={Role.Manager} message={runButtonMessage}>
+                                <Button
+                                    variant="primary"
+                                    size="sm"
+                                    onClick={() => setRunDialogOpen(true)}
+                                    disabled={runButtonDisabled}
+                                    data-action="run-job"
+                                >
+                                    <LightningIcon weight="bold" aria-hidden="true" />
+                                    <span>Run a job</span>
+                                </Button>
+                            </DisabledTooltip>
                         </div>
 
-                        <JobExecutionFilters
-                            filters={executionFilters}
-                            templates={templateOptions}
-                            statusOptions={statusFilterOptions}
-                            onChange={setExecutionFilters}
-                        />
+                        <div className="jobs-page__executions-toolbar">
+                            <JobExecutionFilters
+                                filters={executionFilters}
+                                templates={templateOptions}
+                                statusOptions={statusFilterOptions}
+                                onChange={setExecutionFilters}
+                            />
+                            <label
+                                htmlFor="jobs-page-roots-only"
+                                className="jobs-page__roots-toggle"
+                                data-control="roots-only"
+                            >
+                                <Switch
+                                    id="jobs-page-roots-only"
+                                    size="sm"
+                                    checked={rootsOnly}
+                                    onCheckedChange={setRootsOnly}
+                                    aria-label="Show top level only"
+                                    data-action="toggle-roots-only"
+                                />
+                                <span>Show top level only</span>
+                            </label>
+                        </div>
 
-                        <div className="jobs-page__list" role="list" aria-label="Job executions">
-                            {filteredExecutions.length === 0 ? (
+                        <div className="jobs-page__list" role="list" aria-label="Job history">
+                            {isLoadingJobs ? (
+                                <div className="jobs-page__loading" data-testid="jobs-page__loading">
+                                    <Skeleton className="jobs-page__skeleton" />
+                                    <Skeleton className="jobs-page__skeleton" />
+                                    <Skeleton className="jobs-page__skeleton" />
+                                </div>
+                            ) : displayedJobs.length === 0 ? (
                                 <EmptyState
-                                    icon={<ClockCounterClockwise weight="duotone" />}
-                                    title="No job executions found"
+                                    icon={<ClockCounterClockwiseIcon weight="duotone" />}
+                                    title="No job history found"
                                     description={
                                         hasActiveFilters
                                             ? 'Try adjusting your filters'
-                                            : 'Executions will appear here when jobs are run'
+                                            : 'History will appear here when jobs are run'
                                     }
                                 />
                             ) : (
-                                filteredExecutions.map((execution) => (
-                                    <ExecutionRow key={execution.id} execution={execution} />
+                                displayedJobs.map((execution) => (
+                                    <ExecutionRow
+                                        key={execution.id}
+                                        execution={execution}
+                                        autoExpand={execution.id === linkedJobId}
+                                    />
                                 ))
                             )}
                         </div>
+
+                        {totalExecutions > EXECUTIONS_PAGE_SIZE && (
+                            <Pager
+                                className="jobs-page__pager"
+                                data-component="executions-pager"
+                                page={page}
+                                pageCount={totalPages}
+                                onFirst={() => setPage(1)}
+                                onPrevious={() => setPage(page - 1)}
+                                onNext={() => setPage(page + 1)}
+                                onLast={() => setPage(totalPages)}
+                            />
+                        )}
                     </TabsContent>
 
-                    <TabsContent value="triggers">
-                        <div className="jobs-page__section-header">
-                            <div className="list-toolbar__summary" aria-label="Triggers summary">
-                                <Badge
-                                    variant="completed"
+                    <TabsContent value="schedules">
+                        {canManageTriggers && (
+                            <div className="jobs-page__section-header">
+                                <Button
+                                    variant="primary"
                                     size="sm"
-                                    badgeStyle="outline"
-                                    dot
-                                    count={enabledAllTriggers}
+                                    onClick={schedCrud.handleAdd}
+                                    data-action="add-schedule"
                                 >
-                                    Enabled
-                                </Badge>
-                                <Badge
-                                    variant="pending"
-                                    size="sm"
-                                    badgeStyle="outline"
-                                    dot
-                                    count={totalAllTriggers - enabledAllTriggers}
-                                >
-                                    Disabled
-                                </Badge>
+                                    <CalendarBlankIcon weight="bold" aria-hidden="true" />
+                                    <span>Add Schedule</span>
+                                </Button>
                             </div>
-                            {canManageTriggers && (
-                                <div className="jobs-page__trigger-desktop-actions">
-                                    <Button
-                                        variant="primary"
-                                        size="sm"
-                                        onClick={schedCrud.handleAdd}
-                                        data-action="add-schedule"
-                                    >
-                                        <CalendarBlank weight="bold" aria-hidden="true" />
-                                        <span>Add Schedule</span>
-                                    </Button>
-                                    <Button
-                                        variant="secondary"
-                                        size="sm"
-                                        onClick={eventCrud.handleAdd}
-                                        data-action="add-event-trigger"
-                                    >
-                                        <Lightning weight="bold" aria-hidden="true" />
-                                        <span>Add Event Trigger</span>
-                                    </Button>
-                                </div>
-                            )}
-                        </div>
+                        )}
 
-                        <div className="jobs-page__list" role="list" aria-label="Triggers">
-                            {totalAllTriggers === 0 ? (
+                        <div className="jobs-page__list" role="list" aria-label="Schedule triggers">
+                            {totalSchedules === 0 && (
                                 <EmptyState
-                                    icon={<Lightning weight="duotone" />}
-                                    title="No triggers found"
+                                    icon={<CalendarBlankIcon weight="duotone" />}
+                                    title="No schedule triggers"
                                     description={
                                         canManageTriggers
-                                            ? 'Create a schedule or event trigger to run jobs automatically'
-                                            : 'Triggers will appear here when configured'
+                                            ? 'Create a schedule to run a job automatically.'
+                                            : 'Schedule triggers will appear here when configured.'
                                     }
                                 />
-                            ) : (
-                                <>
-                                    <ScheduleTriggersTab
-                                        crud={schedCrud}
-                                        templates={templateOptions}
-                                        canManage={canManageTriggers}
-                                        canRun={canRunJobs}
-                                    />
-                                    <EventTriggersTab
-                                        crud={eventCrud}
-                                        templates={templateOptions}
-                                        canManage={canManageTriggers}
-                                    />
-                                </>
                             )}
+                            <ScheduleTriggersTab
+                                crud={schedCrud}
+                                templates={scheduleTemplateOptions}
+                                systemJobTypes={systemJobTypes}
+                                canManage={canManageTriggers}
+                                canRun={canRunJobs}
+                            />
+                        </div>
+                    </TabsContent>
+
+                    <TabsContent value="events">
+                        {canManageTriggers && (
+                            <div className="jobs-page__section-header">
+                                <Button
+                                    variant="primary"
+                                    size="sm"
+                                    onClick={eventCrud.handleAdd}
+                                    data-action="add-event-trigger"
+                                >
+                                    <LightningIcon weight="bold" aria-hidden="true" />
+                                    <span>Add Event Trigger</span>
+                                </Button>
+                            </div>
+                        )}
+
+                        <div className="jobs-page__list" role="list" aria-label="Event triggers">
+                            {totalEvents === 0 && (
+                                <EmptyState
+                                    icon={<LightningIcon weight="duotone" />}
+                                    title="No event triggers"
+                                    description={
+                                        canManageTriggers
+                                            ? 'Create an event trigger to run a job when events occur.'
+                                            : 'Event triggers will appear here when configured.'
+                                    }
+                                />
+                            )}
+                            <EventTriggersTab
+                                crud={eventCrud}
+                                templates={eventTemplateOptions}
+                                systemJobTypes={systemJobTypes}
+                                canManage={canManageTriggers}
+                            />
                         </div>
                     </TabsContent>
                 </Tabs>
             </PullToRefresh>
 
-            {canManageTriggers && activeTab === 'triggers' && (
-                <QuickActionsButton actions={triggerFabActions} title="Add Trigger" className="jobs-page__fab" />
-            )}
+            <RunJobDialog
+                open={runDialogOpen}
+                onOpenChange={setRunDialogOpen}
+                runnableJobs={runnableJobOptions}
+                runJob={runJob}
+                onRan={refetchJobs}
+            />
         </div>
     );
 }

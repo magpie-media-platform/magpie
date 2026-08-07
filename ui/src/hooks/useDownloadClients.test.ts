@@ -22,19 +22,21 @@ const mockApiClients: ApiDownloadClient[] = [
         providerType: 'sabnzbd',
         name: 'SABnzbd',
         enabled: true,
-        status: 1,
+        status: 'Healthy',
         lastChecked: '2024-01-15T10:30:00Z',
-        settings: { host: 'localhost', port: '8080' },
+        cleanupDeleteFiles: true,
+        keepFailedOnClient: false,
         createdAt: '2024-01-01T00:00:00Z',
     },
     {
         id: 'client-2',
-        providerType: 'qbittorrent',
-        name: 'qBittorrent',
+        providerType: 'downloadclient-a',
+        name: 'Downloadclient A',
         enabled: true,
-        status: 2,
+        status: 'Unhealthy',
         lastChecked: '2024-01-15T10:25:00Z',
-        settings: { host: 'localhost', port: '8080' },
+        cleanupDeleteFiles: true,
+        keepFailedOnClient: false,
         createdAt: '2024-01-02T00:00:00Z',
     },
     {
@@ -42,8 +44,10 @@ const mockApiClients: ApiDownloadClient[] = [
         providerType: 'transmission',
         name: 'Transmission',
         enabled: false,
-        status: 0,
+        status: 'Unknown',
         lastChecked: null,
+        cleanupDeleteFiles: true,
+        keepFailedOnClient: false,
         createdAt: '2024-01-03T00:00:00Z',
     },
 ];
@@ -109,7 +113,7 @@ describe('useDownloadClients', () => {
 
             expect(result.current.clients).toHaveLength(3);
             expect(result.current.clients[0].name).toBe('SABnzbd');
-            expect(result.current.clients[1].name).toBe('qBittorrent');
+            expect(result.current.clients[1].name).toBe('Downloadclient A');
             expect(result.current.clients[2].name).toBe('Transmission');
         });
 
@@ -145,9 +149,9 @@ describe('useDownloadClients', () => {
     });
 
     describe('toggling client enabled state', () => {
-        it('should enable a client via POST /download-clients/{id}/enable', async () => {
+        it('should enable a client via PATCH /download-clients/{id}', async () => {
             mockApiGet.mockResolvedValue(mockApiClients);
-            mockApiPost.mockResolvedValue({ ...mockApiClients[2], enabled: true });
+            mockApiPatch.mockResolvedValue(undefined);
 
             const { result } = renderHook(() => useDownloadClients(), {
                 wrapper: createWrapper(),
@@ -161,12 +165,14 @@ describe('useDownloadClients', () => {
                 await result.current.toggleClientEnabled('client-3', true);
             });
 
-            expect(mockApiPost).toHaveBeenCalledWith('/download-clients/client-3/enable');
+            expect(mockApiPatch).toHaveBeenCalledWith('/download-clients/client-3', {
+                enabled: { value: true },
+            });
         });
 
-        it('should disable a client via POST /download-clients/{id}/disable', async () => {
+        it('should disable a client via PATCH /download-clients/{id}', async () => {
             mockApiGet.mockResolvedValue(mockApiClients);
-            mockApiPost.mockResolvedValue({ ...mockApiClients[0], enabled: false });
+            mockApiPatch.mockResolvedValue(undefined);
 
             const { result } = renderHook(() => useDownloadClients(), {
                 wrapper: createWrapper(),
@@ -180,17 +186,19 @@ describe('useDownloadClients', () => {
                 await result.current.toggleClientEnabled('client-1', false);
             });
 
-            expect(mockApiPost).toHaveBeenCalledWith('/download-clients/client-1/disable');
+            expect(mockApiPatch).toHaveBeenCalledWith('/download-clients/client-1', {
+                enabled: { value: false },
+            });
         });
 
         it('should set isToggling while toggling', async () => {
             mockApiGet.mockResolvedValue(mockApiClients);
 
-            let resolvePost: (value: ApiDownloadClient) => void;
-            const postPromise = new Promise<ApiDownloadClient>((resolve) => {
-                resolvePost = resolve;
+            let resolvePatch: () => void;
+            const patchPromise = new Promise<void>((resolve) => {
+                resolvePatch = resolve;
             });
-            mockApiPost.mockReturnValue(postPromise);
+            mockApiPatch.mockReturnValue(patchPromise);
 
             const { result } = renderHook(() => useDownloadClients(), {
                 wrapper: createWrapper(),
@@ -201,7 +209,7 @@ describe('useDownloadClients', () => {
             });
 
             act(() => {
-                result.current.toggleClientEnabled('client-1', false);
+                void result.current.toggleClientEnabled('client-1', false);
             });
 
             await waitFor(() => {
@@ -209,7 +217,7 @@ describe('useDownloadClients', () => {
             });
 
             act(() => {
-                resolvePost!({ ...mockApiClients[0], enabled: false });
+                resolvePatch!();
             });
 
             await waitFor(() => {
@@ -226,7 +234,7 @@ describe('useDownloadClients', () => {
                 providerType: 'deluge',
                 name: 'New Deluge',
                 enabled: true,
-                status: 0,
+                status: 'Unknown',
                 createdAt: '2024-01-04T00:00:00Z',
             });
 
@@ -273,7 +281,7 @@ describe('useDownloadClients', () => {
             });
 
             act(() => {
-                result.current.createClient({
+                void result.current.createClient({
                     providerType: 'deluge',
                     name: 'New Deluge',
                 });
@@ -289,7 +297,9 @@ describe('useDownloadClients', () => {
                     providerType: 'deluge',
                     name: 'New Deluge',
                     enabled: true,
-                    status: 0,
+                    status: 'Unknown',
+                    cleanupDeleteFiles: true,
+                    keepFailedOnClient: false,
                     createdAt: '2024-01-04T00:00:00Z',
                 });
             });
@@ -377,7 +387,7 @@ describe('useDownloadClients', () => {
             });
 
             act(() => {
-                result.current.updateClient('client-1', {
+                void result.current.updateClient('client-1', {
                     name: { value: 'Updated' },
                 });
             });
@@ -434,7 +444,7 @@ describe('useDownloadClients', () => {
             });
 
             act(() => {
-                result.current.deleteClient('client-1');
+                void result.current.deleteClient('client-1');
             });
 
             await waitFor(() => {
@@ -468,9 +478,8 @@ describe('useDownloadClients', () => {
             expect(client.name).toBe('SABnzbd');
             expect(client.providerType).toBe('sabnzbd');
             expect(client.enabled).toBe(true);
-            expect(client.status).toBe(1);
+            expect(client.status).toBe('Healthy');
             expect(client.lastChecked).toBe('2024-01-15T10:30:00Z');
-            expect(client.settings).toEqual({ host: 'localhost', port: '8080' });
             expect(client.createdAt).toBe('2024-01-01T00:00:00Z');
         });
 
@@ -487,48 +496,25 @@ describe('useDownloadClients', () => {
 
             expect(result.current.clients[0].lastChecked).toBeNull();
         });
-
-        it('should handle undefined settings', async () => {
-            mockApiGet.mockResolvedValue([
-                {
-                    id: 'client-4',
-                    providerType: 'test',
-                    name: 'Test',
-                    enabled: true,
-                    status: 0,
-                    createdAt: '2024-01-01T00:00:00Z',
-                },
-            ]);
-
-            const { result } = renderHook(() => useDownloadClients(), {
-                wrapper: createWrapper(),
-            });
-
-            await waitFor(() => {
-                expect(result.current.isLoading).toBe(false);
-            });
-
-            expect(result.current.clients[0].settings).toBeUndefined();
-        });
     });
 
     describe('status labels and variants', () => {
         it('should export status labels for all values', async () => {
             const { downloadClientStatusLabels } = await import('./useDownloadClients');
 
-            expect(downloadClientStatusLabels[0]).toBe('Unknown');
-            expect(downloadClientStatusLabels[1]).toBe('Healthy');
-            expect(downloadClientStatusLabels[2]).toBe('Unhealthy');
-            expect(downloadClientStatusLabels[3]).toBe('Stale');
+            expect(downloadClientStatusLabels.Unknown).toBe('Unknown');
+            expect(downloadClientStatusLabels.Healthy).toBe('Healthy');
+            expect(downloadClientStatusLabels.Unhealthy).toBe('Unhealthy');
+            expect(downloadClientStatusLabels.Stale).toBe('Stale');
         });
 
         it('should export status variants for all values', async () => {
             const { downloadClientStatusVariants } = await import('./useDownloadClients');
 
-            expect(downloadClientStatusVariants[0]).toBe('unknown');
-            expect(downloadClientStatusVariants[1]).toBe('healthy');
-            expect(downloadClientStatusVariants[2]).toBe('unhealthy');
-            expect(downloadClientStatusVariants[3]).toBe('stale');
+            expect(downloadClientStatusVariants.Unknown).toBe('unknown');
+            expect(downloadClientStatusVariants.Healthy).toBe('healthy');
+            expect(downloadClientStatusVariants.Unhealthy).toBe('unhealthy');
+            expect(downloadClientStatusVariants.Stale).toBe('stale');
         });
     });
 });

@@ -22,8 +22,7 @@
 
     .sidebar-content {
         flex: 1;
-        overflow-y: auto;
-        overflow-x: hidden;
+        overflow: hidden auto;
         padding: var(--space-sm);
         scrollbar-width: thin;
         scrollbar-color: var(--bg-tertiary) transparent;
@@ -144,7 +143,8 @@
         }
     }
 
-    .sidebar-item {
+    .sidebar-item,
+    .sidebar-submenu-trigger {
         display: flex;
         align-items: center;
         gap: var(--space-sm);
@@ -167,7 +167,6 @@
             color: var(--text-primary);
         }
 
-        &.sidebar-item--active,
         &[data-active='true'] {
             background-color: var(--bg-primary);
             color: var(--accent-primary);
@@ -178,6 +177,15 @@
         &:focus-visible {
             outline: var(--focus-ring-width) solid var(--focus-ring-color);
             outline-offset: var(--focus-ring-offset);
+        }
+    }
+
+    .sidebar-item {
+        &.sidebar-item--active {
+            background-color: var(--bg-primary);
+            color: var(--accent-primary);
+            font-weight: var(--weight-semibold);
+            box-shadow: inset 3px 0 0 var(--accent-primary);
         }
 
         @media (min-width: 768px) {
@@ -214,41 +222,9 @@
     }
 
     .sidebar-submenu-trigger {
-        display: flex;
-        align-items: center;
-        gap: var(--space-sm);
-        width: 100%;
-        padding: var(--space-sm) var(--space-md);
-        min-height: var(--touch-target-min);
-        font-family: var(--font-sans);
-        font-size: var(--text-base);
-        font-weight: var(--weight-medium);
-        color: var(--text-secondary);
         text-align: left;
         background: none;
         border: none;
-        border-radius: var(--radius-sm);
-        cursor: pointer;
-        transition:
-            background-color var(--duration-fast) var(--easing-default),
-            color var(--duration-fast) var(--easing-default);
-
-        &:hover {
-            background-color: var(--bg-tertiary);
-            color: var(--text-primary);
-        }
-
-        &[data-active='true'] {
-            background-color: var(--bg-primary);
-            color: var(--accent-primary);
-            font-weight: var(--weight-semibold);
-            box-shadow: inset 3px 0 0 var(--accent-primary);
-        }
-
-        &:focus-visible {
-            outline: var(--focus-ring-width) solid var(--focus-ring-color);
-            outline-offset: var(--focus-ring-offset);
-        }
 
         &.sidebar-submenu-trigger--collapsed {
             justify-content: center;

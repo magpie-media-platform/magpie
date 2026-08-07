@@ -15,7 +15,7 @@
             border-color var(--duration-fast) var(--easing-default),
             box-shadow var(--duration-fast) var(--easing-default);
 
-        &:hover:not(:disabled):not([data-disabled]) {
+        &:hover:not(:disabled, [data-disabled]) {
             border-color: var(--border-accent);
         }
 
@@ -92,7 +92,6 @@
         overflow: hidden;
         min-width: var(--radix-select-trigger-width);
         max-height: var(--radix-select-content-available-height);
-
         animation-duration: var(--duration-fast);
         animation-timing-function: var(--easing-default);
 
@@ -110,6 +109,7 @@
             opacity: 0;
             transform: translateY(-4px);
         }
+
         to {
             opacity: 1;
             transform: translateY(0);
@@ -121,6 +121,7 @@
             opacity: 1;
             transform: translateY(0);
         }
+
         to {
             opacity: 0;
             transform: translateY(-4px);
@@ -129,6 +130,7 @@
 
     .select-viewport {
         padding: var(--space-xs);
+        background-color: var(--bg-secondary);
     }
 
     .select-item {

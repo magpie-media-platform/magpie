@@ -1,0 +1,120 @@
+@layer components {
+    .activity-tab {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-md);
+    }
+
+    .activity-tab__error {
+        margin: 0;
+        padding: var(--space-sm);
+        background-color: var(--bg-secondary);
+        color: var(--status-unhealthy);
+        border-radius: var(--radius-md);
+        font-size: var(--text-sm);
+    }
+
+    .activity-tab__skeletons {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-xs);
+    }
+
+    .activity-tab__sort-controls {
+        display: none;
+    }
+
+    .activity-tab__status-icon {
+        font-size: var(--text-lg);
+        color: var(--text-muted);
+    }
+
+    .activity-tab__status-icon--ok {
+        color: var(--status-healthy);
+    }
+
+    .activity-tab__status-icon--bad {
+        color: var(--status-unhealthy);
+    }
+
+    .activity-tab__status-icon--warn {
+        color: var(--status-degraded);
+    }
+
+    .activity-tab__status-icon--info {
+        color: var(--accent-primary);
+    }
+
+    .activity-tab__status-icon--neutral {
+        color: var(--text-muted);
+    }
+
+    .activity-tab__status-cell {
+        display: inline-flex;
+        align-items: center;
+        gap: var(--space-xs);
+    }
+
+    .activity-tab__time {
+        white-space: nowrap;
+        color: var(--text-secondary);
+        font-size: var(--text-sm);
+    }
+
+    .activity-tab__activity {
+        color: var(--text-primary);
+        font-size: var(--text-sm);
+        font-weight: var(--weight-semibold);
+        overflow-wrap: break-word;
+    }
+
+    .activity-tab__detail {
+        font-size: var(--text-sm);
+        color: var(--text-secondary);
+        overflow-wrap: break-word;
+    }
+
+    .activity-tab__detail--empty {
+        color: var(--text-muted);
+    }
+
+    .activity-tab__actions-cell {
+        display: flex;
+        align-items: center;
+        gap: var(--space-xs);
+        flex-wrap: wrap;
+    }
+
+    .activity-tab__pager {
+        justify-content: flex-end;
+    }
+
+    @media (max-width: 1023px) {
+        .activity-tab__sort-controls {
+            display: flex;
+            align-items: center;
+            gap: var(--space-xs);
+            padding: var(--space-xs);
+            background-color: var(--bg-secondary);
+            border: 1px solid var(--border-default);
+            border-radius: var(--radius-md);
+        }
+
+        .activity-tab__sort-icon {
+            flex: 0 0 auto;
+            color: var(--accent-primary);
+            font-size: var(--text-base);
+        }
+
+        .activity-tab__sort-controls .select-trigger {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .activity-tab__sort-direction {
+            flex: 0 0 auto;
+            min-width: auto;
+            padding: var(--space-xs);
+        }
+    }
+}

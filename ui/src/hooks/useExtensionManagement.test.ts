@@ -3,18 +3,26 @@ import { renderHook, waitFor, act } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createElement } from 'react';
 
-vi.mock('@/lib/api', () => ({
-    apiGet: vi.fn(),
-    apiPost: vi.fn(),
-    apiPatch: vi.fn(),
-}));
-
-import { apiGet, apiPost, apiPatch } from '@/lib/api';
-import { RestartRequiredProvider } from '@/components/ui/RestartRequiredBanner';
-import { useExtensionManagement, useExtensionActions, type ApiExtension } from './useExtensionManagement';
+vi.mock('@/lib/api', () => {
+    return {
+        apiFetchResponse: vi.fn(),
+        apiGet: vi.fn(),
+        apiPost: vi.fn(),
+        apiPatch: vi.fn(),
+    };
+});
+import { apiFetchResponse, apiGet, apiPost, apiPatch } from '@/lib/api';
+import { RestartRequiredProvider, useRestartRequired } from '@/components/ui/RestartRequiredBanner';
+import {
+    useExtensionManagement,
+    useExtensionActions,
+    type ApiExtension,
+    type ExtensionUpdateInfo,
+} from './useExtensionManagement';
 
 const mockExtension: ApiExtension = {
     id: 'ext-1',
+    packageId: 'Test.Extension',
     version: '1.0.0',
     name: 'TestExtension',
     filePath: '/extensions/test',
@@ -26,6 +34,12 @@ const mockExtension: ApiExtension = {
     autoUpgrade: false,
     createdAt: '2024-01-01T00:00:00Z',
 };
+
+const mockApiFetchResponse = vi.mocked(apiFetchResponse);
+
+function makeExtensionListItem(extension: ApiExtension) {
+    return { extension, updateInfo: null };
+}
 
 function createWrapper() {
     const queryClient = new QueryClient({
@@ -57,7 +71,7 @@ describe('useExtensionManagement', () => {
 
     describe('fetching extensions', () => {
         it('should fetch extensions from the API', async () => {
-            mockApiGet.mockResolvedValue([mockExtension]);
+            mockApiGet.mockResolvedValue([makeExtensionListItem(mockExtension)]);
 
             const { result } = renderHook(() => useExtensionManagement(), {
                 wrapper: createWrapper(),
@@ -73,7 +87,7 @@ describe('useExtensionManagement', () => {
         });
 
         it('should transform extensions to ExtensionItem format', async () => {
-            mockApiGet.mockResolvedValue([mockExtension]);
+            mockApiGet.mockResolvedValue([makeExtensionListItem(mockExtension)]);
 
             const { result } = renderHook(() => useExtensionManagement(), {
                 wrapper: createWrapper(),
@@ -90,7 +104,6 @@ describe('useExtensionManagement', () => {
             expect(ext.version).toBe('1.0.0');
             expect(ext.enabled).toBe(true);
             expect(ext.managed).toBe(true);
-            // Phantom fields that used to be fabricated must not be present.
             expect('updateAvailable' in ext).toBe(false);
             expect('availableVersion' in ext).toBe(false);
             expect('hasSettings' in ext).toBe(false);
@@ -102,7 +115,7 @@ describe('useExtensionManagement', () => {
                 author: 'Author Name',
                 description: 'Sample description',
             };
-            mockApiGet.mockResolvedValue([apiExt]);
+            mockApiGet.mockResolvedValue([makeExtensionListItem(apiExt)]);
 
             const { result } = renderHook(() => useExtensionManagement(), {
                 wrapper: createWrapper(),
@@ -118,7 +131,7 @@ describe('useExtensionManagement', () => {
         });
 
         it('should default author and description to null when API omits them', async () => {
-            mockApiGet.mockResolvedValue([mockExtension]);
+            mockApiGet.mockResolvedValue([makeExtensionListItem(mockExtension)]);
 
             const { result } = renderHook(() => useExtensionManagement(), {
                 wrapper: createWrapper(),
@@ -164,8 +177,8 @@ describe('useExtensionManagement', () => {
         });
     });
 
-    describe('version deduplication via Map', () => {
-        it('should keep only the newest extension when multiple share the same name', async () => {
+    describe('duplicate extension names', () => {
+        it('should keep every extension when multiple share the same name', async () => {
             const older: ApiExtension = {
                 ...mockExtension,
                 id: 'ext-old',
@@ -179,7 +192,7 @@ describe('useExtensionManagement', () => {
                 createdAt: '2024-06-01T00:00:00Z',
             };
 
-            mockApiGet.mockResolvedValue([older, newer]);
+            mockApiGet.mockResolvedValue([makeExtensionListItem(older), makeExtensionListItem(newer)]);
 
             const { result } = renderHook(() => useExtensionManagement(), {
                 wrapper: createWrapper(),
@@ -189,12 +202,11 @@ describe('useExtensionManagement', () => {
                 expect(result.current.isLoading).toBe(false);
             });
 
-            expect(result.current.extensions).toHaveLength(1);
-            expect(result.current.extensions[0].id).toBe('ext-new');
-            expect(result.current.extensions[0].version).toBe('2.0.0');
+            expect(result.current.extensions).toHaveLength(2);
+            expect(result.current.extensions.map((extension) => extension.id)).toEqual(['ext-old', 'ext-new']);
         });
 
-        it('should prefer the newer entry when order is reversed in the list', async () => {
+        it('should preserve API order when duplicated names are returned', async () => {
             const older: ApiExtension = {
                 ...mockExtension,
                 id: 'ext-old',
@@ -208,7 +220,7 @@ describe('useExtensionManagement', () => {
                 createdAt: '2024-06-01T00:00:00Z',
             };
 
-            mockApiGet.mockResolvedValue([newer, older]);
+            mockApiGet.mockResolvedValue([makeExtensionListItem(newer), makeExtensionListItem(older)]);
 
             const { result } = renderHook(() => useExtensionManagement(), {
                 wrapper: createWrapper(),
@@ -218,15 +230,15 @@ describe('useExtensionManagement', () => {
                 expect(result.current.isLoading).toBe(false);
             });
 
-            expect(result.current.extensions).toHaveLength(1);
-            expect(result.current.extensions[0].id).toBe('ext-new');
+            expect(result.current.extensions).toHaveLength(2);
+            expect(result.current.extensions.map((extension) => extension.id)).toEqual(['ext-new', 'ext-old']);
         });
 
         it('should keep extensions with different names as separate entries', async () => {
             const extA: ApiExtension = { ...mockExtension, id: 'ext-a', name: 'ExtensionA' };
             const extB: ApiExtension = { ...mockExtension, id: 'ext-b', name: 'ExtensionB' };
 
-            mockApiGet.mockResolvedValue([extA, extB]);
+            mockApiGet.mockResolvedValue([makeExtensionListItem(extA), makeExtensionListItem(extB)]);
 
             const { result } = renderHook(() => useExtensionManagement(), {
                 wrapper: createWrapper(),
@@ -242,7 +254,7 @@ describe('useExtensionManagement', () => {
 
     describe('enable / disable', () => {
         it('should call the enable endpoint when toggling on', async () => {
-            mockApiGet.mockResolvedValue([mockExtension]);
+            mockApiGet.mockResolvedValue([makeExtensionListItem(mockExtension)]);
             mockApiPost.mockResolvedValue({ ...mockExtension, enabled: true });
 
             const { result } = renderHook(() => useExtensionManagement(), {
@@ -261,7 +273,7 @@ describe('useExtensionManagement', () => {
         });
 
         it('should call the disable endpoint when toggling off', async () => {
-            mockApiGet.mockResolvedValue([mockExtension]);
+            mockApiGet.mockResolvedValue([makeExtensionListItem(mockExtension)]);
             mockApiPost.mockResolvedValue({ ...mockExtension, enabled: false });
 
             const { result } = renderHook(() => useExtensionManagement(), {
@@ -280,7 +292,7 @@ describe('useExtensionManagement', () => {
         });
 
         it('should set isToggling while the mutation is pending', async () => {
-            mockApiGet.mockResolvedValue([mockExtension]);
+            mockApiGet.mockResolvedValue([makeExtensionListItem(mockExtension)]);
 
             let resolveEnable: (value: ApiExtension) => void;
             const enablePromise = new Promise<ApiExtension>((resolve) => {
@@ -297,7 +309,7 @@ describe('useExtensionManagement', () => {
             });
 
             act(() => {
-                result.current.toggleEnabled('ext-1', true);
+                void result.current.toggleEnabled('ext-1', true);
             });
 
             await waitFor(() => {
@@ -316,7 +328,7 @@ describe('useExtensionManagement', () => {
 
     describe('patch via setAutoUpgrade', () => {
         it('should call the patch endpoint with autoUpgrade wrapped in a value object', async () => {
-            mockApiGet.mockResolvedValue([mockExtension]);
+            mockApiGet.mockResolvedValue([makeExtensionListItem(mockExtension)]);
             mockApiPatch.mockResolvedValue(undefined);
 
             const { result } = renderHook(() => useExtensionManagement(), {
@@ -335,7 +347,7 @@ describe('useExtensionManagement', () => {
         });
 
         it('should set isPatching while the mutation is pending', async () => {
-            mockApiGet.mockResolvedValue([mockExtension]);
+            mockApiGet.mockResolvedValue([makeExtensionListItem(mockExtension)]);
 
             let resolvePatch: (value: void) => void;
             const patchPromise = new Promise<void>((resolve) => {
@@ -352,7 +364,7 @@ describe('useExtensionManagement', () => {
             });
 
             act(() => {
-                result.current.setAutoUpgrade('ext-1', false);
+                void result.current.setAutoUpgrade('ext-1', false);
             });
 
             await waitFor(() => {
@@ -408,7 +420,7 @@ describe('useExtensionActions', () => {
             response = await result.current.installExtension({ packageId: 'Magpie.Foo', version: '1.2.3' });
         });
 
-        expect(mockApiPost).toHaveBeenCalledWith('/extensions/install', {
+        expect(mockApiPost).toHaveBeenCalledWith('/extensions', {
             packageId: 'Magpie.Foo',
             version: '1.2.3',
         });
@@ -430,13 +442,21 @@ describe('useExtensionActions', () => {
 
         expect(mockApiPost).toHaveBeenCalledTimes(1);
         const [url, body] = mockApiPost.mock.calls[0];
-        expect(url).toBe('/extensions/install-file');
+        expect(url).toBe('/extensions/upload');
         expect(body).toBeInstanceOf(FormData);
-        expect((body as FormData).get('file')).toBe(file);
+        const sent = (body as FormData).get('file');
+        expect(sent).toBeInstanceOf(File);
+        expect((sent as File).name).toBe(file.name);
+        expect((sent as File).size).toBe(file.size);
     });
 
     it('uninstalls an extension via the uninstall endpoint', async () => {
-        mockApiPost.mockResolvedValue(undefined);
+        mockApiFetchResponse.mockResolvedValue(
+            new Response(null, {
+                status: 204,
+                headers: { 'X-Magpie-Restart-Required': 'true' },
+            }),
+        );
 
         const { result } = renderHook(() => useExtensionActions(), {
             wrapper: createWrapper(),
@@ -446,10 +466,33 @@ describe('useExtensionActions', () => {
             await result.current.uninstallExtension('ext-1');
         });
 
-        expect(mockApiPost).toHaveBeenCalledWith('/extensions/ext-1/uninstall');
+        expect(mockApiFetchResponse).toHaveBeenCalledWith('/extensions/ext-1', { method: 'DELETE' });
     });
 
-    it('updates an extension and forwards the version', async () => {
+    it('marks restart required when uninstall response includes restart header', async () => {
+        mockApiFetchResponse.mockResolvedValue(
+            new Response(null, {
+                status: 204,
+                headers: { 'X-Magpie-Restart-Required': 'true' },
+            }),
+        );
+
+        const { result } = renderHook(
+            () => ({
+                actions: useExtensionActions(),
+                restart: useRestartRequired(),
+            }),
+            { wrapper: createWrapper() },
+        );
+
+        await act(async () => {
+            await result.current.actions.uninstallExtension('ext-1');
+        });
+
+        expect(result.current.restart.restartRequired).toBe(true);
+    });
+
+    it('upgrades an extension to the requested version', async () => {
         mockApiPost.mockResolvedValue({ extension: mockExtension, restartRequired: true });
 
         const { result } = renderHook(() => useExtensionActions(), {
@@ -460,11 +503,25 @@ describe('useExtensionActions', () => {
             await result.current.updateExtension('ext-1', '2.0.0');
         });
 
-        expect(mockApiPost).toHaveBeenCalledWith('/extensions/ext-1/update', { version: '2.0.0' });
+        expect(mockApiPost).toHaveBeenCalledWith('/extensions/ext-1/upgrade/2.0.0');
     });
 
-    it('checks for updates and returns the per-extension info list', async () => {
-        const updates = [
+    it('upgrades an extension to the latest version', async () => {
+        mockApiPost.mockResolvedValue({ extension: mockExtension, restartRequired: true });
+
+        const { result } = renderHook(() => useExtensionActions(), {
+            wrapper: createWrapper(),
+        });
+
+        await act(async () => {
+            await result.current.updateExtension('ext-1');
+        });
+
+        expect(mockApiPost).toHaveBeenCalledWith('/extensions/ext-1/upgrade/latest');
+    });
+
+    it('checks for updates by refreshing the extension list and returns its update info', async () => {
+        const updates: ExtensionUpdateInfo[] = [
             {
                 extensionId: 'ext-1',
                 packageId: 'Magpie.Foo',
@@ -473,7 +530,7 @@ describe('useExtensionActions', () => {
                 hasUpdate: true,
             },
         ];
-        mockApiPost.mockResolvedValue(updates);
+        vi.mocked(apiGet).mockResolvedValue([{ extension: mockExtension, updateInfo: updates[0] }]);
 
         const { result } = renderHook(() => useExtensionActions(), {
             wrapper: createWrapper(),
@@ -484,7 +541,8 @@ describe('useExtensionActions', () => {
             returned = await result.current.checkUpdates();
         });
 
-        expect(mockApiPost).toHaveBeenCalledWith('/extensions/check-updates');
+        expect(apiGet).toHaveBeenCalledWith('/extensions');
+        expect(mockApiPost).not.toHaveBeenCalledWith('/extensions/check-updates');
         expect(returned).toEqual(updates);
     });
 

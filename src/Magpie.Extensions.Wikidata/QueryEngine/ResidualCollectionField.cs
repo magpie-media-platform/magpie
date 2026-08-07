@@ -1,0 +1,35 @@
+namespace Magpie.Extensions.Wikidata.QueryEngine;
+
+internal enum ResidualCollectionField
+{
+    ContentRatingBody,
+    ContentRatingRating,
+    AwardBody,
+    AwardName,
+    AwardCategory,
+    AwardStatus,
+    AwardYear,
+    AwardLanguage,
+    AwardCountry,
+    ImageType,
+    ImageMimeType,
+    ImageUrl,
+    ImageSource,
+    ImageLanguage,
+    ImageWidth,
+    ImageHeight,
+    ReferenceOrdinal,
+    ReferenceKind,
+    ReferenceUrl,
+    ReferenceDisplayName,
+    ReferenceLanguage,
+    PreviewMimeType,
+    PreviewUrl,
+    PreviewSource,
+    PreviewTitle,
+    PreviewLanguage,
+    AlternateTextKind,
+    AlternateTextLanguage,
+    AlternateTextText,
+    GenreName
+}

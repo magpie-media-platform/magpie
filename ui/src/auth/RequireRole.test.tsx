@@ -1,7 +1,7 @@
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
-import { AuthProvider } from './AuthContext';
+import { AuthTestProvider as AuthProvider } from '@/test/AuthTestProvider';
 import { RequireRole, useRequireRole } from './RequireRole';
 import { Role } from './types';
 

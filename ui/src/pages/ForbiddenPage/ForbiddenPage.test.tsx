@@ -2,7 +2,8 @@ import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
 
-import { AuthProvider, Role } from '@/auth';
+import { Role } from '@/auth';
+import { AuthTestProvider as AuthProvider } from '@/test/AuthTestProvider';
 import { ForbiddenPage } from './ForbiddenPage';
 
 describe('ForbiddenPage', () => {
@@ -15,7 +16,7 @@ describe('ForbiddenPage', () => {
             </MemoryRouter>,
         );
 
-        expect(screen.getByText('Access denied')).toBeInTheDocument();
+        expect(screen.getByRole('heading', { name: 'Access denied', level: 1 })).toBeInTheDocument();
         expect(screen.getByText('You do not have permission to access this page.')).toBeInTheDocument();
     });
 
@@ -85,7 +86,10 @@ describe('ForbiddenPage', () => {
         );
 
         expect(screen.getByText(/Signed in as mgr \(Manager\)/)).toBeInTheDocument();
-        expect(screen.getByText('You can manage content, indexers, and clients.')).toBeInTheDocument();
+        expect(
+            screen.getByText('You can manage content, downloads, wishlists, filters, and tags, and run jobs.'),
+        ).toBeInTheDocument();
+        expect(screen.queryByText(/indexers, and clients/)).not.toBeInTheDocument();
     });
 
     it('does not concatenate user info into the permission message', () => {

@@ -1,11 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import type { ContentKind, FulfillmentStatus } from '@/types/content';
-
 import {
-    getKindIcon,
     getFulfillmentClass,
-    getFulfillmentVariant,
     formatDate,
     formatTime,
     getDayOfMonth,
@@ -14,37 +10,10 @@ import {
     getWeekDays,
     isSameDay,
     isToday,
+    parseCalendarDate,
     WEEKDAY_NAMES,
     getFirstDayOfWeek,
-    getWeekdayNames,
 } from './calendarUtils';
-
-describe('getKindIcon', () => {
-    it('returns Television for episode', () => {
-        const icon = getKindIcon('episode');
-        expect(icon.displayName).toBe('Television');
-    });
-
-    it('returns FilmSlate for movie', () => {
-        const icon = getKindIcon('movie');
-        expect(icon.displayName).toBe('FilmSlate');
-    });
-
-    it('returns MusicNote for music', () => {
-        const icon = getKindIcon('music');
-        expect(icon.displayName).toBe('MusicNote');
-    });
-
-    it('returns Book for book', () => {
-        const icon = getKindIcon('book');
-        expect(icon.displayName).toBe('Book');
-    });
-
-    it('returns FilmSlate for unknown kind', () => {
-        const icon = getKindIcon('unknown' as ContentKind);
-        expect(icon.displayName).toBe('FilmSlate');
-    });
-});
 
 describe('getFulfillmentClass', () => {
     it('returns class string for each status', () => {
@@ -52,21 +21,13 @@ describe('getFulfillmentClass', () => {
         expect(getFulfillmentClass('upgradable')).toBe('calendar-page__event--upgradable');
         expect(getFulfillmentClass('fulfilled')).toBe('calendar-page__event--fulfilled');
         expect(getFulfillmentClass('fulfilledExternally')).toBe('calendar-page__event--fulfilledExternally');
-    });
-});
-
-describe('getFulfillmentVariant', () => {
-    it('returns the status value unchanged', () => {
-        const statuses: FulfillmentStatus[] = ['missing', 'upgradable', 'fulfilled', 'fulfilledExternally'];
-        for (const status of statuses) {
-            expect(getFulfillmentVariant(status)).toBe(status);
-        }
+        expect(getFulfillmentClass('partial')).toBe('calendar-page__event--partial');
     });
 });
 
 describe('formatDate', () => {
     it('formats a date with weekday, month, day, and year', () => {
-        const date = new Date(2024, 0, 15); // Jan 15, 2024
+        const date = new Date(2024, 0, 15);
         const result = formatDate(date);
         expect(result).toContain('2024');
         expect(result).toContain('15');
@@ -90,15 +51,14 @@ describe('getDayOfMonth', () => {
 
 describe('getWeekStart', () => {
     it('returns Sunday of the current week', () => {
-        // Wednesday Jan 17, 2024
         const wed = new Date(2024, 0, 17);
         const start = getWeekStart(wed);
-        expect(start.getDay()).toBe(0); // Sunday
-        expect(start.getDate()).toBe(14); // Jan 14
+        expect(start.getDay()).toBe(0);
+        expect(start.getDate()).toBe(14);
     });
 
     it('returns the same day when already Sunday', () => {
-        const sun = new Date(2024, 0, 14); // Sunday
+        const sun = new Date(2024, 0, 14);
         const start = getWeekStart(sun);
         expect(start.getDay()).toBe(0);
         expect(start.getDate()).toBe(14);
@@ -122,32 +82,27 @@ describe('getWeekStart', () => {
 
 describe('getMonthDays', () => {
     it('returns an array of dates covering the full calendar grid', () => {
-        // January 2024: starts on Monday, 31 days
         const days = getMonthDays(2024, 0);
-        // First day should be a Sunday (start padding)
         expect(days[0].getDay()).toBe(0);
-        // Last day should be a Saturday (end padding)
         expect(days[days.length - 1].getDay()).toBe(6);
-        // All 31 days of January should be present
         const janDays = days.filter((d) => d.getMonth() === 0 && d.getFullYear() === 2024);
         expect(janDays.length).toBe(31);
     });
 
     it('includes padding days from previous and next month', () => {
-        // January 2024 starts on Monday, so Sunday Dec 31 2023 is the padding start
         const days = getMonthDays(2024, 0);
         const prevMonthDays = days.filter((d) => d.getMonth() === 11 && d.getFullYear() === 2023);
         expect(prevMonthDays.length).toBeGreaterThan(0);
     });
 
     it('handles February in a leap year', () => {
-        const days = getMonthDays(2024, 1); // Feb 2024 (leap year)
+        const days = getMonthDays(2024, 1);
         const febDays = days.filter((d) => d.getMonth() === 1 && d.getFullYear() === 2024);
         expect(febDays.length).toBe(29);
     });
 
     it('handles February in a non-leap year', () => {
-        const days = getMonthDays(2023, 1); // Feb 2023
+        const days = getMonthDays(2023, 1);
         const febDays = days.filter((d) => d.getMonth() === 1 && d.getFullYear() === 2023);
         expect(febDays.length).toBe(28);
     });
@@ -155,7 +110,7 @@ describe('getMonthDays', () => {
 
 describe('getWeekDays', () => {
     it('returns exactly 7 days', () => {
-        const start = new Date(2024, 0, 14); // Sunday
+        const start = new Date(2024, 0, 14);
         const days = getWeekDays(start);
         expect(days.length).toBe(7);
     });
@@ -202,6 +157,27 @@ describe('isSameDay', () => {
     });
 });
 
+describe('parseCalendarDate', () => {
+    it('keeps date-only publication values on their calendar date in a negative time zone', () => {
+        const originalTimeZone = process.env.TZ;
+        process.env.TZ = 'America/Los_Angeles';
+        try {
+            expect(parseCalendarDate('2026-07-20')).toEqual(new Date(2026, 6, 20));
+            expect(parseCalendarDate('2026-07-20T00:00:00Z')).toEqual(new Date(2026, 6, 20));
+        } finally {
+            if (originalTimeZone === undefined) {
+                delete process.env.TZ;
+            } else {
+                process.env.TZ = originalTimeZone;
+            }
+        }
+    });
+
+    it('preserves the instant for publication values with a time', () => {
+        expect(parseCalendarDate('2026-07-20T20:00:00Z')).toEqual(new Date('2026-07-20T20:00:00Z'));
+    });
+});
+
 describe('isToday', () => {
     it('returns true for today', () => {
         expect(isToday(new Date())).toBe(true);
@@ -224,32 +200,24 @@ describe('WEEKDAY_NAMES', () => {
 
 describe('getFirstDayOfWeek', () => {
     it('returns Monday (1) for a Monday-first locale when weekInfo is supported', () => {
-        // Many modern engines support Intl.Locale weekInfo for fr-FR/de-DE etc.
-        // If the host engine does not support it, the fallback is Sunday (0)
-        // and we accept that (graceful improvement, not a perfect i18n).
         const day = getFirstDayOfWeek('fr-FR');
         expect([0, 1]).toContain(day);
     });
 
     it('returns Sunday (0) for en-US', () => {
-        // en-US is Sunday-first. If weekInfo is unsupported the fallback is
-        // also Sunday, so this assertion is stable across engines.
         expect(getFirstDayOfWeek('en-US')).toBe(0);
     });
 });
 
 describe('getWeekStart with explicit locale', () => {
     it('returns Monday of the current week for a Monday-first locale (when weekInfo is supported)', () => {
-        // Wednesday Jan 17, 2024
         const wed = new Date(2024, 0, 17);
         const start = getWeekStart(wed, 'fr-FR');
         const firstDay = getFirstDayOfWeek('fr-FR');
         if (firstDay === 1) {
-            // Monday-first: Monday Jan 15, 2024
             expect(start.getDay()).toBe(1);
             expect(start.getDate()).toBe(15);
         } else {
-            // Engine does not support weekInfo: falls back to Sunday.
             expect(start.getDay()).toBe(0);
             expect(start.getDate()).toBe(14);
         }
@@ -260,21 +228,5 @@ describe('getWeekStart with explicit locale', () => {
         const start = getWeekStart(wed, 'en-US');
         expect(start.getDay()).toBe(0);
         expect(start.getDate()).toBe(14);
-    });
-});
-
-describe('getWeekdayNames', () => {
-    it('returns 7 names', () => {
-        expect(getWeekdayNames('en-US')).toHaveLength(7);
-        expect(getWeekdayNames('fr-FR')).toHaveLength(7);
-    });
-
-    it('orders names starting from the locale first day of week', () => {
-        const enUs = getWeekdayNames('en-US');
-        // en-US is Sunday-first, so the first name should not be a Monday name like "Mon".
-        // We assert via Intl: format the anchor Sunday in en-US and compare to enUs[0].
-        const anchorSunday = new Date(2024, 0, 7);
-        const expectedFirst = new Intl.DateTimeFormat('en-US', { weekday: 'short' }).format(anchorSunday);
-        expect(enUs[0]).toBe(expectedFirst);
     });
 });

@@ -1,6 +1,8 @@
-import { forwardRef, type ComponentPropsWithoutRef, type ElementRef, type ReactNode } from 'react';
+import { forwardRef, type ComponentPropsWithoutRef, type ComponentRef, type ReactNode } from 'react';
 import * as DialogPrimitive from '@radix-ui/react-dialog';
-import { X } from '@phosphor-icons/react';
+import { XIcon } from '@phosphor-icons/react';
+
+import { OverlayBodyGuard } from '../OverlayBodyGuard';
 
 import './Dialog.css';
 
@@ -16,9 +18,13 @@ export type DialogOverlayProps = ComponentPropsWithoutRef<typeof DialogPrimitive
 
 export interface DialogContentProps extends ComponentPropsWithoutRef<typeof DialogPrimitive.Content> {
     hideCloseButton?: boolean;
+
+    size?: 'default' | 'alert';
 }
 
 export type DialogHeaderProps = ComponentPropsWithoutRef<'div'>;
+
+export type DialogBodyProps = ComponentPropsWithoutRef<'div'>;
 
 export type DialogFooterProps = ComponentPropsWithoutRef<'div'>;
 
@@ -36,7 +42,7 @@ const DialogPortal = DialogPrimitive.Portal;
 
 const DialogClose = DialogPrimitive.Close;
 
-const DialogOverlay = forwardRef<ElementRef<typeof DialogPrimitive.Overlay>, DialogOverlayProps>(
+const DialogOverlay = forwardRef<ComponentRef<typeof DialogPrimitive.Overlay>, DialogOverlayProps>(
     ({ className, ...props }, ref) => {
         const classes = ['dialog-overlay', className].filter(Boolean).join(' ');
 
@@ -46,18 +52,36 @@ const DialogOverlay = forwardRef<ElementRef<typeof DialogPrimitive.Overlay>, Dia
 
 DialogOverlay.displayName = 'DialogOverlay';
 
-const DialogContent = forwardRef<ElementRef<typeof DialogPrimitive.Content>, DialogContentProps>(
-    ({ className, children, hideCloseButton = false, ...props }, ref) => {
+const DialogContent = forwardRef<ComponentRef<typeof DialogPrimitive.Content>, DialogContentProps>(
+    (
+        {
+            className,
+            children,
+            hideCloseButton = false,
+            size = 'default',
+            'aria-describedby': ariaDescribedBy,
+            ...props
+        },
+        ref,
+    ) => {
         const classes = ['dialog-content', className].filter(Boolean).join(' ');
 
         return (
             <DialogPortal>
                 <DialogOverlay />
-                <DialogPrimitive.Content ref={ref} className={classes} data-component="dialog" {...props}>
+                <DialogPrimitive.Content
+                    ref={ref}
+                    className={classes}
+                    data-component="dialog"
+                    data-size={size}
+                    aria-describedby={ariaDescribedBy}
+                    {...props}
+                >
+                    <OverlayBodyGuard />
                     {children}
                     {!hideCloseButton && (
                         <DialogPrimitive.Close className="overlay-close" aria-label="Close">
-                            <X size={20} weight="bold" aria-hidden="true" />
+                            <XIcon size={20} weight="bold" aria-hidden="true" />
                         </DialogPrimitive.Close>
                     )}
                 </DialogPrimitive.Content>
@@ -76,6 +100,14 @@ const DialogHeader = forwardRef<HTMLDivElement, DialogHeaderProps>(({ className,
 
 DialogHeader.displayName = 'DialogHeader';
 
+const DialogBody = forwardRef<HTMLDivElement, DialogBodyProps>(({ className, ...props }, ref) => {
+    const classes = ['dialog-body', className].filter(Boolean).join(' ');
+
+    return <div ref={ref} className={classes} {...props} />;
+});
+
+DialogBody.displayName = 'DialogBody';
+
 const DialogFooter = forwardRef<HTMLDivElement, DialogFooterProps>(({ className, ...props }, ref) => {
     const classes = ['dialog-footer', className].filter(Boolean).join(' ');
 
@@ -84,7 +116,7 @@ const DialogFooter = forwardRef<HTMLDivElement, DialogFooterProps>(({ className,
 
 DialogFooter.displayName = 'DialogFooter';
 
-const DialogTitle = forwardRef<ElementRef<typeof DialogPrimitive.Title>, DialogTitleProps>(
+const DialogTitle = forwardRef<ComponentRef<typeof DialogPrimitive.Title>, DialogTitleProps>(
     ({ className, ...props }, ref) => {
         const classes = ['dialog-title', className].filter(Boolean).join(' ');
 
@@ -94,7 +126,7 @@ const DialogTitle = forwardRef<ElementRef<typeof DialogPrimitive.Title>, DialogT
 
 DialogTitle.displayName = 'DialogTitle';
 
-const DialogDescription = forwardRef<ElementRef<typeof DialogPrimitive.Description>, DialogDescriptionProps>(
+const DialogDescription = forwardRef<ComponentRef<typeof DialogPrimitive.Description>, DialogDescriptionProps>(
     ({ className, ...props }, ref) => {
         const classes = ['dialog-description', className].filter(Boolean).join(' ');
 
@@ -111,6 +143,7 @@ export {
     DialogOverlay,
     DialogContent,
     DialogHeader,
+    DialogBody,
     DialogFooter,
     DialogTitle,
     DialogDescription,

@@ -3,7 +3,8 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it } from 'vitest';
 
-import { AuthProvider, Role } from '@/auth';
+import { Role } from '@/auth';
+import { AuthTestProvider as AuthProvider } from '@/test/AuthTestProvider';
 import { UserMenu } from './UserMenu';
 
 const mockUser = {

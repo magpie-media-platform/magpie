@@ -1,0 +1,405 @@
+using System;
+using System.Collections;
+using System.Collections.Generic;
+using System.Globalization;
+using System.Linq;
+using System.Text.RegularExpressions;
+
+namespace Magpie.Extensions.Cardigann.Engine.Templating;
+
+internal static class CardigannTemplateExtensions
+{
+    private static readonly TimeSpan RegexTimeout = TimeSpan.FromSeconds(2);
+
+    private static readonly Regex ReReplaceRegex = new(
+        @"{{\s*re_replace\s+(\..+?)\s+""(.*?)""\s+""(.*?)""\s*}}",
+        RegexOptions.Compiled);
+
+    private static readonly Regex ReReplacePipeRegex = new(
+        @"{{\s*(\..+?)\s*\|\s*re_replace\s+""(.*?)""\s+""(.*?)""\s*}}",
+        RegexOptions.Compiled);
+
+    private static readonly Regex JoinRegex = new(@"{{\s*join\s+(\..+?)\s+""(.*?)""\s*}}", RegexOptions.Compiled);
+
+    private static readonly Regex JoinPipeRegex = new(
+        @"{{\s*(\..+?)\s*\|\s*join\s+""(.*?)""\s*}}",
+        RegexOptions.Compiled);
+
+    private static readonly Regex LogicFunctionRegex = new(
+        @"\b(and|or|eq|ne)(?:\s+(\(?\.[^\)\s]+\)?|""[^""]+""))" + "{2,}",
+        RegexOptions.Compiled);
+
+    private static readonly Regex IfElseRegex = new(
+        @"{{\s*if\s*(.+?)\s*}}(.*?){{\s*else\s*}}(.*?){{\s*end\s*}}",
+        RegexOptions.Compiled | RegexOptions.Singleline);
+
+    private static readonly Regex IfRegex = new(
+        @"{{\s*if\s*(.+?)\s*}}(.*?){{\s*end\s*}}",
+        RegexOptions.Compiled | RegexOptions.Singleline);
+
+    private static readonly Regex RangeRegex = new(
+        @"{{\s*range\s*(((?<index>\$.+?),)((\s*(?<element>.+?)\s*(:=)\s*)))?(?<variable>.+?)\s*}}" +
+        @"(?<prefix>.*?){{\.}}(?<postfix>.*?){{\s*end\s*}}",
+        RegexOptions.Compiled | RegexOptions.Singleline);
+
+    private static readonly Regex SimpleVariableRegex = new(@"{{\s*(\..+?)\s*}}", RegexOptions.Compiled);
+
+    private const string TrueVar = ".True";
+
+    private const string FalseVar = ".False";
+
+    public static string RenderCardigannTemplate(this string template, IReadOnlyDictionary<string, object?> variables)
+    {
+        if (string.IsNullOrEmpty(template) || !template.Contains("{{", StringComparison.Ordinal))
+        {
+            return template;
+        }
+
+        var vars = new Dictionary<string, object?>();
+        if (variables != null)
+        {
+            foreach (var kvp in variables)
+            {
+                vars[kvp.Key] = kvp.Value;
+            }
+        }
+
+        if (!vars.ContainsKey(TrueVar))
+        {
+            vars[TrueVar] = "True";
+        }
+
+        if (!vars.ContainsKey(FalseVar))
+        {
+            vars[FalseVar] = null;
+        }
+
+        template = ApplyReReplace(template, vars);
+        template = ApplyJoin(template, vars);
+        template = ApplyLogicFunctions(template, vars);
+        template = ApplyConditionals(template, vars);
+        template = ApplyRange(template, vars);
+        template = ApplySimpleVariables(template, vars);
+
+        return template;
+    }
+
+    private static string ApplyReReplace(string template, IDictionary<string, object?> vars)
+    {
+        template = ReplaceAll(
+            template,
+            ReReplacePipeRegex,
+            m =>
+            {
+                var variable = m.Groups[1].Value;
+                var pattern = m.Groups[2].Value;
+                var replacement = m.Groups[3].Value;
+                return ReReplace(GetString(vars, variable), pattern, replacement, m.Value);
+            });
+
+        template = ReplaceAll(
+            template,
+            ReReplaceRegex,
+            m =>
+            {
+                var variable = m.Groups[1].Value;
+                var pattern = m.Groups[2].Value;
+                var replacement = m.Groups[3].Value;
+                return ReReplace(GetString(vars, variable), pattern, replacement, m.Value);
+            });
+
+        return template;
+    }
+
+    private static string ReReplace(string input, string pattern, string replacement, string original)
+    {
+        try
+        {
+            return Regex.Replace(input ?? string.Empty, pattern, replacement, RegexOptions.None, RegexTimeout);
+        }
+        catch (RegexMatchTimeoutException)
+        {
+            return original;
+        }
+        catch (ArgumentException)
+        {
+            return original;
+        }
+    }
+
+    private static string ApplyJoin(string template, IDictionary<string, object?> vars)
+    {
+        template = ReplaceAll(
+            template,
+            JoinPipeRegex,
+            m =>
+            {
+                var variable = m.Groups[1].Value;
+                var delimiter = m.Groups[2].Value;
+                return string.Join(delimiter, GetList(vars, variable));
+            });
+
+        template = ReplaceAll(
+            template,
+            JoinRegex,
+            m =>
+            {
+                var variable = m.Groups[1].Value;
+                var delimiter = m.Groups[2].Value;
+                return string.Join(delimiter, GetList(vars, variable));
+            });
+
+        return template;
+    }
+
+    private static string ApplyLogicFunctions(string template, IDictionary<string, object?> vars)
+    {
+        var match = LogicFunctionRegex.Match(template);
+        var guard = 0;
+
+        while (match.Success && guard++ < 10000)
+        {
+            var functionStartIndex = match.Groups[0].Index;
+            var functionLength = match.Groups[0].Length;
+            var functionName = match.Groups[1].Value;
+            var parameters = match.Groups[2].Captures
+                .Cast<Capture>()
+                .Select(c => c.Value.Trim('(', ')'))
+                .ToList();
+            var usesLiterals = functionName is "eq" or "ne";
+            if (!usesLiterals)
+            {
+                parameters.RemoveAll(p => p.StartsWith("\"", StringComparison.Ordinal));
+            }
+
+            var functionResult = string.Empty;
+
+            switch (functionName)
+            {
+                case "and":
+                case "or":
+                    {
+                        var isAnd = functionName == "and";
+                        foreach (var parameter in parameters)
+                        {
+                            functionResult = parameter;
+                            var isFalsy = string.IsNullOrWhiteSpace(GetVariable(vars, parameter) as string);
+                            if (isFalsy == isAnd)
+                            {
+                                break;
+                            }
+                        }
+
+                        break;
+                    }
+
+                case "eq":
+                case "ne":
+                    {
+                        var wantEqual = functionName == "eq";
+                        if (parameters.Count > 2)
+                        {
+                            functionLength = match.Groups[2].Captures[2].Index - functionStartIndex;
+                        }
+
+                        var resolved = parameters
+                            .Take(2)
+                            .Select(p => p.StartsWith("\"", StringComparison.Ordinal)
+                                ? p.Trim('"')
+                                : GetVariable(vars, p) as string);
+
+                        var isEqual = resolved.Distinct().Count() == 1;
+                        functionResult = isEqual == wantEqual ? TrueVar : FalseVar;
+                        break;
+                    }
+            }
+
+            template = template.Remove(functionStartIndex, functionLength).Insert(functionStartIndex, functionResult);
+            match = LogicFunctionRegex.Match(template);
+        }
+
+        return template;
+    }
+
+    private static string ApplyConditionals(string template, IDictionary<string, object?> vars)
+    {
+        template = ReplaceAll(
+            template,
+            IfElseRegex,
+            m =>
+            {
+                var condition = m.Groups[1].Value;
+                var onTrue = m.Groups[2].Value;
+                var onFalse = m.Groups[3].Value;
+
+                if (!TryEvaluateCondition(condition, vars, out var result))
+                {
+                    return m.Value;
+                }
+
+                return result ? onTrue : onFalse;
+            });
+
+        template = ReplaceAll(
+            template,
+            IfRegex,
+            m =>
+            {
+                var condition = m.Groups[1].Value;
+                var onTrue = m.Groups[2].Value;
+
+                if (!TryEvaluateCondition(condition, vars, out var result))
+                {
+                    return m.Value;
+                }
+
+                return result ? onTrue : string.Empty;
+            });
+
+        return template;
+    }
+
+    private static bool TryEvaluateCondition(string condition, IDictionary<string, object?> vars, out bool result)
+    {
+        result = false;
+        if (condition == null || !condition.StartsWith(".", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        result = IsTruthy(GetVariable(vars, condition));
+        return true;
+    }
+
+    private static string ApplyRange(string template, IDictionary<string, object?> vars)
+    {
+        return ReplaceAll(
+            template,
+            RangeRegex,
+            m =>
+            {
+                var index = m.Groups["index"].Success ? m.Groups["index"].Value : null;
+                var variable = m.Groups["variable"].Value;
+                var prefix = m.Groups["prefix"].Value;
+                var postfix = m.Groups["postfix"].Value;
+
+                var list = GetList(vars, variable);
+                var indexReplace = "{{" + index + "}}";
+
+                var expanded = string.Empty;
+                var arrayIndex = 0;
+                foreach (var value in list)
+                {
+                    var indexValue = arrayIndex++;
+                    if (index != null)
+                    {
+                        var indexText = indexValue.ToString(CultureInfo.InvariantCulture);
+                        expanded += prefix.Replace(indexReplace, indexText, StringComparison.Ordinal) +
+                            value +
+                            postfix.Replace(indexReplace, indexText, StringComparison.Ordinal);
+                    }
+                    else
+                    {
+                        expanded += prefix + value + postfix;
+                    }
+                }
+
+                return expanded;
+            });
+    }
+
+    private static string ApplySimpleVariables(string template, IDictionary<string, object?> vars)
+    {
+        return ReplaceAll(
+            template,
+            SimpleVariableRegex,
+            m =>
+            {
+                var variable = m.Groups[1].Value;
+                return GetString(vars, variable);
+            });
+    }
+
+    private static string ReplaceAll(string input, Regex regex, Func<Match, string> replacer)
+    {
+        var result = input;
+        var searchStart = 0;
+        var guard = 0;
+
+        while (guard++ < 100000)
+        {
+            var match = regex.Match(result, searchStart);
+            if (!match.Success)
+            {
+                break;
+            }
+
+            string replacement;
+            try
+            {
+                replacement = replacer(match) ?? string.Empty;
+            }
+            catch (Exception)
+            {
+                replacement = match.Value;
+            }
+
+            result = result.Substring(0, match.Index) + replacement + result.Substring(match.Index + match.Length);
+
+            searchStart = match.Index + replacement.Length;
+            if (searchStart > result.Length)
+            {
+                searchStart = result.Length;
+            }
+        }
+
+        return result;
+    }
+
+    private static object? GetVariable(IDictionary<string, object?> vars, string path)
+    {
+        if (path != null && vars.TryGetValue(path, out var value))
+        {
+            return value;
+        }
+
+        return null;
+    }
+
+    private static string GetString(IDictionary<string, object?> vars, string path)
+    {
+        var value = GetVariable(vars, path);
+        return value switch
+        {
+            null => string.Empty,
+            string s => s,
+            IEnumerable<string> list => string.Join(",", list),
+            _ => value.ToString() ?? string.Empty
+        };
+    }
+
+    private static IEnumerable<string> GetList(IDictionary<string, object?> vars, string path)
+    {
+        var value = GetVariable(vars, path);
+        return value switch
+        {
+            null => [],
+            IEnumerable<string> list => list,
+            string s => [s],
+            IEnumerable other => other.Cast<object?>().Select(o => o?.ToString() ?? string.Empty),
+            _ => []
+        };
+    }
+
+    private static bool IsTruthy(object? value)
+    {
+        return value switch
+        {
+            null => false,
+            string s => !string.IsNullOrWhiteSpace(s),
+            ICollection c => c.Count > 0,
+            IEnumerable e => e.Cast<object?>().Any(),
+            _ => true
+        };
+    }
+}

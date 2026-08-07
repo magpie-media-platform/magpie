@@ -9,10 +9,10 @@ using Magpie.Data;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
-using Magpie.Test.Shared;
 
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 using NUnit.Framework;
 
@@ -49,13 +49,15 @@ public class QualityTierRepositoryTests
 
         _userId = user.Id;
 
-        var loggerFactory = LoggerFactory.Create(builder => builder.AddTestLogger());
+        var loggerFactory = NullLoggerFactory.Instance;
 
         var auditRecordRepository = new AuditRecordRepository(
             _context,
-            loggerFactory.CreateLogger<AuditRecordRepository>());
+            Moq.Mock.Of<Sdk.Services.IEventBus>(),
+            loggerFactory.CreateLogger<AuditRecordRepository>(),
+            new TransactionManager(_context, NullLogger<TransactionManager>.Instance));
 
-        var transactionManager = new TransactionManager(_context);
+        var transactionManager = new TransactionManager(_context, NullLogger<TransactionManager>.Instance);
 
         _subject = new QualityTierRepository(
             _context,
@@ -91,10 +93,10 @@ public class QualityTierRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.QualityTiers.Add(qualityTier);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        var result = await _subject.GetByIdAsync(qualityTier.Id);
+        var result = await _subject.GetByIdAsync(qualityTier.Id).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -108,14 +110,14 @@ public class QualityTierRepositoryTests
     public async Task GetByIdAsync_ReturnsNull_WhenNotExists()
     {
         // Act
-        var result = await _subject.GetByIdAsync(Guid.NewGuid());
+        var result = await _subject.GetByIdAsync(Guid.NewGuid()).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.Null);
     }
 
     [Test]
-    public async Task ListAllAsync_ReturnsAllQualityTiers()
+    public async Task ListAllAsync_ReturnsAllQualityTiers_WhenTiersExist()
     {
         // Arrange
         var qualityTier1 = new QualityTier
@@ -131,10 +133,10 @@ public class QualityTierRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.QualityTiers.AddRange(qualityTier1, qualityTier2);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        var result = await _subject.ListAllAsync(default);
+        var result = await _subject.ListAllAsync(default).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Has.Exactly(2).Items);
@@ -144,14 +146,14 @@ public class QualityTierRepositoryTests
     public async Task ListAllAsync_ReturnsEmptyList_WhenNoQualityTiers()
     {
         // Act
-        var result = await _subject.ListAllAsync(default);
+        var result = await _subject.ListAllAsync(default).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.Empty);
     }
 
     [Test]
-    public async Task CreateAsync_CreatesQualityTier()
+    public async Task CreateAsync_CreatesQualityTier_WhenRequestIsValid()
     {
         // Arrange
         var qualityTier = new QualityTier
@@ -170,7 +172,7 @@ public class QualityTierRepositoryTests
         };
 
         // Act
-        var result = await _subject.CreateAsync(qualityTier, _userId);
+        var result = await _subject.CreateAsync(qualityTier, _userId).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -183,7 +185,7 @@ public class QualityTierRepositoryTests
     }
 
     [Test]
-    public async Task CreateAsync_CreatesAuditRecord()
+    public async Task CreateAsync_CreatesAuditRecord_WhenTierIsCreated()
     {
         // Arrange
         var qualityTier = new QualityTier
@@ -193,10 +195,10 @@ public class QualityTierRepositoryTests
         };
 
         // Act
-        await _subject.CreateAsync(qualityTier, _userId);
+        await _subject.CreateAsync(qualityTier, _userId).ConfigureAwait(false);
 
         // Assert
-        var auditRecords = await _context.AuditRecords.ToListAsync();
+        var auditRecords = await _context.AuditRecords.ToListAsync().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(auditRecords, Has.Count.EqualTo(1));
@@ -217,7 +219,7 @@ public class QualityTierRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.QualityTiers.Add(qualityTier);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         qualityTier.Name = "UpdatedTier";
         qualityTier.Criteria = new()
@@ -232,12 +234,12 @@ public class QualityTierRepositoryTests
         };
 
         // Act
-        var result = await _subject.UpdateAsync(qualityTier, _userId);
+        var result = await _subject.UpdateAsync(qualityTier, _userId).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.True);
 
-        var updated = await _subject.GetByIdAsync(qualityTier.Id);
+        var updated = await _subject.GetByIdAsync(qualityTier.Id).ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(updated, Has.Property(nameof(updated.Name)).EqualTo("UpdatedTier"));
@@ -258,14 +260,14 @@ public class QualityTierRepositoryTests
         };
 
         // Act
-        var result = await _subject.UpdateAsync(qualityTier, _userId);
+        var result = await _subject.UpdateAsync(qualityTier, _userId).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.False);
     }
 
     [Test]
-    public async Task UpdateAsync_CreatesAuditRecord()
+    public async Task UpdateAsync_CreatesAuditRecord_WhenTierExists()
     {
         // Arrange
         var qualityTier = new QualityTier
@@ -275,15 +277,15 @@ public class QualityTierRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.QualityTiers.Add(qualityTier);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         qualityTier.Name = "Updated";
 
         // Act
-        await _subject.UpdateAsync(qualityTier, _userId);
+        await _subject.UpdateAsync(qualityTier, _userId).ConfigureAwait(false);
 
         // Assert
-        var auditRecords = await _context.AuditRecords.ToListAsync();
+        var auditRecords = await _context.AuditRecords.ToListAsync().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(auditRecords, Has.Count.EqualTo(1));
@@ -303,15 +305,15 @@ public class QualityTierRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.QualityTiers.Add(qualityTier);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        var result = await _subject.DeleteAsync(qualityTier.Id, _userId);
+        var result = await _subject.DeleteAsync(qualityTier.Id, _userId).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.True);
 
-        var deleted = await _subject.GetByIdAsync(qualityTier.Id);
+        var deleted = await _subject.GetByIdAsync(qualityTier.Id).ConfigureAwait(false);
         Assert.That(deleted, Is.Null);
     }
 
@@ -319,14 +321,14 @@ public class QualityTierRepositoryTests
     public async Task DeleteAsync_ReturnsFalse_WhenNotExists()
     {
         // Act
-        var result = await _subject.DeleteAsync(Guid.NewGuid(), _userId);
+        var result = await _subject.DeleteAsync(Guid.NewGuid(), _userId).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.False);
     }
 
     [Test]
-    public async Task DeleteAsync_CreatesAuditRecord()
+    public async Task DeleteAsync_CreatesAuditRecord_WhenTierExists()
     {
         // Arrange
         var qualityTier = new QualityTier
@@ -336,13 +338,13 @@ public class QualityTierRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.QualityTiers.Add(qualityTier);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        await _subject.DeleteAsync(qualityTier.Id, _userId);
+        await _subject.DeleteAsync(qualityTier.Id, _userId).ConfigureAwait(false);
 
         // Assert
-        var auditRecords = await _context.AuditRecords.ToListAsync();
+        var auditRecords = await _context.AuditRecords.ToListAsync().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(auditRecords, Has.Count.EqualTo(1));
@@ -363,17 +365,17 @@ public class QualityTierRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.QualityTiers.Add(qualityTier);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         var patch = new QualityTierPatch { Id = qualityTier.Id, Name = new() { Value = "PatchedName" } };
 
         // Act
-        var result = await _subject.PatchAsync(patch, _userId);
+        var result = await _subject.PatchAsync(patch, _userId).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.True);
 
-        var patched = await _subject.GetByIdAsync(qualityTier.Id);
+        var patched = await _subject.GetByIdAsync(qualityTier.Id).ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(patched, Has.Property(nameof(patched.Name)).EqualTo("PatchedName"));
@@ -389,14 +391,14 @@ public class QualityTierRepositoryTests
         var patch = new QualityTierPatch { Id = Guid.NewGuid(), Name = new() { Value = "NonExistent" } };
 
         // Act
-        var result = await _subject.PatchAsync(patch, _userId);
+        var result = await _subject.PatchAsync(patch, _userId).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.False);
     }
 
     [Test]
-    public async Task PatchAsync_CreatesAuditRecord()
+    public async Task PatchAsync_CreatesAuditRecord_WhenPatchSucceeds()
     {
         // Arrange
         var qualityTier = new QualityTier
@@ -406,15 +408,15 @@ public class QualityTierRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.QualityTiers.Add(qualityTier);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         var patch = new QualityTierPatch { Id = qualityTier.Id, Name = new() { Value = "Patched" } };
 
         // Act
-        await _subject.PatchAsync(patch, _userId);
+        await _subject.PatchAsync(patch, _userId).ConfigureAwait(false);
 
         // Assert
-        var auditRecords = await _context.AuditRecords.ToListAsync();
+        var auditRecords = await _context.AuditRecords.ToListAsync().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(auditRecords, Has.Count.EqualTo(1));
@@ -431,15 +433,15 @@ public class QualityTierRepositoryTests
         var patch = new QualityTierPatch { Id = Guid.NewGuid(), Name = new() { Value = "NonExistent" } };
 
         // Act
-        await _subject.PatchAsync(patch, _userId);
+        await _subject.PatchAsync(patch, _userId).ConfigureAwait(false);
 
         // Assert
-        var auditRecords = await _context.AuditRecords.ToListAsync();
+        var auditRecords = await _context.AuditRecords.ToListAsync().ConfigureAwait(false);
         Assert.That(auditRecords, Is.Empty);
     }
 
     [Test]
-    public async Task PatchAsync_PreservesUnpatchedFields()
+    public async Task PatchAsync_PreservesUnpatchedFields_WhenPatchIsPartial()
     {
         // Arrange
         var qualityTier = new QualityTier
@@ -458,20 +460,73 @@ public class QualityTierRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.QualityTiers.Add(qualityTier);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         var patch = new QualityTierPatch { Id = qualityTier.Id, Name = new() { Value = "NewName" } };
 
         // Act
-        await _subject.PatchAsync(patch, _userId);
+        await _subject.PatchAsync(patch, _userId).ConfigureAwait(false);
 
         // Assert
-        var patched = await _subject.GetByIdAsync(qualityTier.Id);
+        var patched = await _subject.GetByIdAsync(qualityTier.Id).ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(patched, Has.Property(nameof(patched.Name)).EqualTo("NewName"));
-            Assert.That(patched, Has.Property(nameof(patched.Criteria))
-                .With.Property(nameof(QualityTierCriteria.And)).With.Count.EqualTo(1));
+            Assert.That(
+                patched,
+                Has.Property(nameof(patched.Criteria))
+                    .With.Property(nameof(QualityTierCriteria.And)).With.Count.EqualTo(1));
         }
+    }
+
+    [Test]
+    public async Task PatchAsync_PersistsCriteria_WhenCriteriaPatchProvided()
+    {
+        // Arrange
+        var qualityTier = new QualityTier
+        {
+            Name = "CriteriaTier",
+            Criteria = new()
+            {
+                And = [new()
+                {
+                    Items = new()
+                    {
+                        ["resolution"] = new() { Operator = CriteriaValueOperator.Equals, Values = ["720p"] }
+                    }
+                }]
+            },
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.QualityTiers.Add(qualityTier);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        var patch = new QualityTierPatch
+        {
+            Id = qualityTier.Id,
+            Criteria = new()
+            {
+                Value = new()
+                {
+                    And = [new()
+                    {
+                        Items = new()
+                        {
+                            ["resolution"] = new() { Operator = CriteriaValueOperator.Equals, Values = ["720p QA"] }
+                        }
+                    }]
+                }
+            }
+        };
+
+        // Act
+        var result = await _subject.PatchAsync(patch, _userId).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(result, Is.True);
+
+        var patched = await _subject.GetByIdAsync(qualityTier.Id).ConfigureAwait(false);
+        var values = patched!.Criteria.And.Single().Items["resolution"].Values;
+        Assert.That(values, Is.EqualTo(["720p QA"]));
     }
 }

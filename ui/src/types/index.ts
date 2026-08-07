@@ -1,18 +1,46 @@
-export type { SubjectKind, FilterableSubjectKind } from './subjects';
-
-export { formatSubjectKindLabel, formatSubjectKindFilterLabel } from './subjects';
+export { formatSubjectKindLabel, resolveSubjectKindLabel, resolveSubjectKindPluralLabel } from './subjects';
 
 export type { DownloadClientOption, StateFilterOption, DownloadFilterState } from './downloads';
 
-export type { UserItem, UserCreate, UserUpdate, ApiKeyItem, ApiKeyCreatedItem, ApiKeyCreate } from './users';
+export type { ContentFilterCriteria, CriteriaSet } from './filters';
+
+export type {
+    JobExecutionStatusValue,
+    JobExecutionEffectiveStatusValue,
+    JobScopeValue,
+    JobTriggerModeValue,
+    JobParameterDefinition,
+} from './jobs';
+
+export type {
+    LibraryMetadataFieldDefinition,
+    LibraryMetadataValueKind,
+    LibraryStandardMetadataFieldDefinition,
+    LibraryLevelDefinition,
+    LibraryTypeDefinition,
+} from './library';
+
+export type { FiltersPageCreateState, LibraryAddPreloadState, WishlistsPageCreateState } from './navigation';
+
+export type {
+    UserItem,
+    UserCreate,
+    UserUpdate,
+    UserExternalCreate,
+    ApiKeyItem,
+    ApiKeyCreatedItem,
+    ApiKeyCreate,
+} from './users';
 
 export { roleVariants } from './users';
 
 export type {
     FulfillmentStatusValue,
-    ContentKind,
-    MonitoringStatus,
+    ApiFulfillmentStatus,
     FulfillmentStatus,
+    DownloadStatusValue,
+    AcquisitionStatus,
+    FulfillmentBadge,
     ApiContentHierarchyItem,
     ApiContentItem,
     ApiMetadataContainer,
@@ -23,21 +51,95 @@ export type {
 } from './content';
 
 export {
-    mapContentType,
-    mapMonitoringIntent,
     mapFulfillmentStatus,
+    mapFulfillmentStatusToApiName,
+    getFulfillmentBadge,
+    mapAcquisitionStatus,
     mapToContentListItem,
     mapToContentDetailItem,
 } from './content';
+
+export type {
+    AcquisitionBlockReason,
+    RootFolderResolutionSource,
+    EffectiveRootFolder,
+    SetContentRootFolderVariables,
+    QualityTierListResolutionSource,
+    EffectiveQualityTierList,
+    SetQualityTierListVariables,
+    MediaServerDeepLink,
+    SearchContentReleasesParams,
+    ContentListResult,
+    ContentRelationship,
+    PendingRefreshState,
+    PendingRefreshResponse,
+    UpdateContentRequest,
+    MetadataInspectorField,
+    MetadataGenre,
+    MetadataImage,
+    MetadataRelationship,
+    MetadataExternalId,
+    MetadataPreview,
+    MetadataAlternateText,
+    MetadataAward,
+    MetadataContentRating,
+    MetadataCustomValue,
+    MetadataReference,
+    MetadataContribution,
+    MaterializedMetadata,
+    SubjectRef,
+    MetadataInspectorResponse,
+    ScalarPatch,
+    MetadataCollectionPatch,
+    MetadataSetPatch,
+    MetadataAlternateTextAdd,
+    MetadataAlternateTextUpdate,
+    MetadataAwardAdd,
+    MetadataAwardUpdate,
+    MetadataContentRatingAdd,
+    MetadataContentRatingUpdate,
+    MetadataExternalIdAdd,
+    MetadataExternalIdUpdate,
+    MetadataImageAdd,
+    MetadataImageUpdate,
+    MetadataPreviewAdd,
+    MetadataPreviewUpdate,
+    MetadataReferenceAdd,
+    MetadataReferenceUpdate,
+    MetadataRelationshipAdd,
+    MetadataRelationshipUpdate,
+    MetadataContainerPatch,
+    MetadataSubItemKey,
+    RelationshipSubItemPayload,
+    GenreSubItemPayload,
+    ImageSubItemPayload,
+    PreviewSubItemPayload,
+    ExternalIdSubItemPayload,
+    AlternateTextSubItemPayload,
+    AwardSubItemPayload,
+    ContentRatingSubItemPayload,
+    CustomMetadataValueSubItemPayload,
+    ReferenceSubItemPayload,
+    SubItemPayloadByKey,
+    SubItemPayload,
+    BulkResult,
+    ContentHierarchyItemPatch,
+    BulkContentPatchRequest,
+    BulkContentDeleteRequest,
+} from './contentMetadata';
 
 export type { CalendarEvent, CalendarView, CalendarQueryParams } from './calendar';
 
 export type { PagedList } from './paging';
 
-export type { ContentFilterOption, QualityTierListOption, TagOption, WishlistFormValues } from './wishlist';
+export type {
+    ContentFilterOption,
+    QualityTierListOption,
+    RootFolderOption,
+    TagOption,
+    WishlistFormValues,
+} from './wishlist';
 
 export type { BadgeVariant, BadgeSize, BadgeStyle } from './badge';
-
-export type { LogLevel, LogEntry } from './logs';
 
 export type { DiskSpaceInfo, DownloadState, DownloadStateCounts, ActiveDownloadItem } from './system';

@@ -5,20 +5,22 @@ using Magpie.Models.Filtering;
 namespace Magpie.Models.Data;
 
 /// <summary>
-/// Filter criteria for <see cref="Subject"/>.
+/// The filter criteria for a <see cref="Subject"/>.
 /// </summary>
 public sealed record SubjectFilterCriteria
 {
     /// <summary>
-    /// Filter criteria for <see cref="Subject.Kind"/>.
+    /// The criteria on the kind of subject.
     /// </summary>
     public CriteriaSet<PropertyCriterion<string>> Kind { get; init; } = new();
+
     /// <summary>
-    /// Filter criteria for <see cref="Subject.DateLastRefreshed"/>.
+    /// The criteria on the UTC time of the last refresh.
     /// </summary>
     public CriteriaSet<PropertyCriterion<DateTime>> DateLastRefreshed { get; init; } = new();
+
     /// <summary>
-    /// Filter criteria for the subject metadata.
+    /// The criteria on the metadata of the subject.
     /// </summary>
     public CriteriaSet<MetadataCriteria> Metadata { get; init; } = new();
 }

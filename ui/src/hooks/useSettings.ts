@@ -1,6 +1,10 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 
-import { apiGet, apiPatch } from '@/lib/api';
+import { apiGet, apiPatch, apiPost } from '@/lib/api';
+import { useInvalidateQueriesOnEvents } from '@/hooks/useInvalidateQueriesOnEvents';
+import type { IntegrationSettingDefinition } from '@/hooks/useProviderSchema';
+import type { ConnectionTestResult, IntegrationSettingsTestRequest } from '@/hooks/useTestConnection';
+import { POLLING_INTERVALS } from '@/lib/queryClient';
 import { queryErrorOrNull } from '@/lib/utils';
 
 export interface ApiSetting {
@@ -21,6 +25,10 @@ export interface ApiSetting {
     modifiedByUserId?: string | null;
 }
 
+interface ApiSecretSettingState {
+    isSet: boolean;
+}
+
 export interface ApiSettingsGroup {
     id: string;
 
@@ -37,9 +45,15 @@ export interface ApiSettingsGroup {
     modifiedByUserId?: string | null;
 
     settings: ApiSetting[];
+
+    secretSettings?: Record<string, ApiSecretSettingState> | null;
+
+    schema?: IntegrationSettingDefinition[] | null;
+
+    canTest?: boolean;
 }
 
-export interface SettingsGroupPatch {
+interface SettingsGroupPatch {
     settings: {
         add?: Record<string, string>;
         remove?: string[];
@@ -53,8 +67,26 @@ export const settingsQueryKeys = {
     extensionGroups: (extensionId: string) => ['settings', 'extension', extensionId] as const,
 };
 
-async function fetchSystemSettingsGroup(name: string): Promise<ApiSettingsGroup> {
-    return apiGet<ApiSettingsGroup>(`/settings/groups/system/${encodeURIComponent(name)}`);
+const SETTINGS_CHANGE_EVENTS = [
+    'settingsGroup.updated',
+    'extension.installed',
+    'extension.enabled',
+    'extension.disabled',
+    'extension.uninstalled',
+    'extension.upgraded',
+] as const;
+
+export function hasConfiguredExtensionSettings(group: ApiSettingsGroup): boolean {
+    const hasExtension = group.extensionId !== undefined && group.extensionId !== null;
+    const hasVisibleSettings = group.settings.some((setting) => setting.value.trim().length > 0);
+    const hasSecretSettings = Object.values(group.secretSettings ?? {}).some((state) => state.isSet);
+
+    return hasExtension && (hasVisibleSettings || hasSecretSettings);
+}
+
+async function fetchSystemSettingsGroup(name: string): Promise<ApiSettingsGroup | null> {
+    const groups = await apiGet<ApiSettingsGroup[]>('/settings/groups');
+    return groups.find((group) => group.extensionId == null && group.name === name) ?? null;
 }
 
 async function updateSystemSettingsGroup(name: string, patch: SettingsGroupPatch): Promise<void> {
@@ -82,19 +114,26 @@ export function settingsToRecord(settings: ApiSetting[]): Record<string, string>
 }
 
 export function useSystemSettingsGroup(name: string) {
+    useInvalidateQueriesOnEvents(SETTINGS_CHANGE_EVENTS, [settingsQueryKeys.systemGroup(name)], {
+        context: { 'settingsGroup.name': name },
+        exact: true,
+        owner: 'system-settings-group',
+    });
     const query = useQuery({
         queryKey: settingsQueryKeys.systemGroup(name),
         queryFn: () => fetchSystemSettingsGroup(name),
+        staleTime: POLLING_INTERVALS.slow / 2,
     });
 
     return {
         group: query.data ?? null,
         isLoading: query.isLoading,
         error: query.error ?? null,
+        dataUpdatedAt: query.dataUpdatedAt,
     };
 }
 
-export interface UpdateSettingsVars {
+interface UpdateSettingsVars {
     values: Record<string, string>;
     existingKeys: Set<string>;
 }
@@ -128,7 +167,7 @@ export function useUpdateSystemSettingsGroup(name: string) {
     const mutation = useMutation({
         mutationFn: (vars: UpdateSettingsVars) => updateSystemSettingsGroup(name, buildSettingsPatch(vars)),
         onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: settingsQueryKeys.systemGroup(name) });
+            void queryClient.invalidateQueries({ queryKey: settingsQueryKeys.systemGroup(name) });
         },
     });
 
@@ -140,10 +179,20 @@ export function useUpdateSystemSettingsGroup(name: string) {
 }
 
 export function useExtensionSettingsGroups(extensionId: string | null) {
+    useInvalidateQueriesOnEvents(
+        extensionId ? SETTINGS_CHANGE_EVENTS : [],
+        [settingsQueryKeys.extensionGroups(extensionId ?? '')],
+        {
+            context: { 'settingsGroup.extensionId': extensionId ?? '' },
+            exact: true,
+            owner: 'extension-settings-groups',
+        },
+    );
     const query = useQuery({
         queryKey: settingsQueryKeys.extensionGroups(extensionId ?? ''),
         queryFn: fetchAllSettingsGroups,
         enabled: !!extensionId,
+        staleTime: POLLING_INTERVALS.slow / 2,
         select: (groups) => groups.filter((g) => g.extensionId === extensionId),
     });
 
@@ -151,6 +200,7 @@ export function useExtensionSettingsGroups(extensionId: string | null) {
         groups: query.data ?? [],
         isLoading: query.isLoading,
         error: query.error ?? null,
+        dataUpdatedAt: query.dataUpdatedAt,
     };
 }
 
@@ -161,13 +211,37 @@ export function useUpdateExtensionSettingsGroup(extensionId: string, name: strin
         mutationFn: (vars: UpdateSettingsVars) =>
             updateExtensionSettingsGroup(extensionId, name, buildSettingsPatch(vars)),
         onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: settingsQueryKeys.extensionGroups(extensionId) });
+            void queryClient.invalidateQueries({ queryKey: settingsQueryKeys.extensionGroups(extensionId) });
         },
     });
 
     return {
         updateSettings: mutation.mutateAsync,
         isUpdating: mutation.isPending,
+        error: queryErrorOrNull(mutation),
+    };
+}
+
+async function testExtensionSettingsGroup(
+    extensionId: string,
+    name: string,
+    settings: Record<string, string>,
+): Promise<ConnectionTestResult> {
+    const request: IntegrationSettingsTestRequest = { settings };
+    return apiPost<ConnectionTestResult>(
+        `/settings/groups/${encodeURIComponent(extensionId)}/${encodeURIComponent(name)}/test`,
+        request,
+    );
+}
+
+export function useTestExtensionSettingsGroup(extensionId: string, name: string) {
+    const mutation = useMutation({
+        mutationFn: (settings: Record<string, string>) => testExtensionSettingsGroup(extensionId, name, settings),
+    });
+
+    return {
+        test: mutation.mutateAsync,
+        isTesting: mutation.isPending,
         error: queryErrorOrNull(mutation),
     };
 }

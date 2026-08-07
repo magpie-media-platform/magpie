@@ -5,7 +5,7 @@ using Magpie.Models.Data;
 namespace Magpie.Models.Arguments;
 
 /// <summary>
-/// Query criteria for <see cref="AuditRecord"/>s. 
+/// The query filters for audit records.
 /// </summary>
 public sealed record AuditRecordQuery
 {
@@ -45,7 +45,17 @@ public sealed record AuditRecordQuery
     public Range<DateTime>? Timestamp { get; init; }
 
     /// <summary>
+    /// The exclusive latest timestamp to match.
+    /// </summary>
+    public DateTime? TimestampBefore { get; init; }
+
+    /// <summary>
     /// <inheritdoc cref="AuditRecord.UserId" path="/summary"/>
     /// </summary>
     public Guid? UserId { get; init; }
+
+    /// <summary>
+    /// <inheritdoc cref="AuditRecord.CorrelationId" path="/summary"/>
+    /// </summary>
+    public Guid? CorrelationId { get; init; }
 }

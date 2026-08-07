@@ -5,7 +5,6 @@
         z-index: var(--z-modal);
         background-color: var(--overlay-backdrop);
         backdrop-filter: blur(var(--blur-overlay));
-
         animation-duration: var(--duration-normal);
         animation-timing-function: var(--easing-default);
         animation-fill-mode: forwards;
@@ -35,7 +34,6 @@
         border-radius: var(--radius-lg);
         box-shadow: var(--shadow-lg);
         overflow: hidden;
-
         animation-duration: var(--duration-normal);
         animation-timing-function: var(--easing-default);
         animation-fill-mode: forwards;
@@ -54,7 +52,7 @@
     }
 
     @media (max-width: 480px) {
-        .dialog-content {
+        .dialog-content:not([data-size='alert']) {
             left: 0;
             top: 0;
             transform: none;
@@ -73,8 +71,26 @@
             }
         }
 
-        .dialog-footer {
+        .dialog-content:not([data-size='alert']) .dialog-footer {
             margin-top: auto;
+        }
+
+        .dialog-content[data-size='alert'] {
+            inset: auto 0 0;
+            transform: none;
+            width: 100%;
+            max-width: none;
+            max-height: calc(100vh - var(--space-2xl));
+            border-bottom-left-radius: 0;
+            border-bottom-right-radius: 0;
+
+            &[data-state='open'] {
+                animation-name: dialog-slide-up-in;
+            }
+
+            &[data-state='closed'] {
+                animation-name: dialog-slide-up-out;
+            }
         }
     }
 
@@ -84,6 +100,11 @@
         gap: var(--space-xs);
         padding: var(--space-lg);
         padding-right: calc(var(--space-lg) + var(--touch-target-min) + var(--space-sm));
+    }
+
+    .dialog-body {
+        padding: var(--space-md) var(--space-lg);
+        overflow-y: auto;
     }
 
     .dialog-footer {

@@ -1,40 +1,67 @@
-import { useQuery, useMutation, useQueryClient, type Query } from '@tanstack/react-query';
+import { useQuery, useQueries, useMutation, useQueryClient } from '@tanstack/react-query';
 
 import { apiGet, apiPost, apiDelete, buildUrl } from '@/lib/api';
-import { POLLING_INTERVALS } from '@/lib/queryClient';
+import { useInvalidateQueriesOnEvents } from '@/hooks/useInvalidateQueriesOnEvents';
+import type { EventStreamPayload } from '@/hooks/useEventStream';
+import { magpieEventNames } from '@/lib/magpieEventNames';
 import { queryErrorOrNull } from '@/lib/utils';
 import type { BadgeVariant } from '@/types/badge';
+import type { DownloadStatusValue } from '@/types/content';
 import type { PagedList } from '@/types/paging';
 
-export type DownloadStatusValue = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;
+export type { DownloadStatusValue } from '@/types/content';
 
 export const downloadStatusLabels: Record<DownloadStatusValue, string> = {
-    0: 'Grabbed',
-    1: 'Queued',
-    2: 'Downloading',
-    3: 'Paused',
-    4: 'Stalled',
-    5: 'Downloaded',
-    6: 'Imported',
-    7: 'Failed',
+    Grabbed: 'Grabbed',
+    Queued: 'Queued',
+    Downloading: 'Downloading',
+    Paused: 'Paused',
+    Stalled: 'Stalled',
+    Downloaded: 'Downloaded',
+    Importing: 'Importing',
+    Imported: 'Imported',
+    Failed: 'Failed',
+    Cancelled: 'Cancelled',
 };
 
-// Mirrors Magpie.Models.Enums.DownloadStatus terminal states (Imported, Failed).
-export const terminalDownloadStatuses: ReadonlySet<DownloadStatusValue> = new Set([6, 7]);
+export const terminalDownloadStatuses: ReadonlySet<DownloadStatusValue> = new Set(['Imported', 'Failed', 'Cancelled']);
 
 export function isTerminalDownloadStatus(status: DownloadStatusValue | undefined): boolean {
     return status !== undefined && terminalDownloadStatuses.has(status);
 }
 
 export const downloadStatusVariants: Record<DownloadStatusValue, BadgeVariant> = {
-    0: 'grabbed',
-    1: 'queued',
-    2: 'downloading',
-    3: 'paused',
-    4: 'stalled',
-    5: 'downloaded',
-    6: 'imported',
-    7: 'failed',
+    Grabbed: 'grabbed',
+    Queued: 'queued',
+    Downloading: 'downloading',
+    Paused: 'paused',
+    Stalled: 'stalled',
+    Downloaded: 'downloaded',
+    Importing: 'importing',
+    Imported: 'imported',
+    Failed: 'failed',
+    Cancelled: 'cancelled',
+};
+
+export type DownloadFailureReasonValue =
+    | 'BlockedExecutable'
+    | 'BlockedFileType'
+    | 'NoUsableContent'
+    | 'DownloadStuck'
+    | 'DownloadErrored'
+    | 'ImportFailed'
+    | 'NoCompatibleClient'
+    | 'ClientRejected';
+
+export const downloadFailureReasonLabels: Record<DownloadFailureReasonValue, string> = {
+    BlockedExecutable: 'Blocked executable',
+    BlockedFileType: 'Blocked file type',
+    NoUsableContent: 'No usable content',
+    DownloadStuck: 'Stuck download',
+    DownloadErrored: 'Download errored',
+    ImportFailed: 'Import failed',
+    NoCompatibleClient: 'No compatible client',
+    ClientRejected: 'Client rejected',
 };
 
 export interface ApiDownload {
@@ -44,9 +71,23 @@ export interface ApiDownload {
 
     downloadClientId: string;
 
+    downloadClientName?: string | null;
+
     externalId: string;
 
     title: string;
+
+    contentHierarchyName?: string | null;
+
+    contentMetadataTitle?: string | null;
+
+    contentHierarchyItemId?: string | null;
+
+    contentHierarchyParentId?: string | null;
+
+    posterUrl?: string | null;
+
+    releaseInfoUrl?: string | null;
 
     status: DownloadStatusValue;
 
@@ -56,6 +97,14 @@ export interface ApiDownload {
 
     dateCompleted?: string | null;
 
+    progress?: number | null;
+
+    lastProgressAt?: string | null;
+
+    failedAt?: string | null;
+
+    failureReason?: DownloadFailureReasonValue | null;
+
     createdAt: string;
 
     createdByUserId?: string | null;
@@ -63,6 +112,16 @@ export interface ApiDownload {
     modifiedAt?: string | null;
 
     modifiedByUserId?: string | null;
+
+    canPause?: boolean | null;
+
+    canResume?: boolean | null;
+
+    canForceStart?: boolean | null;
+
+    clientRemovedAt?: string | null;
+
+    heldByPolicy?: boolean | null;
 }
 
 export type PagedDownloads = PagedList<ApiDownload>;
@@ -74,6 +133,8 @@ export interface DownloadQueryParams {
 
     status?: DownloadStatusValue;
 
+    statuses?: readonly DownloadStatusValue[];
+
     pageNumber?: number;
 
     pageSize?: number;
@@ -83,11 +144,91 @@ export interface DownloadQueryParams {
     sortDirection?: 0 | 1 | 2;
 }
 
+export interface DownloadBulkFilter {
+    releaseId?: string;
+
+    downloadClientId?: string;
+
+    status?: DownloadStatusValue;
+
+    statuses?: readonly DownloadStatusValue[];
+}
+
+interface DownloadBulkArgs {
+    filter: DownloadBulkFilter;
+
+    excludeIds: string[];
+}
+
+export interface DownloadBulkActionResult {
+    affected: number;
+}
+
+async function bulkForgetDownloads({ filter, excludeIds }: DownloadBulkArgs): Promise<void> {
+    return apiDelete(buildUrl('/downloads', { ...filter, excludeIds, removeFromClient: false }));
+}
+
+async function bulkRemoveDownloads({ filter, excludeIds }: DownloadBulkArgs): Promise<void> {
+    return apiDelete(buildUrl('/downloads', { ...filter, excludeIds, removeFromClient: true, deleteFiles: true }));
+}
+
+async function bulkPauseDownloads({ filter, excludeIds }: DownloadBulkArgs): Promise<DownloadBulkActionResult> {
+    return apiPost<DownloadBulkActionResult>(buildUrl('/downloads/bulk/pause', { ...filter, excludeIds }));
+}
+
+async function bulkResumeDownloads({ filter, excludeIds }: DownloadBulkArgs): Promise<DownloadBulkActionResult> {
+    return apiPost<DownloadBulkActionResult>(buildUrl('/downloads/bulk/resume', { ...filter, excludeIds }));
+}
+
+async function bulkStopDownloads({ filter, excludeIds }: DownloadBulkArgs): Promise<DownloadBulkActionResult> {
+    return apiPost<DownloadBulkActionResult>(buildUrl('/downloads/bulk/stop', { ...filter, excludeIds }));
+}
+
 export const downloadQueryKeys = {
     all: ['downloads'] as const,
     list: (params?: DownloadQueryParams) => ['downloads', 'list', params ?? {}] as const,
+    count: (status: DownloadStatusValue, downloadClientId?: string) =>
+        ['downloads', 'count', status, downloadClientId ?? null] as const,
     detail: (id: string) => ['downloads', 'detail', id] as const,
 };
+
+export const downloadEvents = [
+    'download.created',
+    'download.updated',
+    'download.deleted',
+    magpieEventNames.downloadCompleted,
+    magpieEventNames.downloadFailed,
+    magpieEventNames.downloadImported,
+    'download.stalled',
+] as const;
+
+const CONTENT_LINEAGE_EVENTS = [
+    magpieEventNames.contentHierarchyItemUpdated,
+    magpieEventNames.contentHierarchyItemDeleted,
+    magpieEventNames.metadataRefreshed,
+] as const;
+
+function useDownloadEventInvalidation(
+    queryKeys: readonly (readonly unknown[])[],
+    enabled = true,
+    entityIds?: readonly string[],
+    predicate?: (event: EventStreamPayload) => boolean,
+    unprovableMembership = false,
+    prePredicate?: (event: EventStreamPayload) => boolean,
+    failOpenEventNames?: readonly string[],
+) {
+    useInvalidateQueriesOnEvents(enabled ? downloadEvents : [], queryKeys, {
+        debounceMs: 200,
+        entityIds,
+        exact: true,
+        failOpenEventNames,
+        maxWaitMs: 800,
+        owner: 'downloads-query',
+        prePredicate,
+        predicate,
+        unprovableMembership,
+    });
+}
 
 async function fetchDownloads(params?: DownloadQueryParams): Promise<PagedDownloads> {
     const url = buildUrl('/downloads', params);
@@ -102,6 +243,10 @@ async function removeDownload(id: string): Promise<void> {
     return apiDelete(`/downloads/${id}`);
 }
 
+async function deleteDownloadWithFiles(id: string): Promise<void> {
+    return apiDelete(`/downloads/${id}/files`);
+}
+
 async function pauseDownload(id: string): Promise<void> {
     return apiPost(`/downloads/${id}/pause`);
 }
@@ -110,36 +255,139 @@ async function resumeDownload(id: string): Promise<void> {
     return apiPost(`/downloads/${id}/resume`);
 }
 
+async function forceStartDownload(id: string): Promise<void> {
+    return apiPost(`/downloads/${id}/force-start`);
+}
+
+async function retryDownload(id: string): Promise<void> {
+    return apiPost(`/downloads/${id}/retry`);
+}
+
+async function cancelDownload(id: string): Promise<void> {
+    return apiPost(`/downloads/${id}/cancel`);
+}
+
 export function useDownloads(params?: DownloadQueryParams) {
     const queryClient = useQueryClient();
+    const hasFilters = !!(params?.downloadClientId || params?.releaseId || params?.status);
+    useDownloadEventInvalidation(
+        [downloadQueryKeys.list(params)],
+        true,
+        undefined,
+        (event) => {
+            const current = queryClient.getQueryData<PagedDownloads>(downloadQueryKeys.list(params));
+            const isCurrent = !!current?.items.some((download) => download.id === event.context['download.id']);
+            const changedFields = event.context['download.changedFields']?.split(',') ?? [];
+            const normalizedSortBy = params?.sortBy?.replace(/[^a-z]/gi, '').toLowerCase();
+            const affectsSort = changedFields.some(
+                (field) => field.replace(/[^a-z]/gi, '').toLowerCase() === normalizedSortBy,
+            );
+            if (event.name === 'download.updated' && !changedFields.some((field) => field.toLowerCase() === 'status')) {
+                return isCurrent || affectsSort;
+            }
+
+            if (event.name === 'download.deleted') {
+                return true;
+            }
+            if (!hasFilters || isCurrent) {
+                return true;
+            }
+            return (
+                (!params?.downloadClientId || event.context['downloadClient.id'] === params.downloadClientId) &&
+                (!params?.releaseId || event.context['download.releaseId'] === params.releaseId) &&
+                (!params?.status || event.context['download.status'] === params.status)
+            );
+        },
+        hasFilters,
+        (event) => {
+            if (event.name !== 'download.updated') {
+                return true;
+            }
+            const current = queryClient.getQueryData<PagedDownloads>(downloadQueryKeys.list(params));
+            const isCurrent = !!current?.items.some((download) => download.id === event.context['download.id']);
+            const changedFields = event.context['download.changedFields']?.split(',') ?? [];
+            const normalizedSortBy = params?.sortBy?.replace(/[^a-z]/gi, '').toLowerCase();
+            const affectsSort = changedFields.some(
+                (field) => field.replace(/[^a-z]/gi, '').toLowerCase() === normalizedSortBy,
+            );
+            return isCurrent || affectsSort || changedFields.some((field) => field.trim().toLowerCase() === 'status');
+        },
+        hasFilters ? ['download.created'] : undefined,
+    );
+    useInvalidateQueriesOnEvents(CONTENT_LINEAGE_EVENTS, [downloadQueryKeys.list(params)], {
+        debounceMs: 200,
+        exact: true,
+        maxWaitMs: 800,
+        owner: 'downloads:content-lineage',
+        predicate: (event) => {
+            const current = queryClient.getQueryData<PagedDownloads>(downloadQueryKeys.list(params));
+            return !!current?.items.some(
+                (download) => download.contentHierarchyItemId === event.context['content.hierarchyItemId'],
+            );
+        },
+    });
 
     const downloadsQuery = useQuery({
         queryKey: downloadQueryKeys.list(params),
         queryFn: () => fetchDownloads(params),
-        refetchInterval: POLLING_INTERVALS.fast,
-        staleTime: POLLING_INTERVALS.fast / 2,
     });
 
     const removeMutation = useMutation({
         mutationFn: removeDownload,
         onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: downloadQueryKeys.all });
+            void queryClient.invalidateQueries({ queryKey: downloadQueryKeys.all });
+        },
+    });
+
+    const deleteWithFilesMutation = useMutation({
+        mutationFn: deleteDownloadWithFiles,
+        onSuccess: () => {
+            void queryClient.invalidateQueries({ queryKey: downloadQueryKeys.all });
         },
     });
 
     const pauseMutation = useMutation({
         mutationFn: pauseDownload,
         onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: downloadQueryKeys.all });
+            void queryClient.invalidateQueries({ queryKey: downloadQueryKeys.all });
         },
     });
 
     const resumeMutation = useMutation({
         mutationFn: resumeDownload,
         onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: downloadQueryKeys.all });
+            void queryClient.invalidateQueries({ queryKey: downloadQueryKeys.all });
         },
     });
+
+    const forceStartMutation = useMutation({
+        mutationFn: forceStartDownload,
+        onSuccess: () => {
+            void queryClient.invalidateQueries({ queryKey: downloadQueryKeys.all });
+        },
+    });
+
+    const retryMutation = useMutation({
+        mutationFn: retryDownload,
+        onSuccess: () => {
+            void queryClient.invalidateQueries({ queryKey: downloadQueryKeys.all });
+        },
+    });
+
+    const cancelMutation = useMutation({
+        mutationFn: cancelDownload,
+        onSuccess: () => {
+            void queryClient.invalidateQueries({ queryKey: downloadQueryKeys.all });
+        },
+    });
+
+    const invalidateAll = () => queryClient.invalidateQueries({ queryKey: downloadQueryKeys.all });
+
+    const bulkForgetMutation = useMutation({ mutationFn: bulkForgetDownloads, onSuccess: invalidateAll });
+    const bulkRemoveMutation = useMutation({ mutationFn: bulkRemoveDownloads, onSuccess: invalidateAll });
+    const bulkPauseMutation = useMutation({ mutationFn: bulkPauseDownloads, onSuccess: invalidateAll });
+    const bulkResumeMutation = useMutation({ mutationFn: bulkResumeDownloads, onSuccess: invalidateAll });
+    const bulkStopMutation = useMutation({ mutationFn: bulkStopDownloads, onSuccess: invalidateAll });
 
     const downloads: ApiDownload[] = downloadsQuery.data?.items ?? [];
     const pagination = downloadsQuery.data
@@ -159,29 +407,166 @@ export function useDownloads(params?: DownloadQueryParams) {
         removeDownload: removeMutation.mutateAsync,
         isRemoving: removeMutation.isPending,
 
+        deleteDownloadWithFiles: deleteWithFilesMutation.mutateAsync,
+        isDeletingWithFiles: deleteWithFilesMutation.isPending,
+
         pauseDownload: pauseMutation.mutateAsync,
         isPausing: pauseMutation.isPending,
 
         resumeDownload: resumeMutation.mutateAsync,
         isResuming: resumeMutation.isPending,
 
+        forceStartDownload: forceStartMutation.mutateAsync,
+        isForceStarting: forceStartMutation.isPending,
+
+        retryDownload: retryMutation.mutateAsync,
+        isRetrying: retryMutation.isPending,
+
+        cancelDownload: cancelMutation.mutateAsync,
+        isCancelling: cancelMutation.isPending,
+
+        bulkForgetDownloads: bulkForgetMutation.mutateAsync,
+        bulkRemoveDownloads: bulkRemoveMutation.mutateAsync,
+        bulkPauseDownloads: bulkPauseMutation.mutateAsync,
+        bulkResumeDownloads: bulkResumeMutation.mutateAsync,
+        bulkStopDownloads: bulkStopMutation.mutateAsync,
+
         refetch: downloadsQuery.refetch,
     };
 }
 
+export function useDownloadStatusCounts(statuses: readonly DownloadStatusValue[], downloadClientId?: string) {
+    useInvalidateQueriesOnEvents(
+        statuses.length > 0 ? downloadEvents : [],
+        statuses.map((status) => downloadQueryKeys.count(status, downloadClientId || undefined)),
+        {
+            debounceMs: 200,
+            exact: true,
+            failOpenEventNames: downloadClientId ? ['download.created'] : undefined,
+            maxWaitMs: 800,
+            owner: 'downloads:status-counts',
+            prePredicate: (event) =>
+                event.name !== 'download.updated' ||
+                event.context['download.changedFields']
+                    ?.split(',')
+                    .some((field) => field.trim().toLowerCase() === 'status') === true,
+            predicate: (event) =>
+                (event.name !== 'download.updated' ||
+                    event.context['download.changedFields']
+                        ?.split(',')
+                        .some((field) => field.trim().toLowerCase() === 'status') === true) &&
+                (!downloadClientId ||
+                    event.name === 'download.deleted' ||
+                    event.context['downloadClient.id'] === downloadClientId),
+            unprovableMembership: !!downloadClientId,
+        },
+    );
+    const queries = useQueries({
+        queries: statuses.map((status) => ({
+            queryKey: downloadQueryKeys.count(status, downloadClientId || undefined),
+            queryFn: () =>
+                fetchDownloads({
+                    status,
+                    downloadClientId: downloadClientId || undefined,
+                    pageNumber: 1,
+                    pageSize: 1,
+                }),
+        })),
+    });
+
+    const counts = {} as Record<DownloadStatusValue, number>;
+    statuses.forEach((status, i) => {
+        counts[status] = queries[i]?.data?.totalItems ?? 0;
+    });
+
+    const total = Object.values(counts).reduce((sum, n) => sum + n, 0);
+    const error = queries.find((query) => query.error)?.error ?? null;
+
+    return {
+        counts,
+        total,
+        isLoading: queries.some((query) => query.isLoading),
+        error,
+        refetch: () => Promise.all(queries.map((query) => query.refetch())),
+    };
+}
+
+export function useDownloadStatusTotal(
+    statuses: readonly DownloadStatusValue[],
+    downloadClientId?: string,
+    enabled = true,
+) {
+    const params: DownloadQueryParams = {
+        statuses,
+        downloadClientId: downloadClientId || undefined,
+        pageNumber: 1,
+        pageSize: 1,
+    };
+    useDownloadEventInvalidation(
+        [downloadQueryKeys.list(params)],
+        enabled,
+        undefined,
+        (event) =>
+            event.name !== 'download.updated' ||
+            event.context['download.changedFields']
+                ?.split(',')
+                .some((field) => field.trim().toLowerCase() === 'status') === true,
+    );
+    const query = useQuery({
+        queryKey: downloadQueryKeys.list(params),
+        queryFn: () => fetchDownloads(params),
+        enabled,
+    });
+
+    return {
+        total: query.data?.totalItems ?? 0,
+        isLoading: query.isLoading,
+        error: queryErrorOrNull(query),
+    };
+}
+
+export function useLatestDownloadForRelease(releaseId: string | null | undefined) {
+    const params: DownloadQueryParams = {
+        releaseId: releaseId ?? undefined,
+        pageNumber: 1,
+        pageSize: 1,
+        sortBy: 'CreatedAt',
+        sortDirection: 2,
+    };
+
+    const query = useQuery({
+        queryKey: downloadQueryKeys.list(params),
+        queryFn: () => fetchDownloads(params),
+        enabled: !!releaseId,
+    });
+    const relatedIds = [releaseId, query.data?.items?.[0]?.id].filter((id): id is string => !!id);
+    useDownloadEventInvalidation([downloadQueryKeys.list(params)], !!releaseId, relatedIds);
+
+    return {
+        download: query.data?.items?.[0] ?? null,
+        isLoading: query.isLoading,
+        error: queryErrorOrNull(query),
+    };
+}
+
 export function useDownload(id: string, enabled = true) {
+    useDownloadEventInvalidation([downloadQueryKeys.detail(id)], enabled && Boolean(id), id ? [id] : []);
     const downloadQuery = useQuery({
         queryKey: downloadQueryKeys.detail(id),
         queryFn: () => fetchDownloadById(id),
         enabled: enabled && Boolean(id),
-        refetchInterval: (query: Query<ApiDownload, Error>) => {
-            if (isTerminalDownloadStatus(query.state.data?.status)) {
-                return false;
-            }
-            return POLLING_INTERVALS.fast;
-        },
-        staleTime: POLLING_INTERVALS.fast / 2,
     });
+    useInvalidateQueriesOnEvents(
+        enabled && downloadQuery.data?.contentHierarchyItemId ? CONTENT_LINEAGE_EVENTS : [],
+        [downloadQueryKeys.detail(id)],
+        {
+            debounceMs: 200,
+            entityIds: downloadQuery.data?.contentHierarchyItemId ? [downloadQuery.data.contentHierarchyItemId] : [],
+            exact: true,
+            maxWaitMs: 800,
+            owner: 'download-detail:content-lineage',
+        },
+    );
 
     return {
         download: downloadQuery.data ?? null,

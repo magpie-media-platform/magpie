@@ -97,7 +97,7 @@ public class QueryNodesTests
     [Test]
     public void ScalarExprNode_StoresProperties_WhenConstructed()
     {
-        // Arrange & Act
+        // Arrange
         var node = new ScalarExprNode("title", ScalarOperator.Contains, new StringValueNode("Star"))
         {
             Position = 0,
@@ -116,7 +116,7 @@ public class QueryNodesTests
     [Test]
     public void ScalarExprNode_AllowsNullValue_ForNullOperators()
     {
-        // Arrange & Act
+        // Arrange
         var isNullNode = new ScalarExprNode("name", ScalarOperator.IsNull, null)
         {
             Position = 0,
@@ -133,8 +133,7 @@ public class QueryNodesTests
         {
             Assert.That(isNullNode, Has.Property(nameof(ScalarExprNode.Operator)).EqualTo(ScalarOperator.IsNull));
             Assert.That(isNullNode, Has.Property(nameof(ScalarExprNode.Value)).Null);
-            Assert.That(isNotNullNode, Has.Property(nameof(ScalarExprNode.Operator))
-                .EqualTo(ScalarOperator.IsNotNull));
+            Assert.That(isNotNullNode, Has.Property(nameof(ScalarExprNode.Operator)).EqualTo(ScalarOperator.IsNotNull));
             Assert.That(isNotNullNode, Has.Property(nameof(ScalarExprNode.Value)).Null);
         }
     }
@@ -289,7 +288,7 @@ public class QueryNodesTests
     [Test]
     public void StringValueNode_StoresValue_WhenConstructed()
     {
-        // Arrange & Act
+        // Arrange
         var node = new StringValueNode("Breaking Bad")
         {
             Position = 7,
@@ -308,7 +307,7 @@ public class QueryNodesTests
     [Test]
     public void NumberValueNode_StoresValue_WhenConstructed()
     {
-        // Arrange & Act
+        // Arrange
         var node = new NumberValueNode("1000000000")
         {
             Position = 12,
@@ -327,7 +326,7 @@ public class QueryNodesTests
     [Test]
     public void IdentifierValueNode_StoresValue_WhenConstructed()
     {
-        // Arrange & Act
+        // Arrange
         var node = new IdentifierValueNode("Monitored")
         {
             Position = 14,
@@ -349,8 +348,8 @@ public class QueryNodesTests
         // Arrange
         var values = new List<ValueNode>
         {
-            new StringValueNode("movie") { Position = 16, Length = 7 },
-            new StringValueNode("show") { Position = 25, Length = 6 },
+            new StringValueNode("type-a") { Position = 16, Length = 7 },
+            new StringValueNode("type-c") { Position = 25, Length = 6 },
         };
 
         // Act

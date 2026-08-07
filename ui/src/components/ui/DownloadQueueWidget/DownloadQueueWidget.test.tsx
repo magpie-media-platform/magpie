@@ -16,6 +16,7 @@ const renderWithRouter = (ui: React.ReactElement) => {
 const defaultCounts: DownloadStateCounts = {
     downloading: 2,
     queued: 5,
+    paused: 2,
     stalled: 1,
 };
 
@@ -45,7 +46,7 @@ describe('DownloadQueueWidget', () => {
     it('displays total count in header', () => {
         renderWithRouter(<DownloadQueueWidget counts={defaultCounts} />);
 
-        expect(screen.getByText('8')).toBeInTheDocument();
+        expect(screen.getByText('10')).toBeInTheDocument();
     });
 
     it('displays count for each state', () => {
@@ -53,6 +54,7 @@ describe('DownloadQueueWidget', () => {
 
         expect(screen.getByText('Downloading')).toBeInTheDocument();
         expect(screen.getByText('Queued')).toBeInTheDocument();
+        expect(screen.getByText('Paused')).toBeInTheDocument();
         expect(screen.getByText('Stalled')).toBeInTheDocument();
 
         const downloadingRow = screen.getByText('Downloading').closest('.download-queue-widget__row');
@@ -60,6 +62,9 @@ describe('DownloadQueueWidget', () => {
 
         const queuedRow = screen.getByText('Queued').closest('.download-queue-widget__row');
         expect(queuedRow).toHaveTextContent('5');
+
+        const pausedRow = screen.getByText('Paused').closest('.download-queue-widget__row');
+        expect(pausedRow).toHaveTextContent('2');
 
         const stalledRow = screen.getByText('Stalled').closest('.download-queue-widget__row');
         expect(stalledRow).toHaveTextContent('1');
@@ -92,7 +97,7 @@ describe('DownloadQueueWidget loading state', () => {
         renderWithRouter(<DownloadQueueWidget counts={defaultCounts} loading />);
 
         const skeletonRows = document.querySelectorAll('.download-queue-widget__row--skeleton');
-        expect(skeletonRows.length).toBe(3);
+        expect(skeletonRows.length).toBe(4);
     });
 
     it('shows skeleton items when loading', () => {
@@ -222,7 +227,10 @@ describe('DownloadQueueWidget navigation', () => {
         const getStateUrl = (state: DownloadState) => `/downloads?state=${state}`;
 
         renderWithRouter(
-            <DownloadQueueWidget counts={{ downloading: 1, queued: 0, stalled: 0 }} getStateUrl={getStateUrl} />,
+            <DownloadQueueWidget
+                counts={{ downloading: 1, queued: 0, paused: 0, stalled: 0 }}
+                getStateUrl={getStateUrl}
+            />,
         );
 
         const queuedRow = screen.getByText('Queued').closest('.download-queue-widget__row');
@@ -292,6 +300,7 @@ describe('DownloadQueueWidget navigation', () => {
 
         expect(screen.getByText('Downloading').closest('a')).toHaveAttribute('href', '/downloads?state=downloading');
         expect(screen.getByText('Queued').closest('a')).toHaveAttribute('href', '/downloads?state=queued');
+        expect(screen.getByText('Paused').closest('a')).toHaveAttribute('href', '/downloads?state=paused');
         expect(screen.getByText('Stalled').closest('a')).toHaveAttribute('href', '/downloads?state=stalled');
     });
 });
@@ -305,7 +314,7 @@ describe('DownloadQueueWidget view all link', () => {
     it('shows view all link even when no downloads exist', () => {
         renderWithRouter(
             <DownloadQueueWidget
-                counts={{ downloading: 0, queued: 0, stalled: 0 }}
+                counts={{ downloading: 0, queued: 0, paused: 0, stalled: 0 }}
                 activeDownloads={[]}
                 viewAllUrl="/downloads"
             />,
@@ -336,6 +345,10 @@ describe('DownloadQueueWidget data attributes', () => {
             'data-status',
             'queued',
         );
+        expect(screen.getByText('Paused').closest('.download-queue-widget__row')).toHaveAttribute(
+            'data-status',
+            'paused',
+        );
         expect(screen.getByText('Stalled').closest('.download-queue-widget__row')).toHaveAttribute(
             'data-status',
             'stalled',
@@ -362,7 +375,7 @@ describe('DownloadQueueWidget accessibility', () => {
         expect(downloadingRow).toHaveAttribute('aria-label', 'View 2 downloading items');
     });
 
-    it('clickable download items have aria-label', () => {
+    it('clickable download items keep their visible title in the accessible name', () => {
         const getDownloadUrl = (download: ActiveDownloadItem) => `/downloads/${download.id}`;
         renderWithRouter(
             <DownloadQueueWidget
@@ -373,7 +386,8 @@ describe('DownloadQueueWidget accessibility', () => {
         );
 
         const item = screen.getByText('Breaking Bad S01E01').closest('.download-queue-widget__item');
-        expect(item).toHaveAttribute('aria-label', 'View Breaking Bad S01E01');
+        expect(item).not.toHaveAttribute('aria-label');
+        expect(item).toHaveAccessibleName('Breaking Bad S01E01 5m 1.2 GB 45 45%');
     });
 
     it('icon is hidden from screen readers', () => {
@@ -424,5 +438,16 @@ describe('DownloadQueueWidget progress clamping', () => {
         const progressBar = screen.getByRole('progressbar');
         expect(progressBar).toHaveAttribute('aria-valuenow', '100');
         expect(screen.getByText('100%')).toBeInTheDocument();
+    });
+
+    it('rounds a fractional progress percent for display', () => {
+        const downloads: ActiveDownloadItem[] = [
+            { id: '1', title: 'Test', progress: 29.9197357204959, state: 'downloading' },
+        ];
+
+        renderWithRouter(<DownloadQueueWidget counts={defaultCounts} activeDownloads={downloads} />);
+
+        expect(screen.getByText('30%')).toBeInTheDocument();
+        expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '30');
     });
 });

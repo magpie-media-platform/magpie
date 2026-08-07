@@ -11,65 +11,87 @@ namespace Magpie.Models.Data;
 public record DownloadClient
 {
     /// <summary>
-    /// The download client id.
+    /// The unique id of the download client.
     /// </summary>
     public Guid Id { get; set; }
 
     /// <summary>
-    /// The extension that defines the download client provider.
+    /// The id of the extension that supplies the download client.
     /// </summary>
     public Guid? ExtensionId { get; set; }
 
     /// <summary>
-    /// The download client provider type.
+    /// The name of the provider type.
     /// </summary>
     public required string ProviderType { get; set; }
 
     /// <summary>
-    /// The display name.
+    /// The display name of the download client.
     /// </summary>
     public required string Name { get; set; }
 
     /// <summary>
-    /// Whether the client is enabled.
+    /// Whether the download client is enabled.
     /// </summary>
     public bool Enabled { get; set; }
 
     /// <summary>
-    /// The current health status.
+    /// The priority of the download client.
     /// </summary>
-    public DownloadClientStatus Status { get; set; }
+    public int Priority { get; set; } = 100;
 
     /// <summary>
-    /// The date of the last health check.
+    /// The status of the download client.
+    /// </summary>
+    public IntegrationHealthStatus Status { get; set; }
+
+    /// <summary>
+    /// The UTC time of the last check.
     /// </summary>
     public DateTime? LastChecked { get; set; }
 
     /// <summary>
-    /// Provider-specific settings.
+    /// The message of the last error.
     /// </summary>
-    /// <remarks>
-    /// The settings are stored as serialized JSON.
-    /// </remarks>
+    public string? LastError { get; set; }
+
+    /// <summary>
+    /// The number of consecutive failures.
+    /// </summary>
+    public int ConsecutiveFailures { get; set; }
+
+    /// <summary>
+    /// Whether the cleanup deletes the files from disk.
+    /// </summary>
+    public bool CleanupDeleteFiles { get; set; } = true;
+
+    /// <summary>
+    /// Whether failed downloads stay on the download client.
+    /// </summary>
+    public bool KeepFailedOnClient { get; set; }
+
+    /// <summary>
+    /// The settings of the download client, keyed by name.
+    /// </summary>
     public Dictionary<string, string> Settings { get; set; } = [];
 
     /// <summary>
-    /// When the record was created.
+    /// The UTC time the record was created.
     /// </summary>
     public DateTime CreatedAt { get; set; }
 
     /// <summary>
-    /// The id of the user that created the record.
+    /// The id of the user who created the record.
     /// </summary>
     public Guid? CreatedByUserId { get; set; }
 
     /// <summary>
-    /// When the record was last modified.
+    /// The UTC time the record was last modified.
     /// </summary>
     public DateTime? ModifiedAt { get; set; }
 
     /// <summary>
-    /// The id of the user that last modified the record.
+    /// The id of the user who last modified the record.
     /// </summary>
     public Guid? ModifiedByUserId { get; set; }
 }

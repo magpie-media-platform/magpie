@@ -1,0 +1,386 @@
+import { useState, useCallback, useMemo } from 'react';
+import {
+    ArrowRightIcon,
+    ArrowsLeftRightIcon,
+    CircleNotchIcon,
+    FlaskIcon,
+    TrashIcon,
+    PencilSimpleIcon,
+    PlusIcon,
+    WarningCircleIcon,
+} from '@phosphor-icons/react';
+
+import { Badge } from '@/components/ui/Badge';
+import { Button } from '@/components/ui/Button';
+import { QuickActionsButton, type QuickAction } from '@/components/ui/QuickActionsButton';
+import { DeleteConfirmDialog } from '@/components/ui/DeleteConfirmDialog/DeleteConfirmDialog';
+import { PageHeader } from '@/components/ui/PageHeader';
+import { PullToRefresh } from '@/components/ui/PullToRefresh';
+import { useToast } from '@/components/ui/Toast';
+import { useDocumentTitle } from '@/hooks/useDocumentTitle';
+import { useRemotePathMappings, type ApiRemotePathMapping } from '@/hooks/useRemotePathMappings';
+import { useToggle } from '@/hooks/useToggle';
+
+import { EmptyState } from '@/components/ui/EmptyState';
+import { Tooltip } from '@/components/ui/Tooltip';
+
+import { RemotePathMappingForm, type RemotePathMappingFormValues } from './RemotePathMappingForm';
+
+import './RemotePathMappingsPage.css';
+import '@/styles/card-actions.css';
+import '@/styles/list-toolbar.css';
+
+function toRemotePathMappingFormValues(mapping: ApiRemotePathMapping): RemotePathMappingFormValues {
+    return {
+        id: mapping.id,
+        host: mapping.host,
+        remotePath: mapping.remotePath,
+        localPath: mapping.localPath,
+    };
+}
+
+export function RemotePathMappingsPage() {
+    useDocumentTitle('Remote Path Mappings');
+    const [formOpen, , openForm, closeForm] = useToggle();
+    const [editingMapping, setEditingMapping] = useState<RemotePathMappingFormValues | null>(null);
+    const [deletingMapping, setDeletingMapping] = useState<ApiRemotePathMapping | null>(null);
+    const [isDeleting, setIsDeleting] = useState(false);
+    const [testingMappingId, setTestingMappingId] = useState<string | null>(null);
+    const { toast } = useToast();
+
+    const {
+        mappings,
+        isLoading,
+        error,
+        createMapping,
+        isCreating,
+        updateMapping,
+        isUpdating,
+        deleteMapping,
+        testLocalPath,
+        isTestingLocalPath,
+        refetch,
+    } = useRemotePathMappings();
+    const currentEditingMapping = useMemo(() => {
+        if (!editingMapping?.id) {
+            return editingMapping;
+        }
+        const mapping = mappings.find((candidate) => candidate.id === editingMapping.id);
+        return mapping ? toRemotePathMappingFormValues(mapping) : editingMapping;
+    }, [editingMapping, mappings]);
+
+    const isSubmitting = isCreating || isUpdating;
+
+    const handleAddMapping = useCallback(() => {
+        setEditingMapping(null);
+        openForm();
+    }, [openForm]);
+
+    const addMappingActions: QuickAction[] = useMemo(
+        () => [
+            { id: 'add-mapping', label: 'Add Mapping', icon: <PlusIcon weight="bold" />, onClick: handleAddMapping },
+        ],
+        [handleAddMapping],
+    );
+
+    const handleEditMapping = useCallback(
+        (id: string) => {
+            const mapping = mappings.find((m) => m.id === id);
+            if (mapping) {
+                setEditingMapping(toRemotePathMappingFormValues(mapping));
+                openForm();
+            }
+        },
+        [mappings, openForm],
+    );
+
+    const handleFormSubmit = useCallback(
+        async (values: RemotePathMappingFormValues) => {
+            try {
+                if (values.id) {
+                    await updateMapping(values.id, {
+                        host: values.host,
+                        remotePath: values.remotePath,
+                        localPath: values.localPath,
+                    });
+                    toast({
+                        title: values.host,
+                        description: 'Remote path mapping updated.',
+                        variant: 'success',
+                    });
+                } else {
+                    await createMapping({
+                        host: values.host,
+                        remotePath: values.remotePath,
+                        localPath: values.localPath,
+                    });
+                    toast({
+                        title: values.host,
+                        description: 'Remote path mapping added.',
+                        variant: 'success',
+                    });
+                }
+
+                closeForm();
+                setEditingMapping(null);
+            } catch (error) {
+                toast({
+                    title: values.host,
+                    description: 'Failed to save remote path mapping',
+                    variant: 'error',
+                });
+                throw error;
+            }
+        },
+        [toast, createMapping, updateMapping, closeForm],
+    );
+
+    const handleFormClose = useCallback(
+        (open: boolean) => {
+            if (!open) {
+                closeForm();
+                setEditingMapping(null);
+            }
+        },
+        [closeForm],
+    );
+
+    const handleDeleteMapping = useCallback(
+        (id: string) => {
+            const mapping = mappings.find((m) => m.id === id);
+            if (!mapping) {
+                return;
+            }
+            setDeletingMapping(mapping);
+        },
+        [mappings],
+    );
+
+    const handleConfirmDelete = useCallback(async () => {
+        if (!deletingMapping) {
+            return;
+        }
+
+        setIsDeleting(true);
+
+        try {
+            await deleteMapping(deletingMapping.id);
+            toast({
+                title: deletingMapping.host,
+                description: 'Remote path mapping deleted.',
+                variant: 'success',
+            });
+        } catch {
+            toast({
+                title: deletingMapping.host,
+                description: 'Failed to delete remote path mapping',
+                variant: 'error',
+            });
+        } finally {
+            setIsDeleting(false);
+            setDeletingMapping(null);
+        }
+    }, [deletingMapping, deleteMapping, toast]);
+
+    const handleCancelDelete = useCallback(() => {
+        setDeletingMapping(null);
+    }, []);
+
+    const handleTestLocalPath = useCallback(
+        async (localPath: string, mappingId?: string) => {
+            if (mappingId) {
+                setTestingMappingId(mappingId);
+            }
+
+            try {
+                const result = await testLocalPath({ localPath });
+                toast({
+                    title: localPath,
+                    description: result.message,
+                    variant: result.success ? 'success' : 'warning',
+                });
+            } catch {
+                toast({
+                    title: localPath,
+                    description: 'Failed to test local path',
+                    variant: 'error',
+                });
+            } finally {
+                if (mappingId) {
+                    setTestingMappingId(null);
+                }
+            }
+        },
+        [testLocalPath, toast],
+    );
+
+    const handleRefresh = useCallback(async () => {
+        await refetch();
+    }, [refetch]);
+
+    return (
+        <div className="remote-path-mappings-page" data-page="remote-path-mappings">
+            <PullToRefresh onRefresh={handleRefresh} className="remote-path-mappings-page__pull-to-refresh">
+                <PageHeader
+                    className="remote-path-mappings-page__header"
+                    title="Remote Path Mappings"
+                    description="Translate paths reported by remote download clients into paths Magpie can read at import time."
+                    icon={
+                        <ArrowsLeftRightIcon
+                            weight="duotone"
+                            aria-hidden="true"
+                            data-testid="remote-path-mappings-page__icon"
+                        />
+                    }
+                    actions={
+                        <Button variant="primary" size="sm" data-action="add-mapping" onClick={handleAddMapping}>
+                            <PlusIcon weight="bold" aria-hidden="true" />
+                            <span className="remote-path-mappings-page__add-label">Add Mapping</span>
+                        </Button>
+                    }
+                />
+
+                <div className="remote-path-mappings-page__list" role="list" aria-label="Remote path mappings">
+                    {isLoading ? (
+                        <EmptyState title="Loading..." size="sm" />
+                    ) : error ? (
+                        <EmptyState
+                            icon={<WarningCircleIcon weight="duotone" />}
+                            title="Failed to load remote path mappings"
+                            action={
+                                <Button variant="secondary" size="sm" onClick={() => refetch()}>
+                                    Retry
+                                </Button>
+                            }
+                        />
+                    ) : mappings.length === 0 ? (
+                        <EmptyState
+                            icon={<ArrowsLeftRightIcon weight="duotone" />}
+                            title="No remote path mappings configured"
+                            description="A mapping is needed when a download client runs on another machine."
+                        />
+                    ) : (
+                        mappings.map((mapping) => (
+                            <MappingRow
+                                key={mapping.id}
+                                mapping={mapping}
+                                onEdit={handleEditMapping}
+                                onDelete={handleDeleteMapping}
+                                onTest={handleTestLocalPath}
+                                isTesting={testingMappingId === mapping.id}
+                            />
+                        ))
+                    )}
+                </div>
+            </PullToRefresh>
+
+            <QuickActionsButton actions={addMappingActions} title="Add Mapping" />
+
+            <DeleteConfirmDialog
+                open={!!deletingMapping}
+                onConfirm={handleConfirmDelete}
+                onCancel={handleCancelDelete}
+                itemName={deletingMapping?.host ?? ''}
+                itemType="Remote Path Mapping"
+                isDeleting={isDeleting}
+            />
+
+            <RemotePathMappingForm
+                open={formOpen}
+                onOpenChange={handleFormClose}
+                initialValues={currentEditingMapping}
+                onSubmit={handleFormSubmit}
+                onTestLocalPath={(localPath) => handleTestLocalPath(localPath)}
+                isSubmitting={isSubmitting}
+                isTestingLocalPath={isTestingLocalPath && testingMappingId === null}
+            />
+        </div>
+    );
+}
+
+RemotePathMappingsPage.displayName = 'RemotePathMappingsPage';
+
+interface MappingRowProps {
+    mapping: ApiRemotePathMapping;
+    onEdit: (id: string) => void;
+    onDelete: (id: string) => void;
+    onTest: (localPath: string, mappingId: string) => void;
+    isTesting: boolean;
+}
+
+function MappingRow({ mapping, onEdit, onDelete, onTest, isTesting }: MappingRowProps) {
+    return (
+        <div className="remote-path-mappings-page__item" role="listitem" data-mapping-id={mapping.id}>
+            <div className="remote-path-mappings-page__item-main">
+                <div className="remote-path-mappings-page__item-info">
+                    <div className="remote-path-mappings-page__item-header">
+                        <Badge variant="info" size="sm">
+                            {mapping.host}
+                        </Badge>
+                    </div>
+                    <div className="remote-path-mappings-page__item-meta">
+                        <span className="remote-path-mappings-page__item-path" data-path="remote">
+                            {mapping.remotePath}
+                        </span>
+                        <ArrowRightIcon
+                            weight="bold"
+                            className="remote-path-mappings-page__item-arrow"
+                            aria-hidden="true"
+                        />
+                        <span className="remote-path-mappings-page__item-path" data-path="local">
+                            {mapping.localPath}
+                        </span>
+                    </div>
+                </div>
+                <div className="remote-path-mappings-page__item-actions card-actions">
+                    <Tooltip content="Test local path">
+                        <button
+                            type="button"
+                            className="remote-path-mappings-page__action-btn card-actions__btn"
+                            data-testid="remote-path-mappings-page__action-btn"
+                            onClick={() => onTest(mapping.localPath, mapping.id)}
+                            disabled={isTesting}
+                            aria-label={`Test local path for ${mapping.host}`}
+                            data-action="test-local-path"
+                            data-target={mapping.id}
+                        >
+                            {isTesting ? (
+                                <CircleNotchIcon weight="bold" className="card-actions__spinner" />
+                            ) : (
+                                <FlaskIcon weight="bold" />
+                            )}
+                        </button>
+                    </Tooltip>
+                    <Tooltip content="Edit">
+                        <button
+                            type="button"
+                            className="remote-path-mappings-page__action-btn card-actions__btn"
+                            data-testid="remote-path-mappings-page__action-btn"
+                            onClick={() => onEdit(mapping.id)}
+                            aria-label={`Edit mapping for ${mapping.host}`}
+                            data-action="edit"
+                            data-target={mapping.id}
+                        >
+                            <PencilSimpleIcon weight="bold" />
+                        </button>
+                    </Tooltip>
+                    <Tooltip content="Delete">
+                        <button
+                            type="button"
+                            className="remote-path-mappings-page__action-btn remote-path-mappings-page__action-btn--danger card-actions__btn card-actions__btn--danger"
+                            data-testid="remote-path-mappings-page__action-btn"
+                            onClick={() => onDelete(mapping.id)}
+                            aria-label={`Delete mapping for ${mapping.host}`}
+                            data-action="delete"
+                            data-target={mapping.id}
+                        >
+                            <TrashIcon weight="bold" />
+                        </button>
+                    </Tooltip>
+                </div>
+            </div>
+        </div>
+    );
+}
+
+export default RemotePathMappingsPage;

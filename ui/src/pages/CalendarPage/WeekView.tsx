@@ -1,20 +1,16 @@
-import { CalendarBlank } from '@phosphor-icons/react';
-
-import { EmptyState } from '@/components/ui/EmptyState';
 import type { CalendarEvent } from '@/types/calendar';
 
 import { EventCard } from './EventCard';
-import { formatDate, getWeekDays, getWeekStart, isToday, WEEKDAY_NAMES } from './calendarUtils';
+import { formatDate, formatDateKey, getWeekDays, getWeekStart, isToday, WEEKDAY_NAMES } from './calendarUtils';
 
 interface WeekViewProps {
     currentDate: Date;
-    viewEvents: CalendarEvent[];
     getEventsForDate: (date: Date) => CalendarEvent[];
     onDayClick: (date: Date) => void;
     onEventClick: (event: CalendarEvent) => void;
 }
 
-export function WeekView({ currentDate, viewEvents, getEventsForDate, onDayClick, onEventClick }: WeekViewProps) {
+export function WeekView({ currentDate, getEventsForDate, onDayClick, onEventClick }: WeekViewProps) {
     return (
         <div className="calendar-page__week-view" data-component="week-view">
             <div className="calendar-page__weekday-header">
@@ -23,7 +19,7 @@ export function WeekView({ currentDate, viewEvents, getEventsForDate, onDayClick
                         key={i}
                         className={`calendar-page__weekday-col ${isToday(date) ? 'calendar-page__weekday-col--today' : ''}`}
                     >
-                        <span className="calendar-page__weekday-name">{WEEKDAY_NAMES[i]}</span>
+                        <span className="calendar-page__weekday-name">{WEEKDAY_NAMES[date.getDay()]}</span>
                         <span className="calendar-page__weekday-date" data-testid="calendar-page__weekday-date">
                             {date.getDate()}
                         </span>
@@ -47,24 +43,24 @@ export function WeekView({ currentDate, viewEvents, getEventsForDate, onDayClick
                                 }
                             }}
                             aria-label={formatDate(date)}
-                            data-date={date.toISOString().split('T')[0]}
+                            data-date={formatDateKey(date)}
                             {...(isToday(date) ? { 'data-testid': 'calendar-page__week-col--today' } : {})}
                         >
+                            <div className="calendar-page__week-day-heading" aria-hidden="true">
+                                <span>{WEEKDAY_NAMES[date.getDay()]}</span>
+                                <span>{date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</span>
+                            </div>
                             {dayEvents.map((evt) => (
                                 <EventCard key={evt.id} event={evt} onClick={onEventClick} compact />
                             ))}
+                            {dayEvents.length === 0 && (
+                                <span className="calendar-page__week-day-empty" aria-hidden="true">
+                                    No events
+                                </span>
+                            )}
                         </div>
                     );
                 })}
-                {viewEvents.length === 0 && (
-                    <div className="calendar-page__week-empty-overlay">
-                        <EmptyState
-                            icon={<CalendarBlank weight="duotone" />}
-                            title="No events this week"
-                            description="Try a different week or adjust your filters"
-                        />
-                    </div>
-                )}
             </div>
         </div>
     );

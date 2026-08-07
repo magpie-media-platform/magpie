@@ -1,0 +1,93 @@
+@layer components {
+    .sortable-list__item {
+        position: relative;
+    }
+
+    .sortable-list__drag-handle {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+        width: 1.75rem;
+        align-self: stretch;
+        padding: 0 var(--space-2xs);
+        border-right: 1px solid var(--border-default);
+        color: var(--text-muted);
+        font-size: var(--text-lg);
+        cursor: grab;
+        touch-action: none;
+        user-select: none;
+        transition: color var(--duration-fast) var(--easing-default);
+    }
+
+    .sortable-list__drag-handle:active {
+        cursor: grabbing;
+    }
+
+    .sortable-list__order-controls {
+        display: flex;
+        flex-direction: column;
+        flex-shrink: 0;
+        align-self: stretch;
+        justify-content: center;
+        gap: var(--space-3xs);
+        padding: var(--space-3xs);
+        border-right: 1px solid var(--border-default);
+    }
+
+    .sortable-list__order-button {
+        min-width: var(--touch-target-min);
+        min-height: calc(var(--touch-target-min) / 2);
+        padding: 0 var(--space-xs);
+    }
+
+    .sortable-list__spinner {
+        animation: spin var(--duration-spinner) linear infinite;
+    }
+
+    .sortable-list__item--dragging {
+        opacity: var(--opacity-disabled);
+        cursor: grabbing;
+    }
+
+    .sortable-list__item--drop-target {
+        border-color: var(--accent-primary);
+    }
+
+    .sortable-list__item--drop-before::before,
+    .sortable-list__item--drop-after::after {
+        content: '';
+        position: absolute;
+        left: 0;
+        right: 0;
+        height: 3px;
+        background-color: var(--accent-primary);
+        border-radius: 2px;
+        pointer-events: none;
+        box-shadow: var(--shadow-glow);
+    }
+
+    .sortable-list__item--drop-before::before {
+        top: -6px;
+    }
+
+    .sortable-list__item--drop-after::after {
+        bottom: -6px;
+    }
+
+    .sortable-list__drag-image {
+        position: fixed;
+        top: -9999px;
+        left: -9999px;
+        display: none;
+        padding: var(--space-xs) var(--space-sm);
+        background-color: var(--bg-secondary);
+        border: 1px solid var(--accent-primary);
+        border-radius: var(--radius-sm);
+        color: var(--text-primary);
+        font-size: var(--text-sm);
+        font-weight: var(--weight-medium);
+        white-space: nowrap;
+        pointer-events: none;
+    }
+}

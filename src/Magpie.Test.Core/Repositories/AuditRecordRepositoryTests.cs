@@ -1,16 +1,28 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 
+using Magpie.Abstractions;
 using Magpie.Abstractions.Repositories;
+using Magpie.Core;
 using Magpie.Core.Repositories;
 using Magpie.Data;
+using Magpie.Models;
+using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
-using Magpie.Test.Shared;
+using Magpie.Models.Paging;
+using Magpie.Sdk.Events;
+using Magpie.Sdk.Services;
 
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
+
+using Moq;
 
 using NUnit.Framework;
 
@@ -20,6 +32,8 @@ namespace Magpie.Test.Core.Repositories;
 public class AuditRecordRepositoryTests
 {
     private MagpieDbContext _context = null!;
+    private List<MagpieEvent> _publishedEvents = null!;
+    private ITransactionManager _transactionManager = null!;
     private IAuditRecordRepository _subject = null!;
     private Guid _userId;
 
@@ -47,11 +61,20 @@ public class AuditRecordRepositoryTests
 
         _userId = user.Id;
 
-        var loggerFactory = LoggerFactory.Create(builder => builder.AddTestLogger());
+        var loggerFactory = NullLoggerFactory.Instance;
+        _publishedEvents = [];
+        var eventBus = new Mock<IEventBus>();
+        eventBus
+            .Setup(bus => bus.PublishAsync(It.IsAny<MagpieEvent>(), It.IsAny<CancellationToken>()))
+            .Callback((MagpieEvent magpieEvent, CancellationToken _) => _publishedEvents.Add(magpieEvent))
+            .Returns(Task.CompletedTask);
 
+        _transactionManager = new TransactionManager(_context, NullLogger<TransactionManager>.Instance);
         _subject = new AuditRecordRepository(
             _context,
-            loggerFactory.CreateLogger<AuditRecordRepository>());
+            eventBus.Object,
+            loggerFactory.CreateLogger<AuditRecordRepository>(),
+            transactionManager: _transactionManager);
     }
 
     [TearDown]
@@ -62,17 +85,105 @@ public class AuditRecordRepositoryTests
     }
 
     [Test]
-    public async Task ListAllAsync_ReturnsAllRecords()
+    public async Task CreateAsync_DefersEvent_UntilWrappedTransactionCommits()
+    {
+        // Arrange
+        var record = new AuditRecord { Category = "Security", Operation = "Login", Timestamp = DateTime.UtcNow };
+        var eventsDuringTransaction = -1;
+
+        // Act
+        await _transactionManager.ExecuteWithTransactionAsync(async ct =>
+        {
+            await _subject.CreateAsync(record, ct).ConfigureAwait(false);
+            eventsDuringTransaction = _publishedEvents.Count;
+        }).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(eventsDuringTransaction, Is.Zero);
+            Assert.That(_publishedEvents, Has.Count.EqualTo(1));
+            Assert.That(_publishedEvents[0].Name, Is.EqualTo(MagpieEvents.Names.AuditRecordCreated));
+        }
+    }
+
+    [Test]
+    public void CreateAsync_DropsEvent_WhenWrappedTransactionRollsBack()
+    {
+        // Arrange
+        var record = new AuditRecord { Category = "Security", Operation = "Login", Timestamp = DateTime.UtcNow };
+
+        // Act
+        // Assert
+        Assert.That(
+            async () => await _transactionManager.ExecuteWithTransactionAsync(async ct =>
+            {
+                await _subject.CreateAsync(record, ct).ConfigureAwait(false);
+                throw new InvalidOperationException("boom");
+            }).ConfigureAwait(false),
+            Throws.InstanceOf<InvalidOperationException>());
+        Assert.That(_publishedEvents, Is.Empty);
+    }
+
+    [Test]
+    public async Task CreateAsync_CommitsBothRecordsAndRunsSecondPublication_WhenFirstPublicationFails()
+    {
+        // Arrange
+        var firstRecord = new AuditRecord { Category = "System", Operation = "First", Timestamp = DateTime.UtcNow };
+        var secondRecord = new AuditRecord { Category = "System", Operation = "Second", Timestamp = DateTime.UtcNow };
+        var publicationCount = 0;
+        var secondPublicationRecordId = string.Empty;
+        var eventBus = new Mock<IEventBus>();
+        eventBus
+            .Setup(bus => bus.PublishAsync(It.IsAny<MagpieEvent>(), It.IsAny<CancellationToken>()))
+            .Returns((MagpieEvent magpieEvent, CancellationToken _) =>
+            {
+                publicationCount++;
+                if (publicationCount == 1)
+                {
+                    throw new InvalidOperationException("The first publication failed.");
+                }
+
+                secondPublicationRecordId = magpieEvent.Context[MagpieEvents.Keys.AuditRecordId];
+                return Task.CompletedTask;
+            });
+        IAuditRecordRepository subject = new AuditRecordRepository(
+            _context,
+            eventBus.Object,
+            NullLogger<AuditRecordRepository>.Instance,
+            _transactionManager);
+
+        // Act
+        await _transactionManager.ExecuteWithTransactionAsync(async ct =>
+        {
+            await subject.CreateAsync(firstRecord, ct).ConfigureAwait(false);
+            await subject.CreateAsync(secondRecord, ct).ConfigureAwait(false);
+        }).ConfigureAwait(false);
+
+        // Assert
+        var records = await _context.AuditRecords.AsNoTracking().ToListAsync().ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(records, Has.Count.EqualTo(2));
+            Assert.That(records, Has.One.Property(nameof(AuditRecord.Id)).EqualTo(firstRecord.Id));
+            Assert.That(records, Has.One.Property(nameof(AuditRecord.Id)).EqualTo(secondRecord.Id));
+            Assert.That(publicationCount, Is.EqualTo(2));
+            Assert.That(secondPublicationRecordId, Is.EqualTo(secondRecord.Id.ToString("D")));
+        }
+    }
+
+    [Test]
+    public async Task ListAllAsync_ReturnsAllRecords_WhenRecordsExist()
     {
         // Arrange
         var record1 = new AuditRecord { Category = "Security", Operation = "Login", Timestamp = DateTime.UtcNow };
         var record2 = new AuditRecord { Category = "Content", Operation = "Create", Timestamp = DateTime.UtcNow };
         var record3 = new AuditRecord { Category = "System", Operation = "Start", Timestamp = DateTime.UtcNow };
         _context.AuditRecords.AddRange(record1, record2, record3);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        var result = await _subject.ListAllAsync(default);
+        var result = await _subject.ListAllAsync(default).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Has.Exactly(3).Items);
@@ -82,14 +193,14 @@ public class AuditRecordRepositoryTests
     public async Task ListAllAsync_ReturnsEmptyList_WhenNoRecords()
     {
         // Act
-        var result = await _subject.ListAllAsync(default);
+        var result = await _subject.ListAllAsync(default).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.Empty);
     }
 
     [Test]
-    public async Task ListAllAsync_ReturnsRecordsOrderedByTimestampDescending()
+    public async Task ListAllAsync_ReturnsRecordsOrderedByTimestampDescending_WhenRecordsExist()
     {
         // Arrange
         var oldRecord = new AuditRecord
@@ -111,10 +222,10 @@ public class AuditRecordRepositoryTests
             Timestamp = DateTime.UtcNow
         };
         _context.AuditRecords.AddRange(oldRecord, middleRecord, newRecord);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        var result = (await _subject.ListAllAsync(default)).ToList();
+        var result = (await _subject.ListAllAsync(default).ConfigureAwait(false)).ToList();
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -127,7 +238,7 @@ public class AuditRecordRepositoryTests
     }
 
     [Test]
-    public async Task GetByIdAsync_ReturnsRecord()
+    public async Task GetByIdAsync_ReturnsRecord_WhenRecordExists()
     {
         // Arrange
         var record = new AuditRecord
@@ -141,10 +252,10 @@ public class AuditRecordRepositoryTests
             UserId = _userId
         };
         _context.AuditRecords.Add(record);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        var result = await _subject.GetByIdAsync(record.Id);
+        var result = await _subject.GetByIdAsync(record.Id).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -161,7 +272,7 @@ public class AuditRecordRepositoryTests
     public async Task GetByIdAsync_ReturnsNull_WhenNotFound()
     {
         // Act
-        var result = await _subject.GetByIdAsync(Guid.NewGuid());
+        var result = await _subject.GetByIdAsync(Guid.NewGuid()).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.Null);
@@ -174,10 +285,12 @@ public class AuditRecordRepositoryTests
         var record1 = new AuditRecord { Category = "Security", Operation = "Login", Timestamp = DateTime.UtcNow };
         var record2 = new AuditRecord { Category = "Content", Operation = "Create", Timestamp = DateTime.UtcNow };
         _context.AuditRecords.AddRange(record1, record2);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        var result = await _subject.QueryAsync(new(), null, null);
+        var result = await _subject.QueryAsync(new(),
+            new() { PageNumber = 1, PageSize = 100 },
+            null).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -188,7 +301,7 @@ public class AuditRecordRepositoryTests
     }
 
     [Test]
-    public async Task QueryAsync_FiltersByEntityId()
+    public async Task QueryAsync_FiltersByEntityId_WhenEntityIdFilterIsSet()
     {
         // Arrange
         var entityId = Guid.NewGuid().ToString();
@@ -214,22 +327,26 @@ public class AuditRecordRepositoryTests
             Timestamp = DateTime.UtcNow
         };
         _context.AuditRecords.AddRange(record1, record2, record3);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        var result = await _subject.QueryAsync(new() { EntityId = entityId }, null, null);
+        var result = await _subject.QueryAsync(new() { EntityId = entityId },
+            new() { PageNumber = 1, PageSize = 100 },
+            null).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
         {
             Assert.That(result, Has.Property(nameof(result.Items)).With.Exactly(2).Items);
-            Assert.That(result, Has.Property(nameof(result.Items))
-                .With.All.Property(nameof(AuditRecord.EntityId)).EqualTo(entityId));
+            Assert.That(
+                result,
+                Has.Property(nameof(result.Items))
+                    .With.All.Property(nameof(AuditRecord.EntityId)).EqualTo(entityId));
         }
     }
 
     [Test]
-    public async Task QueryAsync_FiltersByParentEntityId()
+    public async Task QueryAsync_FiltersByParentEntityId_WhenParentEntityIdFilterIsSet()
     {
         // Arrange
         var parentId = Guid.NewGuid().ToString();
@@ -248,22 +365,26 @@ public class AuditRecordRepositoryTests
             Timestamp = DateTime.UtcNow
         };
         _context.AuditRecords.AddRange(record1, record2);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        var result = await _subject.QueryAsync(new() { ParentEntityId = parentId }, null, null);
+        var result = await _subject.QueryAsync(new() { ParentEntityId = parentId },
+            new() { PageNumber = 1, PageSize = 100 },
+            null).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
         {
             Assert.That(result, Has.Property(nameof(result.Items)).With.Exactly(1).Items);
-            Assert.That(result, Has.Property(nameof(result.Items))
-                .With.All.Property(nameof(AuditRecord.ParentEntityId)).EqualTo(parentId));
+            Assert.That(
+                result,
+                Has.Property(nameof(result.Items))
+                    .With.All.Property(nameof(AuditRecord.ParentEntityId)).EqualTo(parentId));
         }
     }
 
     [Test]
-    public async Task QueryAsync_FiltersByEntityType()
+    public async Task QueryAsync_FiltersByEntityType_WhenEntityTypeFilterIsSet()
     {
         // Arrange
         var record1 = new AuditRecord
@@ -288,80 +409,92 @@ public class AuditRecordRepositoryTests
             Timestamp = DateTime.UtcNow
         };
         _context.AuditRecords.AddRange(record1, record2, record3);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        var result = await _subject.QueryAsync(new() { EntityType = "Subject" }, null, null);
+        var result = await _subject.QueryAsync(new() { EntityType = "Subject" },
+            new() { PageNumber = 1, PageSize = 100 },
+            null).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
         {
             Assert.That(result, Has.Property(nameof(result.Items)).With.Exactly(2).Items);
-            Assert.That(result, Has.Property(nameof(result.Items))
-                .With.All.Property(nameof(AuditRecord.EntityType)).EqualTo("Subject"));
+            Assert.That(
+                result,
+                Has.Property(nameof(result.Items))
+                    .With.All.Property(nameof(AuditRecord.EntityType)).EqualTo("Subject"));
         }
     }
 
     [Test]
-    public async Task QueryAsync_FiltersByCategory()
+    public async Task QueryAsync_FiltersByCategory_WhenCategoryFilterIsSet()
     {
         // Arrange
         var record1 = new AuditRecord { Category = "Security", Operation = "Login", Timestamp = DateTime.UtcNow };
         var record2 = new AuditRecord { Category = "Security", Operation = "Logout", Timestamp = DateTime.UtcNow };
         var record3 = new AuditRecord { Category = "Content", Operation = "Create", Timestamp = DateTime.UtcNow };
         _context.AuditRecords.AddRange(record1, record2, record3);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        var result = await _subject.QueryAsync(new() { Category = "Security" }, null, null);
+        var result = await _subject.QueryAsync(new() { Category = "Security" },
+            new() { PageNumber = 1, PageSize = 100 },
+            null).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
         {
             Assert.That(result, Has.Property(nameof(result.Items)).With.Exactly(2).Items);
-            Assert.That(result, Has.Property(nameof(result.Items))
-                .With.All.Property(nameof(AuditRecord.Category)).EqualTo("Security"));
+            Assert.That(
+                result,
+                Has.Property(nameof(result.Items))
+                    .With.All.Property(nameof(AuditRecord.Category)).EqualTo("Security"));
         }
     }
 
     [Test]
-    public async Task QueryAsync_FiltersByOperation()
+    public async Task QueryAsync_FiltersByOperation_WhenOperationFilterIsSet()
     {
         // Arrange
         var record1 = new AuditRecord { Category = "Content", Operation = "Create", Timestamp = DateTime.UtcNow };
         var record2 = new AuditRecord { Category = "System", Operation = "Create", Timestamp = DateTime.UtcNow };
         var record3 = new AuditRecord { Category = "Content", Operation = "Delete", Timestamp = DateTime.UtcNow };
         _context.AuditRecords.AddRange(record1, record2, record3);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        var result = await _subject.QueryAsync(new() { Operation = "Create" }, null, null);
+        var result = await _subject.QueryAsync(new() { Operation = "Create" },
+            new() { PageNumber = 1, PageSize = 100 },
+            null).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
         {
             Assert.That(result, Has.Property(nameof(result.Items)).With.Exactly(2).Items);
-            Assert.That(result, Has.Property(nameof(result.Items))
-                .With.All.Property(nameof(AuditRecord.Operation)).EqualTo("Create"));
+            Assert.That(
+                result,
+                Has.Property(nameof(result.Items))
+                    .With.All.Property(nameof(AuditRecord.Operation)).EqualTo("Create"));
         }
     }
 
     [Test]
-    public async Task QueryAsync_FiltersByDescription()
+    public async Task QueryAsync_FiltersByDescription_WhenDescriptionFilterIsSet()
     {
         // Arrange
         var record1 = new AuditRecord
         {
             Category = "Content",
             Operation = "Create",
-            Detail = "Created new movie entry",
+            Detail = "Created new type-a entry",
             Timestamp = DateTime.UtcNow
         };
         var record2 = new AuditRecord
         {
             Category = "Content",
             Operation = "Update",
-            Detail = "Updated movie metadata",
+            Detail = "Updated type-a metadata",
             Timestamp = DateTime.UtcNow
         };
         var record3 = new AuditRecord
@@ -372,22 +505,26 @@ public class AuditRecordRepositoryTests
             Timestamp = DateTime.UtcNow
         };
         _context.AuditRecords.AddRange(record1, record2, record3);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        var result = await _subject.QueryAsync(new() { Detail = "movie" }, null, null);
+        var result = await _subject.QueryAsync(new() { Detail = "type-a" },
+            new() { PageNumber = 1, PageSize = 100 },
+            null).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
         {
             Assert.That(result, Has.Property(nameof(result.Items)).With.Exactly(2).Items);
-            Assert.That(result, Has.Property(nameof(result.Items))
-                .With.All.Property(nameof(AuditRecord.Detail)).Contains("movie"));
+            Assert.That(
+                result,
+                Has.Property(nameof(result.Items))
+                    .With.All.Property(nameof(AuditRecord.Detail)).Contains("type-a"));
         }
     }
 
     [Test]
-    public async Task QueryAsync_FiltersByTimestampMin()
+    public async Task QueryAsync_FiltersByTimestampMin_WhenMinimumTimestampIsSet()
     {
         // Arrange
         var cutoff = DateTime.UtcNow.AddHours(-1);
@@ -404,22 +541,27 @@ public class AuditRecordRepositoryTests
             Timestamp = DateTime.UtcNow
         };
         _context.AuditRecords.AddRange(oldRecord, newRecord);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        var result = await _subject.QueryAsync(new() { Timestamp = new(cutoff, null) }, null, null);
+        var result = await _subject.QueryAsync(new() { Timestamp = new(cutoff, null) },
+            new() { PageNumber = 1, PageSize = 100 },
+            null)
+            .ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
         {
             Assert.That(result, Has.Property(nameof(result.Items)).With.Exactly(1).Items);
-            Assert.That(result, Has.Property(nameof(result.Items))
-                .With.All.Property(nameof(AuditRecord.Id)).EqualTo(newRecord.Id));
+            Assert.That(
+                result,
+                Has.Property(nameof(result.Items))
+                    .With.All.Property(nameof(AuditRecord.Id)).EqualTo(newRecord.Id));
         }
     }
 
     [Test]
-    public async Task QueryAsync_FiltersByTimestampMax()
+    public async Task QueryAsync_FiltersByTimestampMax_WhenMaximumTimestampIsSet()
     {
         // Arrange
         var cutoff = DateTime.UtcNow.AddHours(-1);
@@ -436,22 +578,27 @@ public class AuditRecordRepositoryTests
             Timestamp = DateTime.UtcNow
         };
         _context.AuditRecords.AddRange(oldRecord, newRecord);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        var result = await _subject.QueryAsync(new() { Timestamp = new(null, cutoff), }, null, null);
+        var result = await _subject.QueryAsync(new() { Timestamp = new(null, cutoff), },
+            new() { PageNumber = 1, PageSize = 100 },
+            null)
+            .ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
         {
             Assert.That(result, Has.Property(nameof(result.Items)).With.Exactly(1).Items);
-            Assert.That(result, Has.Property(nameof(result.Items))
-                .With.All.Property(nameof(AuditRecord.Id)).EqualTo(oldRecord.Id));
+            Assert.That(
+                result,
+                Has.Property(nameof(result.Items))
+                    .With.All.Property(nameof(AuditRecord.Id)).EqualTo(oldRecord.Id));
         }
     }
 
     [Test]
-    public async Task QueryAsync_FiltersByTimestampRange()
+    public async Task QueryAsync_FiltersByTimestampRange_WhenTimestampBoundsAreSet()
     {
         // Arrange
         var minTime = DateTime.UtcNow.AddHours(-3);
@@ -475,25 +622,81 @@ public class AuditRecordRepositoryTests
             Timestamp = DateTime.UtcNow
         };
         _context.AuditRecords.AddRange(tooOld, inRange, tooNew);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
         var result = await _subject.QueryAsync(
             new() { Timestamp = new(minTime, maxTime) },
-            null,
-            null);
+            new() { PageNumber = 1, PageSize = 100 },
+            null).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
         {
             Assert.That(result, Has.Property(nameof(result.Items)).With.Exactly(1).Items);
-            Assert.That(result, Has.Property(nameof(result.Items))
-                .With.All.Property(nameof(AuditRecord.Id)).EqualTo(inRange.Id));
+            Assert.That(
+                result,
+                Has.Property(nameof(result.Items))
+                    .With.All.Property(nameof(AuditRecord.Id)).EqualTo(inRange.Id));
         }
     }
 
     [Test]
-    public async Task QueryAsync_FiltersByUserId()
+    public async Task QueryAsync_FiltersByCorrelationId_WhenCorrelationIdFilterIsSet()
+    {
+        // Arrange
+        var targetCorrelation = Guid.NewGuid();
+        var otherCorrelation = Guid.NewGuid();
+        var match1 = new AuditRecord
+        {
+            Category = "Jobs",
+            Operation = "Op1",
+            CorrelationId = targetCorrelation,
+            Timestamp = DateTime.UtcNow
+        };
+        var match2 = new AuditRecord
+        {
+            Category = "Jobs",
+            Operation = "Op2",
+            CorrelationId = targetCorrelation,
+            Timestamp = DateTime.UtcNow
+        };
+        var differentChain = new AuditRecord
+        {
+            Category = "Jobs",
+            Operation = "Op3",
+            CorrelationId = otherCorrelation,
+            Timestamp = DateTime.UtcNow
+        };
+        var noCorrelation = new AuditRecord
+        {
+            Category = "Jobs",
+            Operation = "Op4",
+            CorrelationId = null,
+            Timestamp = DateTime.UtcNow
+        };
+        _context.AuditRecords.AddRange(match1, match2, differentChain, noCorrelation);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        var result = await _subject.QueryAsync(new() { CorrelationId = targetCorrelation },
+            new() { PageNumber = 1, PageSize = 100 },
+            null)
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Has.Property(nameof(result.Items)).With.Exactly(2).Items);
+            Assert.That(
+                result,
+                Has.Property(nameof(result.Items))
+                    .With.All.Property(nameof(AuditRecord.CorrelationId)).EqualTo(targetCorrelation));
+        }
+    }
+
+    [Test]
+    public async Task QueryAsync_FiltersByUserId_WhenUserIdFilterIsSet()
     {
         // Arrange
         var otherUserId = Guid.NewGuid();
@@ -519,22 +722,26 @@ public class AuditRecordRepositoryTests
             Timestamp = DateTime.UtcNow
         };
         _context.AuditRecords.AddRange(record1, record2, record3);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        var result = await _subject.QueryAsync(new() { UserId = _userId }, null, null);
+        var result = await _subject.QueryAsync(new() { UserId = _userId },
+            new() { PageNumber = 1, PageSize = 100 },
+            null).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
         {
             Assert.That(result, Has.Property(nameof(result.Items)).With.Exactly(2).Items);
-            Assert.That(result, Has.Property(nameof(result.Items))
-                .With.All.Property(nameof(AuditRecord.UserId)).EqualTo(_userId));
+            Assert.That(
+                result,
+                Has.Property(nameof(result.Items))
+                    .With.All.Property(nameof(AuditRecord.UserId)).EqualTo(_userId));
         }
     }
 
     [Test]
-    public async Task QueryAsync_CombinesMultipleFilters()
+    public async Task QueryAsync_CombinesMultipleFilters_WhenMultipleFiltersAreSet()
     {
         // Arrange
         var record1 = new AuditRecord
@@ -570,24 +777,31 @@ public class AuditRecordRepositoryTests
             Timestamp = DateTime.UtcNow
         };
         _context.AuditRecords.AddRange(record1, record2, record3, record4);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        var result = await _subject.QueryAsync(new() { Category = "Content", EntityType = "Subject" }, null, null);
+        var result = await _subject.QueryAsync(new() { Category = "Content", EntityType = "Subject" },
+            new() { PageNumber = 1, PageSize = 100 },
+            null)
+            .ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
         {
             Assert.That(result, Has.Property(nameof(result.Items)).With.Exactly(2).Items);
-            Assert.That(result, Has.Property(nameof(result.Items))
-                .With.All.Property(nameof(AuditRecord.Category)).EqualTo("Content"));
-            Assert.That(result, Has.Property(nameof(result.Items))
-                .With.All.Property(nameof(AuditRecord.EntityType)).EqualTo("Subject"));
+            Assert.That(
+                result,
+                Has.Property(nameof(result.Items))
+                    .With.All.Property(nameof(AuditRecord.Category)).EqualTo("Content"));
+            Assert.That(
+                result,
+                Has.Property(nameof(result.Items))
+                    .With.All.Property(nameof(AuditRecord.EntityType)).EqualTo("Subject"));
         }
     }
 
     [Test]
-    public async Task QueryAsync_AppliesPaging()
+    public async Task QueryAsync_AppliesPaging_WhenPagingIsSet()
     {
         // Arrange
         for (var i = 0; i < 10; i++)
@@ -599,10 +813,12 @@ public class AuditRecordRepositoryTests
                 Timestamp = DateTime.UtcNow.AddMinutes(-i)
             });
         }
-        await _context.SaveChangesAsync();
+
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        var result = await _subject.QueryAsync(new(), new() { PageNumber = 2, PageSize = 3 }, null);
+        var result = await _subject.QueryAsync(new(), new() { PageNumber = 2, PageSize = 3 }, null)
+            .ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -615,21 +831,54 @@ public class AuditRecordRepositoryTests
     }
 
     [Test]
-    public async Task QueryAsync_AppliesSortingAscending()
+    public async Task QueryAsync_ReturnsEmptySecondPage_WhenFirstPageExactlyMatchesPageSize()
+    {
+        // Arrange
+        _context.AuditRecords.AddRange(
+            new AuditRecord { Category = "Content", Operation = "First" },
+            new AuditRecord { Category = "Content", Operation = "Second" },
+            new AuditRecord { Category = "Content", Operation = "Third" });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        var firstPage = await _subject.QueryAsync(new(), new() { PageNumber = 1, PageSize = 3 }, null)
+            .ConfigureAwait(false);
+        var secondPage = await _subject.QueryAsync(new(), new() { PageNumber = 2, PageSize = 3 }, null)
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(firstPage.Items, Has.Exactly(3).Items);
+            Assert.That(firstPage.TotalItems, Is.EqualTo(3));
+            Assert.That(firstPage.PageNumber, Is.EqualTo(1));
+            Assert.That(firstPage.PageSize, Is.EqualTo(3));
+            Assert.That(secondPage.Items, Is.Empty);
+            Assert.That(secondPage.TotalItems, Is.EqualTo(3));
+            Assert.That(secondPage.PageNumber, Is.EqualTo(2));
+            Assert.That(secondPage.PageSize, Is.EqualTo(3));
+        }
+    }
+
+    [Test]
+    public async Task QueryAsync_AppliesSortingAscending_WhenAscendingSortIsSet()
     {
         // Arrange
         var record1 = new AuditRecord { Category = "C", Operation = "Op1", Timestamp = DateTime.UtcNow };
         var record2 = new AuditRecord { Category = "A", Operation = "Op2", Timestamp = DateTime.UtcNow };
         var record3 = new AuditRecord { Category = "B", Operation = "Op3", Timestamp = DateTime.UtcNow };
         _context.AuditRecords.AddRange(record1, record2, record3);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        var result = await _subject.QueryAsync(new(), null, new()
-        {
-            PropertyName = nameof(AuditRecord.Category),
-            Direction = SortDirection.Ascending
-        });
+        var result = await _subject.QueryAsync(
+            new(),
+            new() { PageNumber = 1, PageSize = 100 },
+            new()
+            {
+                PropertyName = nameof(AuditRecord.Category),
+                Direction = SortDirection.Ascending
+            }).ConfigureAwait(false);
 
         // Assert
         var items = result.Items.ToList();
@@ -642,21 +891,24 @@ public class AuditRecordRepositoryTests
     }
 
     [Test]
-    public async Task QueryAsync_AppliesSortingDescending()
+    public async Task QueryAsync_AppliesSortingDescending_WhenDescendingSortIsSet()
     {
         // Arrange
         var record1 = new AuditRecord { Category = "C", Operation = "Op1", Timestamp = DateTime.UtcNow };
         var record2 = new AuditRecord { Category = "A", Operation = "Op2", Timestamp = DateTime.UtcNow };
         var record3 = new AuditRecord { Category = "B", Operation = "Op3", Timestamp = DateTime.UtcNow };
         _context.AuditRecords.AddRange(record1, record2, record3);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        var result = await _subject.QueryAsync(new(), null, new()
-        {
-            PropertyName = nameof(AuditRecord.Category),
-            Direction = SortDirection.Descending
-        });
+        var result = await _subject.QueryAsync(
+            new(),
+            new() { PageNumber = 1, PageSize = 100 },
+            new()
+            {
+                PropertyName = nameof(AuditRecord.Category),
+                Direction = SortDirection.Descending
+            }).ConfigureAwait(false);
 
         // Assert
         var items = result.Items.ToList();
@@ -669,7 +921,7 @@ public class AuditRecordRepositoryTests
     }
 
     [Test]
-    public async Task QueryAsync_DefaultSortsbyTimestampDescending()
+    public async Task QueryAsync_DefaultSortsByTimestampDescending_WhenSortIsNotSet()
     {
         // Arrange
         var oldRecord = new AuditRecord
@@ -685,10 +937,12 @@ public class AuditRecordRepositoryTests
             Timestamp = DateTime.UtcNow
         };
         _context.AuditRecords.AddRange(oldRecord, newRecord);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        var result = await _subject.QueryAsync(new(), null, null);
+        var result = await _subject.QueryAsync(new(),
+            new() { PageNumber = 1, PageSize = 100 },
+            null).ConfigureAwait(false);
 
         // Assert
         var items = result.Items.ToList();
@@ -703,7 +957,9 @@ public class AuditRecordRepositoryTests
     public async Task QueryAsync_ReturnsEmptyResult_WhenNoMatches()
     {
         // Act
-        var result = await _subject.QueryAsync(new() { Category = "NonExistent" }, null, null);
+        var result = await _subject.QueryAsync(new() { Category = "NonExistent" },
+            new() { PageNumber = 1, PageSize = 100 },
+            null).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -714,7 +970,7 @@ public class AuditRecordRepositoryTests
     }
 
     [Test]
-    public async Task CreateAsync_CreatesRecord()
+    public async Task CreateAsync_CreatesRecord_WhenRequestIsValid()
     {
         // Arrange
         var record = new AuditRecord
@@ -728,12 +984,12 @@ public class AuditRecordRepositoryTests
         };
 
         // Act
-        var result = await _subject.CreateAsync(record);
+        var result = await _subject.CreateAsync(record).ConfigureAwait(false);
 
         // Assert
         var entity = await _context.AuditRecords
             .AsNoTracking()
-            .FirstOrDefaultAsync(r => r.Id == result.Id);
+            .FirstOrDefaultAsync(r => r.Id == result.Id).ConfigureAwait(false);
 
         using (Assert.EnterMultipleScope())
         {
@@ -743,7 +999,27 @@ public class AuditRecordRepositoryTests
             Assert.That(entity, Has.Property(nameof(entity.EntityType)).EqualTo("User"));
             Assert.That(entity, Has.Property(nameof(entity.Detail)).EqualTo("User logged in successfully"));
             Assert.That(entity, Has.Property(nameof(entity.UserId)).EqualTo(_userId));
+            Assert.That(_publishedEvents, Has.Count.EqualTo(1));
+            Assert.That(_publishedEvents[0].Name, Is.EqualTo(MagpieEvents.Names.AuditRecordCreated));
+            Assert.That(
+                _publishedEvents[0].Context[MagpieEvents.Keys.AuditRecordId],
+                Is.EqualTo(record.Id.ToString("D")));
         }
+    }
+
+    [Test]
+    public void CreateAsync_DoesNotPublish_WhenPersistenceFails()
+    {
+        // Arrange
+        _context.Database.CloseConnection();
+        var record = new AuditRecord { Category = "System", Operation = "Startup" };
+
+        // Act
+        var action = (AsyncTestDelegate)(async () => await _subject.CreateAsync(record).ConfigureAwait(false));
+
+        // Assert
+        Assert.ThrowsAsync<DbUpdateException>(action);
+        Assert.That(_publishedEvents, Is.Empty);
     }
 
     [Test]
@@ -758,7 +1034,7 @@ public class AuditRecordRepositoryTests
         };
 
         // Act
-        var result = await _subject.CreateAsync(record);
+        var result = await _subject.CreateAsync(record).ConfigureAwait(false);
         var afterCreate = DateTime.UtcNow;
 
         // Assert
@@ -782,14 +1058,14 @@ public class AuditRecordRepositoryTests
         };
 
         // Act
-        var result = await _subject.CreateAsync(record);
+        var result = await _subject.CreateAsync(record).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Has.Property(nameof(result.Timestamp)).EqualTo(specificTimestamp));
     }
 
     [Test]
-    public async Task CreateAsync_CreatesRecordWithAllFields()
+    public async Task CreateAsync_CreatesRecordWithAllFields_WhenAllFieldsAreSet()
     {
         // Arrange
         var entityId = Guid.NewGuid().ToString();
@@ -809,12 +1085,12 @@ public class AuditRecordRepositoryTests
         };
 
         // Act
-        var result = await _subject.CreateAsync(record);
+        var result = await _subject.CreateAsync(record).ConfigureAwait(false);
 
         // Assert
         var entity = await _context.AuditRecords
             .AsNoTracking()
-            .FirstOrDefaultAsync(r => r.Id == result.Id);
+            .FirstOrDefaultAsync(r => r.Id == result.Id).ConfigureAwait(false);
 
         using (Assert.EnterMultipleScope())
         {
@@ -830,7 +1106,7 @@ public class AuditRecordRepositoryTests
     }
 
     [Test]
-    public async Task CreateAsync_CreatesRecordWithNullOptionalFields()
+    public async Task CreateAsync_CreatesRecordWithNullOptionalFields_WhenOptionalFieldsAreNull()
     {
         // Arrange
         var record = new AuditRecord
@@ -840,12 +1116,12 @@ public class AuditRecordRepositoryTests
         };
 
         // Act
-        var result = await _subject.CreateAsync(record);
+        var result = await _subject.CreateAsync(record).ConfigureAwait(false);
 
         // Assert
         var entity = await _context.AuditRecords
             .AsNoTracking()
-            .FirstOrDefaultAsync(r => r.Id == result.Id);
+            .FirstOrDefaultAsync(r => r.Id == result.Id).ConfigureAwait(false);
 
         using (Assert.EnterMultipleScope())
         {
@@ -854,6 +1130,75 @@ public class AuditRecordRepositoryTests
             Assert.That(entity, Has.Property(nameof(entity.EntityType)).Null);
             Assert.That(entity, Has.Property(nameof(entity.Detail)).Null);
             Assert.That(entity, Has.Property(nameof(entity.UserId)).Null);
+        }
+    }
+
+    [Test]
+    public async Task QueryAsync_SortsByCamelCasePropertyName_WhenCamelCaseSortPropertyIsSet()
+    {
+        // Arrange
+        var older = new AuditRecord
+        {
+            Category = "Content",
+            Operation = "Create",
+            Timestamp = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc)
+        };
+        var newer = new AuditRecord
+        {
+            Category = "Content",
+            Operation = "Update",
+            Timestamp = new DateTime(2024, 6, 1, 0, 0, 0, DateTimeKind.Utc)
+        };
+        _context.AuditRecords.AddRange(older, newer);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        var sort = new SortParameter { PropertyName = "timestamp", Direction = SortDirection.Descending };
+
+        // Act
+        var result = await _subject.QueryAsync(new(),
+            new() { PageNumber = 1, PageSize = 100 },
+            sort).ConfigureAwait(false);
+
+        // Assert
+        var items = result.Items.ToList();
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(items, Has.Count.EqualTo(2));
+            Assert.That(items, Has.ItemAt(0).Property(nameof(AuditRecord.Operation)).EqualTo("Update"));
+            Assert.That(items, Has.ItemAt(1).Property(nameof(AuditRecord.Operation)).EqualTo("Create"));
+        }
+    }
+
+    [Test]
+    public async Task DeleteWhereAsync_DeletesAgedRecords_KeepsFresh()
+    {
+        // Arrange
+        var now = DateTime.UtcNow;
+        var agedTime = new FakeTimeProvider(DateTimeOffset.UtcNow.AddDays(-91));
+        var agedRepository = new AuditRecordRepository(
+            _context,
+            Mock.Of<IEventBus>(),
+            NullLoggerFactory.Instance.CreateLogger<AuditRecordRepository>(),
+            _transactionManager,
+            agedTime);
+        var aged = await agedRepository.CreateAsync(
+            new AuditRecord { Category = "test", Operation = "noop" },
+            default).ConfigureAwait(false);
+        var fresh = await _subject.CreateAsync(new AuditRecord { Category = "test", Operation = "noop" })
+            .ConfigureAwait(false);
+
+        // Act
+        var deleted = await _subject.DeleteWhereAsync(new AuditRecordQuery
+        {
+            TimestampBefore = now.AddDays(-90)
+        }).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(deleted, Is.EqualTo(1));
+            Assert.That(await _context.AuditRecords.AnyAsync(a => a.Id == aged.Id).ConfigureAwait(false), Is.False);
+            Assert.That(await _context.AuditRecords.AnyAsync(a => a.Id == fresh.Id).ConfigureAwait(false), Is.True);
         }
     }
 }

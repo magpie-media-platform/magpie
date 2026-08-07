@@ -1,7 +1,8 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 
-import { apiGet, apiPost, apiPatch, apiDelete } from '@/lib/api';
+import { apiGet, apiPost, apiPatch, apiDelete, buildUrl } from '@/lib/api';
 import { POLLING_INTERVALS } from '@/lib/queryClient';
+import { useInvalidateQueriesOnEvents } from './useInvalidateQueriesOnEvents';
 import { queryErrorOrNull } from '@/lib/utils';
 import type { JobScopeValue, JobExecutionModeValue } from './useJobs';
 
@@ -79,14 +80,19 @@ export interface ScheduleTriggerPatch {
     parameters?: DictionaryPatch<string, string>;
 }
 
-export const scheduleTriggerQueryKeys = {
+export interface ScheduleTriggerQueryParams {
+    mine?: boolean;
+}
+
+const scheduleTriggerQueryKeys = {
     all: ['schedule-triggers'] as const,
-    list: () => ['schedule-triggers', 'list'] as const,
+    list: (params?: ScheduleTriggerQueryParams) => ['schedule-triggers', 'list', params ?? {}] as const,
     detail: (id: string) => ['schedule-triggers', 'detail', id] as const,
 };
 
-async function fetchScheduleTriggers(): Promise<ApiScheduleTrigger[]> {
-    return apiGet<ApiScheduleTrigger[]>('/schedule-triggers');
+async function fetchScheduleTriggers(params?: ScheduleTriggerQueryParams): Promise<ApiScheduleTrigger[]> {
+    const url = buildUrl('/schedule-triggers', params as Record<string, string | number | boolean | undefined>);
+    return apiGet<ApiScheduleTrigger[]>(url);
 }
 
 async function fetchScheduleTriggerById(id: string): Promise<ApiScheduleTrigger> {
@@ -105,34 +111,38 @@ async function deleteScheduleTrigger(id: string): Promise<void> {
     return apiDelete(`/schedule-triggers/${id}`);
 }
 
-export function useScheduleTriggers() {
+export function useScheduleTriggers(params?: ScheduleTriggerQueryParams) {
+    useInvalidateQueriesOnEvents(
+        ['scheduleTrigger.created', 'scheduleTrigger.updated', 'scheduleTrigger.deleted'],
+        [scheduleTriggerQueryKeys.list(params)],
+        { exact: true, owner: 'schedule-triggers:list' },
+    );
     const queryClient = useQueryClient();
 
     const triggersQuery = useQuery({
-        queryKey: scheduleTriggerQueryKeys.list(),
-        queryFn: fetchScheduleTriggers,
-        refetchInterval: POLLING_INTERVALS.normal,
+        queryKey: scheduleTriggerQueryKeys.list(params),
+        queryFn: () => fetchScheduleTriggers(params),
         staleTime: POLLING_INTERVALS.normal / 2,
     });
 
     const createMutation = useMutation({
         mutationFn: createScheduleTrigger,
         onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: scheduleTriggerQueryKeys.all });
+            void queryClient.invalidateQueries({ queryKey: scheduleTriggerQueryKeys.all });
         },
     });
 
     const updateMutation = useMutation({
         mutationFn: updateScheduleTrigger,
         onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: scheduleTriggerQueryKeys.all });
+            void queryClient.invalidateQueries({ queryKey: scheduleTriggerQueryKeys.all });
         },
     });
 
     const deleteMutation = useMutation({
         mutationFn: deleteScheduleTrigger,
         onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: scheduleTriggerQueryKeys.all });
+            void queryClient.invalidateQueries({ queryKey: scheduleTriggerQueryKeys.all });
         },
     });
 
@@ -157,11 +167,15 @@ export function useScheduleTriggers() {
 }
 
 export function useScheduleTrigger(id: string, enabled = true) {
+    useInvalidateQueriesOnEvents(
+        ['scheduleTrigger.created', 'scheduleTrigger.updated', 'scheduleTrigger.deleted'],
+        [scheduleTriggerQueryKeys.detail(id)],
+        { entityIds: id ? [id] : [], exact: true, owner: 'schedule-triggers:detail' },
+    );
     const triggerQuery = useQuery({
         queryKey: scheduleTriggerQueryKeys.detail(id),
         queryFn: () => fetchScheduleTriggerById(id),
         enabled: enabled && Boolean(id),
-        refetchInterval: POLLING_INTERVALS.normal,
         staleTime: POLLING_INTERVALS.normal / 2,
     });
 

@@ -3,6 +3,10 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { CalendarEvent } from '@/types/calendar';
 
+vi.mock('@/hooks/useLibraryTypes', () => ({
+    useTypeIconName: () => () => 'film-slate',
+}));
+
 import { ListView } from './ListView';
 
 function makeEvent(id: string, title: string): CalendarEvent {
@@ -11,8 +15,11 @@ function makeEvent(id: string, title: string): CalendarEvent {
         contentId: `content-${id}`,
         title,
         date: '2024-04-15T20:00:00Z',
-        kind: 'episode',
+        contentType: 'tv',
+        level: 'episode',
         fulfillment: 'missing',
+        monitoring: true,
+        effectiveMonitoring: true,
     };
 }
 
@@ -33,7 +40,6 @@ describe('ListView', () => {
     it('shows dates on event cards', () => {
         const events = [makeEvent('1', 'Shogun')];
         render(<ListView viewEvents={events} onEventClick={vi.fn()} />);
-        // showDate is true for ListView, so date testid should be present
         expect(screen.getByTestId('calendar-page__event-date')).toBeInTheDocument();
     });
 

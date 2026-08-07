@@ -12,8 +12,8 @@ describe('NotFoundPage', () => {
             </MemoryRouter>,
         );
 
-        expect(screen.getByText('Page not found')).toBeInTheDocument();
-        expect(screen.getByText("The page you're looking for doesn't exist or may have moved.")).toBeInTheDocument();
+        expect(screen.getByRole('heading', { name: 'Page not found', level: 1 })).toBeInTheDocument();
+        expect(screen.getByText('The requested page does not exist.')).toBeInTheDocument();
     });
 
     it('renders a link to the dashboard', () => {

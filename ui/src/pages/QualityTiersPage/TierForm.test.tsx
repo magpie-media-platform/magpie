@@ -1,12 +1,54 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
 import type { ReactNode } from 'react';
 
 import { TooltipProvider } from '@/components/ui/Tooltip';
 
 import { TierForm } from './TierForm';
+
+const mockUseQualityFields = vi.fn();
+const mockUseLibraryTypes = vi.fn();
+
+vi.mock('@/hooks/useQualityFields', () => ({
+    useQualityFields: () => mockUseQualityFields(),
+}));
+
+vi.mock('@/hooks/useLibraryTypes', () => ({
+    useLibraryTypes: () => mockUseLibraryTypes(),
+}));
+
+const defaultQualityFields = {
+    universalFields: [
+        { name: 'Title', label: 'Title', isNumeric: false },
+        { name: 'Size', label: 'Size', isNumeric: true },
+    ],
+    isLoading: false,
+    error: null,
+};
+
+const defaultLibraryTypes = {
+    contentTypes: [] as {
+        id: string;
+        name: string;
+        pluralName: string;
+        slug: string;
+        iconName: null;
+        levels: never[];
+    }[],
+    subjectTypes: [],
+    isLoading: false,
+    error: null,
+    refetch: vi.fn(),
+};
+
+beforeEach(() => {
+    vi.restoreAllMocks();
+    vi.clearAllMocks();
+    mockUseQualityFields.mockReturnValue(defaultQualityFields);
+    mockUseLibraryTypes.mockReturnValue(defaultLibraryTypes);
+});
 
 function TestWrapper({ children }: { children: ReactNode }) {
     return (
@@ -453,6 +495,237 @@ describe('TierForm', () => {
         );
 
         expect(document.querySelector('[data-criterion-id="c1"]')).toBeInTheDocument();
+    });
+
+    it('initializes a stored criterion field outside the current vocabulary', () => {
+        render(
+            <TestWrapper>
+                <TierForm
+                    open={true}
+                    onOpenChange={vi.fn()}
+                    initialValues={{
+                        id: 't1-1',
+                        name: 'Bluray-1080p',
+                        isCutoff: true,
+                        criteria: [{ id: 'c1', field: 'source', operator: 'Equals', value: 'Bluray' }],
+                    }}
+                    onSubmit={vi.fn()}
+                />
+            </TestWrapper>,
+        );
+
+        const field = screen.getByLabelText(/criterion 1 field/i);
+        expect(field).toHaveValue('source');
+    });
+});
+
+describe('TierForm dirty-on-open guard', () => {
+    const populatedTier = {
+        id: 't1',
+        name: 'Bluray-1080p',
+        isCutoff: true,
+        criteria: [{ id: 'c1', field: 'source', operator: 'Equals' as const, value: 'Bluray' }],
+        exclusions: [
+            {
+                id: 'r1',
+                name: 'Block proper',
+                criteria: [{ id: 'rc1', field: 'group', operator: 'Equals' as const, value: 'EVO' }],
+            },
+        ],
+        sourceRules: [
+            {
+                id: 'r1',
+                name: 'Block proper',
+                kind: 'Exclude' as const,
+                criteria: { and: [{ items: { group: { operator: 'Equals' as const, value: 'EVO' } } }] },
+            },
+        ],
+    };
+
+    function trackBeforeUnload() {
+        const state = { armed: false };
+        const original = window.addEventListener.bind(window);
+        vi.spyOn(window, 'addEventListener').mockImplementation((type, ...rest) => {
+            if (type === 'beforeunload') {
+                state.armed = true;
+            }
+            return original(type, ...(rest as [EventListenerOrEventListenerObject]));
+        });
+        return state;
+    }
+
+    it('does not arm the unsaved-changes guard when opening an untouched tier', () => {
+        const guard = trackBeforeUnload();
+        render(
+            <TestWrapper>
+                <TierForm open={true} onOpenChange={vi.fn()} onSubmit={vi.fn()} initialValues={populatedTier} />
+            </TestWrapper>,
+        );
+
+        expect(guard.armed).toBe(false);
+    });
+
+    it('closes without warning on cancel of an untouched existing tier', async () => {
+        const user = userEvent.setup();
+        const onOpenChange = vi.fn();
+        render(
+            <TestWrapper>
+                <TierForm open={true} onOpenChange={onOpenChange} onSubmit={vi.fn()} initialValues={populatedTier} />
+            </TestWrapper>,
+        );
+
+        await user.click(screen.getByRole('button', { name: /cancel/i }));
+
+        expect(screen.queryByText('Unsaved Changes')).not.toBeInTheDocument();
+        expect(onOpenChange).toHaveBeenCalledWith(false);
+    });
+
+    it('arms the guard after a real edit to an existing tier', async () => {
+        const user = userEvent.setup();
+        const guard = trackBeforeUnload();
+        render(
+            <TestWrapper>
+                <TierForm open={true} onOpenChange={vi.fn()} onSubmit={vi.fn()} initialValues={populatedTier} />
+            </TestWrapper>,
+        );
+
+        guard.armed = false;
+        await user.type(document.querySelector('[data-field="name"]') as HTMLElement, '!');
+
+        expect(guard.armed).toBe(true);
+    });
+});
+
+describe('TierForm dirty detection', () => {
+    it('does not warn on cancel for a loaded stored criterion field outside the current vocabulary', async () => {
+        const user = userEvent.setup();
+        const onOpenChange = vi.fn();
+        render(
+            <TestWrapper>
+                <TierForm
+                    open={true}
+                    onOpenChange={onOpenChange}
+                    initialValues={{
+                        id: 't1-1',
+                        name: 'Bluray-1080p',
+                        isCutoff: true,
+                        criteria: [{ id: 'c1', field: 'source', operator: 'Equals', value: 'Bluray' }],
+                    }}
+                    onSubmit={vi.fn()}
+                />
+            </TestWrapper>,
+        );
+
+        await user.click(screen.getByRole('button', { name: /cancel/i }));
+
+        expect(screen.queryByText('Unsaved Changes')).not.toBeInTheDocument();
+        expect(onOpenChange).toHaveBeenCalledWith(false);
+    });
+
+    it('round-trips a changed criterion field through submit and reopen', async () => {
+        const user = userEvent.setup();
+        const onSubmit = vi.fn();
+        const initialValues = {
+            id: 't1-1',
+            name: 'Bluray-1080p',
+            isCutoff: true,
+            criteria: [{ id: 'c1', field: 'source', operator: 'Equals' as const, value: 'Bluray' }],
+        };
+
+        const { rerender } = render(
+            <TestWrapper>
+                <TierForm open={true} onOpenChange={vi.fn()} initialValues={initialValues} onSubmit={onSubmit} />
+            </TestWrapper>,
+        );
+
+        fireEvent.change(screen.getByLabelText(/criterion 1 field/i), { target: { value: 'Size' } });
+        await user.click(screen.getByRole('button', { name: /save/i }));
+
+        expect(onSubmit).toHaveBeenCalledWith(
+            expect.objectContaining({
+                criteria: [expect.objectContaining({ id: 'c1', field: 'Size' })],
+            }),
+        );
+
+        const savedValues = onSubmit.mock.calls[0][0];
+
+        rerender(
+            <TestWrapper>
+                <TierForm open={false} onOpenChange={vi.fn()} initialValues={savedValues} onSubmit={onSubmit} />
+            </TestWrapper>,
+        );
+        rerender(
+            <TestWrapper>
+                <TierForm open={true} onOpenChange={vi.fn()} initialValues={savedValues} onSubmit={onSubmit} />
+            </TestWrapper>,
+        );
+
+        expect(screen.getByLabelText(/criterion 1 field/i)).toHaveValue('Size');
+    });
+
+    it('does not warn on cancel after inserting a blank criterion row', async () => {
+        const user = userEvent.setup();
+        const onOpenChange = vi.fn();
+        render(
+            <TestWrapper>
+                <TierForm open={true} onOpenChange={onOpenChange} onSubmit={vi.fn()} />
+            </TestWrapper>,
+        );
+
+        await user.click(document.querySelector('[data-action="add-criterion"]') as HTMLElement);
+        await user.click(screen.getByRole('button', { name: /cancel/i }));
+
+        expect(screen.queryByText('Unsaved Changes')).not.toBeInTheDocument();
+        expect(onOpenChange).toHaveBeenCalledWith(false);
+    });
+
+    it('does not warn on cancel after inserting a blank exclusion row', async () => {
+        const user = userEvent.setup();
+        const onOpenChange = vi.fn();
+        render(
+            <TestWrapper>
+                <TierForm open={true} onOpenChange={onOpenChange} onSubmit={vi.fn()} />
+            </TestWrapper>,
+        );
+
+        await user.click(screen.getByRole('button', { name: /add exclusion/i }));
+        await user.click(screen.getByRole('button', { name: /cancel/i }));
+
+        expect(screen.queryByText('Unsaved Changes')).not.toBeInTheDocument();
+        expect(onOpenChange).toHaveBeenCalledWith(false);
+    });
+
+    it('warns on cancel after a real field edit', async () => {
+        const user = userEvent.setup();
+        const onOpenChange = vi.fn();
+        render(
+            <TestWrapper>
+                <TierForm open={true} onOpenChange={onOpenChange} onSubmit={vi.fn()} />
+            </TestWrapper>,
+        );
+
+        await user.type(screen.getByLabelText(/name/i), 'Bluray-1080p');
+        await user.click(screen.getByRole('button', { name: /cancel/i }));
+
+        expect(screen.getByText('Unsaved Changes')).toBeInTheDocument();
+        expect(onOpenChange).not.toHaveBeenCalled();
+    });
+
+    it('warns on cancel once a criterion value is filled in', async () => {
+        const user = userEvent.setup();
+        const onOpenChange = vi.fn();
+        render(
+            <TestWrapper>
+                <TierForm open={true} onOpenChange={onOpenChange} onSubmit={vi.fn()} />
+            </TestWrapper>,
+        );
+
+        await user.click(document.querySelector('[data-action="add-criterion"]') as HTMLElement);
+        await user.type(screen.getByLabelText(/criterion 1 value/i), 'Bluray');
+        await user.click(screen.getByRole('button', { name: /cancel/i }));
+
+        expect(screen.getByText('Unsaved Changes')).toBeInTheDocument();
+        expect(onOpenChange).not.toHaveBeenCalled();
     });
 });
 

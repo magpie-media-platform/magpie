@@ -3,97 +3,74 @@ using System.CommandLine;
 using System.Threading;
 using System.Threading.Tasks;
 
-using Magpie.Abstractions.Security;
-using Magpie.Api;
-using Magpie.App.Extensions;
-using Magpie.Auth;
-using Magpie.Data;
+using Magpie.Models;
 
-using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Builder;
-using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Hosting.Systemd;
+using Microsoft.Extensions.Hosting.WindowsServices;
 
 namespace Magpie.App.Commands;
 
-/// <summary>
-/// Command that boots the Magpie host as an HTTP server, loads extensions, applies the
-/// database schema, maps every API endpoint group, and runs until cancelled.
-/// </summary>
 internal sealed class RunCommand : Command
 {
-    public RunCommand() : base("run", "Run the Magpie HTTP host with extensions loaded")
+    private readonly Option<bool> _sentinelSupervisedOption = new("--sentinel-supervised")
     {
+        Hidden = true,
+        DefaultValueFactory = _ => false
+    };
+
+    public RunCommand() : base("run", "Run the Magpie HTTP host")
+    {
+        Add(_sentinelSupervisedOption);
         SetAction(ExecuteAsync);
     }
 
-    private static async Task<int> ExecuteAsync(ParseResult parseResult, CancellationToken cancellationToken)
+    private async Task<int> ExecuteAsync(ParseResult parseResult, CancellationToken cancellationToken)
     {
+        var hostStatus = new HostStatusInfo
+        {
+            Mode = parseResult.GetValue(_sentinelSupervisedOption) switch
+            {
+                true => HostMode.Sentinel,
+                false when WindowsServiceHelpers.IsWindowsService() => HostMode.WindowsService,
+                false when SystemdHelpers.IsSystemdService() => HostMode.Systemd,
+                false => HostMode.Default
+            }
+        };
+
         var builder = WebApplication.CreateBuilder();
 
         builder.AddMagpie();
+        builder.Services.AddMagpieAuthenticationScheme();
+        builder.AddMagpieSystem(hostStatus);
 
-        builder.AddMagpieExtensions();
+        await builder.MigrateMagpieDatabaseAsync(cancellationToken).ConfigureAwait(false);
+        await builder.AddMagpieExtensionsAsync(cancellationToken: cancellationToken).ConfigureAwait(false);
 
         var app = builder.Build();
 
-        await EnsureDatabaseAsync(app, cancellationToken).ConfigureAwait(false);
+        app.EnsureMagpieClusterBackplane();
 
-        if (app.Environment.IsDevelopment())
-        {
-            // Vite dev server runs on http://localhost:5173 by default. Allow the SPA to
-            // call the API directly during local development.
-            app.UseCors(policy => policy
-                .WithOrigins("http://localhost:5173")
-                .AllowAnyHeader()
-                .AllowAnyMethod()
-                .AllowCredentials());
+        app.UseExceptionHandler();
 
-            app.UseSwagger();
-            app.UseSwaggerUI();
-        }
+        app.UseCors(policy => policy
+            .SetIsOriginAllowed(_ => true)
+            .AllowAnyHeader()
+            .AllowAnyMethod()
+            .AllowCredentials());
 
-        // IUserManager is contributed by extensions. Without one, the Magpie scheme handler
-        // ctor would throw on every authenticated request, so we drop the scheme entirely
-        // and let authorization reject those routes.
-        var userManager = app.Services.GetService<IUserManager>();
-        if (userManager is null)
-        {
-            var schemeProvider = app.Services.GetRequiredService<IAuthenticationSchemeProvider>();
-            schemeProvider.RemoveScheme(MagpieAuthSchemes.Magpie);
-            var logger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Magpie.App.RunCommand");
-            logger.LogWarning(
-                "No IUserManager registration found; the '{Scheme}' authentication scheme has been disabled. "
-                + "Authenticated endpoints will reject requests until an extension provides IUserManager.",
-                MagpieAuthSchemes.Magpie);
-        }
-
+        app.UseStaticFiles();
         app.UseAuthentication();
         app.UseAuthorization();
-
+        app.UseMagpieSetupRedirect();
         app.MapMagpieEndpoints();
+        app.MapFallbackToFile("index.html").AllowAnonymous();
 
-        await app.RunAsync(cancellationToken).ConfigureAwait(false);
+        await app.DispatchLifecycleEventsAsync(cancellationToken).ConfigureAwait(false);
 
-        return 0;
-    }
+        await app.RunAsync().ConfigureAwait(false);
 
-    private static async Task EnsureDatabaseAsync(WebApplication app, CancellationToken cancellationToken)
-    {
-        var logger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Magpie.App.RunCommand");
-        try
-        {
-            using var scope = app.Services.CreateScope();
-            var context = scope.ServiceProvider.GetRequiredService<MagpieDbContext>();
-            await context.Database.EnsureCreatedAsync(cancellationToken).ConfigureAwait(false);
-            logger.LogInformation("Database schema verified.");
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "Failed to initialize the Magpie database.");
-            throw;
-        }
+        return hostStatus.ShutdownExitCode ?? Environment.ExitCode;
     }
 }

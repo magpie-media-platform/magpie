@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom';
-import { WarningCircle, ArrowCounterClockwise, House } from '@phosphor-icons/react';
+import { WarningCircleIcon, ArrowCounterClockwiseIcon, HouseIcon } from '@phosphor-icons/react';
 
 import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
@@ -12,27 +12,24 @@ export interface RouteErrorStateProps {
     onRetry?: () => void;
 }
 
-export function RouteErrorState({
-    message = 'Something went wrong while loading this page.',
-    onRetry,
-}: RouteErrorStateProps) {
+export function RouteErrorState({ message = 'Try again or go to the dashboard.', onRetry }: RouteErrorStateProps) {
     return (
         <div className="route-error" data-component="route-error">
             <EmptyState
-                icon={<WarningCircle weight="duotone" />}
+                icon={<WarningCircleIcon weight="duotone" />}
                 title="Failed to load page"
                 description={message}
                 action={
                     <div className="route-error__actions">
                         {onRetry && (
                             <Button variant="primary" onClick={onRetry}>
-                                <ArrowCounterClockwise weight="bold" aria-hidden="true" />
+                                <ArrowCounterClockwiseIcon weight="bold" aria-hidden="true" />
                                 Retry
                             </Button>
                         )}
                         <Button asChild variant="secondary">
                             <Link to="/">
-                                <House weight="bold" aria-hidden="true" />
+                                <HouseIcon weight="bold" aria-hidden="true" />
                                 Go to Dashboard
                             </Link>
                         </Button>

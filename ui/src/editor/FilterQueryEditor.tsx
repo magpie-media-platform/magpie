@@ -1,9 +1,10 @@
-import { useRef, useEffect, useCallback, type ComponentPropsWithoutRef } from 'react';
+import { useRef, useEffect, useCallback, useState, type ComponentPropsWithoutRef } from 'react';
 import { EditorState } from '@codemirror/state';
 import { EditorView, keymap, placeholder as placeholderExt } from '@codemirror/view';
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
 import { autocompletion, closeBrackets, closeBracketsKeymap } from '@codemirror/autocomplete';
 import { HighlightStyle, syntaxHighlighting, bracketMatching } from '@codemirror/language';
+import { forEachDiagnostic } from '@codemirror/lint';
 import { tags as t } from '@lezer/highlight';
 
 import { filterQuery } from './language';
@@ -11,13 +12,13 @@ import { filterQuery } from './language';
 import './FilterQueryEditor.css';
 
 const filterQueryHighlightStyle = HighlightStyle.define([
-    { tag: t.variableName, color: 'var(--accent-secondary, #7dcfff)' },
-    { tag: t.string, color: 'var(--status-healthy, #9ece6a)' },
-    { tag: t.number, color: 'var(--status-degraded, #e0af68)' },
-    { tag: t.keyword, color: 'var(--status-stabilizing, #bb9af7)', fontWeight: 'var(--weight-medium)' },
-    { tag: t.logicOperator, color: 'var(--status-stabilizing, #bb9af7)', fontWeight: 'var(--weight-semibold)' },
-    { tag: [t.compareOperator, t.operatorKeyword], color: 'var(--accent-primary, #7aa2f7)' },
-    { tag: t.null, color: 'var(--text-muted, #858db5)', fontStyle: 'italic' },
+    { tag: t.variableName, color: 'var(--accent-secondary)' },
+    { tag: t.string, color: 'var(--status-healthy)' },
+    { tag: t.number, color: 'var(--status-degraded)' },
+    { tag: t.keyword, color: 'var(--status-stabilizing)', fontWeight: 'var(--weight-medium)' },
+    { tag: t.logicOperator, color: 'var(--status-stabilizing)', fontWeight: 'var(--weight-semibold)' },
+    { tag: [t.compareOperator, t.operatorKeyword], color: 'var(--accent-primary)' },
+    { tag: t.null, color: 'var(--text-muted)', fontStyle: 'italic' },
 ]);
 
 export interface FilterQueryEditorProps extends Omit<ComponentPropsWithoutRef<'div'>, 'onChange'> {
@@ -30,14 +31,17 @@ export interface FilterQueryEditorProps extends Omit<ComponentPropsWithoutRef<'d
     placeholder?: string;
 
     context?: 'content' | 'subject';
+
+    onErrorChange?: (error: string | null) => void;
 }
 
 export function FilterQueryEditor({
     value,
     onChange,
     readOnly = false,
-    placeholder = 'e.g. genre has "Action" and monitoring = Active',
+    placeholder = 'genre has "Action" and monitoring = true',
     context = 'content',
+    onErrorChange,
     className,
     ...props
 }: FilterQueryEditorProps) {
@@ -48,7 +52,26 @@ export function FilterQueryEditor({
     const valueRef = useRef(value);
     valueRef.current = value;
 
-    const isInternalUpdate = useRef(false);
+    const [errorMessage, setErrorMessage] = useState<string | null>(null);
+    const errorRef = useRef<string | null>(null);
+    const onErrorChangeRef = useRef(onErrorChange);
+    onErrorChangeRef.current = onErrorChange;
+
+    const syncDiagnostics = useCallback((view: EditorView) => {
+        let firstError: string | null = null;
+        forEachDiagnostic(view.state, (d) => {
+            if (firstError === null && d.severity === 'error') {
+                firstError = d.message;
+            }
+        });
+        if (firstError !== errorRef.current) {
+            errorRef.current = firstError;
+            setErrorMessage(firstError);
+            onErrorChangeRef.current?.(firstError);
+        }
+    }, []);
+
+    const lastEmittedRef = useRef(value);
 
     const createEditor = useCallback(() => {
         if (!containerRef.current) {
@@ -65,12 +88,17 @@ export function FilterQueryEditor({
                 closeBrackets(),
                 autocompletion({ activateOnTyping: true, icons: false }),
                 placeholderExt(placeholder),
+                EditorView.lineWrapping,
                 keymap.of([...closeBracketsKeymap, ...defaultKeymap, ...historyKeymap]),
                 EditorView.updateListener.of((update) => {
                     if (update.docChanged) {
-                        isInternalUpdate.current = true;
-                        onChangeRef.current(update.state.doc.toString());
+                        const text = update.state.doc.toString();
+                        if (text !== lastEmittedRef.current || text !== valueRef.current) {
+                            lastEmittedRef.current = text;
+                            onChangeRef.current(text);
+                        }
                     }
+                    syncDiagnostics(update.view);
                 }),
                 EditorView.editable.of(!readOnly),
                 EditorView.theme({
@@ -101,7 +129,7 @@ export function FilterQueryEditor({
                     },
                     '.cm-tooltip.cm-tooltip-autocomplete > ul > li': {
                         color: 'var(--text-primary, #c0caf5)',
-                        padding: '4px 8px',
+                        padding: 'var(--space-xs) var(--space-sm)',
                     },
                     '.cm-tooltip.cm-tooltip-autocomplete > ul > li[aria-selected]': {
                         background: 'var(--accent-primary, #7aa2f7)',
@@ -120,7 +148,7 @@ export function FilterQueryEditor({
         });
 
         viewRef.current = view;
-    }, [context, placeholder, readOnly]);
+    }, [context, placeholder, readOnly, syncDiagnostics]);
 
     useEffect(() => {
         createEditor();
@@ -137,32 +165,47 @@ export function FilterQueryEditor({
             return;
         }
 
-        if (isInternalUpdate.current) {
-            isInternalUpdate.current = false;
+        const currentDoc = view.state.doc.toString();
+        if (currentDoc === value || lastEmittedRef.current === value) {
             return;
         }
 
-        const currentDoc = view.state.doc.toString();
-        if (currentDoc !== value) {
-            view.dispatch({
-                changes: { from: 0, to: currentDoc.length, insert: value },
-            });
-        }
+        const prevSelection = view.state.selection.main;
+        const caret = Math.min(prevSelection.head, value.length);
+        lastEmittedRef.current = value;
+        view.dispatch({
+            changes: { from: 0, to: currentDoc.length, insert: value },
+            selection: { anchor: caret },
+        });
     }, [value]);
 
-    const classes = ['filter-query-editor', readOnly && 'filter-query-editor--readonly', className]
+    const classes = [
+        'filter-query-editor',
+        readOnly && 'filter-query-editor--readonly',
+        errorMessage && 'filter-query-editor--invalid',
+        className,
+    ]
         .filter(Boolean)
         .join(' ');
 
     return (
-        <div
-            ref={containerRef}
-            className={classes}
-            role="textbox"
-            aria-label="Filter query"
-            aria-readonly={readOnly || undefined}
-            data-readonly={readOnly || undefined}
-            {...props}
-        />
+        <div className="filter-query-editor-field" data-component="filter-query-editor">
+            <div
+                ref={containerRef}
+                className={classes}
+                role="textbox"
+                aria-label="Filter query"
+                aria-invalid={errorMessage ? true : undefined}
+                aria-readonly={readOnly || undefined}
+                data-readonly={readOnly || undefined}
+                data-invalid={errorMessage ? true : undefined}
+                {...props}
+            />
+            {errorMessage && (
+                <p className="filter-query-editor__error" role="alert" data-component="filter-query-error">
+                    {errorMessage}
+                </p>
+            )}
+        </div>
     );
 }

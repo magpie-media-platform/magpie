@@ -108,10 +108,10 @@ describe('useDebouncedValue', () => {
 
         const { result: objectResult, rerender: rerenderObject } = renderHook(
             ({ value }) => useDebouncedValue(value, 100),
-            { initialProps: { value: { a: 1 } } },
+            { initialProps: { value: { a: 1 } as Record<string, number> } },
         );
 
-        const newObject = { b: 2 };
+        const newObject: Record<string, number> = { b: 2 };
         rerenderObject({ value: newObject });
         act(() => {
             vi.advanceTimersByTime(100);
@@ -139,7 +139,6 @@ describe('useDebouncedValue', () => {
         });
 
         rerender({ value: 'pending' });
-        // Timer is still pending: do not advance time.
         unmount();
 
         expect(onFlush).toHaveBeenCalledTimes(1);

@@ -154,9 +154,9 @@ describe('useCrudResource', () => {
     });
 
     describe('toggling enabled', () => {
-        it('should enable via POST /{id}/enable', async () => {
+        it('should enable via PATCH /{id}', async () => {
             mockApiGet.mockResolvedValue(mockItems);
-            mockApiPost.mockResolvedValue({ ...mockItems[1], enabled: true });
+            mockApiPatch.mockResolvedValue(undefined);
 
             const { result } = renderHook(() => useTestResource(), { wrapper: createWrapper() });
 
@@ -168,12 +168,14 @@ describe('useCrudResource', () => {
                 await result.current.toggleEnabled('item-2', true);
             });
 
-            expect(mockApiPost).toHaveBeenCalledWith('/test-resources/item-2/enable');
+            expect(mockApiPatch).toHaveBeenCalledWith('/test-resources/item-2', {
+                enabled: { value: true },
+            });
         });
 
-        it('should disable via POST /{id}/disable', async () => {
+        it('should disable via PATCH /{id}', async () => {
             mockApiGet.mockResolvedValue(mockItems);
-            mockApiPost.mockResolvedValue({ ...mockItems[0], enabled: false });
+            mockApiPatch.mockResolvedValue(undefined);
 
             const { result } = renderHook(() => useTestResource(), { wrapper: createWrapper() });
 
@@ -185,7 +187,9 @@ describe('useCrudResource', () => {
                 await result.current.toggleEnabled('item-1', false);
             });
 
-            expect(mockApiPost).toHaveBeenCalledWith('/test-resources/item-1/disable');
+            expect(mockApiPatch).toHaveBeenCalledWith('/test-resources/item-1', {
+                enabled: { value: false },
+            });
         });
     });
 

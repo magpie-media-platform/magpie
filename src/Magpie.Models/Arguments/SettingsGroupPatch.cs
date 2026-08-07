@@ -1,27 +1,26 @@
 using System;
 
-using Magpie.Models.Data;
 using Magpie.Models.Patch;
 
 namespace Magpie.Models.Arguments;
 
 /// <summary>
-/// Patch for <see cref="SettingsGroup"/>.
+/// The partial-update arguments for a settings group.
 /// </summary>
 public sealed record SettingsGroupPatch
 {
     /// <summary>
-    /// The <see cref="SettingsGroup.ExtensionId"/> of the item to patch.
+    /// The id of the extension that owns the group.
     /// </summary>
-    public required Guid? ExtensionId { get; init; }
+    public Guid? ExtensionId { get; init; }
 
     /// <summary>
-    /// The <see cref="SettingsGroup.Name"/> of the item to patch.
+    /// The name of the settings group.
     /// </summary>
-    public required string Name { get; init; }
+    public string Name { get; init; } = string.Empty;
 
     /// <summary>
-    /// The <see cref="SettingsGroup.Settings"/> to patch.
+    /// The patch for the settings keys and values.
     /// </summary>
     public DictionaryPatch<string, string, string> Settings { get; init; } = new();
 }

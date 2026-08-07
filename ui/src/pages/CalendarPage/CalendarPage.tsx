@@ -1,17 +1,17 @@
-import { useMemo, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useEffect, useMemo, useCallback } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
-    CalendarBlank,
-    CaretLeft,
-    CaretRight,
-    ListBullets,
-    SquaresFour,
-    Rows,
-    CalendarDots,
+    CalendarBlankIcon,
+    CaretLeftIcon,
+    CaretRightIcon,
+    ListBulletsIcon,
+    SquaresFourIcon,
+    RowsIcon,
+    CalendarDotsIcon,
 } from '@phosphor-icons/react';
 
 import { Button } from '@/components/ui/Button';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/Select';
+import { PageHeader } from '@/components/ui/PageHeader';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { CalendarMainSlot } from '@/components/ui/Slot/CalendarSlots';
 import { PullToRefresh } from '@/components/ui/PullToRefresh';
@@ -24,99 +24,79 @@ import { DayView } from './DayView';
 import { ListView } from './ListView';
 import { MonthView } from './MonthView';
 import { WeekView } from './WeekView';
-import { formatDate, getMonthDays, getWeekStart, isSameDay, WEEKDAY_NAMES } from './calendarUtils';
+import {
+    formatDate,
+    formatDateKey,
+    getMonthDays,
+    getWeekStart,
+    isSameDay,
+    parseCalendarDate,
+    WEEKDAY_NAMES,
+} from './calendarUtils';
+import {
+    canonicalizeCalendarSearchParams,
+    DEFAULT_CALENDAR_VIEW,
+    normalizeCalendarView,
+    parseCalendarDateParam,
+} from './calendarUrlState';
 
 import './CalendarPage.css';
-
-const ALL_VALUE = '__all__';
-
-const VALID_VIEWS: CalendarView[] = ['month', 'week', 'day', 'list'];
-
-const VALID_KINDS = ['episode', 'movie', 'music', 'book'];
-
-function parseDateParam(value: string | null): Date | null {
-    if (!value) {
-        return null;
-    }
-    const parsed = new Date(value + 'T00:00:00');
-    if (isNaN(parsed.getTime())) {
-        return null;
-    }
-    return parsed;
-}
-
-function formatDateParam(date: Date): string {
-    const y = date.getFullYear();
-    const m = String(date.getMonth() + 1).padStart(2, '0');
-    const d = String(date.getDate()).padStart(2, '0');
-    return `${y}-${m}-${d}`;
-}
-
-const kindFilterOptions = [
-    { value: ALL_VALUE, label: 'All Types' },
-    { value: 'episode', label: 'Episodes' },
-    { value: 'movie', label: 'Movies' },
-    { value: 'music', label: 'Music' },
-    { value: 'book', label: 'Books' },
-];
 
 export function CalendarPage() {
     useDocumentTitle('Calendar');
     const navigate = useNavigate();
+    const [searchParams, setSearchParams] = useSearchParams();
     const [urlState, updateParams] = useUrlFilterState({
-        view: 'month',
-        date: formatDateParam(new Date()),
-        kind: ALL_VALUE,
+        view: DEFAULT_CALENDAR_VIEW,
+        date: formatDateKey(new Date()),
     });
 
-    const view: CalendarView = VALID_VIEWS.includes(urlState.view as CalendarView)
-        ? (urlState.view as CalendarView)
-        : 'month';
+    useEffect(() => {
+        const canonicalParams = canonicalizeCalendarSearchParams(searchParams);
+        if (canonicalParams) {
+            setSearchParams(canonicalParams, { replace: true });
+        }
+    }, [searchParams, setSearchParams]);
 
-    const currentDate: Date = useMemo(() => parseDateParam(urlState.date) ?? new Date(), [urlState.date]);
+    const view: CalendarView = normalizeCalendarView(urlState.view) ?? DEFAULT_CALENDAR_VIEW;
 
-    const kindFilter: string = VALID_KINDS.includes(urlState.kind) ? urlState.kind : ALL_VALUE;
+    const currentDate: Date = useMemo(() => parseCalendarDateParam(urlState.date) ?? new Date(), [urlState.date]);
 
     const dateRange = useMemo(() => {
-        const toIso = (d: Date): string => d.toISOString().split('T')[0];
         switch (view) {
             case 'day':
-                return { startDate: toIso(currentDate), endDate: toIso(currentDate) };
+                return { startDate: formatDateKey(currentDate), endDate: formatDateKey(currentDate) };
             case 'week': {
                 const weekStart = getWeekStart(currentDate);
                 const weekEnd = new Date(weekStart);
                 weekEnd.setDate(weekStart.getDate() + 6);
-                return { startDate: toIso(weekStart), endDate: toIso(weekEnd) };
+                return { startDate: formatDateKey(weekStart), endDate: formatDateKey(weekEnd) };
             }
             case 'list': {
                 const today = new Date();
                 today.setHours(0, 0, 0, 0);
                 const listEnd = new Date(today);
                 listEnd.setDate(today.getDate() + 6);
-                return { startDate: toIso(today), endDate: toIso(listEnd) };
+                return { startDate: formatDateKey(today), endDate: formatDateKey(listEnd) };
             }
             case 'month':
             default: {
                 const monthDays = getMonthDays(currentDate.getFullYear(), currentDate.getMonth());
-                return { startDate: toIso(monthDays[0]), endDate: toIso(monthDays[monthDays.length - 1]) };
+                return {
+                    startDate: formatDateKey(monthDays[0]),
+                    endDate: formatDateKey(monthDays[monthDays.length - 1]),
+                };
             }
         }
     }, [view, currentDate]);
 
     const { events, isLoading, refetch } = useCalendar(dateRange);
 
-    const filteredEvents = useMemo(() => {
-        if (kindFilter === ALL_VALUE) {
-            return events;
-        }
-        return events.filter((e) => e.kind === kindFilter);
-    }, [events, kindFilter]);
-
     const getEventsForDate = useCallback(
         (date: Date): CalendarEvent[] => {
-            return filteredEvents.filter((e) => isSameDay(new Date(e.date), date));
+            return events.filter((event) => isSameDay(parseCalendarDate(event.date), date));
         },
-        [filteredEvents],
+        [events],
     );
 
     const viewEvents = useMemo(() => {
@@ -125,38 +105,39 @@ export function CalendarPage() {
                 return getEventsForDate(currentDate);
             case 'week': {
                 const weekStart = getWeekStart(currentDate);
-                const weekEnd = new Date(weekStart);
-                weekEnd.setDate(weekStart.getDate() + 6);
-                return filteredEvents.filter((e) => {
-                    const eventDate = new Date(e.date);
-                    return eventDate >= weekStart && eventDate <= weekEnd;
+                const weekEndExclusive = new Date(weekStart);
+                weekEndExclusive.setDate(weekStart.getDate() + 7);
+                return events.filter((event) => {
+                    const eventDate = parseCalendarDate(event.date);
+                    return eventDate >= weekStart && eventDate < weekEndExclusive;
                 });
             }
             case 'list': {
                 const today = new Date();
                 today.setHours(0, 0, 0, 0);
-                const weekEnd = new Date(today);
-                weekEnd.setDate(today.getDate() + 6);
-                return filteredEvents
-                    .filter((e) => {
-                        const eventDate = new Date(e.date);
-                        return eventDate >= today && eventDate <= weekEnd;
+                const weekEndExclusive = new Date(today);
+                weekEndExclusive.setDate(today.getDate() + 7);
+                return events
+                    .filter((event) => {
+                        const eventDate = parseCalendarDate(event.date);
+                        return eventDate >= today && eventDate < weekEndExclusive;
                     })
-                    .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+                    .sort((a, b) => parseCalendarDate(a.date).getTime() - parseCalendarDate(b.date).getTime());
             }
             case 'month': {
                 const monthDays = getMonthDays(currentDate.getFullYear(), currentDate.getMonth());
                 const monthStart = monthDays[0];
-                const monthEnd = monthDays[monthDays.length - 1];
-                return filteredEvents.filter((e) => {
-                    const eventDate = new Date(e.date);
-                    return eventDate >= monthStart && eventDate <= monthEnd;
+                const monthEndExclusive = new Date(monthDays[monthDays.length - 1]);
+                monthEndExclusive.setDate(monthEndExclusive.getDate() + 1);
+                return events.filter((event) => {
+                    const eventDate = parseCalendarDate(event.date);
+                    return eventDate >= monthStart && eventDate < monthEndExclusive;
                 });
             }
             default:
-                return filteredEvents;
+                return events;
         }
-    }, [view, currentDate, filteredEvents, getEventsForDate]);
+    }, [view, currentDate, events, getEventsForDate]);
 
     const handlePrev = useCallback(() => {
         let newDate: Date;
@@ -172,10 +153,10 @@ export function CalendarPage() {
                 newDate = new Date(currentDate);
                 newDate.setDate(newDate.getDate() - 1);
                 break;
-            default:
+            case 'list':
                 return;
         }
-        updateParams({ date: formatDateParam(newDate) });
+        updateParams({ date: formatDateKey(newDate) });
     }, [currentDate, view, updateParams]);
 
     const handleNext = useCallback(() => {
@@ -192,26 +173,26 @@ export function CalendarPage() {
                 newDate = new Date(currentDate);
                 newDate.setDate(newDate.getDate() + 1);
                 break;
-            default:
+            case 'list':
                 return;
         }
-        updateParams({ date: formatDateParam(newDate) });
+        updateParams({ date: formatDateKey(newDate) });
     }, [currentDate, view, updateParams]);
 
     const handleToday = useCallback(() => {
-        updateParams({ date: formatDateParam(new Date()) });
+        updateParams({ date: formatDateKey(new Date()) });
     }, [updateParams]);
 
     const handleEventClick = useCallback(
         (event: CalendarEvent) => {
-            navigate(`/library/${event.contentId}`);
+            void navigate(`/library/${event.contentId}`);
         },
         [navigate],
     );
 
     const handleDayClick = useCallback(
         (date: Date) => {
-            updateParams({ view: 'day', date: formatDateParam(date) });
+            updateParams({ view: 'day', date: formatDateKey(date) });
         },
         [updateParams],
     );
@@ -242,31 +223,12 @@ export function CalendarPage() {
     return (
         <div className="calendar-page" data-page="calendar">
             <PullToRefresh onRefresh={handleRefresh} className="calendar-page__pull-to-refresh">
-                <header className="calendar-page__header">
-                    <div className="calendar-page__header-left">
-                        <CalendarBlank
-                            weight="duotone"
-                            className="calendar-page__icon"
-                            data-testid="calendar-page__icon"
-                            aria-hidden="true"
-                        />
-                        <h1 className="calendar-page__title">Calendar</h1>
-                    </div>
-                    <div className="calendar-page__header-actions">
-                        <Select value={kindFilter} onValueChange={(val) => updateParams({ kind: val })}>
-                            <SelectTrigger className="calendar-page__filter-trigger" data-filter="kind">
-                                <SelectValue placeholder="All Types" />
-                            </SelectTrigger>
-                            <SelectContent>
-                                {kindFilterOptions.map((opt) => (
-                                    <SelectItem key={opt.value} value={opt.value}>
-                                        {opt.label}
-                                    </SelectItem>
-                                ))}
-                            </SelectContent>
-                        </Select>
-                    </div>
-                </header>
+                <PageHeader
+                    className="calendar-page__header"
+                    title="Calendar"
+                    description="Upcoming release calendar for content in your library."
+                    icon={<CalendarBlankIcon weight="duotone" data-testid="calendar-page__icon" aria-hidden="true" />}
+                />
 
                 <CalendarMainSlot>
                     <section className="calendar-page__controls" aria-label="Calendar navigation">
@@ -278,11 +240,11 @@ export function CalendarPage() {
                                 aria-label="Previous"
                                 data-action="prev"
                             >
-                                <CaretLeft weight="bold" />
+                                <CaretLeftIcon weight="bold" />
                             </Button>
                             <span className="calendar-page__nav-title">{headerTitle}</span>
                             <Button variant="ghost" size="sm" onClick={handleNext} aria-label="Next" data-action="next">
-                                <CaretRight weight="bold" />
+                                <CaretRightIcon weight="bold" />
                             </Button>
                             <Button variant="secondary" size="sm" onClick={handleToday} data-action="today">
                                 Today
@@ -298,7 +260,7 @@ export function CalendarPage() {
                                 data-view="month"
                                 data-active={view === 'month' || undefined}
                             >
-                                <SquaresFour weight={view === 'month' ? 'fill' : 'regular'} />
+                                <SquaresFourIcon weight={view === 'month' ? 'fill' : 'regular'} />
                                 <span className="calendar-page__view-btn-label">Month</span>
                             </button>
                             <button
@@ -310,7 +272,7 @@ export function CalendarPage() {
                                 data-view="week"
                                 data-active={view === 'week' || undefined}
                             >
-                                <Rows weight={view === 'week' ? 'fill' : 'regular'} />
+                                <RowsIcon weight={view === 'week' ? 'fill' : 'regular'} />
                                 <span className="calendar-page__view-btn-label">Week</span>
                             </button>
                             <button
@@ -322,7 +284,7 @@ export function CalendarPage() {
                                 data-view="day"
                                 data-active={view === 'day' || undefined}
                             >
-                                <CalendarDots weight={view === 'day' ? 'fill' : 'regular'} />
+                                <CalendarDotsIcon weight={view === 'day' ? 'fill' : 'regular'} />
                                 <span className="calendar-page__view-btn-label">Day</span>
                             </button>
                             <button
@@ -334,7 +296,7 @@ export function CalendarPage() {
                                 data-view="list"
                                 data-active={view === 'list' || undefined}
                             >
-                                <ListBullets weight={view === 'list' ? 'fill' : 'regular'} />
+                                <ListBulletsIcon weight={view === 'list' ? 'fill' : 'regular'} />
                                 <span className="calendar-page__view-btn-label">List</span>
                             </button>
                         </div>
@@ -358,7 +320,6 @@ export function CalendarPage() {
                     {!isLoading && view === 'month' && (
                         <MonthView
                             currentDate={currentDate}
-                            viewEvents={viewEvents}
                             getEventsForDate={getEventsForDate}
                             onDayClick={handleDayClick}
                         />
@@ -367,7 +328,6 @@ export function CalendarPage() {
                     {!isLoading && view === 'week' && (
                         <WeekView
                             currentDate={currentDate}
-                            viewEvents={viewEvents}
                             getEventsForDate={getEventsForDate}
                             onDayClick={handleDayClick}
                             onEventClick={handleEventClick}

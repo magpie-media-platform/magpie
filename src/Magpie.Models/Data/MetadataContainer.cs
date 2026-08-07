@@ -4,27 +4,27 @@ using System.Collections.Generic;
 namespace Magpie.Models.Data;
 
 /// <summary>
-/// A container for layered metadata contributions.
+/// A holder for the layered metadata contributions of one item.
 /// </summary>
 public record MetadataContainer
 {
     /// <summary>
-    /// The metadata container id.
+    /// The unique id of the metadata container.
     /// </summary>
     public Guid Id { get; set; }
 
     /// <summary>
-    /// When the record was created.
+    /// The UTC time when the record was created.
     /// </summary>
     public DateTime CreatedAt { get; set; }
 
     /// <summary>
-    /// When the metadata was last refreshed.
+    /// The UTC time of the last refresh from the providers.
     /// </summary>
     public DateTime? DateLastRefreshed { get; set; }
 
     /// <summary>
-    /// Metadata contributions from various providers.
+    /// The provider contributions that the container holds.
     /// </summary>
     public ICollection<MetadataContribution> Contributions { get; } = [];
 }

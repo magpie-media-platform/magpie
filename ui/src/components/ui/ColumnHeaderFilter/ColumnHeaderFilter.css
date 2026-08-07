@@ -1,0 +1,87 @@
+@layer components {
+    .column-header-filter {
+        display: inline-flex;
+        align-items: center;
+        min-width: 0;
+        gap: var(--space-sm);
+    }
+
+    .column-header-filter__label {
+        line-height: 1;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .column-header-filter__trigger {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        flex: none;
+        gap: var(--space-2xs);
+        min-width: 1.5rem;
+        min-height: 1.5rem;
+        padding: 0.25rem;
+        border: 1px solid transparent;
+        border-radius: var(--radius-sm);
+        background: transparent;
+        color: var(--text-muted);
+        cursor: pointer;
+        line-height: 0;
+        transition:
+            color var(--duration-fast) var(--easing-default),
+            background-color var(--duration-fast) var(--easing-default),
+            border-color var(--duration-fast) var(--easing-default);
+    }
+
+    .column-header-filter__trigger svg {
+        width: 1rem;
+        height: 1rem;
+        flex: none;
+    }
+
+    .column-header-filter__trigger:hover {
+        color: var(--text-secondary);
+        background: var(--bg-tertiary);
+    }
+
+    .column-header-filter__trigger[data-active] {
+        color: var(--filter-active);
+    }
+
+    .column-header-filter__trigger[data-active]:hover {
+        color: var(--filter-active);
+        background: color-mix(in srgb, var(--filter-active) 15%, transparent);
+    }
+
+    .column-header-filter__trigger:focus-visible {
+        outline: var(--focus-ring-width) solid var(--focus-ring-color);
+        outline-offset: var(--focus-ring-offset);
+    }
+
+    .column-header-filter__trigger:disabled {
+        cursor: not-allowed;
+        opacity: 0.5;
+    }
+
+    .column-header-filter__trigger:disabled:hover {
+        color: var(--text-muted);
+        background: transparent;
+    }
+
+    .column-header-filter__form {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-xs, 0.5rem);
+        padding: var(--space-xs, 0.5rem);
+        min-width: 14rem;
+    }
+
+    .column-header-filter__actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: var(--space-xs, 0.5rem);
+        margin-top: var(--space-2xs, 0.25rem);
+    }
+}

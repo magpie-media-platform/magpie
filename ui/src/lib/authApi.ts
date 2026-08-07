@@ -1,21 +1,19 @@
 import { apiFetch, tokenStorage, ApiError } from './api';
-import type { Role } from '@/auth/types';
+import { Role, roleFromApi, type EffectivePermissions, type PermissionGrant } from '@/auth/types';
 
-export interface LoginRequest {
+interface LoginRequest {
     username: string;
 
     password: string;
 }
 
-export interface AuthTokenResponse {
+interface AuthTokenResponse {
     accessToken: string;
 
     accessTokenExpiresAt: string;
-
-    refreshToken: string;
 }
 
-export interface JwtUser {
+interface JwtUser {
     id: string;
 
     username: string;
@@ -23,37 +21,15 @@ export interface JwtUser {
     role: Role;
 }
 
-const REFRESH_TOKEN_KEY = 'magpie_refresh_token';
-
 const TOKEN_EXPIRES_KEY = 'magpie_token_expires';
 
-export const refreshTokenStorage = {
-    get(): string | null {
-        try {
-            return localStorage.getItem(REFRESH_TOKEN_KEY);
-        } catch {
-            return null;
-        }
-    },
-
-    set(token: string): void {
-        try {
-            localStorage.setItem(REFRESH_TOKEN_KEY, token);
-        } catch {
-            /* empty */
-        }
-    },
-
-    remove(): void {
-        try {
-            localStorage.removeItem(REFRESH_TOKEN_KEY);
-        } catch {
-            /* empty */
-        }
-    },
-};
-
 export const tokenExpirationStorage = {
+    storageKey: TOKEN_EXPIRES_KEY,
+
+    isStorageKey(key: string | null): boolean {
+        return key === TOKEN_EXPIRES_KEY;
+    },
+
     get(): Date | null {
         try {
             const value = localStorage.getItem(TOKEN_EXPIRES_KEY);
@@ -67,7 +43,7 @@ export const tokenExpirationStorage = {
         try {
             localStorage.setItem(TOKEN_EXPIRES_KEY, expiresAt.toISOString());
         } catch {
-            /* empty */
+            void 0;
         }
     },
 
@@ -75,7 +51,7 @@ export const tokenExpirationStorage = {
         try {
             localStorage.removeItem(TOKEN_EXPIRES_KEY);
         } catch {
-            /* empty */
+            void 0;
         }
     },
 };
@@ -91,10 +67,6 @@ export function decodeJwtUser(token: string): JwtUser | null {
         const decodedPayload = atob(payload.replace(/-/g, '+').replace(/_/g, '/'));
         const claims = JSON.parse(decodedPayload);
 
-        // Reject tokens that don't carry a numeric `exp` claim, or whose `exp` claim has
-        // passed. The Magpie auth backend always mints tokens with `exp`; treating a
-        // missing claim as "no expiry constraint" would let a maliciously crafted JWT
-        // bypass session expiry entirely, so we fail closed here.
         if (typeof claims.exp !== 'number' || claims.exp * 1000 <= Date.now()) {
             return null;
         }
@@ -111,8 +83,9 @@ export function decodeJwtUser(token: string): JwtUser | null {
             return null;
         }
 
-        const role = parseInt(roleStr, 10);
-        if (isNaN(role) || role < 0 || role > 3) {
+        const numeric = parseInt(roleStr, 10);
+        const role = isNaN(numeric) ? (Role as Record<string, number>)[roleStr] : numeric;
+        if (typeof role !== 'number' || isNaN(role) || role < 0 || role > 3) {
             return null;
         }
 
@@ -134,7 +107,6 @@ export async function login(username: string, password: string): Promise<JwtUser
     });
 
     tokenStorage.set(response.accessToken);
-    refreshTokenStorage.set(response.refreshToken);
     tokenExpirationStorage.set(new Date(response.accessTokenExpiresAt));
 
     const user = decodeJwtUser(response.accessToken);
@@ -146,38 +118,28 @@ export async function login(username: string, password: string): Promise<JwtUser
 }
 
 export async function logout(): Promise<void> {
-    const refreshToken = refreshTokenStorage.get();
+    const token = tokenStorage.get();
 
-    clearAuthStorage();
-
-    if (refreshToken) {
-        try {
-            await apiFetch('/auth/logout', {
-                method: 'POST',
-                body: { refreshToken },
-            });
-        } catch {
-            /* empty */
-        }
+    try {
+        await apiFetch('/auth/logout', {
+            method: 'POST',
+            ...(token ? { headers: { Authorization: `Bearer ${token}` } } : { skipAuth: true }),
+        });
+    } catch {
+        void 0;
+    } finally {
+        clearAuthStorage();
     }
 }
 
 export async function refreshAccessToken(): Promise<JwtUser> {
-    const refreshToken = refreshTokenStorage.get();
-
-    if (!refreshToken) {
-        throw new ApiError(401, 'No refresh token available');
-    }
-
     try {
         const response = await apiFetch<AuthTokenResponse>('/auth/refresh', {
             method: 'POST',
-            body: { refreshToken },
             skipAuth: true,
         });
 
         tokenStorage.set(response.accessToken);
-        refreshTokenStorage.set(response.refreshToken);
         tokenExpirationStorage.set(new Date(response.accessTokenExpiresAt));
 
         const user = decodeJwtUser(response.accessToken);
@@ -192,6 +154,32 @@ export async function refreshAccessToken(): Promise<JwtUser> {
     }
 }
 
+interface RawPermissionGrant {
+    requiredRole: Role | string | number;
+
+    granted: boolean;
+}
+
+interface RawEffectivePermissions {
+    role: Role | string | number;
+
+    permissions: Record<string, RawPermissionGrant>;
+}
+
+export async function fetchEffectivePermissions(): Promise<EffectivePermissions> {
+    const raw = await apiFetch<RawEffectivePermissions>('/auth/permissions', { method: 'GET' });
+
+    const permissions: Record<string, PermissionGrant> = {};
+    for (const [key, grant] of Object.entries(raw?.permissions ?? {})) {
+        permissions[key] = {
+            requiredRole: roleFromApi(grant.requiredRole),
+            granted: Boolean(grant.granted),
+        };
+    }
+
+    return { role: roleFromApi(raw?.role), permissions };
+}
+
 export function isTokenExpired(bufferSeconds = 60): boolean {
     const expiresAt = tokenExpirationStorage.get();
     if (!expiresAt) {
@@ -204,7 +192,7 @@ export function isTokenExpired(bufferSeconds = 60): boolean {
 }
 
 export function hasStoredSession(): boolean {
-    return tokenStorage.exists() && refreshTokenStorage.get() !== null;
+    return tokenStorage.exists();
 }
 
 export function getCurrentUserFromToken(): JwtUser | null {
@@ -217,6 +205,5 @@ export function getCurrentUserFromToken(): JwtUser | null {
 
 export function clearAuthStorage(): void {
     tokenStorage.remove();
-    refreshTokenStorage.remove();
     tokenExpirationStorage.remove();
 }

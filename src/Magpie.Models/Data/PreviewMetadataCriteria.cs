@@ -5,32 +5,37 @@ using Magpie.Models.Filtering;
 namespace Magpie.Models.Data;
 
 /// <summary>
-/// Filter criteria for <see cref="Preview"/>.
+/// The filter criteria for a <see cref="Preview"/>.
 /// </summary>
 public sealed record PreviewMetadataCriteria
 {
     /// <summary>
-    /// The criteria for <see cref="Preview.Kind"/>.
+    /// The criteria on the MIME type of the preview.
     /// </summary>
     public CriteriaSet<PropertyCriterion<string>> MimeType { get; init; } = new();
+
     /// <summary>
-    /// The criteria for <see cref="Preview.Url"/>.
+    /// The criteria on the URL of the preview.
     /// </summary>
     public CriteriaSet<PropertyCriterion<string>> Url { get; init; } = new();
+
     /// <summary>
-    /// The criteria for <see cref="Preview.Source"/>.
+    /// The criteria on the name of the upstream source.
     /// </summary>
     public CriteriaSet<PropertyCriterion<string>> Source { get; init; } = new();
+
     /// <summary>
-    /// The criteria for <see cref="Preview.Title"/>.
+    /// The criteria on the title of the preview.
     /// </summary>
     public CriteriaSet<PropertyCriterion<string>> Title { get; init; } = new();
+
     /// <summary>
-    /// The criteria for <see cref="Preview.ReleaseDate"/>.
+    /// The criteria on the date when the preview became public.
     /// </summary>
     public CriteriaSet<PropertyCriterion<DateTime>> ReleaseDate { get; init; } = new();
+
     /// <summary>
-    /// The criteria for <see cref="Preview.Language"/>.
+    /// The criteria on the language code of the preview.
     /// </summary>
     public CriteriaSet<PropertyCriterion<string>> Language { get; init; } = new();
 }

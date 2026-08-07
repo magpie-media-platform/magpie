@@ -27,7 +27,7 @@
         color: inherit;
         transition: background-color var(--duration-fast) var(--easing-default);
         flex: 1;
-        min-width: 0;
+        min-width: fit-content;
     }
 
     a.service-health-bar__segment {
@@ -74,6 +74,14 @@
     }
 
     .service-health-bar__dot--degraded {
+        background-color: var(--status-degraded);
+    }
+
+    .service-health-bar__dot--stabilizing {
+        background-color: var(--status-stabilizing);
+    }
+
+    .service-health-bar__dot--stale {
         background-color: var(--status-degraded);
     }
 
@@ -128,11 +136,15 @@
         color: var(--status-degraded);
     }
 
-    @media (max-width: 480px) {
-        .service-health-bar {
-            padding: var(--space-sm);
-        }
+    .service-health-bar__segment--stabilizing .service-health-bar__summary {
+        color: var(--status-stabilizing);
+    }
 
+    .service-health-bar__segment--stale .service-health-bar__summary {
+        color: var(--status-degraded);
+    }
+
+    @media (max-width: 480px) {
         .service-health-bar__services {
             flex-direction: column;
             align-items: stretch;

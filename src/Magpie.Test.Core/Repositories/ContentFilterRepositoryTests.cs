@@ -1,18 +1,24 @@
 using System;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions.Repositories;
 using Magpie.Core;
 using Magpie.Core.Repositories;
 using Magpie.Data;
+using Magpie.Models;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
-using Magpie.Test.Shared;
+using Magpie.Sdk.Events;
+using Magpie.Sdk.Services;
 
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
+
+using Moq;
 
 using NUnit.Framework;
 
@@ -23,6 +29,7 @@ public class ContentFilterRepositoryTests
 {
     private MagpieDbContext _context = null!;
     private IContentFilterRepository _subject = null!;
+    private Mock<IEventBus> _eventBus = null!;
     private Guid _userId;
 
     [SetUp]
@@ -49,16 +56,23 @@ public class ContentFilterRepositoryTests
 
         _userId = user.Id;
 
-        var loggerFactory = LoggerFactory.Create(b => b.AddTestLogger());
+        var loggerFactory = NullLoggerFactory.Instance;
         var auditRecordRepository = new AuditRecordRepository(
             _context,
-            loggerFactory.CreateLogger<AuditRecordRepository>());
-        var transactionManager = new TransactionManager(_context);
+            Mock.Of<IEventBus>(),
+            loggerFactory.CreateLogger<AuditRecordRepository>(),
+            new TransactionManager(_context, NullLogger<TransactionManager>.Instance));
+        var transactionManager = new TransactionManager(_context, NullLogger<TransactionManager>.Instance);
 
+        _eventBus = new Mock<IEventBus>();
+        _eventBus
+            .Setup(bus => bus.PublishAsync(It.IsAny<MagpieEvent>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
         _subject = new ContentFilterRepository(
             _context,
             auditRecordRepository,
             transactionManager,
+            _eventBus.Object,
             loggerFactory.CreateLogger<ContentFilterRepository>());
     }
 
@@ -69,26 +83,21 @@ public class ContentFilterRepositoryTests
         _context.Dispose();
     }
 
-    private static ContentFilterCriteria CreateTestCriteria()
-    {
-        return new ContentFilterCriteria();
-    }
-
     [Test]
-    public async Task GetByIdAsync_ReturnsContentFilter()
+    public async Task GetByIdAsync_ReturnsContentFilter_WhenFilterExists()
     {
         // Arrange
         var entity = new ContentFilter
         {
             Name = "TestFilter",
-            Criteria = CreateTestCriteria(),
+            Criteria = new ContentFilterCriteria(),
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentFilters.Add(entity);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        var result = await _subject.GetByIdAsync(entity.Id);
+        var result = await _subject.GetByIdAsync(entity.Id).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -102,33 +111,33 @@ public class ContentFilterRepositoryTests
     public async Task GetByIdAsync_ReturnsNull_WhenNotFound()
     {
         // Act
-        var result = await _subject.GetByIdAsync(Guid.NewGuid());
+        var result = await _subject.GetByIdAsync(Guid.NewGuid()).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.Null);
     }
 
     [Test]
-    public async Task ListAllAsync_ReturnsAllContentFilters()
+    public async Task ListAllAsync_ReturnsAllContentFilters_WhenFiltersExist()
     {
         // Arrange
         var entity1 = new ContentFilter
         {
             Name = "Filter1",
-            Criteria = CreateTestCriteria(),
+            Criteria = new ContentFilterCriteria(),
             CreatedAt = DateTime.UtcNow
         };
         var entity2 = new ContentFilter
         {
             Name = "Filter2",
-            Criteria = CreateTestCriteria(),
+            Criteria = new ContentFilterCriteria(),
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentFilters.AddRange(entity1, entity2);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        var result = await _subject.ListAllAsync();
+        var result = await _subject.ListAllAsync().ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Has.Exactly(2).Items);
@@ -138,27 +147,31 @@ public class ContentFilterRepositoryTests
     public async Task ListAllAsync_ReturnsEmptyList_WhenNoContentFilters()
     {
         // Act
-        var result = await _subject.ListAllAsync();
+        var result = await _subject.ListAllAsync().ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.Empty);
     }
 
     [Test]
-    public async Task GetByNameAsync_ReturnsContentFilter()
+    public async Task GetByNameAsync_ReturnsContentFilter_WhenNamedFilterExists()
     {
         // Arrange
         var entity = new ContentFilter
         {
             Name = "UniqueFilterName",
-            Criteria = CreateTestCriteria(),
+            Criteria = new ContentFilterCriteria(),
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentFilters.Add(entity);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        var result = await _subject.GetByNameAsync("UniqueFilterName");
+        var result = (await _subject.QueryAsync(new() { Name = "UniqueFilterName" },
+            new() { PageNumber = 1, PageSize = 100 },
+            null).ConfigureAwait(false))
+            .Items
+            .SingleOrDefault();
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -172,14 +185,18 @@ public class ContentFilterRepositoryTests
     public async Task GetByNameAsync_ReturnsNull_WhenNotFound()
     {
         // Act
-        var result = await _subject.GetByNameAsync("NonExistentFilter");
+        var result = (await _subject.QueryAsync(new() { Name = "NonExistentFilter" },
+            new() { PageNumber = 1, PageSize = 100 },
+            null).ConfigureAwait(false))
+            .Items
+            .SingleOrDefault();
 
         // Assert
         Assert.That(result, Is.Null);
     }
 
     [Test]
-    public async Task ListByTagAsync_ReturnsContentFilters()
+    public async Task ListSharedByTagAsync_ReturnsContentFilters_WhenFiltersShareTag()
     {
         // Arrange
         var sharedTag = new Tag { Name = "shared" };
@@ -189,74 +206,181 @@ public class ContentFilterRepositoryTests
         var entity1 = new ContentFilter
         {
             Name = "Filter1",
-            Criteria = CreateTestCriteria(),
+            Criteria = new ContentFilterCriteria(),
             CreatedAt = DateTime.UtcNow
         };
         var entity2 = new ContentFilter
         {
             Name = "Filter2",
-            Criteria = CreateTestCriteria(),
+            Criteria = new ContentFilterCriteria(),
             CreatedAt = DateTime.UtcNow
         };
         var entity3 = new ContentFilter
         {
             Name = "Filter3",
-            Criteria = CreateTestCriteria(),
+            Criteria = new ContentFilterCriteria(),
             CreatedAt = DateTime.UtcNow
         };
         sharedTag.ContentFilters.Add(entity1);
         sharedTag.ContentFilters.Add(entity2);
         uniqueTag.ContentFilters.Add(entity3);
         _context.ContentFilters.AddRange(entity1, entity2, entity3);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        var result = await _subject.ListByTagAsync("shared");
+        var result = (await _subject.QueryAsync(
+            new() { Tag = "shared", SharedOnly = true },
+            new() { PageNumber = 1, PageSize = 100 },
+            null).ConfigureAwait(false)).Items.ToList();
 
         // Assert
         Assert.That(result, Has.Exactly(2).Items);
     }
 
     [Test]
-    public async Task ListByTagAsync_ReturnsEmptyList_WhenNoMatches()
+    public async Task ListSharedByTagAsync_ExcludesOwnedFilters_WhenTagMatchesPrivateFilter()
+    {
+        // Arrange
+        var tag = new Tag { Name = "shared" };
+        _context.Tags.Add(tag);
+
+        var sharedFilter = new ContentFilter
+        {
+            Name = "SharedFilter",
+            Criteria = new ContentFilterCriteria(),
+            CreatedAt = DateTime.UtcNow
+        };
+        var privateFilter = new ContentFilter
+        {
+            Name = "PrivateFilter",
+            Criteria = new ContentFilterCriteria(),
+            OwnerUserId = _userId,
+            CreatedAt = DateTime.UtcNow
+        };
+        tag.ContentFilters.Add(sharedFilter);
+        tag.ContentFilters.Add(privateFilter);
+        _context.ContentFilters.AddRange(sharedFilter, privateFilter);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        var result = (await _subject.QueryAsync(
+            new() { Tag = "shared", SharedOnly = true },
+            new() { PageNumber = 1, PageSize = 100 },
+            null).ConfigureAwait(false)).Items.ToList();
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Has.Count.EqualTo(1));
+            Assert.That(result, Has.One.Property(nameof(ContentFilter.Name)).EqualTo("SharedFilter"));
+        }
+    }
+
+    [Test]
+    public async Task ListSharedByTagAsync_ReturnsEmptyList_WhenNoMatches()
     {
         // Act
-        var result = await _subject.ListByTagAsync("nonexistent");
+        var result = (await _subject.QueryAsync(
+            new() { Tag = "nonexistent", SharedOnly = true },
+            new() { PageNumber = 1, PageSize = 100 },
+            null).ConfigureAwait(false)).Items.ToList();
 
         // Assert
         Assert.That(result, Is.Empty);
     }
 
     [Test]
-    public async Task ListByUserIdAsync_ReturnsContentFiltersForUser()
+    public async Task ListSharedAsync_ExcludesOwnedFilters_WhenPrivateFiltersExist()
+    {
+        // Arrange
+        var sharedFilter = new ContentFilter
+        {
+            Name = "SharedFilter",
+            Criteria = new ContentFilterCriteria(),
+            CreatedAt = DateTime.UtcNow
+        };
+        var privateFilter = new ContentFilter
+        {
+            Name = "PrivateFilter",
+            Criteria = new ContentFilterCriteria(),
+            OwnerUserId = _userId,
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.ContentFilters.AddRange(sharedFilter, privateFilter);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        var result = (await _subject.QueryAsync(new() { SharedOnly = true },
+            new() { PageNumber = 1, PageSize = 100 },
+            null).ConfigureAwait(false)).Items
+            .ToList();
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Has.Count.EqualTo(1));
+            Assert.That(result, Has.One.Property(nameof(ContentFilter.Name)).EqualTo("SharedFilter"));
+        }
+    }
+
+    [Test]
+    public async Task ListSharedAsync_ReturnsEmptyList_WhenNoSharedFilters()
+    {
+        // Arrange
+        var privateFilter = new ContentFilter
+        {
+            Name = "PrivateFilter",
+            Criteria = new ContentFilterCriteria(),
+            OwnerUserId = _userId,
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.ContentFilters.Add(privateFilter);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        var result = (await _subject.QueryAsync(new() { SharedOnly = true },
+            new() { PageNumber = 1, PageSize = 100 },
+            null).ConfigureAwait(false)).Items
+            .ToList();
+
+        // Assert
+        Assert.That(result, Is.Empty);
+    }
+
+    [Test]
+    public async Task ListByUserIdAsync_ReturnsContentFiltersForUser_WhenUserOwnsFilters()
     {
         // Arrange
         var entity1 = new ContentFilter
         {
             Name = "UserFilter1",
-            Criteria = CreateTestCriteria(),
+            Criteria = new ContentFilterCriteria(),
             OwnerUserId = _userId,
             CreatedAt = DateTime.UtcNow
         };
         var entity2 = new ContentFilter
         {
             Name = "UserFilter2",
-            Criteria = CreateTestCriteria(),
+            Criteria = new ContentFilterCriteria(),
             OwnerUserId = _userId,
             CreatedAt = DateTime.UtcNow
         };
         var entity3 = new ContentFilter
         {
             Name = "OtherFilter",
-            Criteria = CreateTestCriteria(),
+            Criteria = new ContentFilterCriteria(),
             OwnerUserId = Guid.NewGuid(),
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentFilters.AddRange(entity1, entity2, entity3);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        var result = await _subject.ListByUserIdAsync(_userId);
+        var result = (await _subject.QueryAsync(new() { OwnerUserId = _userId },
+            new() { PageNumber = 1, PageSize = 100 },
+            null).ConfigureAwait(false))
+            .Items
+            .ToList();
 
         // Assert
         var filters = result.ToList();
@@ -275,39 +399,43 @@ public class ContentFilterRepositoryTests
         var entity = new ContentFilter
         {
             Name = "OtherFilter",
-            Criteria = CreateTestCriteria(),
+            Criteria = new ContentFilterCriteria(),
             OwnerUserId = Guid.NewGuid(),
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentFilters.Add(entity);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        var result = await _subject.ListByUserIdAsync(_userId);
+        var result = (await _subject.QueryAsync(new() { OwnerUserId = _userId },
+            new() { PageNumber = 1, PageSize = 100 },
+            null).ConfigureAwait(false))
+            .Items
+            .ToList();
 
         // Assert
         Assert.That(result, Is.Empty);
     }
 
     [Test]
-    public async Task CreateAsync_CreatesContentFilter()
+    public async Task CreateAsync_CreatesContentFilter_WhenRequestIsValid()
     {
         // Arrange
         var model = new ContentFilter
         {
             Name = "NewFilter",
-            Criteria = CreateTestCriteria()
+            Criteria = new ContentFilterCriteria()
         };
 
         // Act
-        var result = await _subject.CreateAsync(model, _userId);
+        var result = await _subject.CreateAsync(model, _userId).ConfigureAwait(false);
 
         // Assert
         var entity = await _context.ContentFilters
             .AsNoTracking()
             .Where(f => f.Name == "NewFilter")
-            .SingleOrDefaultAsync();
-        var auditRecords = await _context.AuditRecords.ToListAsync();
+            .SingleOrDefaultAsync().ConfigureAwait(false);
+        var auditRecords = await _context.AuditRecords.ToListAsync().ConfigureAwait(false);
 
         using (Assert.EnterMultipleScope())
         {
@@ -321,23 +449,23 @@ public class ContentFilterRepositoryTests
     }
 
     [Test]
-    public async Task CreateAsync_WithNullUserId_CreatesContentFilter()
+    public async Task CreateAsync_CreatesContentFilter_WithNullUserId()
     {
         // Arrange
         var model = new ContentFilter
         {
             Name = "SystemFilter",
-            Criteria = CreateTestCriteria()
+            Criteria = new ContentFilterCriteria()
         };
 
         // Act
-        var result = await _subject.CreateAsync(model, null);
+        var result = await _subject.CreateAsync(model, null).ConfigureAwait(false);
 
         // Assert
         var entity = await _context.ContentFilters
             .AsNoTracking()
             .Where(f => f.Name == "SystemFilter")
-            .SingleOrDefaultAsync();
+            .SingleOrDefaultAsync().ConfigureAwait(false);
 
         using (Assert.EnterMultipleScope())
         {
@@ -349,34 +477,34 @@ public class ContentFilterRepositoryTests
     }
 
     [Test]
-    public async Task UpdateAsync_UpdatesContentFilter()
+    public async Task UpdateAsync_UpdatesContentFilter_WhenFilterExists()
     {
         // Arrange
         var entity = new ContentFilter
         {
             Name = "OriginalName",
-            Criteria = CreateTestCriteria(),
+            Criteria = new ContentFilterCriteria(),
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentFilters.Add(entity);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         var model = new ContentFilter
         {
             Id = entity.Id,
             Name = "UpdatedName",
-            Criteria = CreateTestCriteria(),
+            Criteria = new ContentFilterCriteria(),
             CreatedAt = entity.CreatedAt
         };
 
         // Act
-        var result = await _subject.UpdateAsync(model, _userId);
+        var result = await _subject.UpdateAsync(model, _userId).ConfigureAwait(false);
 
         // Assert
         var updatedEntity = await _context.ContentFilters
             .AsNoTracking()
             .Where(f => f.Id == entity.Id)
-            .SingleOrDefaultAsync();
+            .SingleOrDefaultAsync().ConfigureAwait(false);
 
         using (Assert.EnterMultipleScope())
         {
@@ -396,12 +524,12 @@ public class ContentFilterRepositoryTests
         {
             Id = Guid.NewGuid(),
             Name = "NonExistent",
-            Criteria = CreateTestCriteria(),
+            Criteria = new ContentFilterCriteria(),
             CreatedAt = DateTime.UtcNow
         };
 
         // Act
-        var result = await _subject.UpdateAsync(model, _userId);
+        var result = await _subject.UpdateAsync(model, _userId).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.False);
@@ -415,36 +543,36 @@ public class ContentFilterRepositoryTests
         {
             Id = Guid.NewGuid(),
             Name = "NonExistent",
-            Criteria = CreateTestCriteria(),
+            Criteria = new ContentFilterCriteria(),
             CreatedAt = DateTime.UtcNow
         };
 
         // Act
-        await _subject.UpdateAsync(model, _userId);
+        await _subject.UpdateAsync(model, _userId).ConfigureAwait(false);
 
         // Assert
-        var auditRecords = await _context.AuditRecords.ToListAsync();
+        var auditRecords = await _context.AuditRecords.ToListAsync().ConfigureAwait(false);
         Assert.That(auditRecords, Is.Empty);
     }
 
     [Test]
-    public async Task DeleteAsync_DeletesContentFilter()
+    public async Task DeleteAsync_DeletesContentFilter_WhenFilterExists()
     {
         // Arrange
         var entity = new ContentFilter
         {
             Name = "ToDelete",
-            Criteria = CreateTestCriteria(),
+            Criteria = new ContentFilterCriteria(),
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentFilters.Add(entity);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        var result = await _subject.DeleteAsync(entity.Id, _userId);
+        var result = await _subject.DeleteAsync(entity.Id, _userId).ConfigureAwait(false);
 
         // Assert
-        var entityExists = await _context.ContentFilters.AnyAsync(f => f.Id == entity.Id);
+        var entityExists = await _context.ContentFilters.AnyAsync(f => f.Id == entity.Id).ConfigureAwait(false);
 
         using (Assert.EnterMultipleScope())
         {
@@ -457,7 +585,7 @@ public class ContentFilterRepositoryTests
     public async Task DeleteAsync_ReturnsFalse_WhenNotFound()
     {
         // Act
-        var result = await _subject.DeleteAsync(Guid.NewGuid(), _userId);
+        var result = await _subject.DeleteAsync(Guid.NewGuid(), _userId).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.False);
@@ -467,25 +595,25 @@ public class ContentFilterRepositoryTests
     public async Task DeleteAsync_DoesNotCreateAuditRecord_WhenContentFilterDoesNotExist()
     {
         // Act
-        await _subject.DeleteAsync(Guid.NewGuid(), _userId);
+        await _subject.DeleteAsync(Guid.NewGuid(), _userId).ConfigureAwait(false);
 
         // Assert
-        var auditRecords = await _context.AuditRecords.ToListAsync();
+        var auditRecords = await _context.AuditRecords.ToListAsync().ConfigureAwait(false);
         Assert.That(auditRecords, Is.Empty);
     }
 
     [Test]
-    public async Task PatchAsync_PatchesName()
+    public async Task PatchAsync_PatchesName_WhenNameIsSet()
     {
         // Arrange
         var entity = new ContentFilter
         {
             Name = "OriginalName",
-            Criteria = CreateTestCriteria(),
+            Criteria = new ContentFilterCriteria(),
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentFilters.Add(entity);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         var patch = new ContentFilterPatch
         {
@@ -494,12 +622,12 @@ public class ContentFilterRepositoryTests
         };
 
         // Act
-        var result = await _subject.PatchAsync(patch, _userId);
+        var result = await _subject.PatchAsync(patch, _userId).ConfigureAwait(false);
 
         // Assert
         var updatedEntity = await _context.ContentFilters
             .AsNoTracking()
-            .FirstOrDefaultAsync(f => f.Id == entity.Id);
+            .FirstOrDefaultAsync(f => f.Id == entity.Id).ConfigureAwait(false);
 
         using (Assert.EnterMultipleScope())
         {
@@ -512,17 +640,17 @@ public class ContentFilterRepositoryTests
     }
 
     [Test]
-    public async Task PatchAsync_PatchesCriteria()
+    public async Task PatchAsync_PatchesCriteria_WhenCriteriaIsSet()
     {
         // Arrange
         var entity = new ContentFilter
         {
             Name = "TestFilter",
-            Criteria = CreateTestCriteria(),
+            Criteria = new ContentFilterCriteria(),
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentFilters.Add(entity);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         var newCriteria = new ContentFilterCriteria();
         var patch = new ContentFilterPatch
@@ -532,12 +660,12 @@ public class ContentFilterRepositoryTests
         };
 
         // Act
-        var result = await _subject.PatchAsync(patch, _userId);
+        var result = await _subject.PatchAsync(patch, _userId).ConfigureAwait(false);
 
         // Assert
         var updatedEntity = await _context.ContentFilters
             .AsNoTracking()
-            .FirstOrDefaultAsync(f => f.Id == entity.Id);
+            .FirstOrDefaultAsync(f => f.Id == entity.Id).ConfigureAwait(false);
 
         using (Assert.EnterMultipleScope())
         {
@@ -548,18 +676,18 @@ public class ContentFilterRepositoryTests
     }
 
     [Test]
-    public async Task PatchAsync_PatchesOwnerLock()
+    public async Task PatchAsync_PatchesOwnerLock_WhenOwnerLockIsSet()
     {
         // Arrange
         var entity = new ContentFilter
         {
             Name = "TestFilter",
-            Criteria = CreateTestCriteria(),
+            Criteria = new ContentFilterCriteria(),
             OwnerLock = false,
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentFilters.Add(entity);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         var patch = new ContentFilterPatch
         {
@@ -568,12 +696,12 @@ public class ContentFilterRepositoryTests
         };
 
         // Act
-        var result = await _subject.PatchAsync(patch, _userId);
+        var result = await _subject.PatchAsync(patch, _userId).ConfigureAwait(false);
 
         // Assert
         var updatedEntity = await _context.ContentFilters
             .AsNoTracking()
-            .FirstOrDefaultAsync(f => f.Id == entity.Id);
+            .FirstOrDefaultAsync(f => f.Id == entity.Id).ConfigureAwait(false);
 
         using (Assert.EnterMultipleScope())
         {
@@ -595,12 +723,12 @@ public class ContentFilterRepositoryTests
         var entity = new ContentFilter
         {
             Name = "TestFilter",
-            Criteria = CreateTestCriteria(),
+            Criteria = new ContentFilterCriteria(),
             CreatedAt = DateTime.UtcNow
         };
         existingTag.ContentFilters.Add(entity);
         _context.ContentFilters.Add(entity);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         var patch = new ContentFilterPatch
         {
@@ -609,13 +737,13 @@ public class ContentFilterRepositoryTests
         };
 
         // Act
-        var result = await _subject.PatchAsync(patch, _userId);
+        var result = await _subject.PatchAsync(patch, _userId).ConfigureAwait(false);
 
         // Assert
         var tags = await _context.Tags
             .AsNoTracking()
             .Where(t => t.ContentFilters.Any(f => f.Id == entity.Id))
-            .ToListAsync();
+            .ToListAsync().ConfigureAwait(false);
 
         using (Assert.EnterMultipleScope())
         {
@@ -638,13 +766,13 @@ public class ContentFilterRepositoryTests
         var entity = new ContentFilter
         {
             Name = "TestFilter",
-            Criteria = CreateTestCriteria(),
+            Criteria = new ContentFilterCriteria(),
             CreatedAt = DateTime.UtcNow
         };
         keepTag.ContentFilters.Add(entity);
         removeTag.ContentFilters.Add(entity);
         _context.ContentFilters.Add(entity);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         var patch = new ContentFilterPatch
         {
@@ -653,13 +781,13 @@ public class ContentFilterRepositoryTests
         };
 
         // Act
-        var result = await _subject.PatchAsync(patch, _userId);
+        var result = await _subject.PatchAsync(patch, _userId).ConfigureAwait(false);
 
         // Assert
         var tags = await _context.Tags
             .AsNoTracking()
             .Where(t => t.ContentFilters.Any(f => f.Id == entity.Id))
-            .ToListAsync();
+            .ToListAsync().ConfigureAwait(false);
 
         using (Assert.EnterMultipleScope())
         {
@@ -682,13 +810,13 @@ public class ContentFilterRepositoryTests
         var entity = new ContentFilter
         {
             Name = "TestFilter",
-            Criteria = CreateTestCriteria(),
+            Criteria = new ContentFilterCriteria(),
             CreatedAt = DateTime.UtcNow
         };
         existingTag.ContentFilters.Add(entity);
         toRemoveTag.ContentFilters.Add(entity);
         _context.ContentFilters.Add(entity);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         var patch = new ContentFilterPatch
         {
@@ -697,13 +825,13 @@ public class ContentFilterRepositoryTests
         };
 
         // Act
-        var result = await _subject.PatchAsync(patch, _userId);
+        var result = await _subject.PatchAsync(patch, _userId).ConfigureAwait(false);
 
         // Assert
         var tags = await _context.Tags
             .AsNoTracking()
             .Where(t => t.ContentFilters.Any(f => f.Id == entity.Id))
-            .ToListAsync();
+            .ToListAsync().ConfigureAwait(false);
 
         using (Assert.EnterMultipleScope())
         {
@@ -722,11 +850,11 @@ public class ContentFilterRepositoryTests
         var entity = new ContentFilter
         {
             Name = "TestFilter",
-            Criteria = CreateTestCriteria(),
+            Criteria = new ContentFilterCriteria(),
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentFilters.Add(entity);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         var patch = new ContentFilterPatch
         {
@@ -735,13 +863,13 @@ public class ContentFilterRepositoryTests
         };
 
         // Act
-        var result = await _subject.PatchAsync(patch, _userId);
+        var result = await _subject.PatchAsync(patch, _userId).ConfigureAwait(false);
 
         // Assert
         var tags = await _context.Tags
             .AsNoTracking()
             .Where(t => t.ContentFilters.Any(f => f.Id == entity.Id))
-            .ToListAsync();
+            .ToListAsync().ConfigureAwait(false);
 
         using (Assert.EnterMultipleScope())
         {
@@ -762,9 +890,52 @@ public class ContentFilterRepositoryTests
         };
 
         // Act
-        var result = await _subject.PatchAsync(patch, _userId);
+        var result = await _subject.PatchAsync(patch, _userId).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.False);
+    }
+
+    [Test]
+    public async Task CreateUpdateDeleteAsync_PublishesLifecycleEvents_WhenLifecycleCompletes()
+    {
+        // Arrange
+        var created = await _subject.CreateAsync(
+            new ContentFilter
+            {
+                Name = "Lifecycle",
+                Criteria = new ContentFilterCriteria()
+            },
+            _userId).ConfigureAwait(false);
+
+        // Act
+        await _subject.PatchAsync(
+            new ContentFilterPatch
+            {
+                Id = created.Id,
+                Name = new() { Value = "Lifecycle updated" }
+            },
+            _userId).ConfigureAwait(false);
+        await _subject.DeleteAsync(created.Id, _userId).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            _eventBus.Verify(
+                bus => bus.PublishAsync(
+                    It.Is<MagpieEvent>(magpieEvent => magpieEvent.Name == MagpieEvents.Names.ContentFilterCreated),
+                    It.IsAny<CancellationToken>()),
+                Times.Once);
+            _eventBus.Verify(
+                bus => bus.PublishAsync(
+                    It.Is<MagpieEvent>(magpieEvent => magpieEvent.Name == MagpieEvents.Names.ContentFilterUpdated),
+                    It.IsAny<CancellationToken>()),
+                Times.Once);
+            _eventBus.Verify(
+                bus => bus.PublishAsync(
+                    It.Is<MagpieEvent>(magpieEvent => magpieEvent.Name == MagpieEvents.Names.ContentFilterDeleted),
+                    It.IsAny<CancellationToken>()),
+                Times.Once);
+        }
     }
 }

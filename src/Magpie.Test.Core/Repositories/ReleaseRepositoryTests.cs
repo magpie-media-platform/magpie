@@ -6,12 +6,16 @@ using Magpie.Abstractions.Repositories;
 using Magpie.Core;
 using Magpie.Core.Repositories;
 using Magpie.Data;
+using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
-using Magpie.Test.Shared;
+using Magpie.Models.Paging;
 
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
 
 using NUnit.Framework;
 
@@ -30,6 +34,7 @@ public class ReleaseRepositoryTests
     {
         _context = new MagpieDbContext(new DbContextOptionsBuilder<MagpieDbContext>()
             .UseSqlite("Data Source=:memory:")
+            .ConfigureWarnings(warnings => warnings.Throw(RelationalEventId.MultipleCollectionIncludeWarning))
             .Options);
 
         _context.Database.OpenConnection();
@@ -59,13 +64,15 @@ public class ReleaseRepositoryTests
         _userId = user.Id;
         _indexerId = indexer.Id;
 
-        var loggerFactory = LoggerFactory.Create(builder => builder.AddTestLogger());
+        var loggerFactory = NullLoggerFactory.Instance;
 
         var auditRecordRepository = new AuditRecordRepository(
             _context,
-            loggerFactory.CreateLogger<AuditRecordRepository>());
+            Moq.Mock.Of<Sdk.Services.IEventBus>(),
+            loggerFactory.CreateLogger<AuditRecordRepository>(),
+            new TransactionManager(_context, NullLogger<TransactionManager>.Instance));
 
-        var transactionManager = new TransactionManager(_context);
+        var transactionManager = new TransactionManager(_context, NullLogger<TransactionManager>.Instance);
 
         _subject = new ReleaseRepository(
             _context,
@@ -92,14 +99,14 @@ public class ReleaseRepositoryTests
             Title = "TestRelease",
             PublishDate = DateTime.UtcNow,
             Size = 1024,
-            Categories = ["movies"],
+            Categories = ["type-a"],
             CreatedAt = DateTime.UtcNow
         };
         _context.Releases.Add(release);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        var result = await _subject.GetByIdAsync(release.Id);
+        var result = await _subject.GetByIdAsync(release.Id).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -111,17 +118,89 @@ public class ReleaseRepositoryTests
     }
 
     [Test]
+    public async Task GetByIdAsync_RoundTripsExternalIds_WhenSet()
+    {
+        // Arrange
+        var release = new Release
+        {
+            IndexerId = _indexerId,
+            Protocol = "torrent",
+            Title = "TestRelease",
+            PublishDate = DateTime.UtcNow,
+            CreatedAt = DateTime.UtcNow
+        };
+        release.ExternalIds.Add(new ExternalId { Ordinal = 0, Source = "provider-c", Value = "tt0903747" });
+        release.ExternalIds.Add(new ExternalId { Ordinal = 1, Source = "provider-a", Value = "155" });
+        release.ExternalIds.Add(new ExternalId { Ordinal = 2, Source = "provider-d", Value = "81189" });
+        release.ExternalIds.Add(new ExternalId { Ordinal = 3, Source = "provider-e", Value = "82" });
+        release.ExternalIds.Add(new ExternalId { Ordinal = 4, Source = "provider-f", Value = "1390" });
+        _context.Releases.Add(release);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        var result = await _subject.GetByIdAsync(release.Id).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Has.Property(nameof(Release.ExternalIds)).With.Exactly(5).Items);
+            Assert.That(result, Is.Not.Null);
+            Assert.That(
+                result!.ExternalIds,
+                Has.Some.Matches<ExternalId>(id => id.Source == "provider-c" && id.Value == "tt0903747"));
+            Assert.That(result, Is.Not.Null);
+            Assert.That(
+                result.ExternalIds,
+                Has.Some.Matches<ExternalId>(id => id.Source == "provider-a" && id.Value == "155"));
+            Assert.That(result, Is.Not.Null);
+            Assert.That(
+                result.ExternalIds,
+                Has.Some.Matches<ExternalId>(id => id.Source == "provider-d" && id.Value == "81189"));
+            Assert.That(result, Is.Not.Null);
+            Assert.That(
+                result.ExternalIds,
+                Has.Some.Matches<ExternalId>(id => id.Source == "provider-e" && id.Value == "82"));
+            Assert.That(result, Is.Not.Null);
+            Assert.That(
+                result.ExternalIds,
+                Has.Some.Matches<ExternalId>(id => id.Source == "provider-f" && id.Value == "1390"));
+        }
+    }
+
+    [Test]
+    public async Task GetByIdAsync_LeavesExternalIdsEmpty_WhenUnset()
+    {
+        // Arrange
+        var release = new Release
+        {
+            IndexerId = _indexerId,
+            Protocol = "torrent",
+            Title = "TestRelease",
+            PublishDate = DateTime.UtcNow,
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.Releases.Add(release);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        var result = await _subject.GetByIdAsync(release.Id).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(result, Has.Property(nameof(Release.ExternalIds)).Empty);
+    }
+
+    [Test]
     public async Task GetByIdAsync_ReturnsNull_WhenNotExists()
     {
         // Act
-        var result = await _subject.GetByIdAsync(Guid.NewGuid());
+        var result = await _subject.GetByIdAsync(Guid.NewGuid()).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.Null);
     }
 
     [Test]
-    public async Task ListAllAsync_ReturnsAllReleases()
+    public async Task ListAllAsync_ReturnsAllReleases_WhenReleasesExist()
     {
         // Arrange
         var release1 = new Release
@@ -141,10 +220,10 @@ public class ReleaseRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.Releases.AddRange(release1, release2);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        var result = await _subject.ListAllAsync(default);
+        var result = await _subject.ListAllAsync(default).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Has.Exactly(2).Items);
@@ -154,14 +233,14 @@ public class ReleaseRepositoryTests
     public async Task ListAllAsync_ReturnsEmptyList_WhenNoReleases()
     {
         // Act
-        var result = await _subject.ListAllAsync(default);
+        var result = await _subject.ListAllAsync(default).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.Empty);
     }
 
     [Test]
-    public async Task QueryAsync_FiltersByIndexerId()
+    public async Task QueryAsync_ReturnsMatchingReleases_WhenIndexerFilterIsSet()
     {
         // Arrange
         var otherIndexer = new Indexer
@@ -172,7 +251,7 @@ public class ReleaseRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.Indexers.Add(otherIndexer);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         var release1 = new Release
         {
@@ -199,10 +278,12 @@ public class ReleaseRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.Releases.AddRange(release1, release2, release3);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        var result = await _subject.QueryAsync(new() { IndexerId = _indexerId }, null, null);
+        var result = await _subject.QueryAsync(new() { IndexerId = _indexerId },
+            new() { PageNumber = 1, PageSize = 100 },
+            null).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -213,7 +294,7 @@ public class ReleaseRepositoryTests
     }
 
     [Test]
-    public async Task QueryAsync_FiltersByTitle()
+    public async Task QueryAsync_ReturnsMatchingReleases_WhenTitleFilterIsSet()
     {
         // Arrange
         var release1 = new Release
@@ -241,22 +322,26 @@ public class ReleaseRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.Releases.AddRange(release1, release2, release3);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        var result = await _subject.QueryAsync(new() { Title = "TestMovie" }, null, null);
+        var result = await _subject.QueryAsync(new() { Title = "TestMovie" },
+            new() { PageNumber = 1, PageSize = 100 },
+            null).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
         {
             Assert.That(result, Has.Property(nameof(result.Items)).With.Exactly(2).Items);
-            Assert.That(result, Has.Property(nameof(result.Items))
-                .With.All.Property(nameof(Release.Title)).Contains("TestMovie"));
+            Assert.That(
+                result,
+                Has.Property(nameof(result.Items))
+                    .With.All.Property(nameof(Release.Title)).Contains("TestMovie"));
         }
     }
 
     [Test]
-    public async Task QueryAsync_FiltersByCategory()
+    public async Task QueryAsync_ReturnsMatchingReleases_WhenCategoryFilterIsSet()
     {
         // Arrange
         var release1 = new Release
@@ -265,7 +350,7 @@ public class ReleaseRepositoryTests
             Protocol = "torrent",
             Title = "Release1",
             PublishDate = DateTime.UtcNow,
-            Categories = ["movies", "hd"],
+            Categories = ["type-a", "hd"],
             CreatedAt = DateTime.UtcNow
         };
         var release2 = new Release
@@ -274,14 +359,16 @@ public class ReleaseRepositoryTests
             Protocol = "torrent",
             Title = "Release2",
             PublishDate = DateTime.UtcNow,
-            Categories = ["tv", "hd"],
+            Categories = ["type-c", "hd"],
             CreatedAt = DateTime.UtcNow
         };
         _context.Releases.AddRange(release1, release2);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        var result = await _subject.QueryAsync(new() { Category = "movies" }, null, null);
+        var result = await _subject.QueryAsync(new() { Category = "type-a" },
+            new() { PageNumber = 1, PageSize = 100 },
+            null).ConfigureAwait(false);
 
         // Assert
         var items = result.Items.ToList();
@@ -293,7 +380,7 @@ public class ReleaseRepositoryTests
     }
 
     [Test]
-    public async Task QueryAsync_FiltersByExternalId()
+    public async Task QueryAsync_ReturnsMatchingReleases_WhenExternalIdFilterIsSet()
     {
         // Arrange
         var release1 = new Release
@@ -315,10 +402,12 @@ public class ReleaseRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.Releases.AddRange(release1, release2);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        var result = await _subject.QueryAsync(new() { ExternalId = "ext-123" }, null, null);
+        var result = await _subject.QueryAsync(new() { ExternalId = "ext-123" },
+            new() { PageNumber = 1, PageSize = 100 },
+            null).ConfigureAwait(false);
 
         // Assert
         var items = result.Items.ToList();
@@ -330,7 +419,7 @@ public class ReleaseRepositoryTests
     }
 
     [Test]
-    public async Task QueryAsync_FiltersByPublishDateRange()
+    public async Task QueryAsync_ReturnsMatchingReleases_WhenPublishDateRangeIsSet()
     {
         // Arrange
         var now = DateTime.UtcNow;
@@ -359,13 +448,16 @@ public class ReleaseRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.Releases.AddRange(release1, release2, release3);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        var result = await _subject.QueryAsync(new()
-        {
-            PublishDate = new(now.AddDays(-6), now.AddDays(-1))
-        }, null, null);
+        var result = await _subject.QueryAsync(
+            new()
+            {
+                PublishDate = new(now.AddDays(-6), now.AddDays(-1))
+            },
+            new() { PageNumber = 1, PageSize = 100 },
+            null).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -376,34 +468,34 @@ public class ReleaseRepositoryTests
     }
 
     [Test]
-    public async Task QueryAsync_FiltersByContentItemId()
+    public async Task QueryAsync_ReturnsMatchingReleases_WhenContentItemFilterIsSet()
     {
         // Arrange
         var metadataContainer1 = new MetadataContainer();
         var metadataContainer2 = new MetadataContainer();
         _context.MetadataContainers.AddRange(metadataContainer1, metadataContainer2);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         var hierarchyItem1 = new ContentHierarchyItem
         {
             MetadataContainerId = metadataContainer1.Id,
-            ContentType = "Movies",
-            Level = "Movie",
-            Slug = "test-movie-1",
-            Name = "Test Movie 1",
+            ContentType = "type-a",
+            Level = "Type A",
+            Slug = "test-type-a-1",
+            Name = "Type A Item 1",
             CreatedAt = DateTime.UtcNow
         };
         var hierarchyItem2 = new ContentHierarchyItem
         {
             MetadataContainerId = metadataContainer2.Id,
-            ContentType = "Movies",
-            Level = "Movie",
-            Slug = "test-movie-2",
-            Name = "Test Movie 2",
+            ContentType = "type-a",
+            Level = "Type A",
+            Slug = "test-type-a-2",
+            Name = "Type A Item 2",
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentHierarchyItems.AddRange(hierarchyItem1, hierarchyItem2);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         var contentItem1 = new ContentItem
         {
@@ -416,12 +508,11 @@ public class ReleaseRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.ContentItems.AddRange(contentItem1, contentItem2);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         var release1 = new Release
         {
             IndexerId = _indexerId,
-            ContentItemId = contentItem1.Id,
             Protocol = "torrent",
             Title = "Release1",
             PublishDate = DateTime.UtcNow,
@@ -430,34 +521,49 @@ public class ReleaseRepositoryTests
         var release2 = new Release
         {
             IndexerId = _indexerId,
-            ContentItemId = contentItem2.Id,
             Protocol = "torrent",
             Title = "Release2",
             PublishDate = DateTime.UtcNow,
             CreatedAt = DateTime.UtcNow
         };
         _context.Releases.AddRange(release1, release2);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        _context.ReleaseScopes.AddRange(
+            new ReleaseScope
+            {
+                ReleaseId = release1.Id,
+                ContentHierarchyItemId = hierarchyItem1.Id,
+            },
+            new ReleaseScope
+            {
+                ReleaseId = release2.Id,
+                ContentHierarchyItemId = hierarchyItem2.Id,
+            });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        var result = await _subject.QueryAsync(new() { ContentItemId = contentItem1.Id }, null, null);
+        var result = await _subject.QueryAsync(new() { ContentHierarchyItemId = hierarchyItem1.Id },
+            new() { PageNumber = 1, PageSize = 100 },
+            null)
+            .ConfigureAwait(false);
 
         // Assert
         var items = result.Items.ToList();
         using (Assert.EnterMultipleScope())
         {
             Assert.That(items, Has.Count.EqualTo(1));
-            Assert.That(items, Has.One.With.Property(nameof(Release.ContentItemId)).EqualTo(contentItem1.Id));
+            Assert.That(items, Has.One.With.Property(nameof(Release.Id)).EqualTo(release1.Id));
         }
     }
 
     [Test]
-    public async Task QueryAsync_FiltersByTags()
+    public async Task QueryAsync_ReturnsMatchingReleases_WhenTagFilterIsSet()
     {
         // Arrange
         var tag = new Tag { Name = "high-quality" };
         _context.Tags.Add(tag);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         var release1 = new Release
         {
@@ -476,13 +582,15 @@ public class ReleaseRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.Releases.AddRange(release1, release2);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         tag.Releases.Add(release1);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        var result = await _subject.QueryAsync(new() { Tags = ["high-quality"] }, null, null);
+        var result = await _subject.QueryAsync(new() { Tags = ["high-quality"] },
+            new() { PageNumber = 1, PageSize = 100 },
+            null).ConfigureAwait(false);
 
         // Assert
         var items = result.Items.ToList();
@@ -506,10 +614,12 @@ public class ReleaseRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.Releases.Add(release);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        var result = await _subject.QueryAsync(new() { Title = "NonExistent" }, null, null);
+        var result = await _subject.QueryAsync(new() { Title = "NonExistent" },
+            new() { PageNumber = 1, PageSize = 100 },
+            null).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -520,7 +630,7 @@ public class ReleaseRepositoryTests
     }
 
     [Test]
-    public async Task QueryAsync_AppliesPaging()
+    public async Task QueryAsync_ReturnsRequestedPage_WhenPagingIsSet()
     {
         // Arrange
         for (var i = 0; i < 10; i++)
@@ -534,10 +644,12 @@ public class ReleaseRepositoryTests
                 CreatedAt = DateTime.UtcNow
             });
         }
-        await _context.SaveChangesAsync();
+
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        var result = await _subject.QueryAsync(new(), new() { PageNumber = 2, PageSize = 3 }, null);
+        var result = await _subject.QueryAsync(new(), new() { PageNumber = 2, PageSize = 3 }, null)
+            .ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -550,7 +662,41 @@ public class ReleaseRepositoryTests
     }
 
     [Test]
-    public async Task QueryAsync_AppliesSortingAscending()
+    public async Task QueryAsync_ReturnsBoundedPageAndTotalCount_WhenPagingProvided()
+    {
+        // Arrange
+        var now = DateTime.UtcNow;
+        for (var i = 0; i < 7; i++)
+        {
+            _context.Releases.Add(new Release
+            {
+                IndexerId = _indexerId,
+                Protocol = "torrent",
+                Title = $"Release{i}",
+                PublishDate = now.AddMinutes(-i),
+                CreatedAt = now
+            });
+        }
+
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        var paging = new PagingParameter { PageNumber = 1, PageSize = 3 };
+
+        // Act
+        var result = await _subject.QueryAsync(new(), paging, null).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Has.Property(nameof(result.Items)).With.Exactly(3).Items);
+            Assert.That(result, Has.Property(nameof(result.TotalItems)).EqualTo(7));
+            Assert.That(result, Has.Property(nameof(result.PageNumber)).EqualTo(1));
+            Assert.That(result, Has.Property(nameof(result.PageSize)).EqualTo(3));
+        }
+    }
+
+    [Test]
+    public async Task QueryAsync_ReturnsAscendingReleases_WhenAscendingSortIsSet()
     {
         // Arrange
         var release1 = new Release
@@ -578,14 +724,17 @@ public class ReleaseRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.Releases.AddRange(release1, release2, release3);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        var result = await _subject.QueryAsync(new(), null, new()
-        {
-            PropertyName = nameof(Release.Title),
-            Direction = SortDirection.Ascending
-        });
+        var result = await _subject.QueryAsync(
+            new(),
+            new() { PageNumber = 1, PageSize = 100 },
+            new()
+            {
+                PropertyName = nameof(Release.Title),
+                Direction = SortDirection.Ascending
+            }).ConfigureAwait(false);
 
         // Assert
         var items = result.Items.ToList();
@@ -598,7 +747,7 @@ public class ReleaseRepositoryTests
     }
 
     [Test]
-    public async Task QueryAsync_AppliesSortingDescending()
+    public async Task QueryAsync_ReturnsDescendingReleases_WhenDescendingSortIsSet()
     {
         // Arrange
         var release1 = new Release
@@ -618,14 +767,17 @@ public class ReleaseRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.Releases.AddRange(release1, release2);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        var result = await _subject.QueryAsync(new(), null, new()
-        {
-            PropertyName = nameof(Release.Title),
-            Direction = SortDirection.Descending
-        });
+        var result = await _subject.QueryAsync(
+            new(),
+            new() { PageNumber = 1, PageSize = 100 },
+            new()
+            {
+                PropertyName = nameof(Release.Title),
+                Direction = SortDirection.Descending
+            }).ConfigureAwait(false);
 
         // Assert
         var items = result.Items.ToList();
@@ -637,7 +789,7 @@ public class ReleaseRepositoryTests
     }
 
     [Test]
-    public async Task QueryAsync_DefaultSortsByPublishDateDescending()
+    public async Task QueryAsync_SortsByPublishDateDescending_WhenSortIsNotSet()
     {
         // Arrange
         var now = DateTime.UtcNow;
@@ -658,10 +810,12 @@ public class ReleaseRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.Releases.AddRange(release1, release2);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        var result = await _subject.QueryAsync(new(), null, null);
+        var result = await _subject.QueryAsync(new(),
+            new() { PageNumber = 1, PageSize = 100 },
+            null).ConfigureAwait(false);
 
         // Assert
         var items = result.Items.ToList();
@@ -673,7 +827,7 @@ public class ReleaseRepositoryTests
     }
 
     [Test]
-    public async Task CreateAsync_CreatesRelease()
+    public async Task CreateAsync_CreatesRelease_WhenRequestIsValid()
     {
         // Arrange
         var release = new Release
@@ -683,12 +837,12 @@ public class ReleaseRepositoryTests
             Title = "NewRelease",
             PublishDate = DateTime.UtcNow,
             Size = 2048,
-            Categories = ["movies"],
+            Categories = ["type-a"],
             Languages = ["en"]
         };
 
         // Act
-        var result = await _subject.CreateAsync(release, _userId);
+        var result = await _subject.CreateAsync(release, _userId).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -703,7 +857,7 @@ public class ReleaseRepositoryTests
     }
 
     [Test]
-    public async Task CreateAsync_CreatesReleaseWithAllFields()
+    public async Task CreateAsync_PersistsAllFields_WhenAllFieldsAreProvided()
     {
         // Arrange
         var publishDate = DateTime.UtcNow;
@@ -718,31 +872,186 @@ public class ReleaseRepositoryTests
             PublishDate = publishDate,
             Size = 4096,
             InfoUrl = infoUrl,
-            Categories = ["movies", "hd"],
+            Categories = ["type-a", "hd"],
             Languages = ["en", "fr"],
             Properties = "{\"quality\":\"1080p\"}"
         };
 
         // Act
-        var result = await _subject.CreateAsync(release, _userId);
+        var result = await _subject.CreateAsync(release, _userId).ConfigureAwait(false);
 
         // Assert
         var persisted = await _context.Releases
             .AsNoTracking()
-            .FirstOrDefaultAsync(r => r.Id == result.Id);
+            .FirstOrDefaultAsync(r => r.Id == result.Id).ConfigureAwait(false);
 
         using (Assert.EnterMultipleScope())
         {
             Assert.That(persisted, Has.Property(nameof(persisted.ExternalId)).EqualTo("ext-release-123"));
             Assert.That(persisted, Has.Property(nameof(persisted.InfoUrl)).EqualTo(infoUrl));
             Assert.That(persisted, Has.Property(nameof(persisted.Properties)).EqualTo("{\"quality\":\"1080p\"}"));
-            Assert.That(persisted, Has.Property(nameof(persisted.Categories)).EquivalentTo(new[] { "movies", "hd" }));
+            Assert.That(persisted, Has.Property(nameof(persisted.Categories)).EquivalentTo(new[] { "type-a", "hd" }));
             Assert.That(persisted, Has.Property(nameof(persisted.Languages)).EquivalentTo(new[] { "en", "fr" }));
         }
     }
 
     [Test]
-    public async Task CreateAsync_CreatesAuditRecord()
+    public async Task CreateAsync_PreservesOpaqueIdentityKey_WhenProvided()
+    {
+        // Arrange
+        var release = new Release
+        {
+            IndexerId = _indexerId,
+            Protocol = "torrent",
+            ExternalId = "indexer-release-1",
+            Title = "Release",
+            PublishDate = DateTime.UtcNow
+        };
+        release.IdentityKeys.Add(new ReleaseIdentityKey { Authority = "provider", Value = "opaque", Ordinal = 0 });
+
+        // Act
+        var result = await _subject.CreateAsync(release, _userId).ConfigureAwait(false);
+
+        // Assert
+        var keys = await _context.ReleaseIdentityKeys
+            .AsNoTracking()
+            .Where(k => k.ReleaseId == result.Id)
+            .OrderBy(k => k.Ordinal)
+            .ToListAsync()
+            .ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(keys, Has.Count.EqualTo(1));
+            Assert.That(keys[0].Authority, Is.EqualTo("provider"));
+            Assert.That(keys[0].Value, Is.EqualTo("opaque"));
+        }
+    }
+
+    [Test]
+    public async Task QueryAsync_ReturnsMatchingRelease_WhenIndexerAndExternalIdMatch()
+    {
+        // Arrange
+        var now = DateTime.UtcNow;
+        var release = new Release
+        {
+            IndexerId = _indexerId,
+            Protocol = "torrent",
+            ExternalId = "release",
+            Title = "Release",
+            PublishDate = now.AddDays(-1),
+            CreatedAt = now.AddDays(-1),
+            ObservedAt = now.AddDays(-1)
+        };
+        release.IdentityKeys.Add(new ReleaseIdentityKey
+        {
+            Authority = "provider",
+            Value = "stable-release",
+            Ordinal = 0
+        });
+        _context.Releases.Add(release);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
+
+        // Act
+        var result = await _subject.QueryAsync(
+                new ReleaseQuery { IndexerId = _indexerId, ExternalId = "release" },
+                new() { PageNumber = 1, PageSize = 100 },
+                null)
+            .ConfigureAwait(false);
+
+        // Assert
+        Assert.That(
+            result.Items.Single(),
+            Has.Property(nameof(Release.Id)).EqualTo(release.Id));
+    }
+
+    [Test]
+    public async Task MarkObservedAsync_UpdatesMatchingReleases_WhenReleaseIdsAreProvided()
+    {
+        // Arrange
+        var now = DateTime.UtcNow;
+        var observed = new Release
+        {
+            IndexerId = _indexerId,
+            Protocol = "torrent",
+            ExternalId = "observed",
+            Title = "Observed",
+            PublishDate = now.AddDays(-2),
+            CreatedAt = now.AddDays(-2),
+            ObservedAt = now.AddDays(-2)
+        };
+        var untouched = new Release
+        {
+            IndexerId = _indexerId,
+            Protocol = "torrent",
+            ExternalId = "untouched",
+            Title = "Untouched",
+            PublishDate = now.AddDays(-2),
+            CreatedAt = now.AddDays(-2),
+            ObservedAt = now.AddDays(-2)
+        };
+        _context.Releases.AddRange(observed, untouched);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
+
+        // Act
+        var updated = await _subject.MarkObservedAsync([observed.Id]).ConfigureAwait(false);
+
+        // Assert
+        var rows = await _context.Releases.AsNoTracking().ToListAsync().ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(updated, Is.EqualTo(1));
+            Assert.That(rows.Single(r => r.Id == observed.Id).ObservedAt, Is.GreaterThan(now.AddMinutes(-1)));
+            Assert.That(rows.Single(r => r.Id == untouched.Id).ObservedAt, Is.LessThan(now.AddDays(-1)));
+        }
+    }
+
+    [Test]
+    public async Task UpdateAsync_MergesIdentityKeys_WhenNewKeysAreProvided()
+    {
+        // Arrange
+        var now = DateTime.UtcNow;
+        var release = new Release
+        {
+            IndexerId = _indexerId,
+            Protocol = "torrent",
+            ExternalId = "release-1",
+            Title = "Release",
+            PublishDate = now,
+            CreatedAt = now,
+            ObservedAt = now
+        };
+        release.IdentityKeys.Add(new ReleaseIdentityKey { Authority = "provider-a", Value = "stable-a", Ordinal = 0 });
+        _context.Releases.Add(release);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
+
+        release.IdentityKeys.Clear();
+        release.IdentityKeys.Add(new ReleaseIdentityKey { Authority = "provider-b", Value = "stable-b", Ordinal = 0 });
+
+        // Act
+        await _subject.UpdateAsync(release, _userId, default).ConfigureAwait(false);
+
+        // Assert
+        var keys = await _context.ReleaseIdentityKeys
+            .AsNoTracking()
+            .Where(k => k.ReleaseId == release.Id)
+            .ToListAsync()
+            .ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(
+                keys,
+                Has.Some.Matches<ReleaseIdentityKey>(k => k.Authority == "provider-a" && k.Value == "stable-a"));
+            Assert.That(
+                keys,
+                Has.Some.Matches<ReleaseIdentityKey>(k => k.Authority == "provider-b" && k.Value == "stable-b"));
+        }
+    }
+
+    [Test]
+    public async Task CreateAsync_CreatesAuditRecord_WhenReleaseIsCreated()
     {
         // Arrange
         var release = new Release
@@ -754,10 +1063,10 @@ public class ReleaseRepositoryTests
         };
 
         // Act
-        await _subject.CreateAsync(release, _userId);
+        await _subject.CreateAsync(release, _userId).ConfigureAwait(false);
 
         // Assert
-        var auditRecords = await _context.AuditRecords.ToListAsync();
+        var auditRecords = await _context.AuditRecords.ToListAsync().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(auditRecords, Has.Count.EqualTo(1));
@@ -781,17 +1090,17 @@ public class ReleaseRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.Releases.Add(release);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         release.Title = "UpdatedTitle";
         release.Protocol = "usenet";
         release.Size = 2048;
 
         // Act
-        var result = await _subject.UpdateAsync(release, _userId);
+        var result = await _subject.UpdateAsync(release, _userId).ConfigureAwait(false);
 
         // Assert
-        var updated = await _subject.GetByIdAsync(release.Id);
+        var updated = await _subject.GetByIdAsync(release.Id).ConfigureAwait(false);
 
         using (Assert.EnterMultipleScope())
         {
@@ -818,14 +1127,14 @@ public class ReleaseRepositoryTests
         };
 
         // Act
-        var result = await _subject.UpdateAsync(release, _userId);
+        var result = await _subject.UpdateAsync(release, _userId).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.False);
     }
 
     [Test]
-    public async Task UpdateAsync_CreatesAuditRecord()
+    public async Task UpdateAsync_CreatesAuditRecord_WhenReleaseExists()
     {
         // Arrange
         var release = new Release
@@ -837,20 +1146,104 @@ public class ReleaseRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.Releases.Add(release);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         release.Title = "Updated";
 
         // Act
-        await _subject.UpdateAsync(release, _userId);
+        await _subject.UpdateAsync(release, _userId).ConfigureAwait(false);
 
         // Assert
-        var auditRecords = await _context.AuditRecords.ToListAsync();
+        var auditRecords = await _context.AuditRecords.ToListAsync().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(auditRecords, Has.Count.EqualTo(1));
             Assert.That(auditRecords, Has.One.With.Property(nameof(AuditRecord.Operation)).EqualTo("Update"));
             Assert.That(auditRecords, Has.One.With.Property(nameof(AuditRecord.EntityType)).EqualTo("Release"));
+        }
+    }
+
+    [Test]
+    public async Task QueryAsync_ExcludesRelease_WhenActiveDownloadReferencesIt()
+    {
+        // Arrange
+        var now = DateTime.UtcNow;
+        var release = new Release
+        {
+            IndexerId = _indexerId,
+            Protocol = "torrent",
+            Title = "Protected",
+            PublishDate = now.AddDays(-30),
+            CreatedAt = now.AddDays(-30),
+            ObservedAt = now.AddDays(-30)
+        };
+        var downloadClient = new DownloadClient
+        {
+            ProviderType = "test",
+            Name = "Client",
+            Enabled = true,
+            CreatedAt = now
+        };
+        _context.Releases.Add(release);
+        _context.DownloadClients.Add(downloadClient);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.Downloads.Add(new Download
+        {
+            ReleaseId = release.Id,
+            DownloadClientId = downloadClient.Id,
+            ExternalId = "download-1",
+            Title = "Protected",
+            Status = DownloadStatus.Downloading,
+            CreatedAt = now
+        });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        var deleted = await _subject.DeleteAsync(release.Id, null).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(deleted, Is.True);
+            Assert.That(await _context.Releases.AnyAsync(r => r.Id == release.Id).ConfigureAwait(false), Is.False);
+        }
+    }
+
+    [Test]
+    public async Task QueryAsync_ExcludesRelease_WhenQueuedAcquisitionLockPartitionReferencesIt()
+    {
+        // Arrange
+        var now = DateTime.UtcNow;
+        var release = new Release
+        {
+            IndexerId = _indexerId,
+            Protocol = "torrent",
+            Title = "JobProtected",
+            PublishDate = now.AddDays(-30),
+            CreatedAt = now.AddDays(-30),
+            ObservedAt = now.AddDays(-30)
+        };
+        _context.Releases.Add(release);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.JobExecutions.Add(new JobExecution
+        {
+            JobType = "ReleaseDownloadItem",
+            Scope = JobScope.Content,
+            Status = JobExecutionStatus.Queued,
+            LockPartition = "type:ReleaseDownloadItem" +
+                $"|releaseId={release.Id.ToString().ToLowerInvariant()}",
+            CreatedAt = now
+        });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        var deleted = await _subject.DeleteAsync(release.Id, null).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(deleted, Is.True);
+            Assert.That(await _context.Releases.AnyAsync(r => r.Id == release.Id).ConfigureAwait(false), Is.False);
         }
     }
 
@@ -867,13 +1260,13 @@ public class ReleaseRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.Releases.Add(release);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        var result = await _subject.DeleteAsync(release.Id, _userId);
+        var result = await _subject.DeleteAsync(release.Id, _userId).ConfigureAwait(false);
 
         // Assert
-        var deleted = await _subject.GetByIdAsync(release.Id);
+        var deleted = await _subject.GetByIdAsync(release.Id).ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(result, Is.True);
@@ -885,14 +1278,14 @@ public class ReleaseRepositoryTests
     public async Task DeleteAsync_ReturnsFalse_WhenNotExists()
     {
         // Act
-        var result = await _subject.DeleteAsync(Guid.NewGuid(), _userId);
+        var result = await _subject.DeleteAsync(Guid.NewGuid(), _userId).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.False);
     }
 
     [Test]
-    public async Task DeleteAsync_CreatesAuditRecord()
+    public async Task DeleteAsync_CreatesAuditRecord_WhenReleaseExists()
     {
         // Arrange
         var release = new Release
@@ -904,19 +1297,216 @@ public class ReleaseRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.Releases.Add(release);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        await _subject.DeleteAsync(release.Id, _userId);
+        await _subject.DeleteAsync(release.Id, _userId).ConfigureAwait(false);
 
         // Assert
-        var auditRecords = await _context.AuditRecords.ToListAsync();
+        var auditRecords = await _context.AuditRecords.ToListAsync().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(auditRecords, Has.Count.EqualTo(1));
             Assert.That(auditRecords, Has.One.With.Property(nameof(AuditRecord.Operation)).EqualTo("Delete"));
             Assert.That(auditRecords, Has.One.With.Property(nameof(AuditRecord.EntityType)).EqualTo("Release"));
             Assert.That(auditRecords, Has.One.With.Property(nameof(AuditRecord.UserId)).EqualTo(_userId));
+        }
+    }
+
+    [Test]
+    public async Task QueryAsync_SortsReleases_WhenCamelCasePropertyNameIsSet()
+    {
+        // Arrange
+        var older = new Release
+        {
+            IndexerId = _indexerId,
+            Protocol = "torrent",
+            Title = "Older",
+            PublishDate = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            CreatedAt = DateTime.UtcNow
+        };
+        var newer = new Release
+        {
+            IndexerId = _indexerId,
+            Protocol = "torrent",
+            Title = "Newer",
+            PublishDate = new DateTime(2024, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.Releases.AddRange(older, newer);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        var sort = new SortParameter { PropertyName = "publishDate", Direction = SortDirection.Descending };
+
+        // Act
+        var result = await _subject.QueryAsync(new(),
+            new() { PageNumber = 1, PageSize = 100 },
+            sort).ConfigureAwait(false);
+
+        // Assert
+        var items = result.Items.ToList();
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(items, Has.Count.EqualTo(2));
+            Assert.That(items, Has.ItemAt(0).Property(nameof(Release.Title)).EqualTo("Newer"));
+            Assert.That(items, Has.ItemAt(1).Property(nameof(Release.Title)).EqualTo("Older"));
+        }
+    }
+
+    [Test]
+    public async Task QueryAsync_ReturnsAgedRelease_AndExcludesFreshRelease()
+    {
+        // Arrange
+        var now = DateTime.UtcNow;
+        var agedTime = new FakeTimeProvider(DateTimeOffset.UtcNow.AddDays(-30));
+        var agedRepository = new ReleaseRepository(
+            _context,
+            new AuditRecordRepository(
+                _context,
+                Moq.Mock.Of<Sdk.Services.IEventBus>(),
+                NullLoggerFactory.Instance.CreateLogger<AuditRecordRepository>(),
+                new TransactionManager(_context, NullLogger<TransactionManager>.Instance)),
+            new TransactionManager(_context, NullLogger<TransactionManager>.Instance),
+            NullLoggerFactory.Instance.CreateLogger<ReleaseRepository>(),
+            agedTime);
+        var aged = await agedRepository.CreateAsync(
+            new Release
+            {
+                IndexerId = _indexerId,
+                Protocol = "torrent",
+                Title = "Aged",
+                PublishDate = now.AddDays(-30)
+            },
+            _userId,
+            default).ConfigureAwait(false);
+        var fresh = await _subject.CreateAsync(
+            new Release
+            {
+                IndexerId = _indexerId,
+                Protocol = "torrent",
+                Title = "Fresh",
+                PublishDate = now
+            },
+            _userId).ConfigureAwait(false);
+
+        // Act
+        var deleted = await _subject.DeleteAsync(aged.Id, null).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(deleted, Is.True);
+            Assert.That(await _context.Releases.AnyAsync(r => r.Id == aged.Id).ConfigureAwait(false), Is.False);
+            Assert.That(await _context.Releases.AnyAsync(r => r.Id == fresh.Id).ConfigureAwait(false), Is.True);
+        }
+    }
+
+    [Test]
+    public async Task QueryAsync_ReturnsAgedReleases_WhenOnlyTerminalDownloadsReferenceThem()
+    {
+        // Arrange
+        var now = DateTime.UtcNow;
+        var agedTime = new FakeTimeProvider(DateTimeOffset.UtcNow.AddDays(-30));
+        var agedRepository = new ReleaseRepository(
+            _context,
+            new AuditRecordRepository(
+                _context,
+                Moq.Mock.Of<Sdk.Services.IEventBus>(),
+                NullLoggerFactory.Instance.CreateLogger<AuditRecordRepository>(),
+                new TransactionManager(_context, NullLogger<TransactionManager>.Instance)),
+            new TransactionManager(_context, NullLogger<TransactionManager>.Instance),
+            NullLoggerFactory.Instance.CreateLogger<ReleaseRepository>(),
+            agedTime);
+        var failedBacked = await agedRepository.CreateAsync(
+            new Release
+            {
+                IndexerId = _indexerId,
+                Protocol = "torrent",
+                Title = "FailedBacked",
+                PublishDate = now.AddDays(-30)
+            },
+            _userId,
+            default).ConfigureAwait(false);
+        var cancelledBacked = await agedRepository.CreateAsync(
+            new Release
+            {
+                IndexerId = _indexerId,
+                Protocol = "torrent",
+                Title = "CancelledBacked",
+                PublishDate = now.AddDays(-30)
+            },
+            _userId,
+            default).ConfigureAwait(false);
+        var importedBacked = await agedRepository.CreateAsync(
+            new Release
+            {
+                IndexerId = _indexerId,
+                Protocol = "torrent",
+                Title = "ImportedBacked",
+                PublishDate = now.AddDays(-30)
+            },
+            _userId,
+            default).ConfigureAwait(false);
+        var downloadClient = new DownloadClient
+        {
+            ProviderType = "test",
+            Name = "Client",
+            Enabled = true,
+            CreatedAt = now
+        };
+        _context.DownloadClients.Add(downloadClient);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.Downloads.AddRange(
+            new Download
+            {
+                ReleaseId = failedBacked.Id,
+                DownloadClientId = downloadClient.Id,
+                ExternalId = "terminal-failed",
+                Title = "FailedBacked",
+                Status = DownloadStatus.Failed,
+                CreatedAt = now
+            },
+            new Download
+            {
+                ReleaseId = cancelledBacked.Id,
+                DownloadClientId = downloadClient.Id,
+                ExternalId = "terminal-cancelled",
+                Title = "CancelledBacked",
+                Status = DownloadStatus.Cancelled,
+                CreatedAt = now
+            },
+            new Download
+            {
+                ReleaseId = importedBacked.Id,
+                DownloadClientId = downloadClient.Id,
+                ExternalId = "terminal-imported",
+                Title = "ImportedBacked",
+                Status = DownloadStatus.Imported,
+                CreatedAt = now
+            });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        var deleted = 0;
+        foreach (var releaseId in new[] { failedBacked.Id, cancelledBacked.Id, importedBacked.Id })
+        {
+            if (await _subject.DeleteAsync(releaseId, null).ConfigureAwait(false))
+            {
+                deleted++;
+            }
+        }
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(deleted, Is.EqualTo(3));
+            Assert.That(await _context.Releases.AnyAsync(r => r.Id == failedBacked.Id).ConfigureAwait(false), Is.False);
+            Assert.That(
+                await _context.Releases.AnyAsync(r => r.Id == cancelledBacked.Id).ConfigureAwait(false),
+                Is.False);
+            Assert.That(
+                await _context.Releases.AnyAsync(r => r.Id == importedBacked.Id).ConfigureAwait(false),
+                Is.False);
         }
     }
 }

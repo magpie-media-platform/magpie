@@ -1,18 +1,17 @@
 using System.Collections.Generic;
-using System.Linq;
 
-using Magpie.Abstractions.Api;
-using Magpie.Abstractions.Content;
 using Magpie.Models;
+using Magpie.Sdk.Api;
+using Magpie.Sdk.Services;
 
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
 
 namespace Magpie.Api.EndpointGroups;
 
-internal sealed class ContentTypeEndpointGroup(
-    IEnumerable<IContentTypeDefinitionProvider> contentTypeProviders) : IApiEndpointGroup
+internal sealed class ContentTypeEndpointGroup : IApiEndpointGroup
 {
     public string Name => "content-types";
 
@@ -20,16 +19,12 @@ internal sealed class ContentTypeEndpointGroup(
     {
         builder.MapGet("", GetContentTypes)
             .WithName(nameof(GetContentTypes))
-            .Produces<ContentTypeDefinition[]>()
+            .Produces<IReadOnlyList<ContentTypeDefinition>>()
             .RequireViewer();
     }
 
-    private IResult GetContentTypes()
+    internal IResult GetContentTypes([FromServices] IContentTypeRegistry contentTypeRegistry)
     {
-        var definitions = contentTypeProviders
-            .SelectMany(p => p.GetContentTypeDefinitions())
-            .ToArray();
-
-        return Results.Ok(definitions);
+        return Results.Ok(contentTypeRegistry.Definitions);
     }
 }

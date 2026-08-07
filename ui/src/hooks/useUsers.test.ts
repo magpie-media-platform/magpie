@@ -48,6 +48,8 @@ const mockUsers: UserItem[] = [
         lastLoginAt: '2024-01-15T10:30:00Z',
         createdAt: '2024-01-01T00:00:00Z',
         createdByUserId: null,
+        modifiedAt: null,
+        modifiedByUserId: null,
     },
     {
         id: 'user-2',
@@ -64,6 +66,8 @@ const mockUsers: UserItem[] = [
         lastLoginAt: '2024-01-15T09:00:00Z',
         createdAt: '2024-01-02T00:00:00Z',
         createdByUserId: 'user-1',
+        modifiedAt: null,
+        modifiedByUserId: null,
     },
     {
         id: 'user-3',
@@ -80,6 +84,8 @@ const mockUsers: UserItem[] = [
         lastLoginAt: null,
         createdAt: '2024-01-03T00:00:00Z',
         createdByUserId: 'user-1',
+        modifiedAt: null,
+        modifiedByUserId: null,
     },
 ];
 
@@ -158,7 +164,7 @@ describe('useUsers', () => {
         it('should fetch users with query parameters', async () => {
             mockApiGet.mockResolvedValue(mockPagedResponse);
 
-            const { result } = renderHook(() => useUsers({ role: Role.Admin, enabled: true, page: 1 }), {
+            const { result } = renderHook(() => useUsers({ role: Role.Admin, enabled: true, pageNumber: 1 }), {
                 wrapper: createWrapper(),
             });
 
@@ -223,6 +229,8 @@ describe('useUsers', () => {
                 lastLoginAt: null,
                 createdAt: '2024-01-04T00:00:00Z',
                 createdByUserId: 'user-1',
+                modifiedAt: null,
+                modifiedByUserId: null,
             });
 
             const { result } = renderHook(() => useUsers(), {
@@ -238,6 +246,7 @@ describe('useUsers', () => {
                     username: 'newuser',
                     password: 'password123',
                     role: Role.Viewer,
+                    enabled: true,
                 });
             });
 
@@ -245,6 +254,7 @@ describe('useUsers', () => {
                 username: 'newuser',
                 password: 'password123',
                 role: Role.Viewer,
+                enabled: true,
             });
         });
 
@@ -266,10 +276,11 @@ describe('useUsers', () => {
             });
 
             act(() => {
-                result.current.createUser({
+                void result.current.createUser({
                     username: 'newuser',
                     password: 'password123',
                     role: Role.Viewer,
+                    enabled: true,
                 });
             });
 
@@ -293,6 +304,8 @@ describe('useUsers', () => {
                     lastLoginAt: null,
                     createdAt: '2024-01-04T00:00:00Z',
                     createdByUserId: 'user-1',
+                    modifiedAt: null,
+                    modifiedByUserId: null,
                 });
             });
 
@@ -367,7 +380,7 @@ describe('useUsers', () => {
             });
 
             act(() => {
-                result.current.updateUser('user-1', { role: Role.Manager });
+                void result.current.updateUser('user-1', { role: Role.Manager });
             });
 
             await waitFor(() => {
@@ -385,9 +398,9 @@ describe('useUsers', () => {
     });
 
     describe('toggling user enabled', () => {
-        it('should enable a user via POST /users/{id}/enable', async () => {
+        it('should enable a user via PATCH /users/{id}', async () => {
             mockApiGet.mockResolvedValue(mockPagedResponse);
-            mockApiPost.mockResolvedValue({ ...mockUsers[2], enabled: true });
+            mockApiPatch.mockResolvedValue(undefined);
 
             const { result } = renderHook(() => useUsers(), {
                 wrapper: createWrapper(),
@@ -401,12 +414,14 @@ describe('useUsers', () => {
                 await result.current.toggleUserEnabled('user-3', true);
             });
 
-            expect(mockApiPost).toHaveBeenCalledWith('/users/user-3/enable');
+            expect(mockApiPatch).toHaveBeenCalledWith('/users/user-3', {
+                enabled: { value: true },
+            });
         });
 
-        it('should disable a user via POST /users/{id}/disable', async () => {
+        it('should disable a user via PATCH /users/{id}', async () => {
             mockApiGet.mockResolvedValue(mockPagedResponse);
-            mockApiPost.mockResolvedValue({ ...mockUsers[0], enabled: false });
+            mockApiPatch.mockResolvedValue(undefined);
 
             const { result } = renderHook(() => useUsers(), {
                 wrapper: createWrapper(),
@@ -420,17 +435,19 @@ describe('useUsers', () => {
                 await result.current.toggleUserEnabled('user-1', false);
             });
 
-            expect(mockApiPost).toHaveBeenCalledWith('/users/user-1/disable');
+            expect(mockApiPatch).toHaveBeenCalledWith('/users/user-1', {
+                enabled: { value: false },
+            });
         });
 
         it('should set isToggling while toggling', async () => {
             mockApiGet.mockResolvedValue(mockPagedResponse);
 
-            let resolvePost: (value: UserItem) => void;
-            const postPromise = new Promise<UserItem>((resolve) => {
-                resolvePost = resolve;
+            let resolvePatch: () => void;
+            const patchPromise = new Promise<void>((resolve) => {
+                resolvePatch = resolve;
             });
-            mockApiPost.mockReturnValue(postPromise);
+            mockApiPatch.mockReturnValue(patchPromise);
 
             const { result } = renderHook(() => useUsers(), {
                 wrapper: createWrapper(),
@@ -441,7 +458,7 @@ describe('useUsers', () => {
             });
 
             act(() => {
-                result.current.toggleUserEnabled('user-3', true);
+                void result.current.toggleUserEnabled('user-3', true);
             });
 
             await waitFor(() => {
@@ -449,7 +466,7 @@ describe('useUsers', () => {
             });
 
             act(() => {
-                resolvePost!({ ...mockUsers[2], enabled: true });
+                resolvePatch!();
             });
 
             await waitFor(() => {
@@ -496,7 +513,7 @@ describe('useUsers', () => {
             });
 
             act(() => {
-                result.current.deleteUser('user-3');
+                void result.current.deleteUser('user-3');
             });
 
             await waitFor(() => {
@@ -510,6 +527,27 @@ describe('useUsers', () => {
             await waitFor(() => {
                 expect(result.current.isDeleting).toBe(false);
             });
+        });
+    });
+
+    describe('unlocking users', () => {
+        it('should unlock a user via POST /users/{id}/unlock', async () => {
+            mockApiGet.mockResolvedValue(mockPagedResponse);
+            mockApiPost.mockResolvedValue(undefined);
+
+            const { result } = renderHook(() => useUsers(), {
+                wrapper: createWrapper(),
+            });
+
+            await waitFor(() => {
+                expect(result.current.isLoading).toBe(false);
+            });
+
+            await act(async () => {
+                await result.current.unlockUser('user-3');
+            });
+
+            expect(mockApiPost).toHaveBeenCalledWith('/users/user-3/unlock');
         });
     });
 
@@ -550,7 +588,7 @@ describe('useCurrentUser', () => {
             expect(result.current.isLoading).toBe(false);
         });
 
-        expect(mockApiGet).toHaveBeenCalledWith('/users/me');
+        expect(mockApiGet).toHaveBeenCalledWith('/users/my');
         expect(result.current.currentUser?.username).toBe('admin');
     });
 

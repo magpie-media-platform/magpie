@@ -1,50 +1,99 @@
-import { useQuery, useMutation, useQueryClient, type Query } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 
+import { useAuth } from '@/auth';
 import { apiGet, apiPost, buildUrl } from '@/lib/api';
+import { useInvalidateQueriesOnEvents } from '@/hooks/useInvalidateQueriesOnEvents';
+import type { EventStreamPayload } from '@/hooks/useEventStream';
+import {
+    executeJobRequest,
+    type JobActionDisposition,
+    type JobExecutionModeValue as JobActionExecutionModeValue,
+    type JobExecutionRequest,
+} from '@/lib/jobActions';
 import { POLLING_INTERVALS } from '@/lib/queryClient';
 import { queryErrorOrNull } from '@/lib/utils';
+import type {
+    JobExecutionEffectiveStatusValue,
+    JobExecutionStatusValue,
+    JobParameterDefinition,
+    JobScopeValue,
+    JobTriggerModeValue,
+} from '@/types/jobs';
 import type { PagedList } from '@/types/paging';
 
-export type JobExecutionStatusValue = 0 | 1 | 2 | 3 | 4 | 5 | 6;
+export type {
+    JobExecutionEffectiveStatusValue,
+    JobExecutionStatusValue,
+    JobParameterDefinition,
+    JobScopeValue,
+    JobTriggerModeValue,
+} from '@/types/jobs';
 
 export const jobExecutionStatusLabels: Record<JobExecutionStatusValue, string> = {
-    0: 'Created',
-    1: 'Queued',
-    2: 'Running',
-    3: 'Completed',
-    4: 'Failed',
-    5: 'Cancelled',
-    6: 'Cancellation Requested',
+    Queued: 'Queued',
+    Running: 'Running',
+    Completed: 'Completed',
+    Failed: 'Failed',
+    Cancelled: 'Cancelled',
+    CancellationRequested: 'Cancellation Requested',
 };
 
-// Mirrors Magpie.Models.Enums.JobExecutionStatus terminal states (Completed, Failed, Cancelled).
-export const terminalJobExecutionStatuses: ReadonlySet<JobExecutionStatusValue> = new Set([3, 4, 5]);
+export const terminalJobExecutionStatuses: ReadonlySet<JobExecutionStatusValue> = new Set([
+    'Completed',
+    'Failed',
+    'Cancelled',
+]);
 
 export function isTerminalJobExecutionStatus(status: JobExecutionStatusValue | undefined): boolean {
     return status !== undefined && terminalJobExecutionStatuses.has(status);
 }
 
 export const jobExecutionStatusVariants: Record<JobExecutionStatusValue, string> = {
-    0: 'created',
-    1: 'queued',
-    2: 'running',
-    3: 'completed',
-    4: 'failed',
-    5: 'cancelled',
-    6: 'cancelling',
+    Queued: 'queued',
+    Running: 'running',
+    Completed: 'completed',
+    Failed: 'failed',
+    Cancelled: 'cancelled',
+    CancellationRequested: 'cancelling',
 };
-
-export type JobScopeValue = 0 | 1 | 2 | 3;
 
 export const jobScopeLabels: Record<JobScopeValue, string> = {
-    0: 'System',
-    1: 'Administrative',
-    2: 'Content',
-    3: 'User',
+    System: 'System',
+    Administrative: 'Administrative',
+    Content: 'Content',
+    User: 'User',
 };
+
+export type RoleValue = 'Viewer' | 'Requester' | 'Manager' | 'Admin';
+
+export interface ApiJobSpec {
+    jobType: string;
+
+    displayName: string;
+
+    description?: string | null;
+
+    category: string;
+
+    scope: JobScopeValue;
+
+    enabled: boolean;
+
+    onDemand: boolean;
+
+    supportedTriggerModes: JobTriggerModeValue[];
+
+    requesterTriggerModes?: JobTriggerModeValue[];
+
+    defaultSchedule?: string | null;
+
+    parameters?: JobParameterDefinition[];
+}
 
 export interface ApiJobExecution {
     id: string;
+
+    parentExecutionId?: string | null;
 
     scheduleTriggerId?: string | null;
 
@@ -60,6 +109,8 @@ export interface ApiJobExecution {
 
     parameters?: Record<string, string>;
 
+    correlationId?: string | null;
+
     progress?: number | null;
 
     status: JobExecutionStatusValue;
@@ -71,6 +122,8 @@ export interface ApiJobExecution {
     lastHeartbeat?: string | null;
 
     timeoutAt?: string | null;
+
+    notBeforeAt?: string | null;
 
     startedAt?: string | null;
 
@@ -94,7 +147,11 @@ export interface JobExecutionQueryParams {
 
     eventTriggerId?: string;
 
-    status?: JobExecutionStatusValue;
+    status?: JobExecutionEffectiveStatusValue[];
+
+    mine?: boolean;
+
+    rootsOnly?: boolean;
 
     pageNumber?: number;
 
@@ -105,23 +162,75 @@ export interface JobExecutionQueryParams {
     sortDirection?: 0 | 1 | 2;
 }
 
-export type JobExecutionModeValue = 0 | 1;
+export const displayStatusToWireStatuses: Record<string, JobExecutionEffectiveStatusValue[]> = {
+    pending: ['Pending'],
+    queued: ['Queued'],
+    running: ['Running', 'CancellationRequested'],
+    completed: ['Completed'],
+    failed: ['Failed'],
+    cancelled: ['Cancelled'],
+};
 
-export interface RunJobRequest {
-    jobType: string;
+export type JobExecutionModeValue = JobActionExecutionModeValue;
 
-    extensionId?: string | null;
+export type RunJobRequest = JobExecutionRequest;
 
-    parameters?: Record<string, string>;
-
-    mode?: JobExecutionModeValue;
-}
+export type RunJobResult = JobActionDisposition;
 
 export const jobQueryKeys = {
     all: ['jobs'] as const,
+    specs: (userTriggerMode?: JobTriggerModeValue) => ['jobs', 'specs', userTriggerMode ?? 'all'] as const,
     list: (params?: JobExecutionQueryParams) => ['jobs', 'list', params ?? {}] as const,
     detail: (id: string) => ['jobs', 'detail', id] as const,
 };
+
+const jobExecutionEvents = [
+    'job.execution.created',
+    'job.execution.queued',
+    'job.execution.started',
+    'job.execution.progress.changed',
+    'job.execution.completed',
+    'job.execution.failed',
+    'job.execution.cancellationRequested',
+    'job.execution.cancelled',
+] as const;
+
+export const jobExecutionListEvents = [
+    'job.execution.created',
+    'job.execution.queued',
+    'job.execution.started',
+    'job.execution.progress.changed',
+    'job.execution.completed',
+    'job.execution.failed',
+    'job.execution.cancellationRequested',
+    'job.execution.cancelled',
+] as const;
+
+function useJobExecutionInvalidation(
+    queryKey: readonly unknown[],
+    eventNames: readonly string[],
+    enabled = true,
+    entityIds?: readonly string[],
+    predicate?: (event: EventStreamPayload) => boolean,
+    unprovableMembership = false,
+    prePredicate?: (event: EventStreamPayload) => boolean,
+) {
+    useInvalidateQueriesOnEvents(enabled ? eventNames : [], [queryKey], {
+        debounceMs: 150,
+        entityIds,
+        exact: true,
+        maxWaitMs: 600,
+        owner: 'jobs-query',
+        prePredicate,
+        predicate,
+        unprovableMembership,
+    });
+}
+
+async function fetchJobSpecs(userTriggerMode?: JobTriggerModeValue): Promise<ApiJobSpec[]> {
+    const url = buildUrl('/jobs/specs', { userTriggerMode });
+    return apiGet<ApiJobSpec[]>(url);
+}
 
 async function fetchJobExecutions(params?: JobExecutionQueryParams): Promise<PagedJobExecutions> {
     const url = buildUrl('/jobs', params);
@@ -132,35 +241,115 @@ async function fetchJobExecutionById(id: string): Promise<ApiJobExecution> {
     return apiGet<ApiJobExecution>(`/jobs/${id}`);
 }
 
-async function runJob(request: RunJobRequest): Promise<string> {
-    return apiPost<string>('/jobs', request);
+async function runJob(request: RunJobRequest): Promise<RunJobResult> {
+    return executeJobRequest(request);
 }
 
 async function cancelJob(id: string): Promise<void> {
     return apiPost(`/jobs/${id}/cancel`);
 }
 
+export function useJobSpecs(userTriggerMode?: JobTriggerModeValue) {
+    useInvalidateQueriesOnEvents(
+        [
+            'extension.installed',
+            'extension.enabled',
+            'extension.disabled',
+            'extension.uninstalled',
+            'extension.upgraded',
+        ],
+        [jobQueryKeys.specs(userTriggerMode)],
+        { exact: true, owner: 'jobs:specs' },
+    );
+    const specsQuery = useQuery({
+        queryKey: jobQueryKeys.specs(userTriggerMode),
+        queryFn: () => fetchJobSpecs(userTriggerMode),
+        staleTime: POLLING_INTERVALS.normal,
+    });
+
+    return {
+        specs: specsQuery.data ?? [],
+        isLoading: specsQuery.isLoading,
+        error: queryErrorOrNull(specsQuery),
+        refetch: specsQuery.refetch,
+    };
+}
+
 export function useJobs(params?: JobExecutionQueryParams) {
+    const { user } = useAuth();
     const queryClient = useQueryClient();
+    const hasFilters = !!(
+        params?.eventTriggerId ||
+        params?.extensionId ||
+        params?.jobType ||
+        params?.mine ||
+        params?.rootsOnly ||
+        params?.scheduleTriggerId ||
+        params?.status?.length
+    );
+    useJobExecutionInvalidation(
+        jobQueryKeys.list(params),
+        jobExecutionListEvents,
+        true,
+        undefined,
+        (event) => {
+            const current = queryClient.getQueryData<PagedJobExecutions>(jobQueryKeys.list(params));
+            if (current?.items.some((execution) => execution.id === event.context['execution.id'])) {
+                return true;
+            }
+            if (!hasFilters) {
+                return true;
+            }
+            const effectiveStatus = event.context['execution.effectiveStatus'];
+            return (
+                (!params?.eventTriggerId || event.context['eventTrigger.id'] === params.eventTriggerId) &&
+                (!params?.extensionId || event.context['extension.id'] === params.extensionId) &&
+                (!params?.jobType || event.context['execution.jobType'] === params.jobType) &&
+                (!params?.mine || event.context['user.id'] === user?.id) &&
+                (!params?.rootsOnly || !event.context['execution.parentId']) &&
+                (!params?.scheduleTriggerId || event.context['scheduleTrigger.id'] === params.scheduleTriggerId) &&
+                (!params?.status?.length ||
+                    (!!effectiveStatus && params.status.includes(effectiveStatus as JobExecutionEffectiveStatusValue)))
+            );
+        },
+        hasFilters,
+        (event) => {
+            const context = event.context;
+            const effectiveStatus = context['execution.effectiveStatus'];
+            return !(
+                (params?.eventTriggerId &&
+                    context['eventTrigger.id'] &&
+                    context['eventTrigger.id'] !== params.eventTriggerId) ||
+                (params?.extensionId && context['extension.id'] && context['extension.id'] !== params.extensionId) ||
+                (params?.jobType && context['execution.jobType'] && context['execution.jobType'] !== params.jobType) ||
+                (params?.mine && context['user.id'] && context['user.id'] !== user?.id) ||
+                (params?.rootsOnly && context['execution.parentId']) ||
+                (params?.scheduleTriggerId &&
+                    context['scheduleTrigger.id'] &&
+                    context['scheduleTrigger.id'] !== params.scheduleTriggerId) ||
+                (params?.status?.length &&
+                    effectiveStatus &&
+                    !params.status.includes(effectiveStatus as JobExecutionEffectiveStatusValue))
+            );
+        },
+    );
 
     const jobsQuery = useQuery({
         queryKey: jobQueryKeys.list(params),
         queryFn: () => fetchJobExecutions(params),
-        refetchInterval: POLLING_INTERVALS.fast,
-        staleTime: POLLING_INTERVALS.fast / 2,
     });
 
     const runMutation = useMutation({
         mutationFn: runJob,
         onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: jobQueryKeys.all });
+            void queryClient.invalidateQueries({ queryKey: jobQueryKeys.all });
         },
     });
 
     const cancelMutation = useMutation({
         mutationFn: cancelJob,
         onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: jobQueryKeys.all });
+            void queryClient.invalidateQueries({ queryKey: jobQueryKeys.all });
         },
     });
 
@@ -190,17 +379,11 @@ export function useJobs(params?: JobExecutionQueryParams) {
 }
 
 export function useJobExecution(id: string, enabled = true) {
+    useJobExecutionInvalidation(jobQueryKeys.detail(id), jobExecutionEvents, enabled && Boolean(id), [id]);
     const jobQuery = useQuery({
         queryKey: jobQueryKeys.detail(id),
         queryFn: () => fetchJobExecutionById(id),
         enabled: enabled && Boolean(id),
-        refetchInterval: (query: Query<ApiJobExecution, Error>) => {
-            if (isTerminalJobExecutionStatus(query.state.data?.status)) {
-                return false;
-            }
-            return POLLING_INTERVALS.fast;
-        },
-        staleTime: POLLING_INTERVALS.fast / 2,
     });
 
     return {

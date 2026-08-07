@@ -6,7 +6,8 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <InternalsVisibleTo Include="Magpie.Test.Api" />
+    <InternalsVisibleTo Include="DynamicProxyGenAssembly2" />
+    <InternalsVisibleTo Include="Magpie.CommandLine" />
   </ItemGroup>
 
   <ItemGroup>
@@ -14,13 +15,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\Magpie.Abstractions.Api\Magpie.Abstractions.Api.csproj" />
-    <ProjectReference Include="..\Magpie.Abstractions\Magpie.Abstractions.csproj" />
-    <ProjectReference Include="..\Magpie.Auth\Magpie.Auth.csproj" />
-    <ProjectReference Include="..\Magpie.Core\Magpie.Core.csproj" />
-    <ProjectReference Include="..\Magpie.Data\Magpie.Data.csproj" />
-    <ProjectReference Include="..\Magpie.Models.Api\Magpie.Models.Api.csproj" />
-    <ProjectReference Include="..\Magpie.QueryLanguage\Magpie.QueryLanguage.csproj" />
+    <ProjectReference Include="..\Magpie.Sdk\Magpie.Sdk.csproj" />
   </ItemGroup>
 
 </Project>

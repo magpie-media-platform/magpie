@@ -1,33 +1,35 @@
 import { useState, useCallback, useEffect, useMemo, type ComponentType } from 'react';
 import {
-    FloppyDisk,
-    MagnifyingGlass,
-    X,
-    Tag,
-    Plus,
-    Minus,
-    CheckSquare,
-    Square,
-    MinusSquare,
-    Star,
-    Heart,
-    Lightning,
-    FilmStrip,
-    MusicNote,
-    Book,
-    GameController,
-    Globe,
-    House,
-    User,
-    Users,
-    Folder,
-    Archive,
-    Warning,
-    CheckCircle,
-    Eye,
-    Clock,
+    FloppyDiskIcon,
+    MagnifyingGlassIcon,
+    XIcon,
+    TagIcon,
+    PlusIcon,
+    MinusIcon,
+    CheckSquareIcon,
+    SquareIcon,
+    MinusSquareIcon,
+    StarIcon,
+    HeartIcon,
+    LightningIcon,
+    FilmStripIcon,
+    MusicNoteIcon,
+    BookIcon,
+    GameControllerIcon,
+    GlobeIcon,
+    HouseIcon,
+    UserIcon,
+    UsersIcon,
+    FolderIcon,
+    ArchiveIcon,
+    WarningIcon,
+    CheckCircleIcon,
+    EyeIcon,
+    ClockIcon,
     type IconProps,
 } from '@phosphor-icons/react';
+
+import { ContentLineageTitle } from '@/components/content/ContentLineageTitle';
 
 import { Button } from '../Button';
 import { Input } from '../Input';
@@ -56,28 +58,28 @@ export type TagIconName =
     | 'clock';
 
 const ICON_COMPONENTS: Record<TagIconName, ComponentType<IconProps>> = {
-    tag: Tag,
-    star: Star,
-    heart: Heart,
-    lightning: Lightning,
-    'film-strip': FilmStrip,
-    'music-note': MusicNote,
-    book: Book,
-    'game-controller': GameController,
-    globe: Globe,
-    house: House,
-    user: User,
-    users: Users,
-    folder: Folder,
-    archive: Archive,
-    warning: Warning,
-    'check-circle': CheckCircle,
-    eye: Eye,
-    clock: Clock,
+    tag: TagIcon,
+    star: StarIcon,
+    heart: HeartIcon,
+    lightning: LightningIcon,
+    'film-strip': FilmStripIcon,
+    'music-note': MusicNoteIcon,
+    book: BookIcon,
+    'game-controller': GameControllerIcon,
+    globe: GlobeIcon,
+    house: HouseIcon,
+    user: UserIcon,
+    users: UsersIcon,
+    folder: FolderIcon,
+    archive: ArchiveIcon,
+    warning: WarningIcon,
+    'check-circle': CheckCircleIcon,
+    eye: EyeIcon,
+    clock: ClockIcon,
 };
 
 function getTagIconComponent(iconName?: TagIconName): ComponentType<IconProps> {
-    return iconName ? ICON_COMPONENTS[iconName] : Tag;
+    return iconName ? ICON_COMPONENTS[iconName] : TagIcon;
 }
 
 export interface BulkTagItem {
@@ -92,6 +94,7 @@ export interface BulkTagItem {
 
 export interface ContentWithTags {
     id: string;
+    parentId?: string;
     title: string;
     tags?: string[];
 }
@@ -113,6 +116,8 @@ export interface BulkTagAssignmentProps {
 
     selectedItems: ContentWithTags[];
 
+    selectedCount?: number;
+
     onApply: (result: BulkTagAssignmentResult) => void;
 
     isApplying?: boolean;
@@ -130,9 +135,11 @@ export function BulkTagAssignment({
     onOpenChange,
     availableTags,
     selectedItems,
+    selectedCount,
     onApply,
     isApplying = false,
 }: BulkTagAssignmentProps) {
+    const headerCount = selectedCount ?? selectedItems.length;
     const initialTagStates = useMemo(() => {
         const states: Record<string, TagState> = {};
 
@@ -256,13 +263,25 @@ export function BulkTagAssignment({
             <SheetContent side="right" className="bulk-tag-assignment__sheet" data-component="bulk-tag-assignment">
                 <SheetHeader>
                     <SheetTitle>
-                        <Tag weight="duotone" aria-hidden="true" />
+                        <TagIcon weight="duotone" aria-hidden="true" />
                         Assign Tags
                     </SheetTitle>
                     <SheetDescription>
-                        {selectedItems.length === 1
-                            ? `Modify tags for "${selectedItems[0].title}"`
-                            : `Modify tags for ${selectedItems.length} selected items`}
+                        {headerCount === 1 && selectedItems.length === 1 ? (
+                            <>
+                                Modify tags for &quot;
+                                <ContentLineageTitle
+                                    qualifiedName={{
+                                        id: selectedItems[0].id,
+                                        parentId: selectedItems[0].parentId,
+                                        title: selectedItems[0].title,
+                                    }}
+                                />
+                                &quot;
+                            </>
+                        ) : (
+                            `Modify tags for ${headerCount} selected items`
+                        )}
                     </SheetDescription>
                 </SheetHeader>
 
@@ -275,7 +294,7 @@ export function BulkTagAssignment({
                                 size="sm"
                                 value={searchQuery}
                                 onChange={(e) => setSearchQuery(e.target.value)}
-                                leadingIcon={<MagnifyingGlass weight="regular" />}
+                                leadingIcon={<MagnifyingGlassIcon weight="regular" />}
                                 trailingIcon={
                                     searchQuery ? (
                                         <button
@@ -284,7 +303,7 @@ export function BulkTagAssignment({
                                             onClick={() => setSearchQuery('')}
                                             aria-label="Clear search"
                                         >
-                                            <X weight="bold" />
+                                            <XIcon weight="bold" />
                                         </button>
                                     ) : undefined
                                 }
@@ -295,13 +314,15 @@ export function BulkTagAssignment({
                     <div className="bulk-tag-assignment__tags" role="group" aria-label="Available tags">
                         {availableTags.length === 0 ? (
                             <div className="bulk-tag-assignment__empty">
-                                <Tag weight="thin" aria-hidden="true" />
+                                <TagIcon weight="thin" aria-hidden="true" />
                                 <p>No tags available</p>
-                                <p className="bulk-tag-assignment__empty-hint">Create tags in the Tags page first</p>
+                                <p className="bulk-tag-assignment__empty-hint">
+                                    Add tags from an item&apos;s detail page to use them here
+                                </p>
                             </div>
                         ) : filteredTags.length === 0 ? (
                             <div className="bulk-tag-assignment__empty">
-                                <MagnifyingGlass weight="thin" aria-hidden="true" />
+                                <MagnifyingGlassIcon weight="thin" aria-hidden="true" />
                                 <p>No matching tags</p>
                                 <p className="bulk-tag-assignment__empty-hint">Try a different search term</p>
                             </div>
@@ -327,13 +348,13 @@ export function BulkTagAssignment({
                                     >
                                         <span className="bulk-tag-assignment__checkbox">
                                             {checkboxState.icon === 'checked' && (
-                                                <CheckSquare weight="fill" aria-hidden="true" />
+                                                <CheckSquareIcon weight="fill" aria-hidden="true" />
                                             )}
                                             {checkboxState.icon === 'unchecked' && (
-                                                <Square weight="regular" aria-hidden="true" />
+                                                <SquareIcon weight="regular" aria-hidden="true" />
                                             )}
                                             {checkboxState.icon === 'indeterminate' && (
-                                                <MinusSquare weight="fill" aria-hidden="true" />
+                                                <MinusSquareIcon weight="fill" aria-hidden="true" />
                                             )}
                                         </span>
                                         <span
@@ -354,12 +375,12 @@ export function BulkTagAssignment({
                                             >
                                                 {checkboxState.actionIndicator === 'add' ? (
                                                     <>
-                                                        <Plus weight="bold" aria-hidden="true" />
+                                                        <PlusIcon weight="bold" aria-hidden="true" />
                                                         <span>Add</span>
                                                     </>
                                                 ) : (
                                                     <>
-                                                        <Minus weight="bold" aria-hidden="true" />
+                                                        <MinusIcon weight="bold" aria-hidden="true" />
                                                         <span>Remove</span>
                                                     </>
                                                 )}
@@ -376,13 +397,13 @@ export function BulkTagAssignment({
                             <span className="bulk-tag-assignment__summary-label">Changes:</span>
                             {changes.tagsToAdd.length > 0 && (
                                 <span className="bulk-tag-assignment__summary-item bulk-tag-assignment__summary-item--add">
-                                    <Plus weight="bold" aria-hidden="true" />
+                                    <PlusIcon weight="bold" aria-hidden="true" />
                                     {changes.tagsToAdd.length} tag{changes.tagsToAdd.length !== 1 ? 's' : ''} to add
                                 </span>
                             )}
                             {changes.tagsToRemove.length > 0 && (
                                 <span className="bulk-tag-assignment__summary-item bulk-tag-assignment__summary-item--remove">
-                                    <Minus weight="bold" aria-hidden="true" />
+                                    <MinusIcon weight="bold" aria-hidden="true" />
                                     {changes.tagsToRemove.length} tag{changes.tagsToRemove.length !== 1 ? 's' : ''} to
                                     remove
                                 </span>
@@ -394,7 +415,7 @@ export function BulkTagAssignment({
                 <SheetFooter>
                     <SheetClose asChild>
                         <Button type="button" variant="ghost" disabled={isApplying} data-action="cancel">
-                            <X weight="bold" aria-hidden="true" />
+                            <XIcon weight="bold" aria-hidden="true" />
                             Cancel
                         </Button>
                     </SheetClose>
@@ -405,7 +426,7 @@ export function BulkTagAssignment({
                         onClick={handleApply}
                         data-action="apply"
                     >
-                        <FloppyDisk weight="bold" aria-hidden="true" />
+                        <FloppyDiskIcon weight="bold" aria-hidden="true" />
                         {isApplying ? 'Applying...' : 'Apply'}
                     </Button>
                 </SheetFooter>

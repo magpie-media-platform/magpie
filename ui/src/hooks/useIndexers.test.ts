@@ -13,8 +13,8 @@ vi.mock('@/lib/api', () => ({
     }),
 }));
 
-import { apiGet, apiPost, apiDelete } from '@/lib/api';
-import { useIndexers, type ApiIndexer, type ApiIndexerFeed } from './useIndexers';
+import { apiGet, apiPatch, apiPost, apiDelete } from '@/lib/api';
+import { countConfiguredIndexerInstances, useIndexers, type ApiIndexer, type ApiIndexerFeed } from './useIndexers';
 
 const mockApiIndexers: ApiIndexer[] = [
     {
@@ -22,7 +22,7 @@ const mockApiIndexers: ApiIndexer[] = [
         providerType: 'newznab',
         name: 'NZBgeek',
         description: 'NZBgeek Usenet indexer',
-        availability: 3,
+        availability: 'SemiPrivate',
         categories: ['5000', '5010'],
         createdAt: '2024-01-01T00:00:00Z',
     },
@@ -31,7 +31,7 @@ const mockApiIndexers: ApiIndexer[] = [
         providerType: 'torznab',
         name: 'Jackett',
         description: 'Jackett proxy indexer',
-        availability: 1,
+        availability: 'Public',
         createdAt: '2024-01-02T00:00:00Z',
     },
 ];
@@ -42,7 +42,6 @@ const mockApiFeeds: ApiIndexerFeed[] = [
         providerType: 'prowlarr',
         name: 'Prowlarr Sync',
         description: 'Automatic indexer sync from Prowlarr',
-        settings: { baseUrl: 'http://localhost:9696' },
         enabled: true,
         lastSync: '2024-01-15T09:00:00Z',
         createdAt: '2024-01-01T00:00:00Z',
@@ -75,8 +74,20 @@ function createWrapper() {
         createElement(QueryClientProvider, { client: queryClient }, children);
 }
 
+describe('countConfiguredIndexerInstances', () => {
+    it('sums configured connection counts and ignores catalog-only indexers', () => {
+        expect(
+            countConfiguredIndexerInstances([
+                { ...mockApiIndexers[0], connectionCount: 0 },
+                { ...mockApiIndexers[1], connectionCount: 2 },
+            ]),
+        ).toBe(2);
+    });
+});
+
 describe('useIndexers', () => {
     const mockApiGet = vi.mocked(apiGet);
+    const mockApiPatch = vi.mocked(apiPatch);
     const mockApiPost = vi.mocked(apiPost);
     const mockApiDelete = vi.mocked(apiDelete);
 
@@ -262,7 +273,7 @@ describe('useIndexers', () => {
             });
 
             act(() => {
-                result.current.deleteIndexer('idx-1');
+                void result.current.deleteIndexer('idx-1');
             });
 
             await waitFor(() => {
@@ -290,7 +301,7 @@ describe('useIndexers', () => {
                 }
                 return Promise.reject(new Error('Unknown path'));
             });
-            mockApiPost.mockResolvedValue(undefined);
+            mockApiPatch.mockResolvedValue(undefined);
 
             const { result } = renderHook(() => useIndexers(), {
                 wrapper: createWrapper(),
@@ -304,7 +315,7 @@ describe('useIndexers', () => {
                 await result.current.toggleFeedEnabled('feed-2', true);
             });
 
-            expect(mockApiPost).toHaveBeenCalledWith('/indexer-feeds/feed-2/enable');
+            expect(mockApiPatch).toHaveBeenCalledWith('/indexer-feeds/feed-2', { enabled: true });
         });
 
         it('should disable a feed', async () => {
@@ -317,7 +328,7 @@ describe('useIndexers', () => {
                 }
                 return Promise.reject(new Error('Unknown path'));
             });
-            mockApiPost.mockResolvedValue(undefined);
+            mockApiPatch.mockResolvedValue(undefined);
 
             const { result } = renderHook(() => useIndexers(), {
                 wrapper: createWrapper(),
@@ -331,7 +342,43 @@ describe('useIndexers', () => {
                 await result.current.toggleFeedEnabled('feed-1', false);
             });
 
-            expect(mockApiPost).toHaveBeenCalledWith('/indexer-feeds/feed-1/disable');
+            expect(mockApiPatch).toHaveBeenCalledWith('/indexer-feeds/feed-1', { enabled: false });
+        });
+
+        it('should sync a feed and invalidate the feeds query', async () => {
+            mockApiGet.mockImplementation((path: string) => {
+                if (path === '/indexers') {
+                    return Promise.resolve([]);
+                }
+                if (path === '/indexer-feeds') {
+                    return Promise.resolve(mockApiFeeds);
+                }
+                return Promise.reject(new Error('Unknown path'));
+            });
+            mockApiPost.mockResolvedValue(undefined);
+
+            const queryClient = new QueryClient({
+                defaultOptions: { queries: { retry: false, gcTime: 0 }, mutations: { retry: false } },
+            });
+            const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+            const wrapper = ({ children }: { children: React.ReactNode }) =>
+                createElement(QueryClientProvider, { client: queryClient }, children);
+
+            const { result } = renderHook(() => useIndexers(), { wrapper });
+
+            await waitFor(() => {
+                expect(result.current.isLoading).toBe(false);
+            });
+
+            await act(async () => {
+                await result.current.syncFeed('feed-1');
+            });
+
+            expect(mockApiPost).toHaveBeenCalledWith('/jobs/execute-immediate', {
+                jobType: 'IndexerFeedSyncItem',
+                parameters: { feedId: 'feed-1' },
+            });
+            expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['indexers', 'feeds'] });
         });
 
         it('should delete a feed', async () => {

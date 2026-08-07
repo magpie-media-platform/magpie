@@ -17,18 +17,18 @@ export const HTTP_STATUS = {
 } as const;
 
 const STATUS_MESSAGES: Record<number, string> = {
-    [NETWORK_ERROR_STATUS]: 'Unable to connect to the server. Check your network connection.',
-    [HTTP_STATUS.BAD_REQUEST]: 'Invalid request. Please check your input.',
-    [HTTP_STATUS.UNAUTHORIZED]: 'Your session has expired. Please log in again.',
+    [NETWORK_ERROR_STATUS]: 'Failed to connect to the server. Check the network connection.',
+    [HTTP_STATUS.BAD_REQUEST]: 'The request is invalid. Check the input.',
+    [HTTP_STATUS.UNAUTHORIZED]: 'The session expired. Sign in again.',
     [HTTP_STATUS.FORBIDDEN]: 'You do not have permission to perform this action.',
-    [HTTP_STATUS.NOT_FOUND]: 'The requested resource was not found.',
-    [HTTP_STATUS.CONFLICT]: 'A conflict occurred. The resource may have been modified.',
-    [HTTP_STATUS.UNPROCESSABLE_ENTITY]: 'The request could not be processed. Please check your input.',
-    [HTTP_STATUS.TOO_MANY_REQUESTS]: 'Too many requests. Please wait a moment and try again.',
-    [HTTP_STATUS.INTERNAL_SERVER_ERROR]: 'An unexpected server error occurred. Please try again later.',
-    [HTTP_STATUS.BAD_GATEWAY]: 'The server received an invalid response. Please try again later.',
-    [HTTP_STATUS.SERVICE_UNAVAILABLE]: 'The service is temporarily unavailable. Please try again later.',
-    [HTTP_STATUS.GATEWAY_TIMEOUT]: 'The server took too long to respond. Please try again later.',
+    [HTTP_STATUS.NOT_FOUND]: 'The requested resource does not exist.',
+    [HTTP_STATUS.CONFLICT]: 'The request conflicts with the current resource.',
+    [HTTP_STATUS.UNPROCESSABLE_ENTITY]: 'The request is not valid. Check the input.',
+    [HTTP_STATUS.TOO_MANY_REQUESTS]: 'Too many requests. Wait, then try again.',
+    [HTTP_STATUS.INTERNAL_SERVER_ERROR]: 'The server request failed. Try again later.',
+    [HTTP_STATUS.BAD_GATEWAY]: 'The server received an invalid response. Try again later.',
+    [HTTP_STATUS.SERVICE_UNAVAILABLE]: 'The service is temporarily unavailable. Try again later.',
+    [HTTP_STATUS.GATEWAY_TIMEOUT]: 'The server took too long to respond. Try again later.',
 };
 
 export function isNetworkError(error: unknown): boolean {
@@ -47,10 +47,6 @@ export function isNetworkError(error: unknown): boolean {
 
 export function isAuthError(error: unknown): boolean {
     return isApiError(error) && error.status === HTTP_STATUS.UNAUTHORIZED;
-}
-
-export function isPermissionError(error: unknown): boolean {
-    return isApiError(error) && error.status === HTTP_STATUS.FORBIDDEN;
 }
 
 export function isNotFoundError(error: unknown): boolean {
@@ -78,7 +74,7 @@ export function isRetryableError(error: unknown): boolean {
     return false;
 }
 
-export function getErrorMessage(error: unknown, fallback = 'An unexpected error occurred.'): string {
+export function getErrorMessage(error: unknown, fallback = 'The request failed.'): string {
     if (isApiError(error)) {
         const genericPrefixes = ['Request failed with status', 'HTTP error'];
         const isGenericMessage = genericPrefixes.some((prefix) => error.message.startsWith(prefix));
@@ -87,7 +83,7 @@ export function getErrorMessage(error: unknown, fallback = 'An unexpected error 
             return error.message;
         }
 
-        return STATUS_MESSAGES[error.status] ?? `An error occurred (HTTP ${error.status}).`;
+        return STATUS_MESSAGES[error.status] ?? `The request failed (HTTP ${error.status}).`;
     }
 
     if (error instanceof Error) {
@@ -99,6 +95,10 @@ export function getErrorMessage(error: unknown, fallback = 'An unexpected error 
     }
 
     return fallback;
+}
+
+export function isNoDownloadClientError(error: unknown): boolean {
+    return getErrorMessage(error, '').toLowerCase().includes('download client');
 }
 
 export function getValidationErrors(error: unknown): Record<string, string[]> | null {
@@ -150,7 +150,7 @@ export function getFieldError(error: unknown, fieldName: string): string | null 
     return null;
 }
 
-export interface ErrorDisplayInfo {
+interface ErrorDisplayInfo {
     message: string;
     retryable: boolean;
     status: number;

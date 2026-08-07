@@ -1,29 +1,53 @@
 using System;
+using System.Collections.Generic;
+
+using Magpie.Models.Data;
 
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Design;
+using Microsoft.EntityFrameworkCore.Infrastructure;
 
 namespace Magpie.Data.SqlServer;
 
 /// <summary>
-/// Design-time factory for SQL Server migrations.
+/// The factory for SQL Server-backed <see cref="MagpieDbContext"/> instances.
 /// </summary>
 public sealed class MagpieDbContextFactory : IDesignTimeDbContextFactory<MagpieDbContext>
 {
-    /// <inheritdoc />
-    public MagpieDbContext CreateDbContext(string[] args)
+    /// <summary>
+    /// Creates a context for the given connection string.
+    /// </summary>
+    /// <param name="connectionString">The SQL Server connection string</param>
+    /// <param name="defaultScheduleTriggers">The default schedule triggers to seed</param>
+    /// <param name="defaultEventTriggers">The default event triggers to seed</param>
+    public static MagpieDbContext Create(
+        string connectionString,
+        IReadOnlyList<ScheduleTrigger> defaultScheduleTriggers,
+        IReadOnlyList<EventTrigger> defaultEventTriggers)
     {
-        ArgumentNullException.ThrowIfNull(args);
-
-        var connectionString = args.Length > 0 ? args[0] : GetDesignTimeConnectionString();
+        ArgumentException.ThrowIfNullOrWhiteSpace(connectionString);
 
         var optionsBuilder = new DbContextOptionsBuilder<MagpieDbContext>();
-        optionsBuilder.UseSqlServer(
-            connectionString,
-            options => options.MigrationsAssembly(typeof(MagpieDbContextFactory).Assembly.GetName().Name));
+        ConfigureOptions(optionsBuilder, connectionString, defaultScheduleTriggers, defaultEventTriggers);
 
         return new(optionsBuilder.Options);
+    }
+
+    internal static void ConfigureOptions(
+        DbContextOptionsBuilder optionsBuilder,
+        string connectionString,
+        IReadOnlyList<ScheduleTrigger> defaultScheduleTriggers,
+        IReadOnlyList<EventTrigger> defaultEventTriggers)
+    {
+        optionsBuilder
+            .UseSqlServer(
+                connectionString,
+                sql => sql
+                    .MigrationsAssembly(typeof(MagpieDbContextFactory).Assembly.GetName().Name)
+                    .UseQuerySplittingBehavior(QuerySplittingBehavior.SplitQuery))
+            .ReplaceService<IModelCustomizer, SqlServerModelCustomizer>()
+            .UseMagpieSeeding(defaultScheduleTriggers, defaultEventTriggers);
     }
 
     private static string GetDesignTimeConnectionString()
@@ -37,5 +61,15 @@ public sealed class MagpieDbContextFactory : IDesignTimeDbContextFactory<MagpieD
         };
 
         return builder.ConnectionString;
+    }
+
+    /// <inheritdoc />
+    public MagpieDbContext CreateDbContext(string[] args)
+    {
+        ArgumentNullException.ThrowIfNull(args);
+
+        var connectionString = args.Length > 0 ? args[0] : GetDesignTimeConnectionString();
+
+        return Create(connectionString, [], []);
     }
 }

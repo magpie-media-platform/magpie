@@ -7,9 +7,9 @@ using Magpie.Models.Enums;
 namespace Magpie.Models.Arguments;
 
 /// <summary>
-/// Arguments for creating a schedule trigger.
+/// The create arguments for a schedule trigger.
 /// </summary>
-public record ScheduleTriggerCreate
+public sealed record ScheduleTriggerCreate
 {
     /// <summary>
     /// <inheritdoc cref="ScheduleTrigger.ExtensionId" path="/summary"/>

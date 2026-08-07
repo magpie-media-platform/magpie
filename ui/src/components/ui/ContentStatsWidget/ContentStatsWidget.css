@@ -91,6 +91,10 @@
         background-color: var(--fulfillment-external);
     }
 
+    .content-stats-widget__row--partial .content-stats-widget__indicator {
+        background-color: var(--fulfillment-partial);
+    }
+
     .content-stats-widget__label {
         flex: 1;
         font-size: var(--text-sm);
@@ -111,6 +115,10 @@
 
     .content-stats-widget__row--fulfilledExternally .content-stats-widget__label {
         color: var(--fulfillment-external);
+    }
+
+    .content-stats-widget__row--partial .content-stats-widget__label {
+        color: var(--fulfillment-partial);
     }
 
     .content-stats-widget__count {
@@ -190,6 +198,10 @@
         background-color: var(--fulfillment-external);
     }
 
+    .content-stats-widget__item--partial .content-stats-widget__item-indicator {
+        background-color: var(--fulfillment-partial);
+    }
+
     .content-stats-widget__item-title {
         flex: 1;
         font-size: var(--text-sm);
@@ -229,6 +241,10 @@
 
     .content-stats-widget__item--fulfilledExternally .content-stats-widget__item-status {
         color: var(--fulfillment-external);
+    }
+
+    .content-stats-widget__item--partial .content-stats-widget__item-status {
+        color: var(--fulfillment-partial);
     }
 
     .content-stats-widget__item-timestamp {

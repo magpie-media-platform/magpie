@@ -110,6 +110,23 @@ describe('Input', () => {
         expect(wrapper).toHaveAttribute('data-has-trailing', 'true');
     });
 
+    it('renders an interactive trailing action outside a decorative wrapper', () => {
+        render(
+            <Input
+                trailingAction={
+                    <button type="button" aria-label="Unlock">
+                        x
+                    </button>
+                }
+                aria-label="With action"
+            />,
+        );
+        const action = screen.getByRole('button', { name: 'Unlock' });
+        expect(action).toBeInTheDocument();
+        expect(action.closest('[aria-hidden="true"]')).toBeNull();
+        expect(screen.getByRole('textbox').closest('.input-wrapper')).toHaveAttribute('data-has-trailing', 'true');
+    });
+
     it('forwards ref', () => {
         const ref = vi.fn();
         render(<Input ref={ref} aria-label="Ref test" />);

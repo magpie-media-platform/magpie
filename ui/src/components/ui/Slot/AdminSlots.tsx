@@ -38,16 +38,6 @@ export function AdminExtensionsSlot({ children, className }: AdminSlotProps) {
 
 AdminExtensionsSlot.displayName = 'AdminExtensionsSlot';
 
-export function AdminExtensionSettingsSlot({ children, className }: AdminSlotProps) {
-    return (
-        <Slot slot="admin.extensions.settings" className={className}>
-            {children}
-        </Slot>
-    );
-}
-
-AdminExtensionSettingsSlot.displayName = 'AdminExtensionSettingsSlot';
-
 export function AdminBackupsSlot({ children, className }: AdminSlotProps) {
     return (
         <Slot slot="admin.backups" className={className}>

@@ -3,86 +3,15 @@
         max-width: 400px;
     }
 
-    .tier-list-form {
-        display: flex;
-        flex-direction: column;
-        flex: 1;
-        min-height: 0;
+    .tier-list-form__media-type-value {
         overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        min-width: 0;
     }
 
     .tier-list-form__body {
-        flex: 1;
         overflow-y: auto;
-        padding: var(--space-lg);
-        display: flex;
-        flex-direction: column;
-        gap: var(--space-lg);
-    }
-
-    .tier-list-form__field {
-        display: flex;
-        flex-direction: column;
-        gap: var(--space-xs);
-    }
-
-    .tier-list-form__field--toggle {
-        gap: var(--space-xs);
-    }
-
-    .tier-list-form__toggle-wrapper {
-        display: flex;
-        align-items: center;
-        gap: var(--space-sm);
-    }
-
-    .tier-list-form__toggle-wrapper .label {
-        margin-bottom: 0;
-        cursor: pointer;
-    }
-
-    .tier-list-form__label-row {
-        display: flex;
-        align-items: center;
-        gap: var(--space-xs);
-    }
-
-    .tier-list-form__info-button {
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        width: 18px;
-        height: 18px;
-        padding: 0;
-        background: none;
-        border: none;
-        color: var(--text-muted);
-        font-size: var(--text-sm);
-        cursor: pointer;
-        border-radius: var(--radius-full);
-        transition: color var(--duration-fast) var(--easing-default);
-
-        &:hover {
-            color: var(--text-secondary);
-        }
-
-        &:focus-visible {
-            outline: var(--focus-ring-width) solid var(--focus-ring-color);
-            outline-offset: var(--focus-ring-offset);
-        }
-    }
-
-    .tier-list-form__tooltip {
-        margin: 0;
-        font-size: var(--text-xs);
-        line-height: var(--leading-normal);
-    }
-
-    .tier-list-form__help {
-        margin: 0;
-        font-size: var(--text-xs);
-        color: var(--text-muted);
-        line-height: var(--leading-normal);
     }
 
     .tier-list-form__tags {
@@ -171,17 +100,5 @@
         font-size: var(--text-xs);
         color: var(--text-secondary);
         line-height: var(--leading-normal);
-    }
-
-    @media (max-width: 480px) {
-        .tier-list-form__sheet {
-            max-width: 100%;
-            border-radius: 0;
-        }
-
-        .tier-list-form__body {
-            padding: var(--space-md);
-            gap: var(--space-md);
-        }
     }
 }

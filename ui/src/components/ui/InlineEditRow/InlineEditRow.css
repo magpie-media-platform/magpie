@@ -1,0 +1,78 @@
+@layer components {
+    .inline-edit-row__field {
+        --inline-edit-row-width: 16rem;
+
+        display: flex;
+        align-items: center;
+        width: min(var(--inline-edit-row-width), 100%);
+        height: 32px;
+    }
+
+    .inline-edit-row__field > * {
+        width: 100%;
+        height: 100%;
+    }
+
+    .inline-edit-row__trigger {
+        display: inline-flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: var(--space-sm);
+        padding: var(--space-xs) var(--space-sm);
+        font: inherit;
+        color: inherit;
+        text-align: start;
+        background-color: var(--bg-primary);
+        border: 1px solid var(--border-subtle);
+        border-radius: var(--radius-md);
+        cursor: pointer;
+        transition:
+            background-color var(--duration-fast) var(--easing-default),
+            border-color var(--duration-fast) var(--easing-default);
+
+        &:hover {
+            background-color: var(--bg-secondary);
+            border-color: var(--border-accent);
+        }
+
+        &:focus-visible {
+            outline: var(--focus-ring-width) solid var(--focus-ring-color);
+            outline-offset: var(--focus-ring-offset);
+        }
+    }
+
+    .inline-edit-row__read {
+        display: flex;
+        align-items: center;
+        gap: var(--space-sm);
+        flex: 0 1 auto;
+        min-width: 0;
+        overflow: hidden;
+    }
+
+    .inline-edit-row__read > * {
+        flex: 0 0 auto;
+    }
+
+    .inline-edit-row__read > :first-child {
+        flex: 0 1 auto;
+        min-width: 0;
+        overflow: hidden;
+        white-space: nowrap;
+        text-overflow: ellipsis;
+    }
+
+    .inline-edit-row__pencil {
+        flex-shrink: 0;
+        width: var(--icon-inline-xs);
+        height: var(--icon-inline-xs);
+        color: var(--text-muted);
+        opacity: 0;
+        transition: opacity var(--duration-fast) var(--easing-default);
+    }
+
+    .inline-edit-row__trigger:hover .inline-edit-row__pencil,
+    .inline-edit-row__trigger:focus-visible .inline-edit-row__pencil {
+        opacity: 1;
+    }
+}

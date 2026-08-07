@@ -2,7 +2,6 @@
     .bottom-nav {
         background-color: var(--bg-secondary);
         border-top: 1px solid var(--border-default);
-
         padding-bottom: env(safe-area-inset-bottom, 0);
 
         @media (min-width: 768px) {

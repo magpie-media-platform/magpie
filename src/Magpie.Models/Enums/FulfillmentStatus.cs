@@ -11,17 +11,22 @@ public enum FulfillmentStatus
     Missing = 0,
 
     /// <summary>
-    /// The content item has media files and is open to upgrades.
+    /// The content item has media files and accepts upgrades.
     /// </summary>
     Upgradable,
 
     /// <summary>
-    /// The content item has media files and is fully satisfied.
+    /// The content item has media files and needs no more.
     /// </summary>
     Fulfilled,
 
     /// <summary>
-    /// The content is fulfilled externally and does not need to be acquired.
+    /// An external source fulfills the content item, so it needs no acquisition.
     /// </summary>
-    FulfilledExternally
+    FulfilledExternally,
+
+    /// <summary>
+    /// A container with some, but not all, of its descendant leaves covered.
+    /// </summary>
+    Partial
 }

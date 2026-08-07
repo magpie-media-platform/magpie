@@ -10,19 +10,17 @@
   </ItemGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="Magpie.Test.Auth" />
+    <InternalsVisibleTo Include="DynamicProxyGenAssembly2" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="System.DirectoryServices.Protocols" />
     <PackageReference Include="System.IdentityModel.Tokens.Jwt" />
   </ItemGroup>
 
   <ItemGroup>
-    <InternalsVisibleTo Include="Magpie.Test.Auth" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <ProjectReference Include="..\Magpie.Abstractions.Api\Magpie.Abstractions.Api.csproj" />
-    <ProjectReference Include="..\Magpie.Abstractions.Auth\Magpie.Abstractions.Auth.csproj" />
     <ProjectReference Include="..\Magpie.Abstractions\Magpie.Abstractions.csproj" />
-    <ProjectReference Include="..\Magpie.Core\Magpie.Core.csproj" />
   </ItemGroup>
 
 </Project>

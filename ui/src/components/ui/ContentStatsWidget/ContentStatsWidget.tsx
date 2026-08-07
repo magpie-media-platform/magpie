@@ -1,13 +1,16 @@
 import { forwardRef, memo, type HTMLAttributes, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
-import { ArrowCounterClockwise, WarningCircle } from '@phosphor-icons/react';
+import { ArrowCounterClockwiseIcon, WarningCircleIcon } from '@phosphor-icons/react';
 
 import { Alert } from '@/components/ui/Alert';
 import { Button } from '@/components/ui/Button';
+import { ContentLineageTitle } from '@/components/content/ContentLineageTitle';
+import { getFulfillmentBadge } from '@/types/content';
+import type { FulfillmentStatus } from '@/types';
 
 import './ContentStatsWidget.css';
 
-export type FulfillmentStatus = 'missing' | 'upgradable' | 'fulfilled' | 'fulfilledExternally';
+export type { FulfillmentStatus };
 
 export interface FulfillmentCounts {
     total: number;
@@ -15,14 +18,18 @@ export interface FulfillmentCounts {
     upgradable: number;
     fulfilled: number;
     fulfilledExternally: number;
+    partial: number;
 }
 
 export interface RecentContentItem {
     id: string;
+    parentId?: string;
     title: string;
 
     addedAt: string;
     fulfillment: FulfillmentStatus;
+
+    effectiveMonitoring?: boolean;
 }
 
 export interface ContentStatsWidgetProps extends HTMLAttributes<HTMLDivElement> {
@@ -51,20 +58,6 @@ export interface ContentStatsWidgetProps extends HTMLAttributes<HTMLDivElement> 
     headingLevel?: 2 | 3;
 }
 
-const statusVariantMap: Record<FulfillmentStatus, string> = {
-    missing: 'missing',
-    upgradable: 'upgradable',
-    fulfilled: 'fulfilled',
-    fulfilledExternally: 'fulfilledExternally',
-};
-
-const statusLabelMap: Record<FulfillmentStatus, string> = {
-    missing: 'Missing',
-    upgradable: 'Upgradable',
-    fulfilled: 'Fulfilled',
-    fulfilledExternally: 'External',
-};
-
 interface StatusRowProps {
     status: FulfillmentStatus;
     count: number;
@@ -72,8 +65,7 @@ interface StatusRowProps {
 }
 
 const StatusRow = ({ status, count, url }: StatusRowProps) => {
-    const variant = statusVariantMap[status];
-    const label = statusLabelMap[status];
+    const { variant, label } = getFulfillmentBadge(status);
     const isClickable = url !== undefined && count > 0;
 
     const content = (
@@ -117,17 +109,22 @@ interface ContentItemProps {
 
 const ContentItem = ({ item, url }: ContentItemProps) => {
     const isClickable = url !== undefined;
-    const variant = statusVariantMap[item.fulfillment];
-    const statusLabel = statusLabelMap[item.fulfillment];
+    const { variant, label: statusLabel } = getFulfillmentBadge(item.fulfillment);
+    const suppressed = item.effectiveMonitoring === false;
 
     const content = (
         <>
             <span className="content-stats-widget__item-indicator" aria-hidden="true" />
-            <span className="content-stats-widget__item-title">{item.title}</span>
+            <ContentLineageTitle
+                className="content-stats-widget__item-title"
+                qualifiedName={{ id: item.id, parentId: item.parentId, title: item.title }}
+            />
             <span className="content-stats-widget__item-meta">
-                <span className="content-stats-widget__item-status" aria-label={`Status: ${statusLabel}`}>
-                    {statusLabel}
-                </span>
+                {!suppressed && (
+                    <span className="content-stats-widget__item-status" aria-label={`Status: ${statusLabel}`}>
+                        {statusLabel}
+                    </span>
+                )}
                 <span className="content-stats-widget__item-timestamp">{item.addedAt}</span>
             </span>
         </>
@@ -137,11 +134,16 @@ const ContentItem = ({ item, url }: ContentItemProps) => {
         return (
             <Link
                 to={url}
-                className={`content-stats-widget__item content-stats-widget__item--${variant} content-stats-widget__item--clickable`}
-                aria-label={`View ${item.title}`}
+                className={[
+                    'content-stats-widget__item',
+                    suppressed ? '' : `content-stats-widget__item--${variant}`,
+                    'content-stats-widget__item--clickable',
+                ]
+                    .filter(Boolean)
+                    .join(' ')}
                 data-content-id={item.id}
-                data-status={item.fulfillment}
-                data-variant={variant}
+                data-status={suppressed ? undefined : item.fulfillment}
+                data-variant={suppressed ? undefined : variant}
                 data-clickable
             >
                 {content}
@@ -151,10 +153,12 @@ const ContentItem = ({ item, url }: ContentItemProps) => {
 
     return (
         <div
-            className={`content-stats-widget__item content-stats-widget__item--${variant}`}
+            className={['content-stats-widget__item', suppressed ? '' : `content-stats-widget__item--${variant}`]
+                .filter(Boolean)
+                .join(' ')}
             data-content-id={item.id}
-            data-status={item.fulfillment}
-            data-variant={variant}
+            data-status={suppressed ? undefined : item.fulfillment}
+            data-variant={suppressed ? undefined : variant}
         >
             {content}
         </div>
@@ -225,12 +229,13 @@ const ContentStatsWidgetBase = forwardRef<HTMLDivElement, ContentStatsWidgetProp
                             <SkeletonRow />
                             <SkeletonRow />
                             <SkeletonRow />
+                            <SkeletonRow />
                         </>
                     ) : error ? (
-                        <Alert variant="error" icon={<WarningCircle weight="duotone" />} title="Failed to load">
+                        <Alert variant="error" icon={<WarningCircleIcon weight="duotone" />} title="Failed to load">
                             {onRetry && (
                                 <Button variant="ghost" size="sm" onClick={onRetry}>
-                                    <ArrowCounterClockwise weight="bold" aria-hidden="true" />
+                                    <ArrowCounterClockwiseIcon weight="bold" aria-hidden="true" />
                                     Try again
                                 </Button>
                             )}
@@ -243,8 +248,13 @@ const ContentStatsWidgetBase = forwardRef<HTMLDivElement, ContentStatsWidgetProp
                                 count={counts.upgradable}
                                 url={getStatusUrl?.('upgradable')}
                             />
+                            <StatusRow status="partial" count={counts.partial} url={getStatusUrl?.('partial')} />
                             <StatusRow status="missing" count={counts.missing} url={getStatusUrl?.('missing')} />
-                            <StatusRow status="fulfilledExternally" count={counts.fulfilledExternally} url={getStatusUrl?.('fulfilledExternally')} />
+                            <StatusRow
+                                status="fulfilledExternally"
+                                count={counts.fulfilledExternally}
+                                url={getStatusUrl?.('fulfilledExternally')}
+                            />
                         </>
                     )}
                 </div>

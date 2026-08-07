@@ -1,6 +1,6 @@
 import { forwardRef, type HTMLAttributes, type ReactNode } from 'react';
 import { Link, type To } from 'react-router-dom';
-import { CaretRight, ArrowLeft, House } from '@phosphor-icons/react';
+import { CaretRightIcon, ArrowLeftIcon, HouseIcon } from '@phosphor-icons/react';
 
 import { Skeleton } from '@/components/ui/Skeleton';
 
@@ -40,7 +40,7 @@ export const Breadcrumb = forwardRef<HTMLElement, BreadcrumbProps>(
         const currentItem = items.length > 0 ? items[items.length - 1] : null;
 
         const separatorElement = separator ?? (
-            <CaretRight weight="bold" className="breadcrumb__separator" aria-hidden="true" />
+            <CaretRightIcon weight="bold" className="breadcrumb__separator" aria-hidden="true" />
         );
 
         if (items.length === 0) {
@@ -69,7 +69,11 @@ export const Breadcrumb = forwardRef<HTMLElement, BreadcrumbProps>(
                                     <>
                                         <Link to={item.to} className="breadcrumb__link">
                                             {showHomeIcon && isFirst && (
-                                                <House weight="bold" className="breadcrumb__icon" aria-hidden="true" />
+                                                <HouseIcon
+                                                    weight="bold"
+                                                    className="breadcrumb__icon"
+                                                    aria-hidden="true"
+                                                />
                                             )}
                                             {item.icon && (
                                                 <span className="breadcrumb__icon" aria-hidden="true">
@@ -101,7 +105,7 @@ export const Breadcrumb = forwardRef<HTMLElement, BreadcrumbProps>(
 
                 {parentItem && (
                     <Link to={parentItem.to} className="breadcrumb__back-link">
-                        <ArrowLeft weight="bold" className="breadcrumb__back-icon" aria-hidden="true" />
+                        <ArrowLeftIcon weight="bold" className="breadcrumb__back-icon" aria-hidden="true" />
                         <span className="breadcrumb__back-label">
                             {parentItem.loading ? <Skeleton variant="text" width="6em" /> : parentItem.label}
                         </span>

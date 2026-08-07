@@ -6,358 +6,504 @@ using System.Threading.Tasks;
 
 using Magpie.Abstractions;
 using Magpie.Abstractions.Repositories;
+using Magpie.Core.Events;
 using Magpie.Data;
 using Magpie.Models;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
+using Magpie.Models.Enums;
+using Magpie.Models.Paging;
+using Magpie.Sdk.Services;
 
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 
 namespace Magpie.Core.Repositories;
 
-/// <summary>
-/// Repository for managing wishlists.
-/// </summary>
-public sealed class WishlistRepository(
+internal sealed class WishlistRepository(
     MagpieDbContext context,
     IAuditRecordRepository auditRecordRepository,
     ITransactionManager transactionManager,
-    ILogger<WishlistRepository> logger) : IWishlistRepository
+    IEventBus eventBus,
+    ILogger<WishlistRepository> logger,
+    TimeProvider? timeProvider = null) : IWishlistRepository
 {
-    /// <inheritdoc />
+    private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
+
+    private static IReadOnlyCollection<string> ChangedFields(WishlistPatch patch)
+    {
+        var fields = new List<string>();
+        if (patch.Name is not null)
+        {
+            fields.Add("name");
+        }
+
+        if (patch.ContentFilterId is not null)
+        {
+            fields.Add("contentFilterId");
+        }
+
+        if (patch.QualityTierListId is not null)
+        {
+            fields.Add("qualityTierListId");
+        }
+
+        if (patch.RootFolderId is not null)
+        {
+            fields.Add("rootFolderId");
+        }
+
+        if (patch.OwnerLock is not null)
+        {
+            fields.Add("ownerLock");
+        }
+
+        if (patch.Enabled is not null)
+        {
+            fields.Add("enabled");
+        }
+
+        if (patch.LastSyncedAt is not null)
+        {
+            fields.Add("lastSyncedAt");
+        }
+
+        if (patch.Tags is not null)
+        {
+            fields.Add("tags");
+        }
+
+        return fields;
+    }
+
     public async Task<IEnumerable<Wishlist>> ListAllAsync(CancellationToken cancellationToken)
     {
         try
         {
             return await context.Wishlists
                 .AsNoTracking()
+                .Include(w => w.ContentFilter)
+                .Include(w => w.QualityTierList)
+                .Include(w => w.RootFolder)
                 .ToListAsync(cancellationToken)
                 .ConfigureAwait(false);
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Error listing wishlists");
+            logger.LogError(ex, "The wishlist repository failed to list wishlists.");
             throw;
         }
     }
 
-    /// <inheritdoc />
     public async Task<Wishlist?> GetByIdAsync(Guid id, CancellationToken cancellationToken)
     {
         try
         {
             return await context.Wishlists
                 .AsNoTracking()
+                .Include(w => w.ContentFilter)
+                .Include(w => w.QualityTierList)
+                .Include(w => w.RootFolder)
+                .Include(w => w.Tags)
                 .FirstOrDefaultAsync(w => w.Id == id, cancellationToken)
                 .ConfigureAwait(false);
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Error getting wishlist {WishlistId}", id);
+            logger.LogError(ex, "The wishlist repository failed to read wishlist {WishlistId}.", id);
             throw;
         }
     }
 
-    /// <inheritdoc />
-    public async Task<IEnumerable<Wishlist>> GetByUserIdAsync(Guid userId, CancellationToken cancellationToken)
+    public async Task<PagedList<Wishlist>> QueryAsync(
+        WishlistQuery query,
+        PagingParameter paging,
+        SortParameter? sort,
+        CancellationToken cancellationToken)
     {
         try
         {
-            return await context.Wishlists
+            var wishlists = context.Wishlists
                 .AsNoTracking()
-                .Where(w => w.OwnerUserId == userId)
-                .ToListAsync(cancellationToken)
-                .ConfigureAwait(false);
+                .Include(w => w.ContentFilter)
+                .Include(w => w.QualityTierList)
+                .Include(w => w.RootFolder)
+                .Include(w => w.Tags)
+                .AsQueryable();
+
+            if (query.OwnerUserId is not null)
+            {
+                wishlists = wishlists.Where(w => w.OwnerUserId == query.OwnerUserId);
+            }
+
+            if (query.Monitored is not null)
+            {
+                wishlists = wishlists.Where(w => w.Enabled == query.Monitored);
+            }
+
+            var totalCount = await wishlists.CountAsync(cancellationToken).ConfigureAwait(false);
+
+            var sortProperty = typeof(Wishlist).GetProperties()
+                .Select(property => property.Name)
+                .FirstOrDefault(name => string.Equals(name, sort?.PropertyName, StringComparison.OrdinalIgnoreCase));
+            if (sort is not null && sortProperty is not null)
+            {
+                wishlists = sort.Direction == SortDirection.Ascending
+                    ? wishlists.OrderBy(w => EF.Property<Wishlist>(w, sortProperty)).ThenBy(w => w.Id)
+                    : wishlists.OrderByDescending(w => EF.Property<Wishlist>(w, sortProperty)).ThenBy(w => w.Id);
+            }
+            else
+            {
+                wishlists = wishlists.OrderBy(w => w.Name).ThenBy(w => w.Id);
+            }
+
+            wishlists = wishlists.Skip((paging.PageNumber - 1) * paging.PageSize).Take(paging.PageSize);
+
+            var items = await wishlists.ToListAsync(cancellationToken).ConfigureAwait(false);
+
+            return new()
+            {
+                Items = items,
+                PageNumber = paging.PageNumber,
+                PageSize = paging.PageSize,
+                TotalItems = totalCount
+            };
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Error getting wishlists for user {UserId}", userId);
+            logger.LogError(ex, "The wishlist repository failed to query wishlists.");
             throw;
         }
     }
 
-    /// <inheritdoc />
-    public async Task<IEnumerable<Wishlist>> GetMonitoredAsync(CancellationToken cancellationToken)
-    {
-        try
-        {
-            return await context.Wishlists
-                .AsNoTracking()
-                .Where(w => w.Enabled)
-                .ToListAsync(cancellationToken)
-                .ConfigureAwait(false);
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "Error getting monitored wishlists");
-            throw;
-        }
-    }
-
-    /// <inheritdoc />
     public async Task<Wishlist> CreateAsync(Wishlist model, Guid? createdByUserId, CancellationToken cancellationToken)
     {
         try
         {
-            return await transactionManager.ExecuteWithTransactionAsync(async _ =>
-            {
-                var now = DateTime.UtcNow;
-                model.CreatedAt = now;
-                model.CreatedByUserId = createdByUserId;
-
-                context.Wishlists.Add(model);
-                await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
-
-                await auditRecordRepository.CreateAsync(new()
+            var created = await transactionManager.ExecuteWithTransactionAsync(
+                async _ =>
                 {
-                    Category = AuditCategories.System,
-                    Operation = "Create",
-                    EntityId = model.Id.ToString(),
-                    EntityType = nameof(Wishlist),
-                    Detail = $"Created wishlist {model.Name}",
-                    Timestamp = now,
-                    UserId = createdByUserId
-                }, cancellationToken).ConfigureAwait(false);
+                    var now = _time.GetUtcNow().UtcDateTime;
+                    await CreateCoreAsync(model, createdByUserId, now, cancellationToken).ConfigureAwait(false);
+                    return model;
+                },
+                cancellationToken).ConfigureAwait(false);
 
-                return model;
-            }, cancellationToken);
+            await transactionManager.OnCommittedAsync(
+                token => eventBus.PublishAsync(WishlistEventBuilder.BuildWishlistCreatedEvent(created.Id), token),
+                cancellationToken).ConfigureAwait(false);
+
+            return created;
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Error creating wishlist {WishlistName}", model.Name);
+            logger.LogError(ex, "The wishlist repository failed to create wishlist {WishlistName}.", model.Name);
             throw;
         }
     }
 
-    /// <inheritdoc />
     public async Task<bool> UpdateAsync(Wishlist model, Guid? modifiedByUserId, CancellationToken cancellationToken)
     {
         try
         {
-            return await transactionManager.ExecuteWithTransactionAsync(async _ =>
-            {
-                var now = DateTime.UtcNow;
-                var updated = await context.Wishlists
-                    .Where(w => w.Id == model.Id)
-                    .ExecuteUpdateAsync(
-                        s => s
-                            .SetProperty(w => w.ContentFilterId, model.ContentFilterId)
-                            .SetProperty(w => w.QualityTierListId, model.QualityTierListId)
-                            .SetProperty(w => w.OwnerUserId, model.OwnerUserId)
-                            .SetProperty(w => w.Name, model.Name)
-                            .SetProperty(w => w.OwnerLock, model.OwnerLock)
-                            .SetProperty(w => w.Enabled, model.Enabled)
-                            .SetProperty(w => w.LastSyncedAt, model.LastSyncedAt)
-                            .SetProperty(w => w.ModifiedAt, now)
-                            .SetProperty(w => w.ModifiedByUserId, modifiedByUserId),
-                        cancellationToken)
-                    .ConfigureAwait(false);
-                if (updated > 0)
+            return await transactionManager.ExecuteWithTransactionAsync(
+                async _ =>
                 {
-                    await auditRecordRepository.CreateAsync(new()
+                    var now = _time.GetUtcNow().UtcDateTime;
+                    var updated = await context.Wishlists
+                        .Where(w => w.Id == model.Id)
+                        .ExecuteUpdateAsync(
+                            s => s
+                                .SetProperty(w => w.ContentFilterId, model.ContentFilterId)
+                                .SetProperty(w => w.QualityTierListId, model.QualityTierListId)
+                                .SetProperty(w => w.RootFolderId, model.RootFolderId)
+                                .SetProperty(w => w.OwnerUserId, model.OwnerUserId)
+                                .SetProperty(w => w.Name, model.Name)
+                                .SetProperty(w => w.OwnerLock, model.OwnerLock)
+                                .SetProperty(w => w.Enabled, model.Enabled)
+                                .SetProperty(w => w.LastSyncedAt, model.LastSyncedAt)
+                                .SetProperty(w => w.ModifiedAt, now)
+                                .SetProperty(w => w.ModifiedByUserId, modifiedByUserId),
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                    if (updated > 0)
                     {
-                        Category = AuditCategories.System,
-                        Operation = "Update",
-                        EntityId = model.Id.ToString(),
-                        EntityType = nameof(Wishlist),
-                        Detail = $"Updated wishlist {model.Name}",
-                        Timestamp = now,
-                        UserId = modifiedByUserId
-                    }, cancellationToken).ConfigureAwait(false);
-                }
+                        await auditRecordRepository.CreateAsync(
+                            new()
+                            {
+                                Category = AuditCategories.System,
+                                Operation = "Update",
+                                EntityId = model.Id.ToString(),
+                                EntityType = nameof(Wishlist),
+                                Detail = $"Updated wishlist {model.Name}",
+                                Timestamp = now,
+                                UserId = modifiedByUserId
+                            },
+                            cancellationToken).ConfigureAwait(false);
+                    }
 
-                return updated > 0;
-            }, cancellationToken);
+                    return updated > 0;
+                },
+                cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Error updating wishlist {WishlistId}", model.Id);
+            logger.LogError(ex, "The wishlist repository failed to update wishlist {WishlistId}.", model.Id);
             throw;
         }
     }
 
-    /// <inheritdoc />
     public async Task<bool> DeleteAsync(Guid id, Guid? deletedByUserId, CancellationToken cancellationToken)
     {
         try
         {
-            return await transactionManager.ExecuteWithTransactionAsync(async _ =>
-            {
-                var now = DateTime.UtcNow;
-                var model = await context.Wishlists
-                    .AsNoTracking()
-                    .Where(w => w.Id == id)
-                    .Select(w => new { w.Name })
-                    .FirstOrDefaultAsync(cancellationToken)
-                    .ConfigureAwait(false);
-
-                if (model is null)
+            var removed = await transactionManager.ExecuteWithTransactionAsync(
+                async _ =>
                 {
-                    return false;
-                }
+                    var now = _time.GetUtcNow().UtcDateTime;
+                    var model = await (
+                        from w in context.Wishlists.AsNoTracking()
+                        where w.Id == id
+                        select new { w.Name })
+                        .FirstOrDefaultAsync(cancellationToken)
+                        .ConfigureAwait(false);
 
-                var deleted = await context.Wishlists
-                    .Where(w => w.Id == id)
-                    .ExecuteDeleteAsync(cancellationToken)
-                    .ConfigureAwait(false);
-                if (deleted > 0)
-                {
-                    await auditRecordRepository.CreateAsync(new()
+                    if (model is null)
                     {
-                        Category = AuditCategories.System,
-                        Operation = "Delete",
-                        EntityId = id.ToString(),
-                        EntityType = nameof(Wishlist),
-                        Detail = $"Deleted wishlist {model.Name}",
-                        Timestamp = now,
-                        UserId = deletedByUserId
-                    }, cancellationToken).ConfigureAwait(false);
-                }
+                        return false;
+                    }
 
-                return deleted > 0;
-            }, cancellationToken);
+                    var deleted = await context.Wishlists
+                        .Where(w => w.Id == id)
+                        .ExecuteDeleteAsync(cancellationToken)
+                        .ConfigureAwait(false);
+                    if (deleted > 0)
+                    {
+                        await auditRecordRepository.CreateAsync(
+                            new()
+                            {
+                                Category = AuditCategories.System,
+                                Operation = "Delete",
+                                EntityId = id.ToString(),
+                                EntityType = nameof(Wishlist),
+                                Detail = $"Deleted wishlist {model.Name}",
+                                Timestamp = now,
+                                UserId = deletedByUserId
+                            },
+                            cancellationToken).ConfigureAwait(false);
+                    }
+
+                    return deleted > 0;
+                },
+                cancellationToken).ConfigureAwait(false);
+
+            if (removed)
+            {
+                await transactionManager.OnCommittedAsync(
+                    token => eventBus.PublishAsync(WishlistEventBuilder.BuildWishlistDeletedEvent(id), token),
+                    cancellationToken).ConfigureAwait(false);
+            }
+
+            return removed;
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Error deleting wishlist {WishlistId}", id);
+            logger.LogError(ex, "The wishlist repository failed to delete wishlist {WishlistId}.", id);
             throw;
         }
     }
 
-    /// <inheritdoc />
     public async Task<bool> PatchAsync(WishlistPatch patch, Guid? modifiedByUserId, CancellationToken cancellationToken)
     {
         try
         {
-            return await transactionManager.ExecuteWithTransactionAsync(async _ =>
-            {
-                var now = DateTime.UtcNow;
-                var model = await context.Wishlists
-                    .FirstOrDefaultAsync(w => w.Id == patch.Id, cancellationToken)
-                    .ConfigureAwait(false);
-
-                if (model is null)
+            var patched = await transactionManager.ExecuteWithTransactionAsync(
+                async _ =>
                 {
-                    return false;
-                }
-
-                if (patch.Name is not null)
-                {
-                    model.Name = patch.Name.Value;
-                }
-                if (patch.ContentFilterId is not null)
-                {
-                    model.ContentFilterId = patch.ContentFilterId.Value;
-                }
-                if (patch.QualityTierListId is not null)
-                {
-                    model.QualityTierListId = patch.QualityTierListId.Value;
-                }
-                if (patch.OwnerLock is not null)
-                {
-                    model.OwnerLock = patch.OwnerLock.Value;
-                }
-                if (patch.Enabled is not null)
-                {
-                    model.Enabled = patch.Enabled.Value;
-                }
-
-                if (patch.Tags is not null)
-                {
-                    var tags = await context.Tags
-                        .Include(t => t.Wishlists)
-                        .Where(t => t.Wishlists.Any(w => w.Id == patch.Id))
-                        .ToListAsync(cancellationToken)
+                    var now = _time.GetUtcNow().UtcDateTime;
+                    var model = await context.Wishlists
+                        .FirstOrDefaultAsync(w => w.Id == patch.Id, cancellationToken)
                         .ConfigureAwait(false);
 
-                    if (patch.Tags.Remove is not null)
+                    if (model is null)
                     {
-                        foreach (var tagName in patch.Tags.Remove)
-                        {
-                            var tag = tags.FirstOrDefault(t => t.Name == tagName);
-                            if (tag is not null)
-                            {
-                                var wishlist = tag.Wishlists.FirstOrDefault(w => w.Id == patch.Id);
-                                if (wishlist is not null)
-                                {
-                                    tag.Wishlists.Remove(wishlist);
+                        return false;
+                    }
 
-                                    await auditRecordRepository.CreateAsync(new()
+                    if (patch.Name is not null)
+                    {
+                        model.Name = patch.Name.Value;
+                    }
+
+                    if (patch.ContentFilterId?.Value is { } filterId)
+                    {
+                        model.ContentFilterId = filterId;
+                    }
+
+                    if (patch.QualityTierListId is not null)
+                    {
+                        model.QualityTierListId = patch.QualityTierListId.Value;
+                    }
+
+                    if (patch.RootFolderId is not null)
+                    {
+                        model.RootFolderId = patch.RootFolderId.Value;
+                    }
+
+                    if (patch.OwnerLock is not null)
+                    {
+                        model.OwnerLock = patch.OwnerLock.Value;
+                    }
+
+                    if (patch.Enabled is not null)
+                    {
+                        model.Enabled = patch.Enabled.Value;
+                    }
+
+                    if (patch.LastSyncedAt is not null)
+                    {
+                        model.LastSyncedAt = patch.LastSyncedAt.Value;
+                    }
+
+                    if (patch.Tags is not null)
+                    {
+                        var tags = await context.Tags
+                            .Include(t => t.Wishlists)
+                            .Where(t => t.Wishlists.Any(w => w.Id == patch.Id))
+                            .ToListAsync(cancellationToken)
+                            .ConfigureAwait(false);
+
+                        if (patch.Tags.Remove is not null)
+                        {
+                            foreach (var tagName in patch.Tags.Remove)
+                            {
+                                var tag = tags.FirstOrDefault(t => t.Name == tagName);
+                                if (tag is not null)
+                                {
+                                    var wishlist = tag.Wishlists.FirstOrDefault(w => w.Id == patch.Id);
+                                    if (wishlist is not null)
                                     {
-                                        Category = AuditCategories.System,
-                                        Operation = "RemoveTag",
-                                        EntityId = patch.Id.ToString(),
-                                        EntityType = nameof(Wishlist),
-                                        Detail = $"Removed tag {tagName} from wishlist {model.Name}",
-                                        Timestamp = now,
-                                        UserId = modifiedByUserId
-                                    }, cancellationToken).ConfigureAwait(false);
+                                        tag.Wishlists.Remove(wishlist);
+
+                                        await auditRecordRepository.CreateAsync(
+                                            new()
+                                            {
+                                                Category = AuditCategories.System,
+                                                Operation = "RemoveTag",
+                                                EntityId = patch.Id.ToString(),
+                                                EntityType = nameof(Wishlist),
+                                                Detail = $"Removed tag {tagName} from wishlist {model.Name}",
+                                                Timestamp = now,
+                                                UserId = modifiedByUserId
+                                            },
+                                            cancellationToken).ConfigureAwait(false);
+                                    }
                                 }
                             }
                         }
-                    }
 
-                    if (patch.Tags.Add is not null)
-                    {
-                        var existingTagNames = tags.Select(t => t.Name).ToHashSet();
-                        foreach (var tagName in patch.Tags.Add)
+                        if (patch.Tags.Add is not null)
                         {
-                            if (!existingTagNames.Contains(tagName))
+                            var existingTagNames = tags.Select(t => t.Name).ToHashSet();
+                            foreach (var tagName in patch.Tags.Add)
                             {
-                                var tag = await context.Tags
-                                    .Include(t => t.Wishlists)
-                                    .FirstOrDefaultAsync(t => t.Name == tagName, cancellationToken)
-                                    .ConfigureAwait(false);
-
-                                if (tag is null)
+                                if (!existingTagNames.Contains(tagName))
                                 {
-                                    tag = new Tag { Name = tagName };
-                                    context.Tags.Add(tag);
+                                    var tag = await context.Tags
+                                        .Include(t => t.Wishlists)
+                                        .FirstOrDefaultAsync(t => t.Name == tagName, cancellationToken)
+                                        .ConfigureAwait(false);
+
+                                    if (tag is null)
+                                    {
+                                        tag = new Tag { Name = tagName };
+                                        context.Tags.Add(tag);
+                                    }
+
+                                    tag.Wishlists.Add(model);
+
+                                    await auditRecordRepository.CreateAsync(
+                                        new()
+                                        {
+                                            Category = AuditCategories.System,
+                                            Operation = "AddTag",
+                                            EntityId = patch.Id.ToString(),
+                                            EntityType = nameof(Wishlist),
+                                            Detail = $"Added tag {tagName} to wishlist {model.Name}",
+                                            Timestamp = now,
+                                            UserId = modifiedByUserId
+                                        },
+                                        cancellationToken).ConfigureAwait(false);
                                 }
-
-                                tag.Wishlists.Add(model);
-
-                                await auditRecordRepository.CreateAsync(new()
-                                {
-                                    Category = AuditCategories.System,
-                                    Operation = "AddTag",
-                                    EntityId = patch.Id.ToString(),
-                                    EntityType = nameof(Wishlist),
-                                    Detail = $"Added tag {tagName} to wishlist {model.Name}",
-                                    Timestamp = now,
-                                    UserId = modifiedByUserId
-                                }, cancellationToken).ConfigureAwait(false);
                             }
                         }
                     }
-                }
 
-                model.ModifiedAt = now;
-                model.ModifiedByUserId = modifiedByUserId;
+                    model.ModifiedAt = now;
+                    model.ModifiedByUserId = modifiedByUserId;
 
-                var updated = await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
-                if (updated > 0)
-                {
-                    await auditRecordRepository.CreateAsync(new()
+                    var updated = await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+                    if (updated > 0)
                     {
-                        Category = AuditCategories.System,
-                        Operation = "Patch",
-                        EntityId = patch.Id.ToString(),
-                        EntityType = nameof(Wishlist),
-                        Detail = $"Patched wishlist {model.Name}",
-                        Timestamp = now,
-                        UserId = modifiedByUserId
-                    }, cancellationToken).ConfigureAwait(false);
-                }
+                        await auditRecordRepository.CreateAsync(
+                            new()
+                            {
+                                Category = AuditCategories.System,
+                                Operation = "Patch",
+                                EntityId = patch.Id.ToString(),
+                                EntityType = nameof(Wishlist),
+                                Detail = $"Updated wishlist {model.Name}.",
+                                Timestamp = now,
+                                UserId = modifiedByUserId
+                            },
+                            cancellationToken).ConfigureAwait(false);
+                    }
 
-                return updated > 0;
-            }, cancellationToken);
+                    return updated > 0;
+                },
+                cancellationToken).ConfigureAwait(false);
+
+            if (patched)
+            {
+                await transactionManager.OnCommittedAsync(
+                    token => eventBus.PublishAsync(
+                        WishlistEventBuilder.BuildWishlistUpdatedEvent(patch.Id, ChangedFields(patch)),
+                        token),
+                    cancellationToken).ConfigureAwait(false);
+            }
+
+            return patched;
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Error patching wishlist {WishlistId}", patch.Id);
+            logger.LogError(ex, "The wishlist repository failed to patch wishlist {WishlistId}.", patch.Id);
             throw;
         }
+    }
+
+    private async Task CreateCoreAsync(
+        Wishlist model,
+        Guid? createdByUserId,
+        DateTime now,
+        CancellationToken cancellationToken)
+    {
+        model.CreatedAt = now;
+        model.CreatedByUserId = createdByUserId;
+
+        context.Wishlists.Add(model);
+        await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+
+        await auditRecordRepository.CreateAsync(
+            new()
+            {
+                Category = AuditCategories.System,
+                Operation = "Create",
+                EntityId = model.Id.ToString(),
+                EntityType = nameof(Wishlist),
+                Detail = $"Created wishlist {model.Name}",
+                Timestamp = now,
+                UserId = createdByUserId
+            },
+            cancellationToken).ConfigureAwait(false);
     }
 }

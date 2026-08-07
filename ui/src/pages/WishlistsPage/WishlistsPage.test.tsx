@@ -1,13 +1,14 @@
 import { render, screen, within, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import type { ReactNode } from 'react';
+import { useEffect, type ReactNode } from 'react';
 
 import { ToastProvider, ToastStateProvider, ToastViewport } from '@/components/ui/Toast';
 import { TooltipProvider } from '@/components/ui/Tooltip';
 import { AuthProvider, Role } from '@/auth';
+import { testEffectivePermissions } from '@/test/permissions';
 
 import { WishlistsPage } from './WishlistsPage';
 
@@ -22,7 +23,15 @@ vi.mock('@/lib/api', async (importOriginal) => {
     };
 });
 
-import { apiGet, apiPost, apiDelete } from '@/lib/api';
+const mockFormatMagpieQlCriteria = vi.fn();
+const mockParseMagpieQl = vi.fn();
+
+vi.mock('@/lib/magpieQl', () => ({
+    formatMagpieQlCriteria: (...args: unknown[]) => mockFormatMagpieQlCriteria(...args),
+    parseMagpieQl: (...args: unknown[]) => mockParseMagpieQl(...args),
+}));
+
+import { apiGet, apiPost, apiPatch, apiDelete } from '@/lib/api';
 import type { ApiWishlist } from '@/hooks/useWishlists';
 
 const mockApiWishlists: ApiWishlist[] = [
@@ -54,7 +63,7 @@ const mockApiWishlists: ApiWishlist[] = [
     },
     {
         id: 'wl-3',
-        name: 'Trakt Collection',
+        name: 'Provider I Collection',
         contentFilterId: 'filter-3',
         qualityTierListId: 'qtl-2',
         ownerUserId: 'user-2',
@@ -62,12 +71,12 @@ const mockApiWishlists: ApiWishlist[] = [
         enabled: true,
         lastSyncedAt: '2024-01-14T18:00:00Z',
         createdAt: '2024-01-03T00:00:00Z',
-        contentFilter: { id: 'filter-3', name: 'Trakt List' },
+        contentFilter: { id: 'filter-3', name: 'Provider I List' },
         qualityTierList: { id: 'qtl-2', name: '4K Ultra HD' },
     },
     {
         id: 'wl-4',
-        name: 'IMDb Watchlist',
+        name: 'Provider H Watchlist',
         contentFilterId: 'filter-4',
         qualityTierListId: null,
         ownerUserId: 'user-2',
@@ -75,7 +84,7 @@ const mockApiWishlists: ApiWishlist[] = [
         enabled: false,
         lastSyncedAt: null,
         createdAt: '2024-01-04T00:00:00Z',
-        contentFilter: { id: 'filter-4', name: 'IMDb Filter' },
+        contentFilter: { id: 'filter-4', name: 'Provider H Filter' },
         qualityTierList: null,
     },
 ];
@@ -111,7 +120,7 @@ function TestWrapper({
     return (
         <QueryClientProvider client={queryClient}>
             <MemoryRouter initialEntries={initialEntries}>
-                <AuthProvider initialUser={mockUser}>
+                <AuthProvider initialUser={mockUser} initialPermissions={testEffectivePermissions()}>
                     <TooltipProvider>
                         <ToastProvider>
                             <ToastStateProvider>
@@ -123,6 +132,64 @@ function TestWrapper({
                 </AuthProvider>
             </MemoryRouter>
         </QueryClientProvider>
+    );
+}
+
+function LocationStateProbe({ onChange }: { onChange: (state: unknown) => void }) {
+    const location = useLocation();
+
+    useEffect(() => {
+        onChange(location.state);
+    }, [location.state, onChange]);
+
+    return null;
+}
+
+function RouteStateControls() {
+    const navigate = useNavigate();
+
+    return (
+        <>
+            <button type="button" onClick={() => navigate('/other')}>
+                Go elsewhere
+            </button>
+            <button type="button" onClick={() => navigate(-1)}>
+                Go back
+            </button>
+        </>
+    );
+}
+
+function renderCreateFromFilterRoute({
+    state,
+    onLocationStateChange,
+}: {
+    state: unknown;
+    onLocationStateChange?: (state: unknown) => void;
+}) {
+    return render(
+        <QueryClientProvider client={createTestQueryClient()}>
+            <MemoryRouter initialEntries={[{ pathname: '/wishlists', state }]}>
+                <AuthProvider
+                    initialUser={{ id: 'user-1', username: 'test', role: Role.Admin }}
+                    initialPermissions={testEffectivePermissions()}
+                >
+                    <TooltipProvider>
+                        <ToastProvider>
+                            <ToastStateProvider>
+                                {onLocationStateChange ? <LocationStateProbe onChange={onLocationStateChange} /> : null}
+                                <RouteStateControls />
+                                <Routes>
+                                    <Route path="/wishlists" element={<WishlistsPage />} />
+                                    <Route path="/other" element={<div data-testid="other-route">Other route</div>} />
+                                </Routes>
+                                <ToastViewport />
+                            </ToastStateProvider>
+                        </ToastProvider>
+                    </TooltipProvider>
+                </AuthProvider>
+            </MemoryRouter>
+        </QueryClientProvider>,
     );
 }
 
@@ -216,7 +283,7 @@ describe('WishlistsPage', () => {
         });
     });
 
-    it('renders the wishlist count', async () => {
+    it('does not render a count at the top of the page', async () => {
         render(
             <TestWrapper>
                 <WishlistsPage />
@@ -224,10 +291,9 @@ describe('WishlistsPage', () => {
         );
 
         await waitFor(() => {
-            const count = screen.getByTestId('wishlists-page__count');
-            expect(count).toBeInTheDocument();
-            expect(count).toHaveTextContent('4');
+            expect(screen.getByText('My Movies')).toBeInTheDocument();
         });
+        expect(screen.queryByTestId('wishlists-page__count')).not.toBeInTheDocument();
     });
 
     it('renders the page icon as decorative', async () => {
@@ -257,7 +323,121 @@ describe('WishlistsPage', () => {
     });
 });
 
-describe('WishlistsPage summary badges', () => {
+describe('WishlistsPage error vs empty', () => {
+    const mockApiGet = vi.mocked(apiGet);
+
+    function mockNonWishlistEndpoints(url: string) {
+        if (url === '/content-filters' || url === '/content-filters/my') {
+            return Promise.resolve([]);
+        }
+        if (url === '/quality-tier-lists') {
+            return Promise.resolve([]);
+        }
+        if (url.startsWith('/tags')) {
+            return Promise.resolve([]);
+        }
+        if (url === '/users') {
+            return Promise.resolve({ items: [] });
+        }
+        return null;
+    }
+
+    beforeEach(() => {
+        vi.clearAllMocks();
+    });
+
+    it('renders an error state (not the empty state) when the wishlist query fails', async () => {
+        mockApiGet.mockImplementation((url: string) => {
+            if (url === '/wishlists') {
+                return Promise.reject(new Error('Internal Server Error'));
+            }
+            return mockNonWishlistEndpoints(url) ?? Promise.resolve([]);
+        });
+
+        render(
+            <TestWrapper>
+                <WishlistsPage />
+            </TestWrapper>,
+        );
+
+        await waitFor(() => {
+            expect(screen.getByText('Failed to load wishlists')).toBeInTheDocument();
+        });
+        expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+        expect(screen.queryByText('No wishlists found')).not.toBeInTheDocument();
+    });
+
+    it('renders the empty state when the wishlist query succeeds with no data', async () => {
+        mockApiGet.mockImplementation((url: string) => {
+            if (url === '/wishlists') {
+                return Promise.resolve([]);
+            }
+            return mockNonWishlistEndpoints(url) ?? Promise.resolve([]);
+        });
+
+        render(
+            <TestWrapper>
+                <WishlistsPage />
+            </TestWrapper>,
+        );
+
+        await waitFor(() => {
+            expect(screen.getByText('No wishlists found')).toBeInTheDocument();
+        });
+        expect(screen.queryByText('Failed to load wishlists')).not.toBeInTheDocument();
+    });
+
+    it('describes a wishlist to a role that can create one', async () => {
+        mockApiGet.mockImplementation((url: string) => {
+            if (url === '/wishlists') {
+                return Promise.resolve([]);
+            }
+            return mockNonWishlistEndpoints(url) ?? Promise.resolve([]);
+        });
+
+        render(
+            <TestWrapper role={Role.Requester}>
+                <WishlistsPage />
+            </TestWrapper>,
+        );
+
+        await waitFor(() => {
+            expect(screen.getByText('No wishlists found')).toBeInTheDocument();
+        });
+        expect(
+            screen.getByText('A wishlist is a saved filter Magpie uses to automatically monitor for matching content.'),
+        ).toBeInTheDocument();
+    });
+
+    it('drops the create call-to-action in the empty state for a role that cannot create', async () => {
+        mockApiGet.mockImplementation((url: string) => {
+            if (url === '/wishlists') {
+                return Promise.resolve([]);
+            }
+            return mockNonWishlistEndpoints(url) ?? Promise.resolve([]);
+        });
+
+        render(
+            <TestWrapper role={Role.Viewer}>
+                <WishlistsPage />
+            </TestWrapper>,
+        );
+
+        await waitFor(() => {
+            expect(screen.getByText('No wishlists found')).toBeInTheDocument();
+        });
+        expect(
+            screen.queryByText(
+                'A wishlist is a saved filter Magpie uses to automatically monitor for matching content.',
+            ),
+        ).not.toBeInTheDocument();
+        expect(
+            screen.getByText('Wishlists are saved filters Magpie uses to automatically monitor for matching content.'),
+        ).toBeInTheDocument();
+    });
+});
+
+describe('WishlistsPage status summary removed', () => {
     const mockApiGet = vi.mocked(apiGet);
 
     beforeEach(() => {
@@ -265,54 +445,6 @@ describe('WishlistsPage summary badges', () => {
         mockApiGet.mockImplementation((url: string) => {
             if (url === '/wishlists') {
                 return Promise.resolve(mockApiWishlists);
-            }
-            if (url === '/content-filters' || url === '/content-filters/my') {
-                return Promise.resolve([]);
-            }
-            if (url === '/quality-tier-lists') {
-                return Promise.resolve([]);
-            }
-            if (url.startsWith('/tags')) {
-                return Promise.resolve([]);
-            }
-            if (url === '/users') {
-                return Promise.resolve({
-                    items: [
-                        {
-                            id: 'user-1',
-                            username: 'alice',
-                            role: 0,
-                            enabled: true,
-                            providerType: 'local',
-                            email: null,
-                            extensionId: null,
-                            externalId: null,
-                            settings: null,
-                            lockedUntil: null,
-                            lastLoginAt: null,
-                            createdAt: '2024-01-01T00:00:00Z',
-                            createdByUserId: null,
-                        },
-                        {
-                            id: 'user-2',
-                            username: 'bob',
-                            role: 0,
-                            enabled: true,
-                            providerType: 'local',
-                            email: null,
-                            extensionId: null,
-                            externalId: null,
-                            settings: null,
-                            lockedUntil: null,
-                            lastLoginAt: null,
-                            createdAt: '2024-01-01T00:00:00Z',
-                            createdByUserId: null,
-                        },
-                    ],
-                    pageNumber: 1,
-                    pageSize: 50,
-                    totalItems: 2,
-                });
             }
             return Promise.resolve([]);
         });
@@ -322,7 +454,7 @@ describe('WishlistsPage summary badges', () => {
         vi.restoreAllMocks();
     });
 
-    it('renders status badges', async () => {
+    it('does not render the status summary band', async () => {
         render(
             <TestWrapper>
                 <WishlistsPage />
@@ -330,24 +462,9 @@ describe('WishlistsPage summary badges', () => {
         );
 
         await waitFor(() => {
-            const summary = document.querySelector('[aria-label="Status summary"]');
-            expect(summary?.querySelector('[data-component="badge"][data-status="healthy"]')).toBeInTheDocument();
-            expect(summary?.querySelector('[data-component="badge"][data-status="default"]')).toBeInTheDocument();
-            expect(summary?.querySelector('[data-component="badge"][data-status="paused"]')).toBeInTheDocument();
+            expect(screen.getByText('My Movies')).toBeInTheDocument();
         });
-    });
-
-    it('summary section has accessible label', async () => {
-        render(
-            <TestWrapper>
-                <WishlistsPage />
-            </TestWrapper>,
-        );
-
-        await waitFor(() => {
-            const summary = document.querySelector('[aria-label="Status summary"]');
-            expect(summary).toBeInTheDocument();
-        });
+        expect(document.querySelector('[aria-label="Status summary"]')).not.toBeInTheDocument();
     });
 });
 
@@ -440,8 +557,8 @@ describe('WishlistsPage list items', () => {
         await waitFor(() => {
             expect(screen.getByText('My Movies')).toBeInTheDocument();
             expect(screen.getByText('Plex Watchlist')).toBeInTheDocument();
-            expect(screen.getByText('Trakt Collection')).toBeInTheDocument();
-            expect(screen.getByText('IMDb Watchlist')).toBeInTheDocument();
+            expect(screen.getByText('Provider I Collection')).toBeInTheDocument();
+            expect(screen.getByText('Provider H Watchlist')).toBeInTheDocument();
         });
     });
 
@@ -500,7 +617,7 @@ describe('WishlistsPage list items', () => {
         });
     });
 
-    it('shows unmonitored badge for unmonitored wishlists', async () => {
+    it('does not render a monitored/unmonitored pill on the row', async () => {
         render(
             <TestWrapper>
                 <WishlistsPage />
@@ -508,9 +625,10 @@ describe('WishlistsPage list items', () => {
         );
 
         await waitFor(() => {
-            const unmonitoredBadges = screen.getAllByText('Unmonitored');
-            expect(unmonitoredBadges.length).toBeGreaterThan(0);
+            expect(screen.getByText('My Movies')).toBeInTheDocument();
         });
+        expect(screen.queryByText('Unmonitored')).not.toBeInTheDocument();
+        expect(screen.queryByText('Monitored')).not.toBeInTheDocument();
     });
 
     it('applies unmonitored class to unmonitored items', async () => {
@@ -592,7 +710,7 @@ describe('WishlistsPage filters', () => {
         vi.restoreAllMocks();
     });
 
-    it('renders filter controls', async () => {
+    it('renders a single All/Mine ownership toggle and no clear button', async () => {
         render(
             <TestWrapper>
                 <WishlistsPage />
@@ -602,87 +720,44 @@ describe('WishlistsPage filters', () => {
         await waitFor(() => {
             expect(document.querySelector('[data-component="wishlist-filters"]')).toBeInTheDocument();
         });
+
+        const filterBar = document.querySelector('[data-component="wishlist-filters"]');
+        expect(filterBar).toHaveClass('wishlists-page__ownership');
+        expect(filterBar?.querySelector('[data-component="ownership-toggle"]')).toBeInTheDocument();
+
+        expect(screen.getByRole('radio', { name: 'All' })).toBeInTheDocument();
+        expect(screen.getByRole('radio', { name: 'Mine' })).toBeInTheDocument();
+        expect(screen.queryByRole('combobox', { name: /filter by owner/i })).not.toBeInTheDocument();
+        expect(screen.queryByRole('combobox', { name: /filter by monitored status/i })).not.toBeInTheDocument();
+        expect(document.querySelector('[data-action="clear-filters"]')).not.toBeInTheDocument();
     });
 
-    it('renders owner filter', async () => {
-        render(
-            <TestWrapper>
-                <WishlistsPage />
-            </TestWrapper>,
-        );
-
-        await waitFor(() => {
-            expect(screen.getByRole('combobox', { name: /filter by owner/i })).toBeInTheDocument();
-        });
-    });
-
-    it('renders monitored filter', async () => {
-        render(
-            <TestWrapper>
-                <WishlistsPage />
-            </TestWrapper>,
-        );
-
-        await waitFor(() => {
-            expect(screen.getByRole('combobox', { name: /filter by monitored status/i })).toBeInTheDocument();
-        });
-    });
-
-    it('filters wishlists by monitored status', async () => {
+    it('defaults to All and narrows to the current user with Mine', async () => {
         const user = userEvent.setup();
 
         render(
-            <TestWrapper>
+            <TestWrapper userId="user-1">
                 <WishlistsPage />
             </TestWrapper>,
         );
-
-        await waitFor(() => {
-            expect(screen.getByRole('combobox', { name: /filter by monitored status/i })).toBeInTheDocument();
-        });
-
-        const monitoredTrigger = screen.getByRole('combobox', { name: /filter by monitored status/i });
-        await user.click(monitoredTrigger);
-
-        const unmonitoredOption = screen.getByRole('option', { name: 'Unmonitored' });
-        await user.click(unmonitoredOption);
 
         await waitFor(() => {
             const list = screen.getByRole('list', { name: /wishlists/i });
-            const items = within(list).getAllByRole('listitem');
-            expect(items.length).toBe(1);
-        });
-    });
-
-    it('shows clear filters button when filters are active', async () => {
-        const user = userEvent.setup();
-
-        render(
-            <TestWrapper>
-                <WishlistsPage />
-            </TestWrapper>,
-        );
-
-        await waitFor(() => {
-            expect(screen.getByRole('combobox', { name: /filter by monitored status/i })).toBeInTheDocument();
+            expect(within(list).getAllByRole('listitem').length).toBe(4);
         });
 
-        expect(document.querySelector('[data-action="clear-filters"]')).not.toBeInTheDocument();
-
-        const monitoredTrigger = screen.getByRole('combobox', { name: /filter by monitored status/i });
-        await user.click(monitoredTrigger);
-
-        const unmonitoredOption = screen.getByRole('option', { name: 'Unmonitored' });
-        await user.click(unmonitoredOption);
+        await user.click(screen.getByRole('radio', { name: 'Mine' }));
 
         await waitFor(() => {
-            expect(document.querySelector('[data-action="clear-filters"]')).toBeInTheDocument();
+            const list = screen.getByRole('list', { name: /wishlists/i });
+            expect(within(list).getAllByRole('listitem').length).toBe(2);
         });
     });
 });
 
 describe('WishlistsPage Add Wishlist button', () => {
     const mockApiGet = vi.mocked(apiGet);
+    const mockApiPost = vi.mocked(apiPost);
 
     beforeEach(() => {
         vi.clearAllMocks();
@@ -798,6 +873,135 @@ describe('WishlistsPage Add Wishlist button', () => {
             expect(addButtons.length).toBeGreaterThanOrEqual(1);
         });
     });
+
+    it('passes the monitored toggle when creating a wishlist', async () => {
+        const user = userEvent.setup();
+        mockApiPost.mockResolvedValue({
+            id: 'wl-new',
+            name: 'Unmonitored QA',
+            contentFilterId: 'filter-new',
+            qualityTierListId: null,
+            ownerUserId: 'user-1',
+            ownerLock: false,
+            enabled: false,
+            createdAt: '2024-01-10T00:00:00Z',
+        });
+
+        render(
+            <TestWrapper role={Role.Requester}>
+                <WishlistsPage />
+            </TestWrapper>,
+        );
+
+        const addButtons = await screen.findAllByRole('button', { name: /add wishlist/i });
+        await user.click(addButtons[0]);
+
+        const dialog = await screen.findByRole('dialog');
+        await user.type(within(dialog).getByLabelText(/name/i), 'Unmonitored QA');
+        await user.click(within(dialog).getByLabelText(/monitored/i));
+        await user.click(within(dialog).getByRole('button', { name: /save/i }));
+
+        await waitFor(() => {
+            expect(mockApiPost).toHaveBeenCalledWith(
+                '/wishlists',
+                expect.objectContaining({
+                    name: 'Unmonitored QA',
+                    enabled: false,
+                }),
+            );
+        });
+    });
+});
+
+describe('WishlistsPage create-from-filter route state', () => {
+    const mockApiGet = vi.mocked(apiGet);
+
+    beforeEach(() => {
+        vi.clearAllMocks();
+        mockFormatMagpieQlCriteria.mockResolvedValue({ query: 'genre has "Action"' });
+        mockApiGet.mockImplementation((url: string) => {
+            if (url === '/wishlists') {
+                return Promise.resolve(mockApiWishlists);
+            }
+            if (url === '/content-filters' || url === '/content-filters/my') {
+                return Promise.resolve([]);
+            }
+            if (url === '/quality-tier-lists') {
+                return Promise.resolve([]);
+            }
+            if (url.startsWith('/tags')) {
+                return Promise.resolve([]);
+            }
+            return Promise.resolve([]);
+        });
+    });
+
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    it('opens the add form pre-seeded with the route-state criteria and name', async () => {
+        const seededCriteria = { contentHierarchyItem: { and: [{}] } };
+
+        renderCreateFromFilterRoute({
+            state: { createCriteria: seededCriteria, createName: 'Action Movies' },
+        });
+
+        await waitFor(() => {
+            expect(document.querySelector('[data-component="wishlist-form"]')).toBeInTheDocument();
+        });
+        const nameInput = document.querySelector('[data-field="name"]') as HTMLInputElement;
+        expect(nameInput.value).toBe('Action Movies');
+    });
+
+    it('clears the route state after applying the create seed', async () => {
+        const seededCriteria = { contentHierarchyItem: { and: [{}] } };
+        const onLocationStateChange = vi.fn();
+
+        renderCreateFromFilterRoute({
+            state: { createCriteria: seededCriteria, createName: 'Action Movies' },
+            onLocationStateChange,
+        });
+
+        await waitFor(() => {
+            expect(document.querySelector('[data-component="wishlist-form"]')).toBeInTheDocument();
+        });
+        await waitFor(() => {
+            expect(onLocationStateChange).toHaveBeenLastCalledWith(null);
+        });
+    });
+
+    it('does not reopen the add form after cancelling and returning to the consumed history entry', async () => {
+        const user = userEvent.setup();
+        const seededCriteria = { contentHierarchyItem: { and: [{}] } };
+
+        renderCreateFromFilterRoute({
+            state: { createCriteria: seededCriteria, createName: 'Action Movies' },
+        });
+
+        await waitFor(() => {
+            expect(document.querySelector('[data-component="wishlist-form"]')).toBeInTheDocument();
+        });
+
+        await user.click(screen.getByRole('button', { name: 'Cancel' }));
+
+        await waitFor(() => {
+            expect(document.querySelector('[data-component="wishlist-form"]')).not.toBeInTheDocument();
+        });
+
+        await user.click(screen.getByRole('button', { name: 'Go elsewhere' }));
+
+        await waitFor(() => {
+            expect(screen.getByTestId('other-route')).toBeInTheDocument();
+        });
+
+        await user.click(screen.getByRole('button', { name: 'Go back' }));
+
+        await waitFor(() => {
+            expect(screen.getByText('My Movies')).toBeInTheDocument();
+        });
+        expect(document.querySelector('[data-component="wishlist-form"]')).not.toBeInTheDocument();
+    });
 });
 
 describe('WishlistsPage Edit and Delete actions', () => {
@@ -865,9 +1069,25 @@ describe('WishlistsPage Edit and Delete actions', () => {
         vi.restoreAllMocks();
     });
 
-    it('Manager can delete all wishlists', async () => {
+    it('Manager can delete unlocked wishlists and own locked ones, but not other users locked ones', async () => {
         render(
-            <TestWrapper role={Role.Manager}>
+            <TestWrapper role={Role.Manager} userId="user-1">
+                <WishlistsPage />
+            </TestWrapper>,
+        );
+
+        await waitFor(() => {
+            const deleteButtons = document.querySelectorAll('[data-action="delete"]');
+            expect(deleteButtons.length).toBe(3);
+        });
+
+        const lockedRow = document.querySelector('[data-wishlist-id="wl-3"]');
+        expect(lockedRow?.querySelector('[data-action="delete"]')).toBeNull();
+    });
+
+    it('Admin can delete every wishlist including locked ones owned by other users', async () => {
+        render(
+            <TestWrapper role={Role.Admin} userId="user-1">
                 <WishlistsPage />
             </TestWrapper>,
         );
@@ -991,6 +1211,100 @@ describe('WishlistsPage Edit and Delete actions', () => {
 
         await waitFor(() => {
             expect(mockApiDelete).toHaveBeenCalled();
+        });
+    });
+
+    it('shows the also-delete-filter toggle (off) when the wishlist has a backing filter', async () => {
+        const user = userEvent.setup();
+
+        render(
+            <TestWrapper role={Role.Manager} userId="user-1">
+                <WishlistsPage />
+            </TestWrapper>,
+        );
+
+        await waitFor(() => {
+            expect(document.querySelector('[data-action="delete"]')).toBeInTheDocument();
+        });
+
+        const deleteButton = document.querySelector(
+            '[data-wishlist-id="wl-1"] [data-action="delete"]',
+        ) as HTMLButtonElement;
+        await user.click(deleteButton);
+
+        await waitFor(() => {
+            expect(screen.getByText('Delete Wishlist')).toBeInTheDocument();
+        });
+
+        const toggle = screen.getByRole('switch');
+        expect(toggle).toBeInTheDocument();
+        expect(toggle).toHaveAttribute('data-state', 'unchecked');
+        expect(screen.getByText('Also delete its filter "Action Movies"')).toBeInTheDocument();
+    });
+
+    it('includes deleteFilter=true in the delete call when the toggle is on', async () => {
+        const user = userEvent.setup();
+        const mockApiDelete = vi.mocked(apiDelete);
+        mockApiDelete.mockResolvedValue(undefined);
+
+        render(
+            <TestWrapper role={Role.Manager} userId="user-1">
+                <WishlistsPage />
+            </TestWrapper>,
+        );
+
+        await waitFor(() => {
+            expect(document.querySelector('[data-action="delete"]')).toBeInTheDocument();
+        });
+
+        const deleteButton = document.querySelector(
+            '[data-wishlist-id="wl-1"] [data-action="delete"]',
+        ) as HTMLButtonElement;
+        await user.click(deleteButton);
+
+        await waitFor(() => {
+            expect(screen.getByText('Delete Wishlist')).toBeInTheDocument();
+        });
+
+        await user.click(screen.getByRole('switch'));
+
+        const confirmDeleteButton = document.querySelector('[data-action="confirm-delete"]') as HTMLButtonElement;
+        await user.click(confirmDeleteButton);
+
+        await waitFor(() => {
+            expect(mockApiDelete).toHaveBeenCalledWith('/wishlists/wl-1?deleteFilter=true');
+        });
+    });
+
+    it('omits deleteFilter when the toggle is left off', async () => {
+        const user = userEvent.setup();
+        const mockApiDelete = vi.mocked(apiDelete);
+        mockApiDelete.mockResolvedValue(undefined);
+
+        render(
+            <TestWrapper role={Role.Manager} userId="user-1">
+                <WishlistsPage />
+            </TestWrapper>,
+        );
+
+        await waitFor(() => {
+            expect(document.querySelector('[data-action="delete"]')).toBeInTheDocument();
+        });
+
+        const deleteButton = document.querySelector(
+            '[data-wishlist-id="wl-1"] [data-action="delete"]',
+        ) as HTMLButtonElement;
+        await user.click(deleteButton);
+
+        await waitFor(() => {
+            expect(screen.getByText('Delete Wishlist')).toBeInTheDocument();
+        });
+
+        const confirmDeleteButton = document.querySelector('[data-action="confirm-delete"]') as HTMLButtonElement;
+        await user.click(confirmDeleteButton);
+
+        await waitFor(() => {
+            expect(mockApiDelete).toHaveBeenCalledWith('/wishlists/wl-1');
         });
     });
 
@@ -1119,7 +1433,7 @@ describe('WishlistsPage owner lock indicator', () => {
 
 describe('WishlistsPage lock/unlock actions', () => {
     const mockApiGet = vi.mocked(apiGet);
-    const mockApiPost = vi.mocked(apiPost);
+    const mockApiPatch = vi.mocked(apiPatch);
 
     beforeEach(() => {
         vi.clearAllMocks();
@@ -1240,7 +1554,7 @@ describe('WishlistsPage lock/unlock actions', () => {
 
     it('calls API when lock button is clicked', async () => {
         const user = userEvent.setup();
-        mockApiPost.mockResolvedValue({ ...mockApiWishlists[0], ownerLock: true });
+        mockApiPatch.mockResolvedValue(undefined);
 
         render(
             <TestWrapper userId="user-1">
@@ -1259,7 +1573,7 @@ describe('WishlistsPage lock/unlock actions', () => {
         await user.click(lockButton);
 
         await waitFor(() => {
-            expect(mockApiPost).toHaveBeenCalledWith('/wishlists/my/wl-1/lock');
+            expect(mockApiPatch).toHaveBeenCalledWith('/wishlists/wl-1', { ownerLock: { value: true } });
         });
     });
 });
@@ -1528,7 +1842,7 @@ describe('WishlistsPage accessibility', () => {
         });
     });
 
-    it('filter comboboxes have accessible labels', async () => {
+    it('the ownership toggle has an accessible label', async () => {
         render(
             <TestWrapper>
                 <WishlistsPage />
@@ -1536,8 +1850,7 @@ describe('WishlistsPage accessibility', () => {
         );
 
         await waitFor(() => {
-            expect(screen.getByRole('combobox', { name: /filter by owner/i })).toBeInTheDocument();
-            expect(screen.getByRole('combobox', { name: /filter by monitored status/i })).toBeInTheDocument();
+            expect(screen.getByRole('radiogroup', { name: /filter wishlists by ownership/i })).toBeInTheDocument();
         });
     });
 
@@ -1640,84 +1953,203 @@ describe('WishlistsPage URL search param persistence', () => {
         vi.restoreAllMocks();
     });
 
-    it('pre-filters by monitored status from URL param', async () => {
+    it('pre-filters to the current user from scope=mine in the URL', async () => {
         render(
-            <TestWrapper initialEntries={['/wishlists?monitored=false']}>
+            <TestWrapper userId="user-1" initialEntries={['/wishlists?scope=mine']}>
                 <WishlistsPage />
             </TestWrapper>,
         );
 
         await waitFor(() => {
             const list = screen.getByRole('list', { name: /wishlists/i });
-            const items = within(list).getAllByRole('listitem');
-
-            expect(items.length).toBe(1);
+            expect(within(list).getAllByRole('listitem').length).toBe(2);
         });
+        expect(screen.getByRole('radio', { name: 'Mine' })).toHaveAttribute('aria-checked', 'true');
     });
 
-    it('pre-filters by owner from URL param', async () => {
+    it('shows all wishlists with no scope param', async () => {
         render(
-            <TestWrapper initialEntries={['/wishlists?owner=user-2']}>
+            <TestWrapper userId="user-1" initialEntries={['/wishlists']}>
                 <WishlistsPage />
             </TestWrapper>,
         );
 
         await waitFor(() => {
             const list = screen.getByRole('list', { name: /wishlists/i });
-            const items = within(list).getAllByRole('listitem');
+            expect(within(list).getAllByRole('listitem').length).toBe(4);
+        });
+        expect(screen.getByRole('radio', { name: 'All' })).toHaveAttribute('aria-checked', 'true');
+    });
+});
 
-            expect(items.length).toBe(2);
+describe('WishlistsPage edit seeds the criteria builder from the wishlist response', () => {
+    const mockApiGet = vi.mocked(apiGet);
+
+    const seededCriteria = { contentHierarchyItem: { and: [{ genre: 'Action' }] } };
+    const seededWishlist: ApiWishlist = {
+        id: 'wl-seed',
+        name: 'Seeded Wishlist',
+        contentFilterId: 'backing-1',
+        qualityTierListId: null,
+        ownerUserId: 'user-1',
+        ownerLock: false,
+        enabled: true,
+        lastSyncedAt: null,
+        createdAt: '2024-01-05T00:00:00Z',
+        contentFilter: { id: 'backing-1', name: 'Seeded (wishlist)', criteria: seededCriteria },
+        qualityTierList: null,
+    };
+
+    beforeEach(() => {
+        vi.clearAllMocks();
+        mockFormatMagpieQlCriteria.mockResolvedValue({ query: 'contentType = "movie" and genre has "Action"' });
+        mockParseMagpieQl.mockResolvedValue({ criteria: seededCriteria });
+        mockApiGet.mockImplementation((url: string) => {
+            if (url === '/wishlists') {
+                return Promise.resolve([seededWishlist]);
+            }
+            if (url === '/content-filters' || url === '/content-filters/my') {
+                return Promise.resolve([]);
+            }
+            if (url === '/content-types') {
+                return Promise.resolve([{ slug: 'movie', displayName: 'Movies', levelDefinitions: [] }]);
+            }
+            if (url === '/subject-types') {
+                return Promise.resolve([]);
+            }
+            if (url === '/quality-tier-lists') {
+                return Promise.resolve([]);
+            }
+            if (url.startsWith('/tags')) {
+                return Promise.resolve([]);
+            }
+            if (url === '/users') {
+                return Promise.resolve({ items: [], pageNumber: 1, pageSize: 50, totalItems: 0 });
+            }
+            return Promise.resolve([]);
         });
     });
 
-    it('pre-filters by both owner and monitored from URL params', async () => {
-        render(
-            <TestWrapper initialEntries={['/wishlists?owner=user-2&monitored=true']}>
-                <WishlistsPage />
-            </TestWrapper>,
-        );
-
-        await waitFor(() => {
-            const list = screen.getByRole('list', { name: /wishlists/i });
-            const items = within(list).getAllByRole('listitem');
-
-            expect(items.length).toBe(1);
-        });
+    afterEach(() => {
+        vi.restoreAllMocks();
     });
 
-    it('shows clear filters button when URL params are set', async () => {
-        render(
-            <TestWrapper initialEntries={['/wishlists?monitored=true']}>
-                <WishlistsPage />
-            </TestWrapper>,
-        );
-
-        await waitFor(() => {
-            expect(document.querySelector('[data-action="clear-filters"]')).toBeInTheDocument();
-        });
-    });
-
-    it('clears URL params when clear filters is clicked', async () => {
+    it('seeds the builder from contentFilter.criteria when editing', async () => {
         const user = userEvent.setup();
 
         render(
-            <TestWrapper initialEntries={['/wishlists?owner=user-1&monitored=true']}>
+            <TestWrapper role={Role.Admin} userId="user-1">
                 <WishlistsPage />
             </TestWrapper>,
         );
 
         await waitFor(() => {
-            expect(document.querySelector('[data-action="clear-filters"]')).toBeInTheDocument();
+            expect(document.querySelector('[data-wishlist-id="wl-seed"] [data-action="edit"]')).toBeInTheDocument();
         });
 
-        const clearButton = document.querySelector('[data-action="clear-filters"]') as HTMLButtonElement;
-        await user.click(clearButton);
+        const editButton = document.querySelector(
+            '[data-wishlist-id="wl-seed"] [data-action="edit"]',
+        ) as HTMLButtonElement;
+        await user.click(editButton);
 
         await waitFor(() => {
-            const list = screen.getByRole('list', { name: /wishlists/i });
-            const items = within(list).getAllByRole('listitem');
+            expect(screen.getByText('Edit Wishlist')).toBeInTheDocument();
+        });
 
-            expect(items.length).toBe(4);
+        await waitFor(() => {
+            expect(mockFormatMagpieQlCriteria).toHaveBeenCalledWith(seededCriteria, 'content');
+        });
+        const dialog = await screen.findByRole('dialog');
+        expect(await within(dialog).findByText(/genre has "Action"/)).toBeInTheDocument();
+    });
+
+    it('does not block saving a monitored wishlist after editing seeded criteria', async () => {
+        const user = userEvent.setup();
+        const mockApiPatch = vi.mocked(apiPatch);
+        mockApiPatch.mockResolvedValue(undefined);
+
+        render(
+            <TestWrapper role={Role.Admin} userId="user-1">
+                <WishlistsPage />
+            </TestWrapper>,
+        );
+
+        await waitFor(() => {
+            expect(document.querySelector('[data-wishlist-id="wl-seed"] [data-action="edit"]')).toBeInTheDocument();
+        });
+
+        const editButton = document.querySelector(
+            '[data-wishlist-id="wl-seed"] [data-action="edit"]',
+        ) as HTMLButtonElement;
+        await user.click(editButton);
+
+        const dialog = await screen.findByRole('dialog');
+        await waitFor(() => expect(within(dialog).getByText(/genre has "Action"/)).toBeInTheDocument());
+
+        const saveBtn = document.querySelector('[data-action="save"]') as HTMLButtonElement;
+        await user.click(saveBtn);
+
+        await waitFor(() => {
+            expect(mockApiPatch).toHaveBeenCalled();
+        });
+        expect(screen.queryByText('Add filter criteria to monitor this wishlist')).not.toBeInTheDocument();
+    });
+});
+
+describe('WishlistsPage row criteria query', () => {
+    const mockApiGet = vi.mocked(apiGet);
+
+    const wishlistWithCriteria: ApiWishlist = {
+        id: 'wl-crit',
+        name: 'Criteria Wishlist',
+        contentFilterId: 'filter-crit',
+        qualityTierListId: null,
+        ownerUserId: 'user-1',
+        ownerLock: false,
+        enabled: true,
+        lastSyncedAt: null,
+        createdAt: '2024-01-06T00:00:00Z',
+        contentFilter: {
+            id: 'filter-crit',
+            name: 'Criteria Filter',
+            criteria: { contentHierarchyItem: { and: [{ contentType: { and: [{}] } }] } },
+        },
+        qualityTierList: null,
+    };
+
+    beforeEach(() => {
+        vi.clearAllMocks();
+        mockFormatMagpieQlCriteria.mockResolvedValue({ query: 'genre = Action' });
+        mockApiGet.mockImplementation((url: string) => {
+            if (url === '/wishlists') {
+                return Promise.resolve([wishlistWithCriteria]);
+            }
+            if (url === '/content-filters' || url === '/content-filters/my' || url === '/quality-tier-lists') {
+                return Promise.resolve([]);
+            }
+            if (url.startsWith('/tags')) {
+                return Promise.resolve([]);
+            }
+            if (url === '/users') {
+                return Promise.resolve({ items: [], pageNumber: 1, pageSize: 50, totalItems: 0 });
+            }
+            return Promise.resolve([]);
+        });
+    });
+
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    it('renders the formatted criteria query on the row', async () => {
+        render(
+            <TestWrapper>
+                <WishlistsPage />
+            </TestWrapper>,
+        );
+
+        await waitFor(() => {
+            expect(screen.getByTestId('wishlists-page__item-query')).toHaveTextContent('genre = Action');
         });
     });
 });

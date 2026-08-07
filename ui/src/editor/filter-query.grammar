@@ -42,7 +42,9 @@ ItemGroup { "(" itemExpr ")" }
 
 ItemValue { Value }
 
-Value { String | Number | Identifier }
+Value { String | Number | Boolean | Identifier }
+
+Boolean { kw_true | kw_false }
 
 CompareOp { "=" | "!=" | ">" | ">=" | "<" | "<=" }
 
@@ -73,30 +75,35 @@ ItemOp { "=" | "!=" | ">" | ">=" | "<" | "<=" |
     kw_endswith[@name="endswith"],
     kw_null[@name="null"],
     kw_in[@name="in"],
-    kw_has[@name="has"]
+    kw_has[@name="has"],
+    kw_true[@name="true"],
+    kw_false[@name="false"]
+}
+
+@external specialize {NegatedIdentifier} specializeNegatedKeyword from "./keywords" {
+    NotHas,
+    NotContains,
+    NotStartsWith,
+    NotEndsWith,
+    NotIn,
+    NotNull
 }
 
 @tokens {
     Identifier { $[a-zA-Z_] $[a-zA-Z0-9_]* }
 
+    NegatedIdentifier { "!" Identifier }
+
     String { '"' (![\\\"] | "\\" _)* '"' }
 
     Number { "-"? $[0-9]+ ("." $[0-9]+)? }
 
-    NotHas { "!has" }
-    NotContains { "!contains" }
-    NotStartsWith { "!startswith" }
-    NotEndsWith { "!endswith" }
-    NotIn { "!in" }
-    NotNull { "!null" }
-
     @precedence {
-        NotContains, NotStartsWith, NotEndsWith, NotHas, NotNull, NotIn,
         ">=", "<=", "!=", ">", "<", "=",
         Number
     }
 
-    space { $[ \t\n\r]+ }
+    space { @whitespace+ }
 }
 
 @skip { space }

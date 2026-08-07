@@ -3,8 +3,8 @@ set -e
 
 provider="$1"
 
-declare -A projects=([sqlite]=SQLite [sqlserver]=SqlServer [postgresql]=PostgreSQL [mysql]=MySQL)
-providers=(sqlite sqlserver postgresql mysql)
+declare -A projects=([sqlite]=SQLite [sqlserver]=SqlServer [postgresql]=PostgreSQL)
+providers=(sqlite sqlserver postgresql)
 [[ -n "$provider" ]] && providers=("$provider")
 
 dotnet build src/Magpie.sln -v q

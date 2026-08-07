@@ -4,219 +4,313 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
-using Magpie.Abstractions.Api;
-using Magpie.Abstractions.Integrations;
-using Magpie.Abstractions.Repositories;
-using Magpie.Abstractions.Security;
 using Magpie.Models;
+using Magpie.Models.Api;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
+using Magpie.Sdk.Api;
+using Magpie.Sdk.Services;
 
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
 
 namespace Magpie.Api.EndpointGroups;
 
-internal sealed class IndexersEndpointGroup(
-    IIndexerRepository indexerRepository,
-    IIndexerConnectionRepository indexerConnectionRepository,
-    IEnumerable<IIndexerIntegration> indexerIntegrations) : IApiEndpointGroup
+[MagpieCommandGroup("indexers", "indexers", "Manage indexers")]
+internal sealed class IndexersEndpointGroup : IApiEndpointGroup
 {
     public string Name => "indexers";
 
     public void MapEndpoints(IEndpointRouteBuilder builder)
     {
-        builder.MapGet("", GetAllIndexers)
-            .WithName(nameof(GetAllIndexers))
-            .Produces<Indexer[]>()
+        builder.MapGet("", GetIndexersAsync)
+            .WithName(nameof(GetIndexersAsync))
+            .Produces<IReadOnlyList<IndexerResponse>>()
             .RequireViewer();
 
-        builder.MapGet("{id:guid}", GetIndexerById)
-            .WithName(nameof(GetIndexerById))
-            .Produces<Indexer>()
+        builder.MapPost("", CreateIndexerAsync)
+            .WithName(nameof(CreateIndexerAsync))
+            .Produces<IndexerResponse>(StatusCodes.Status201Created)
+            .ProducesProblem(StatusCodes.Status400BadRequest)
+            .RequireAdmin();
+
+        builder.MapPost("test", TestIndexerSettingsAsync)
+            .WithName(nameof(TestIndexerSettingsAsync))
+            .Produces<ConfigurationTestResult>()
+            .RequireAdmin();
+
+        builder.MapGet("{id:guid}", GetIndexerAsync)
+            .WithName(nameof(GetIndexerAsync))
+            .Produces<IndexerResponse>()
             .ProducesProblem(StatusCodes.Status404NotFound)
             .RequireViewer();
 
-        builder.MapPost("", CreateIndexer)
-            .WithName(nameof(CreateIndexer))
-            .Produces<Indexer>(StatusCodes.Status201Created)
+        builder.MapPatch("{id:guid}", PatchIndexerAsync)
+            .WithName(nameof(PatchIndexerAsync))
+            .Produces(StatusCodes.Status204NoContent)
             .ProducesProblem(StatusCodes.Status400BadRequest)
-            .RequireManager();
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .RequireAdmin();
 
-        builder.MapPatch("{id:guid}", PatchIndexer)
-            .WithName(nameof(PatchIndexer))
+        builder.MapDelete("{id:guid}", DeleteIndexerAsync)
+            .WithName(nameof(DeleteIndexerAsync))
             .Produces(StatusCodes.Status204NoContent)
             .ProducesProblem(StatusCodes.Status404NotFound)
-            .ProducesProblem(StatusCodes.Status400BadRequest)
-            .RequireManager();
+            .RequireAdmin();
 
-        builder.MapPost("{id:guid}/test", TestIndexer)
-            .WithName(nameof(TestIndexer))
-            .Produces<ConnectionTestResult>()
+        builder.MapGet("{id:guid}/schema", GetIndexerSchemaAsync)
+            .WithName(nameof(GetIndexerSchemaAsync))
+            .Produces<IReadOnlyList<SettingSchemaDefinition>>()
             .ProducesProblem(StatusCodes.Status404NotFound)
-            .RequireManager();
+            .RequireViewer();
 
-        builder.MapDelete("{id:guid}", DeleteIndexer)
-            .WithName(nameof(DeleteIndexer))
+        builder.MapPost("{id:guid}/test", TestIndexerAsync)
+            .WithName(nameof(TestIndexerAsync))
+            .Produces<ConfigurationTestResult>()
+            .RequireAdmin();
+
+        builder.MapGet("{id:guid}/connections", GetIndexerConnectionsAsync)
+            .WithName(nameof(GetIndexerConnectionsAsync))
+            .Produces<IReadOnlyList<IndexerConnection>>()
+            .RequireViewer();
+
+        builder.MapPost("{id:guid}/connections", CreateIndexerConnectionAsync)
+            .WithName(nameof(CreateIndexerConnectionAsync))
+            .Produces<IndexerConnection>(StatusCodes.Status201Created)
+            .ProducesProblem(StatusCodes.Status400BadRequest)
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .RequireAdmin();
+
+        builder.MapPatch("{id:guid}/connections/{connectionId:guid}", PatchIndexerConnectionAsync)
+            .WithName(nameof(PatchIndexerConnectionAsync))
             .Produces(StatusCodes.Status204NoContent)
             .ProducesProblem(StatusCodes.Status404NotFound)
-            .RequireManager();
+            .RequireAdmin();
+
+        builder.MapDelete("{id:guid}/connections/{connectionId:guid}", DeleteIndexerConnectionAsync)
+            .WithName(nameof(DeleteIndexerConnectionAsync))
+            .Produces(StatusCodes.Status204NoContent)
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .RequireAdmin();
+
+        builder.MapPost("{id:guid}/connections/{connectionId:guid}/test", TestIndexerConnectionAsync)
+            .WithName(nameof(TestIndexerConnectionAsync))
+            .Produces<ConfigurationTestResult>()
+            .RequireAdmin();
     }
 
-    private async Task<IResult> GetAllIndexers(CancellationToken cancellationToken)
-    {
-        var indexers = await indexerRepository.ListAllAsync(cancellationToken).ConfigureAwait(false);
-        return Results.Ok(indexers);
-    }
-
-    private async Task<IResult> GetIndexerById(Guid id, CancellationToken cancellationToken)
-    {
-        var indexer = await indexerRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
-        return indexer is null ? Results.NotFound() : Results.Ok(indexer);
-    }
-
-    private async Task<IResult> CreateIndexer(
-        HttpContext httpContext,
-        Indexer request,
+    [MagpieCommand("list", "GET", "", "List indexers")]
+    internal async Task<IResult> GetIndexersAsync(
+        [FromServices] IIndexerService indexerService,
         CancellationToken cancellationToken)
     {
-        var currentUserId = httpContext.User.GetUserId();
+        var indexers = await indexerService.ListAsync(cancellationToken).ConfigureAwait(false);
 
-        var indexer = request with
+        var responses = new List<IndexerResponse>(indexers.Count);
+        foreach (var indexer in indexers)
         {
-            Id = Guid.NewGuid(),
-            CreatedAt = DateTime.UtcNow,
-            CreatedByUserId = currentUserId,
-            ModifiedAt = null,
-            ModifiedByUserId = null
-        };
+            var connections = await indexerService.ListConnectionsAsync(indexer.Id, cancellationToken)
+                .ConfigureAwait(false);
+            responses.Add(CreateResponse(indexer, connections.Count));
+        }
 
-        var created = await indexerRepository.CreateAsync(indexer, currentUserId, cancellationToken)
+        return Results.Ok(responses);
+    }
+
+    [MagpieCommand("create", "POST", "", "Create an indexer")]
+    internal async Task<IResult> CreateIndexerAsync(
+        [FromServices] IIndexerService indexerService,
+        AuthenticatedUser user,
+        [FromBody] IndexerCreate create,
+        CancellationToken cancellationToken)
+    {
+        var created = await indexerService.CreateAsync(create, user.Id, cancellationToken).ConfigureAwait(false);
+
+        var connections = await indexerService.ListConnectionsAsync(created.Id, cancellationToken)
             .ConfigureAwait(false);
 
-        return Results.Created($"api/{Name}/{created.Id}", created);
+        return Results.Created($"api/{Name}/{created.Id}", CreateResponse(created, connections.Count));
     }
 
-    private async Task<IResult> PatchIndexer(
-        HttpContext httpContext,
-        Guid id,
-        IndexerPatch request,
+    internal async Task<IResult> TestIndexerSettingsAsync(
+        [FromServices] IIndexerService indexerService,
+        IntegrationSettingsTestRequest request,
         CancellationToken cancellationToken)
     {
-        var existing = await indexerRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
-
-        if (existing is null)
-        {
-            return Results.NotFound();
-        }
-
-        var currentUserId = httpContext.User.GetUserId();
-
-        var indexer = existing with
-        {
-            ProviderType = request.ProviderType ?? existing.ProviderType,
-            Name = request.Name ?? existing.Name,
-            Description = request.Description ?? existing.Description,
-            Availability = request.Availability ?? existing.Availability,
-            Categories = request.Categories ?? existing.Categories,
-            Languages = request.Languages ?? existing.Languages,
-            ModifiedAt = DateTime.UtcNow,
-            ModifiedByUserId = currentUserId
-        };
-
-        await indexerRepository.UpdateAsync(indexer, currentUserId, cancellationToken)
-            .ConfigureAwait(false);
-
-        return Results.NoContent();
-    }
-
-    private async Task<IResult> TestIndexer(
-        Guid id,
-        Guid? connectionId,
-        CancellationToken cancellationToken)
-    {
-        var indexer = await indexerRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
-
-        if (indexer is null)
-        {
-            return Results.NotFound();
-        }
-
-        var integration = indexerIntegrations
-            .FirstOrDefault(i => string.Equals(
-                i.IndexerType,
-                indexer.ProviderType,
-                StringComparison.OrdinalIgnoreCase));
-
-        if (integration is null)
-        {
-            return Results.Ok(new ConnectionTestResult
-            {
-                Success = false,
-                Message = $"No integration registered for type '{indexer.ProviderType}'."
-            });
-        }
-
-        // Indexer-level settings are stored on IndexerConnection rather than on the Indexer entity
-        // itself. Resolve the connection whose settings should be used: either the explicit
-        // connectionId (if supplied), or the indexer's sole connection. Otherwise fail.
-        var connections = (await indexerConnectionRepository
-            .ListByIndexerIdAsync(id, cancellationToken)
-            .ConfigureAwait(false)).ToList();
-
-        IndexerConnection? connection;
-        if (connectionId is { } cid)
-        {
-            connection = connections.FirstOrDefault(c => c.Id == cid);
-            if (connection is null)
-            {
-                return Results.Ok(new ConnectionTestResult
-                {
-                    Success = false,
-                    Message = $"Connection '{cid}' was not found for this indexer."
-                });
-            }
-        }
-        else if (connections.Count == 0)
-        {
-            return Results.Ok(new ConnectionTestResult
-            {
-                Success = false,
-                Message = "No connections are configured for this indexer."
-            });
-        }
-        else if (connections.Count > 1)
-        {
-            return Results.Ok(new ConnectionTestResult
-            {
-                Success = false,
-                Message = "Multiple connections are configured; specify connectionId to choose one."
-            });
-        }
-        else
-        {
-            connection = connections[0];
-        }
-
-        IReadOnlyDictionary<string, string> settings = connection!.Settings;
-
-        var result = await integration.TestConnectionAsync(settings, cancellationToken)
+        var result = await indexerService.TestSettingsAsync(
+            request.ProviderType,
+            request.Id,
+            request.Settings ?? new Dictionary<string, string>(),
+            cancellationToken)
             .ConfigureAwait(false);
 
         return Results.Ok(result);
     }
 
-    private async Task<IResult> DeleteIndexer(
-        HttpContext httpContext,
+    internal async Task<IResult> GetIndexerAsync(
+        [FromServices] IIndexerService indexerService,
         Guid id,
         CancellationToken cancellationToken)
     {
-        var currentUserId = httpContext.User.GetUserId();
+        var indexer = await indexerService.GetAsync(id, cancellationToken).ConfigureAwait(false);
+        if (indexer is null)
+        {
+            return Results.NotFound();
+        }
 
-        var deleted = await indexerRepository.DeleteAsync(id, currentUserId, cancellationToken)
+        var connections = await indexerService.ListConnectionsAsync(id, cancellationToken).ConfigureAwait(false);
+
+        return Results.Ok(CreateResponse(indexer, connections.Count));
+    }
+
+    [MagpieCommand("patch", "PATCH", "{id:guid}", "Update fields on an indexer")]
+    internal async Task<IResult> PatchIndexerAsync(
+        [FromServices] IIndexerService indexerService,
+        AuthenticatedUser user,
+        Guid id,
+        [FromBody] IndexerPatch patch,
+        CancellationToken cancellationToken)
+    {
+        var patched = await indexerService.PatchAsync(id, patch, user.Id, cancellationToken).ConfigureAwait(false);
+
+        return patched ? Results.NoContent() : Results.NotFound();
+    }
+
+    internal async Task<IResult> DeleteIndexerAsync(
+        [FromServices] IIndexerService indexerService,
+        AuthenticatedUser user,
+        Guid id,
+        CancellationToken cancellationToken)
+    {
+        var deleted = await indexerService.DeleteAsync(id, user.Id, cancellationToken).ConfigureAwait(false);
+
+        return deleted ? Results.NoContent() : Results.NotFound();
+    }
+
+    internal async Task<IResult> GetIndexerSchemaAsync(
+        [FromServices] IIndexerService indexerService,
+        Guid id,
+        CancellationToken cancellationToken)
+    {
+        var schema = await indexerService.GetSettingsSchemaAsync(id, cancellationToken).ConfigureAwait(false);
+
+        return Results.Ok(schema);
+    }
+
+    internal async Task<IResult> TestIndexerAsync(
+        [FromServices] IIndexerService indexerService,
+        Guid id,
+        Guid? connectionId,
+        CancellationToken cancellationToken)
+    {
+        var result = await indexerService.TestAsync(id, connectionId, cancellationToken).ConfigureAwait(false);
+
+        return Results.Ok(result);
+    }
+
+    internal async Task<IResult> GetIndexerConnectionsAsync(
+        [FromServices] IIndexerService indexerService,
+        Guid id,
+        CancellationToken cancellationToken)
+    {
+        var connections = await indexerService.ListConnectionsAsync(id, cancellationToken).ConfigureAwait(false);
+        var schema = await indexerService.GetSettingsSchemaAsync(id, cancellationToken).ConfigureAwait(false);
+
+        return Results.Ok(connections.Select(connection => RedactSecrets(connection, schema)).ToList());
+    }
+
+    internal async Task<IResult> CreateIndexerConnectionAsync(
+        [FromServices] IIndexerService indexerService,
+        AuthenticatedUser user,
+        Guid id,
+        IndexerConnectionCreate create,
+        CancellationToken cancellationToken)
+    {
+        var created = await indexerService.CreateConnectionAsync(id, create, user.Id, cancellationToken)
+            .ConfigureAwait(false);
+        var schema = await indexerService.GetSettingsSchemaAsync(id, cancellationToken).ConfigureAwait(false);
+
+        return Results.Created(
+            $"api/{Name}/{id}/connections/{created.Id}",
+            RedactSecrets(created, schema));
+    }
+
+    internal async Task<IResult> PatchIndexerConnectionAsync(
+        [FromServices] IIndexerService indexerService,
+        AuthenticatedUser user,
+        Guid id,
+        Guid connectionId,
+        IndexerConnectionPatch patch,
+        CancellationToken cancellationToken)
+    {
+        var patched = await indexerService.PatchConnectionAsync(id, connectionId, patch, user.Id, cancellationToken)
+            .ConfigureAwait(false);
+
+        return patched ? Results.NoContent() : Results.NotFound();
+    }
+
+    internal async Task<IResult> DeleteIndexerConnectionAsync(
+        [FromServices] IIndexerService indexerService,
+        AuthenticatedUser user,
+        Guid id,
+        Guid connectionId,
+        CancellationToken cancellationToken)
+    {
+        var deleted = await indexerService.DeleteConnectionAsync(id, connectionId, user.Id, cancellationToken)
             .ConfigureAwait(false);
 
         return deleted ? Results.NoContent() : Results.NotFound();
+    }
+
+    internal async Task<IResult> TestIndexerConnectionAsync(
+        [FromServices] IIndexerService indexerService,
+        Guid id,
+        Guid connectionId,
+        CancellationToken cancellationToken)
+    {
+        var result = await indexerService.TestConnectionAsync(
+            id,
+            connectionId,
+            cancellationToken: cancellationToken)
+            .ConfigureAwait(false);
+
+        return Results.Ok(result);
+    }
+
+    private static IndexerResponse CreateResponse(Indexer indexer, int connectionCount)
+    {
+        return new()
+        {
+            Id = indexer.Id,
+            FeedId = indexer.FeedId,
+            ExtensionId = indexer.ExtensionId,
+            ProviderType = indexer.ProviderType,
+            Name = indexer.Name,
+            Description = indexer.Description,
+            Availability = indexer.Availability,
+            Categories = [.. indexer.Categories],
+            Languages = [.. indexer.Languages],
+            SupportedContentTypes = [.. indexer.SupportedContentTypes],
+            DefinitionType = indexer.DefinitionType,
+            ConnectionCount = connectionCount,
+            CreatedAt = indexer.CreatedAt,
+            CreatedByUserId = indexer.CreatedByUserId,
+            ModifiedAt = indexer.ModifiedAt,
+            ModifiedByUserId = indexer.ModifiedByUserId,
+        };
+    }
+
+    private static IndexerConnection RedactSecrets(
+        IndexerConnection connection,
+        IReadOnlyList<SettingSchemaDefinition> schema)
+    {
+        return connection with
+        {
+            Settings = schema.Count == 0
+                ? []
+                : connection.Settings.RedactSecrets(schema),
+        };
     }
 }

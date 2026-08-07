@@ -1,4 +1,3 @@
-/* eslint-disable react-refresh/only-export-components */
 import { forwardRef, type ComponentPropsWithoutRef } from 'react';
 
 import { Shell, ShellHeader, ShellSidebar, ShellMain, ShellBottomNav, useShell, type ShellProps } from '../Shell';

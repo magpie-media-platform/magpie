@@ -1,4 +1,7 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi, beforeEach } from 'vitest';
 import { MemoryRouter, useSearchParams } from 'react-router-dom';
@@ -23,6 +26,10 @@ vi.mock('react-router-dom', async () => {
     };
 });
 
+vi.mock('@/hooks/useLibraryTypes', () => ({
+    useTypeIconName: () => () => 'film-slate',
+}));
+
 const mockEvents: CalendarEvent[] = [
     {
         id: 'evt-1',
@@ -30,9 +37,13 @@ const mockEvents: CalendarEvent[] = [
         title: 'Shogun',
         subtitle: 'S01E10 - A Dream of a Dream',
         date: new Date().toISOString(),
-        posterUrl: 'https://image.tmdb.org/t/p/w92/poster1.jpg',
-        kind: 'episode',
+        posterUrl: 'https://image.provider-a.example/t/p/w92/poster1.jpg',
+        contentType: 'tv',
+        level: 'episode',
+        levelLabel: 'Episode',
         fulfillment: 'missing',
+        monitoring: true,
+        effectiveMonitoring: true,
     },
     {
         id: 'evt-2',
@@ -40,18 +51,26 @@ const mockEvents: CalendarEvent[] = [
         title: 'Fallout',
         subtitle: 'S01E08 - The Beginning',
         date: new Date().toISOString(),
-        posterUrl: 'https://image.tmdb.org/t/p/w92/poster2.jpg',
-        kind: 'episode',
+        posterUrl: 'https://image.provider-a.example/t/p/w92/poster2.jpg',
+        contentType: 'tv',
+        level: 'episode',
+        levelLabel: 'Episode',
         fulfillment: 'fulfilled',
+        monitoring: true,
+        effectiveMonitoring: true,
     },
     {
         id: 'evt-3',
         contentId: 'content-3',
         title: 'Dune: Part Two',
         date: new Date(Date.now() + 86400000).toISOString(),
-        posterUrl: 'https://image.tmdb.org/t/p/w92/poster3.jpg',
-        kind: 'movie',
+        posterUrl: 'https://image.provider-a.example/t/p/w92/poster3.jpg',
+        contentType: 'movie',
+        level: 'movie',
+        levelLabel: 'Movie',
         fulfillment: 'missing',
+        monitoring: true,
+        effectiveMonitoring: true,
     },
 ];
 
@@ -526,6 +545,17 @@ describe('CalendarPage month view', () => {
     });
 });
 
+describe('CalendarPage day cell layout', () => {
+    it('keeps the day cell top-anchored so the date does not drift with event count', () => {
+        const css = readFileSync(resolve(process.cwd(), 'src/pages/CalendarPage/CalendarPage.css'), 'utf8');
+        const dayCell = css.match(/\.calendar-page__day-cell\s*{(?<declarations>[\s\S]*?)\n {4}}/)?.groups
+            ?.declarations;
+
+        expect(dayCell).toContain('flex-direction: column;');
+        expect(dayCell).toContain('justify-content: flex-start;');
+    });
+});
+
 describe('CalendarPage week view', () => {
     const defaultContext = {
         apiBaseUrl: '/api',
@@ -757,48 +787,20 @@ describe('CalendarPage list view', () => {
         const eventDates = screen.getAllByTestId('calendar-page__event-date');
         expect(eventDates.length).toBeGreaterThan(0);
     });
-});
 
-describe('CalendarPage content filter', () => {
-    const defaultContext = {
-        apiBaseUrl: '/api',
-        userId: 'user-123',
-        username: 'testuser',
-        role: 'Admin',
-    };
-
-    const noExtensions = {
-        extensions: [],
-        isReady: true,
-        isLoading: false,
-    };
-
-    beforeEach(() => {
-        vi.clearAllMocks();
-        mockUseExtensions.mockReturnValue(defaultContext);
-        mockUseSlotExtensions.mockReturnValue(noExtensions);
+    it('includes timed events on the final day', async () => {
+        const user = userEvent.setup();
+        const finalDay = new Date();
+        finalDay.setHours(0, 0, 0, 0);
+        finalDay.setDate(finalDay.getDate() + 6);
+        finalDay.setHours(20);
         mockUseCalendar.mockReturnValue({
-            events: mockEvents,
+            events: [{ ...mockEvents[0], id: 'final-day', title: 'Final day event', date: finalDay.toISOString() }],
             isLoading: false,
             isFetching: false,
             error: null,
             refetch: mockRefetch,
         });
-    });
-
-    it('renders kind filter dropdown', () => {
-        render(
-            <MemoryRouter>
-                <CalendarPage />
-            </MemoryRouter>,
-        );
-
-        const kindFilter = document.querySelector('[data-filter="kind"]');
-        expect(kindFilter).toBeInTheDocument();
-    });
-
-    it('filters events by kind when filter is selected', async () => {
-        const user = userEvent.setup();
 
         render(
             <MemoryRouter>
@@ -806,16 +808,9 @@ describe('CalendarPage content filter', () => {
             </MemoryRouter>,
         );
 
-        const kindFilter = document.querySelector('[data-filter="kind"]');
-        await user.click(kindFilter!);
+        await user.click(document.querySelector('[data-view="list"]')!);
 
-        const movieOption = await screen.findByRole('option', { name: 'Movies' });
-        await user.click(movieOption);
-
-        const listBtn = document.querySelector('[data-view="list"]');
-        await user.click(listBtn!);
-
-        expect(document.querySelector('[data-component="list-view"]')).toBeInTheDocument();
+        expect(screen.getByText('Final day event')).toBeInTheDocument();
     });
 });
 
@@ -868,7 +863,7 @@ describe('CalendarPage empty state', () => {
         expect(emptyState).toBeInTheDocument();
     });
 
-    it('shows empty state in month view when no events', async () => {
+    it('does not show the empty-state banner on month or week views', async () => {
         const user = userEvent.setup();
 
         render(
@@ -882,34 +877,14 @@ describe('CalendarPage empty state', () => {
             await user.click(prevBtn!);
         }
 
-        expect(screen.getByText('No events this month')).toBeInTheDocument();
-        const emptyState = document.querySelector('[data-component="month-view"] [data-component="empty-state"]');
-        expect(emptyState).toBeInTheDocument();
-    });
-
-    it('shows empty state in week view when no events', async () => {
-        const user = userEvent.setup();
-
-        render(
-            <MemoryRouter>
-                <CalendarPage />
-            </MemoryRouter>,
-        );
-
-        const prevBtn = document.querySelector('[data-action="prev"]');
-        for (let i = 0; i < 6; i++) {
-            await user.click(prevBtn!);
-        }
+        expect(document.querySelector('[data-component="month-view"] [data-component="empty-state"]')).toBeNull();
 
         const weekBtn = document.querySelector('[data-view="week"]');
         await user.click(weekBtn!);
-
-        expect(screen.getByText('No events this week')).toBeInTheDocument();
-        const emptyState = document.querySelector('[data-component="week-view"] [data-component="empty-state"]');
-        expect(emptyState).toBeInTheDocument();
+        expect(document.querySelector('[data-component="week-view"] [data-component="empty-state"]')).toBeNull();
     });
 
-    it('uses shared EmptyState component with description text', async () => {
+    it('uses shared EmptyState component with description text on day view', async () => {
         const user = userEvent.setup();
 
         render(
@@ -923,7 +898,10 @@ describe('CalendarPage empty state', () => {
             await user.click(prevBtn!);
         }
 
-        expect(screen.getByText('Try a different month or adjust your filters')).toBeInTheDocument();
+        const dayBtn = document.querySelector('[data-view="day"]');
+        await user.click(dayBtn!);
+
+        expect(screen.getByText('Try a different date or check other views')).toBeInTheDocument();
     });
 });
 
@@ -1060,17 +1038,6 @@ describe('CalendarPage URL persistence', () => {
         expect(screen.getByText(expected)).toBeInTheDocument();
     });
 
-    it('restores kind filter from ?kind= search param', async () => {
-        render(
-            <MemoryRouter initialEntries={['/calendar?kind=movie&view=day']}>
-                <CalendarPage />
-                <UrlObserver />
-            </MemoryRouter>,
-        );
-
-        expect(document.querySelector('[data-component="day-view"]')).toBeInTheDocument();
-    });
-
     it('defaults to month view when no view param is present', () => {
         render(
             <MemoryRouter initialEntries={['/calendar']}>
@@ -1152,7 +1119,7 @@ describe('CalendarPage URL persistence', () => {
         expect(urlParams.textContent).toContain('date=2025-06-20');
     });
 
-    it('falls back to defaults for invalid view param', () => {
+    it('falls back to defaults and normalizes the URL for invalid view param', async () => {
         render(
             <MemoryRouter initialEntries={['/calendar?view=invalid']}>
                 <CalendarPage />
@@ -1162,9 +1129,12 @@ describe('CalendarPage URL persistence', () => {
 
         const monthBtn = document.querySelector('[data-view="month"]');
         expect(monthBtn).toHaveAttribute('data-active', 'true');
+        await waitFor(() => {
+            expect(screen.getByTestId('url-params').textContent).toBe('');
+        });
     });
 
-    it('falls back to today for invalid date param', () => {
+    it('falls back to today and normalizes the URL for invalid date param', async () => {
         render(
             <MemoryRouter initialEntries={['/calendar?date=not-a-date']}>
                 <CalendarPage />
@@ -1175,17 +1145,8 @@ describe('CalendarPage URL persistence', () => {
         const now = new Date();
         const monthName = now.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
         expect(screen.getByText(monthName)).toBeInTheDocument();
-    });
-
-    it('falls back to all types for invalid kind param', () => {
-        render(
-            <MemoryRouter initialEntries={['/calendar?kind=invalid']}>
-                <CalendarPage />
-                <UrlObserver />
-            </MemoryRouter>,
-        );
-
-        const kindFilter = document.querySelector('[data-filter="kind"]');
-        expect(kindFilter).toBeInTheDocument();
+        await waitFor(() => {
+            expect(screen.getByTestId('url-params').textContent).toBe('');
+        });
     });
 });

@@ -1,31 +1,32 @@
 import { useCallback } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Database, Rss } from '@phosphor-icons/react';
+import { DatabaseIcon, ListPlusIcon, RssIcon } from '@phosphor-icons/react';
 
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/Tabs';
+import { PageHeader } from '@/components/ui/PageHeader';
 import { PullToRefresh } from '@/components/ui/PullToRefresh';
 
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { useIndexers } from '@/hooks/useIndexers';
 
-import { IndexerManagement } from './IndexerManagement';
+import { ConfiguredManagement } from './ConfiguredManagement';
+import { AvailableCatalog } from './AvailableCatalog';
 import { FeedsManagement } from './FeedsManagement';
 
 import './IndexersPage.css';
 import '@/styles/card-actions.css';
-import '@/styles/list-toolbar.css';
 
 export function IndexersPage() {
     useDocumentTitle('Indexers');
     const [searchParams, setSearchParams] = useSearchParams();
 
-    const activeTab = searchParams.get('tab') || 'indexers';
+    const activeTab = searchParams.get('tab') || 'configured';
     const setActiveTab = useCallback(
         (tab: string) => {
             setSearchParams(
                 (prev) => {
                     const next = new URLSearchParams(prev);
-                    if (tab === 'indexers') {
+                    if (tab === 'configured') {
                         next.delete('tab');
                     } else {
                         next.set('tab', tab);
@@ -40,7 +41,8 @@ export function IndexersPage() {
 
     const { indexers, feeds, refetch } = useIndexers();
 
-    const totalIndexers = indexers.length;
+    const configuredCount = indexers.filter((i) => (i.connectionCount ?? 0) > 0).length;
+    const availableCount = indexers.length;
     const totalFeeds = feeds.length;
 
     const handleRefresh = useCallback(async () => {
@@ -50,32 +52,31 @@ export function IndexersPage() {
     return (
         <div className="indexers-page" data-page="indexers">
             <PullToRefresh onRefresh={handleRefresh} className="indexers-page__pull-to-refresh">
-                <header className="indexers-page__header">
-                    <div className="indexers-page__header-left">
-                        <Database
-                            weight="duotone"
-                            className="indexers-page__icon"
-                            aria-hidden="true"
-                            data-testid="indexers-page__icon"
-                        />
-                        <h1 className="indexers-page__title">Indexers</h1>
-                        <span className="page-count indexers-page__count" data-testid="indexers-page__count">
-                            {totalIndexers}
-                        </span>
-                    </div>
-                </header>
+                <PageHeader
+                    className="indexers-page__header"
+                    title="Indexers"
+                    description="Connections to release indexers and feeds."
+                    icon={<DatabaseIcon weight="duotone" aria-hidden="true" data-testid="indexers-page__icon" />}
+                />
 
                 <Tabs value={activeTab} onValueChange={setActiveTab} className="indexers-page__tabs">
                     <TabsList>
-                        <TabsTrigger value="indexers" data-tab="indexers">
-                            <Database weight="duotone" aria-hidden="true" />
-                            Indexers
+                        <TabsTrigger value="configured" data-tab="configured">
+                            <DatabaseIcon weight="duotone" aria-hidden="true" />
+                            Configured
                             <span className="tab-count indexers-page__tab-count" data-testid="indexers-page__tab-count">
-                                {totalIndexers}
+                                {configuredCount}
+                            </span>
+                        </TabsTrigger>
+                        <TabsTrigger value="available" data-tab="available">
+                            <ListPlusIcon weight="duotone" aria-hidden="true" />
+                            Available
+                            <span className="tab-count indexers-page__tab-count" data-testid="indexers-page__tab-count">
+                                {availableCount}
                             </span>
                         </TabsTrigger>
                         <TabsTrigger value="feeds" data-tab="feeds">
-                            <Rss weight="duotone" aria-hidden="true" />
+                            <RssIcon weight="duotone" aria-hidden="true" />
                             Feeds
                             <span className="tab-count indexers-page__tab-count" data-testid="indexers-page__tab-count">
                                 {totalFeeds}
@@ -83,8 +84,12 @@ export function IndexersPage() {
                         </TabsTrigger>
                     </TabsList>
 
-                    <TabsContent value="indexers" className="indexers-page__tab-content">
-                        <IndexerManagement />
+                    <TabsContent value="configured" className="indexers-page__tab-content">
+                        <ConfiguredManagement onGoToCatalog={() => setActiveTab('available')} />
+                    </TabsContent>
+
+                    <TabsContent value="available" className="indexers-page__tab-content">
+                        <AvailableCatalog />
                     </TabsContent>
 
                     <TabsContent value="feeds" className="indexers-page__tab-content">

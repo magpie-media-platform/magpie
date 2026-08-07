@@ -3,9 +3,9 @@ import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
 import { ToastProvider, ToastViewport, Toast, ToastAction, ToastClose, ToastTitle, ToastDescription } from './Toast';
-import { ToastStateProvider } from './ToastContext';
-import { useToast } from './useToast';
 import { ToastList } from './ToastList';
+import { ToastTray } from './ToastTray';
+import { ToastStateProvider, useToast } from './index';
 import { LiveAnnouncerProvider } from '../LiveAnnouncer';
 
 function TestToastComponent() {
@@ -806,5 +806,83 @@ describe('ToastList', () => {
         );
 
         expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    });
+});
+
+describe('ToastTray', () => {
+    function TestTrayTrigger() {
+        const { toast } = useToast();
+
+        return (
+            <button data-testid="add-toast" onClick={() => toast({ title: 'Toast', description: 'A toast.' })}>
+                Add
+            </button>
+        );
+    }
+
+    function renderWithTray() {
+        return render(
+            <ToastProvider>
+                <ToastStateProvider>
+                    <TestTrayTrigger />
+                    <ToastList />
+                    <ToastViewport>
+                        <ToastTray />
+                    </ToastViewport>
+                </ToastStateProvider>
+            </ToastProvider>,
+        );
+    }
+
+    it('renders nothing with no toasts', () => {
+        renderWithTray();
+
+        expect(screen.queryByRole('button', { name: 'Clear all notifications' })).not.toBeInTheDocument();
+        expect(document.querySelector('.toast-tray')).not.toBeInTheDocument();
+    });
+
+    it('renders nothing with a single toast', async () => {
+        renderWithTray();
+
+        await act(async () => {
+            screen.getByTestId('add-toast').click();
+        });
+
+        expect(screen.getAllByTestId('toast-title')).toHaveLength(1);
+        expect(screen.queryByRole('button', { name: 'Clear all notifications' })).not.toBeInTheDocument();
+        expect(document.querySelector('.toast-tray')).not.toBeInTheDocument();
+    });
+
+    it('shows the clear-all button with two toasts', async () => {
+        renderWithTray();
+
+        await act(async () => {
+            screen.getByTestId('add-toast').click();
+        });
+        await act(async () => {
+            screen.getByTestId('add-toast').click();
+        });
+
+        expect(screen.getAllByTestId('toast-title')).toHaveLength(2);
+        expect(screen.getByRole('button', { name: 'Clear all notifications' })).toBeInTheDocument();
+    });
+
+    it('dismisses all toasts when clicked', async () => {
+        const user = userEvent.setup();
+        renderWithTray();
+
+        await act(async () => {
+            screen.getByTestId('add-toast').click();
+        });
+        await act(async () => {
+            screen.getByTestId('add-toast').click();
+        });
+
+        await user.click(screen.getByRole('button', { name: 'Clear all notifications' }));
+
+        await waitFor(() => {
+            expect(screen.queryAllByTestId('toast-title')).toHaveLength(0);
+        });
+        expect(screen.queryByRole('button', { name: 'Clear all notifications' })).not.toBeInTheDocument();
     });
 });

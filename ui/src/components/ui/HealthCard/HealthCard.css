@@ -1,5 +1,6 @@
 @layer components {
     .health-card {
+        min-width: 0;
         background-color: var(--bg-secondary);
         border: 1px solid var(--border-default);
         border-radius: var(--radius-lg);
@@ -86,6 +87,14 @@
         background-color: var(--status-degraded);
     }
 
+    .health-card__row--stabilizing .health-card__indicator {
+        background-color: var(--status-stabilizing);
+    }
+
+    .health-card__row--stale .health-card__indicator {
+        background-color: var(--status-degraded);
+    }
+
     .health-card__row--unknown .health-card__indicator {
         background-color: var(--status-unknown);
     }
@@ -105,6 +114,14 @@
     }
 
     .health-card__row--degraded .health-card__label {
+        color: var(--status-degraded);
+    }
+
+    .health-card__row--stabilizing .health-card__label {
+        color: var(--status-stabilizing);
+    }
+
+    .health-card__row--stale .health-card__label {
         color: var(--status-degraded);
     }
 
@@ -150,5 +167,16 @@
         background-color: var(--bg-tertiary);
         border-radius: var(--radius-sm);
         animation: pulse var(--duration-pulse) ease-in-out infinite;
+    }
+
+    @media (min-width: 640px) and (max-width: 1099px) {
+        .health-card__header {
+            flex-wrap: wrap;
+        }
+
+        .health-card__icon {
+            flex-basis: 100%;
+            justify-content: flex-start;
+        }
     }
 }

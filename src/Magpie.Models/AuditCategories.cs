@@ -1,32 +1,32 @@
 namespace Magpie.Models;
 
 /// <summary>
-/// Constants for audit/history entry categories.
+/// The category constants for audit and history entries.
 /// </summary>
 public static class AuditCategories
 {
     /// <summary>
-    /// Security-related operations.
+    /// The category for content operations.
+    /// </summary>
+    public const string Content = "Content";
+
+    /// <summary>
+    /// The category for security operations.
     /// </summary>
     public const string Security = "Security";
 
     /// <summary>
-    /// System-level operations.
+    /// The category for system-level operations.
     /// </summary>
     public const string System = "System";
 
     /// <summary>
-    /// Operations related to external integrations.
+    /// The category for external integration operations.
     /// </summary>
     public const string Integrations = "Integrations";
 
     /// <summary>
-    /// Operations related to job processing.
+    /// The category for job processing operations.
     /// </summary>
     public const string Jobs = "Jobs";
-
-    /// <summary>
-    /// Operations related to content management.
-    /// </summary>
-    public static string Content = "Content";
 }

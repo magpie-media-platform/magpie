@@ -1,0 +1,42 @@
+@layer components {
+    :is(.criteria-editor__remove-btn, .rules-editor__remove-btn) {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 28px;
+        height: 28px;
+        padding: 0;
+        background: none;
+        border: 1px solid transparent;
+        border-radius: var(--radius-sm);
+        color: var(--text-muted);
+        font-size: var(--text-sm);
+        cursor: pointer;
+        flex-shrink: 0;
+        transition:
+            background-color var(--duration-fast) var(--easing-default),
+            border-color var(--duration-fast) var(--easing-default),
+            color var(--duration-fast) var(--easing-default);
+
+        &:hover {
+            background-color: color-mix(in srgb, var(--status-unhealthy) 10%, transparent);
+            border-color: var(--status-unhealthy);
+            color: var(--status-unhealthy);
+        }
+
+        &:focus-visible {
+            outline: var(--focus-ring-width) solid var(--focus-ring-color);
+            outline-offset: var(--focus-ring-offset);
+        }
+
+        &:disabled {
+            opacity: var(--opacity-disabled);
+            cursor: not-allowed;
+        }
+
+        @media (pointer: coarse) {
+            width: var(--touch-target-min);
+            height: var(--touch-target-min);
+        }
+    }
+}

@@ -1,6 +1,6 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
     Sheet,
@@ -14,6 +14,7 @@ import {
     SheetOverlay,
     SheetPortal,
 } from './Sheet';
+import { Dialog, DialogContent, DialogTitle } from '../Dialog';
 
 describe('Sheet', () => {
     it('renders trigger element', () => {
@@ -237,6 +238,34 @@ describe('Sheet', () => {
         await user.keyboard('{Escape}');
 
         expect(handleOpenChange).toHaveBeenCalledWith(false);
+    });
+
+    it('does not close the sheet when interacting with a nested dialog', async () => {
+        const user = userEvent.setup();
+        const handleOpenChange = vi.fn();
+
+        render(
+            <Sheet open onOpenChange={handleOpenChange}>
+                <SheetContent>
+                    <SheetTitle>Sheet Title</SheetTitle>
+                </SheetContent>
+                <Dialog open>
+                    <DialogContent>
+                        <DialogTitle>Nested Dialog</DialogTitle>
+                        <button type="button">Keep Editing</button>
+                    </DialogContent>
+                </Dialog>
+            </Sheet>,
+        );
+
+        await waitFor(() => {
+            expect(screen.getByText('Nested Dialog')).toBeInTheDocument();
+        });
+
+        await user.click(screen.getByText('Keep Editing'));
+
+        expect(handleOpenChange).not.toHaveBeenCalledWith(false);
+        expect(screen.getByText('Sheet Title')).toBeInTheDocument();
     });
 
     it('supports controlled open state', async () => {
@@ -619,6 +648,44 @@ describe('Sheet sides', () => {
             const content = document.querySelector('.sheet-content');
             expect(content).toHaveAttribute('data-side', 'bottom');
         });
+    });
+});
+
+describe('Sheet body pointer-events safety net', () => {
+    afterEach(() => {
+        document.body.style.pointerEvents = '';
+    });
+
+    const ControlledSheet = ({ open }: { open: boolean }) => (
+        <Sheet open={open}>
+            <SheetContent>
+                <SheetTitle>Title</SheetTitle>
+            </SheetContent>
+        </Sheet>
+    );
+
+    it('locks body pointer-events while open and restores them on close', async () => {
+        const { rerender } = render(<ControlledSheet open={false} />);
+
+        rerender(<ControlledSheet open={true} />);
+        await waitFor(() => expect(screen.getByRole('dialog')).toBeInTheDocument());
+        expect(document.body.style.pointerEvents).toBe('none');
+
+        rerender(<ControlledSheet open={false} />);
+        await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+        await waitFor(() => expect(document.body.style.pointerEvents).toBe(''));
+    });
+
+    it('restores body pointer-events even when radix leaves a stale lock', async () => {
+        document.body.style.pointerEvents = 'none';
+
+        const { rerender } = render(<ControlledSheet open={true} />);
+        await waitFor(() => expect(screen.getByRole('dialog')).toBeInTheDocument());
+        expect(document.body.style.pointerEvents).toBe('none');
+
+        rerender(<ControlledSheet open={false} />);
+        await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+        await waitFor(() => expect(document.body.style.pointerEvents).toBe(''));
     });
 });
 

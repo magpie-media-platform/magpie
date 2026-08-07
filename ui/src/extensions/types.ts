@@ -1,4 +1,6 @@
-export type AssetKind = 'Script' | 'Style' | 'Link';
+export type AssetKindName = 'Script' | 'Style' | 'Link';
+
+export type AssetKind = AssetKindName | 0 | 1 | 2;
 
 export type UISlotModifier = 'Before' | 'After' | 'Replace';
 
@@ -20,6 +22,16 @@ export interface Asset {
     integrity: string | null;
 
     priority: number;
+}
+
+export interface ExtensionAssetContext {
+    readonly apiBaseUrl: string;
+
+    readonly extensionId: string;
+
+    readonly loadAssetText: (relativePath: string) => Promise<string>;
+
+    readonly waitUntil: (work: PromiseLike<unknown>) => void;
 }
 
 export interface UIExtension {

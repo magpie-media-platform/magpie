@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { queryClient, POLLING_INTERVALS } from './queryClient';
+import { queryClient, retryUnlessNotFound, POLLING_INTERVALS } from './queryClient';
 
 describe('queryClient', () => {
     it('exports a QueryClient instance', () => {
@@ -15,8 +15,8 @@ describe('queryClient', () => {
         expect(queries).toBeDefined();
         expect(queries?.staleTime).toBeGreaterThan(0);
         expect(queries?.gcTime).toBeGreaterThan(0);
-        expect(queries?.gcTime).toBeGreaterThan(queries?.staleTime ?? 0);
-        expect(queries?.retry).toBeGreaterThanOrEqual(0);
+        expect(queries?.gcTime).toBeGreaterThan((queries?.staleTime as number) ?? 0);
+        expect(queries?.retry).toBe(retryUnlessNotFound);
         expect(queries?.refetchOnWindowFocus).toBe(true);
     });
 });

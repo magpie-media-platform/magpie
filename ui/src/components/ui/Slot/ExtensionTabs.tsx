@@ -1,6 +1,5 @@
-/* eslint-disable react-refresh/only-export-components */
 import { createElement, useEffect, useRef } from 'react';
-import { PuzzlePiece } from '@phosphor-icons/react';
+import { PuzzlePieceIcon } from '@phosphor-icons/react';
 
 import { useExtensions, useSlotExtensions } from '@/extensions/useExtensions';
 import type { UIExtension } from '@/extensions/types';
@@ -38,6 +37,10 @@ export function useTabSlotExtensions(slot: string) {
 
 export interface ExtensionTabsProps {
     slot: string;
+
+    entityId?: string;
+
+    entityType?: string;
 }
 
 export function ExtensionTabTriggers({ slot }: ExtensionTabsProps) {
@@ -51,7 +54,7 @@ export function ExtensionTabTriggers({ slot }: ExtensionTabsProps) {
         <>
             {tabs.map((ext, i) => (
                 <TabsTrigger key={`${ext.id}:${i}`} value={tabValue(ext)}>
-                    <PuzzlePiece weight="bold" aria-hidden="true" />
+                    <PuzzlePieceIcon weight="bold" aria-hidden="true" />
                     <span>{tabLabel(ext)}</span>
                 </TabsTrigger>
             ))}
@@ -61,7 +64,7 @@ export function ExtensionTabTriggers({ slot }: ExtensionTabsProps) {
 
 ExtensionTabTriggers.displayName = 'ExtensionTabTriggers';
 
-export function ExtensionTabContents({ slot }: ExtensionTabsProps) {
+export function ExtensionTabContents({ slot, entityId, entityType }: ExtensionTabsProps) {
     const { tabs } = useTabSlotExtensions(slot);
     const { apiBaseUrl, userId, username, role } = useExtensions();
 
@@ -78,6 +81,8 @@ export function ExtensionTabContents({ slot }: ExtensionTabsProps) {
                     userId,
                     username,
                     role,
+                    entityId,
+                    entityType,
                 });
 
                 return (

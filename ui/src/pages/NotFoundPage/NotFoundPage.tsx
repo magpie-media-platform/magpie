@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom';
-import { MagnifyingGlass, House } from '@phosphor-icons/react';
+import { MagnifyingGlassIcon, HouseIcon } from '@phosphor-icons/react';
 
 import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
@@ -12,13 +12,14 @@ export function NotFoundPage() {
     return (
         <div className="not-found-page" data-page="not-found">
             <EmptyState
-                icon={<MagnifyingGlass weight="duotone" />}
+                icon={<MagnifyingGlassIcon weight="duotone" />}
                 title="Page not found"
-                description="The page you're looking for doesn't exist or may have moved."
+                titleLevel={1}
+                description="The requested page does not exist."
                 action={
                     <Button asChild variant="secondary">
                         <Link to="/">
-                            <House weight="bold" aria-hidden="true" />
+                            <HouseIcon weight="bold" aria-hidden="true" />
                             Go to Dashboard
                         </Link>
                     </Button>

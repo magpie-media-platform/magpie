@@ -9,10 +9,10 @@ using Magpie.Data;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
-using Magpie.Test.Shared;
 
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 using NUnit.Framework;
 
@@ -49,18 +49,21 @@ public class MediaServerRepositoryTests
 
         _userId = user.Id;
 
-        var loggerFactory = LoggerFactory.Create(builder => builder.AddTestLogger());
+        var loggerFactory = NullLoggerFactory.Instance;
 
         var auditRecordRepository = new AuditRecordRepository(
             _context,
-            loggerFactory.CreateLogger<AuditRecordRepository>());
+            Moq.Mock.Of<Sdk.Services.IEventBus>(),
+            loggerFactory.CreateLogger<AuditRecordRepository>(),
+            new TransactionManager(_context, NullLogger<TransactionManager>.Instance));
 
-        var transactionManager = new TransactionManager(_context);
+        var transactionManager = new TransactionManager(_context, NullLogger<TransactionManager>.Instance);
 
         _subject = new MediaServerRepository(
             _context,
             auditRecordRepository,
             transactionManager,
+            Moq.Mock.Of<Sdk.Services.IEventBus>(),
             loggerFactory.CreateLogger<MediaServerRepository>());
     }
 
@@ -80,14 +83,14 @@ public class MediaServerRepositoryTests
             Name = "TestServer",
             ProviderType = "plex",
             Enabled = true,
-            Status = MediaServerStatus.Healthy,
+            Status = IntegrationHealthStatus.Healthy,
             CreatedAt = DateTime.UtcNow
         };
         _context.MediaServers.Add(mediaServer);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        var result = await _subject.GetByIdAsync(mediaServer.Id);
+        var result = await _subject.GetByIdAsync(mediaServer.Id).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -95,7 +98,7 @@ public class MediaServerRepositoryTests
             Assert.That(result, Has.Property(nameof(result.Name)).EqualTo("TestServer"));
             Assert.That(result, Has.Property(nameof(result.ProviderType)).EqualTo("plex"));
             Assert.That(result, Has.Property(nameof(result.Enabled)).True);
-            Assert.That(result, Has.Property(nameof(result.Status)).EqualTo(MediaServerStatus.Healthy));
+            Assert.That(result, Has.Property(nameof(result.Status)).EqualTo(IntegrationHealthStatus.Healthy));
         }
     }
 
@@ -103,14 +106,68 @@ public class MediaServerRepositoryTests
     public async Task GetByIdAsync_ReturnsNull_WhenNotExists()
     {
         // Act
-        var result = await _subject.GetByIdAsync(Guid.NewGuid());
+        var result = await _subject.GetByIdAsync(Guid.NewGuid()).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.Null);
     }
 
     [Test]
-    public async Task ListAllAsync_ReturnsAllMediaServers()
+    public async Task PatchAsync_PersistsStatusAndLastChecked_WhenHealthPatchIsProvided()
+    {
+        // Arrange
+        var mediaServer = new MediaServer
+        {
+            Name = "ProbeServer",
+            ProviderType = "mediaserver-a",
+            Enabled = true,
+            Status = IntegrationHealthStatus.Unknown,
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.MediaServers.Add(mediaServer);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        var checkedAt = new DateTime(2026, 5, 29, 12, 0, 0, DateTimeKind.Utc);
+
+        // Act
+        var updated = await _subject.PatchAsync(
+            new()
+            {
+                Id = mediaServer.Id,
+                Status = new() { Value = IntegrationHealthStatus.Healthy },
+                LastChecked = new() { Value = checkedAt }
+            },
+            null).ConfigureAwait(false);
+
+        // Assert
+        var reloaded = await _subject.GetByIdAsync(mediaServer.Id).ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(updated, Is.True);
+            Assert.That(reloaded, Has.Property(nameof(reloaded.Status)).EqualTo(IntegrationHealthStatus.Healthy));
+            Assert.That(reloaded, Has.Property(nameof(reloaded.LastChecked)).EqualTo(checkedAt));
+        }
+    }
+
+    [Test]
+    public async Task PatchAsync_ReturnsFalse_WhenServerDoesNotExist()
+    {
+        // Act
+        var updated = await _subject.PatchAsync(
+            new()
+            {
+                Id = Guid.NewGuid(),
+                Status = new() { Value = IntegrationHealthStatus.Healthy },
+                LastChecked = new() { Value = DateTime.UtcNow }
+            },
+            null).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(updated, Is.False);
+    }
+
+    [Test]
+    public async Task ListAllAsync_ReturnsAllMediaServers_WhenServersExist()
     {
         // Arrange
         var mediaServer1 = new MediaServer
@@ -123,15 +180,15 @@ public class MediaServerRepositoryTests
         var mediaServer2 = new MediaServer
         {
             Name = "Server2",
-            ProviderType = "jellyfin",
+            ProviderType = "mediaserver-a",
             Enabled = true,
             CreatedAt = DateTime.UtcNow
         };
         _context.MediaServers.AddRange(mediaServer1, mediaServer2);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        var result = await _subject.ListAllAsync(default);
+        var result = await _subject.ListAllAsync(default).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Has.Exactly(2).Items);
@@ -141,14 +198,14 @@ public class MediaServerRepositoryTests
     public async Task ListAllAsync_ReturnsEmptyList_WhenNoMediaServers()
     {
         // Act
-        var result = await _subject.ListAllAsync(default);
+        var result = await _subject.ListAllAsync(default).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.Empty);
     }
 
     [Test]
-    public async Task CreateAsync_CreatesMediaServer()
+    public async Task CreateAsync_CreatesMediaServer_WhenRequestIsValid()
     {
         // Arrange
         var mediaServer = new MediaServer
@@ -160,7 +217,7 @@ public class MediaServerRepositoryTests
         };
 
         // Act
-        var result = await _subject.CreateAsync(mediaServer, _userId);
+        var result = await _subject.CreateAsync(mediaServer, _userId).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -174,7 +231,7 @@ public class MediaServerRepositoryTests
     }
 
     [Test]
-    public async Task CreateAsync_CreatesAuditRecord()
+    public async Task CreateAsync_CreatesAuditRecord_WhenServerIsCreated()
     {
         // Arrange
         var mediaServer = new MediaServer
@@ -185,10 +242,10 @@ public class MediaServerRepositoryTests
         };
 
         // Act
-        await _subject.CreateAsync(mediaServer, _userId);
+        await _subject.CreateAsync(mediaServer, _userId).ConfigureAwait(false);
 
         // Assert
-        var auditRecords = await _context.AuditRecords.ToListAsync();
+        var auditRecords = await _context.AuditRecords.ToListAsync().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(auditRecords, Has.Count.EqualTo(1));
@@ -207,28 +264,28 @@ public class MediaServerRepositoryTests
             Name = "OriginalServer",
             ProviderType = "plex",
             Enabled = true,
-            Status = MediaServerStatus.Unknown,
+            Status = IntegrationHealthStatus.Unknown,
             CreatedAt = DateTime.UtcNow
         };
         _context.MediaServers.Add(mediaServer);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         mediaServer.Name = "UpdatedServer";
         mediaServer.Enabled = false;
-        mediaServer.Status = MediaServerStatus.Healthy;
+        mediaServer.Status = IntegrationHealthStatus.Healthy;
 
         // Act
-        var result = await _subject.UpdateAsync(mediaServer, _userId);
+        var result = await _subject.UpdateAsync(mediaServer, _userId).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.True);
 
-        var updated = await _subject.GetByIdAsync(mediaServer.Id);
+        var updated = await _subject.GetByIdAsync(mediaServer.Id).ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(updated, Has.Property(nameof(updated.Name)).EqualTo("UpdatedServer"));
             Assert.That(updated, Has.Property(nameof(updated.Enabled)).False);
-            Assert.That(updated, Has.Property(nameof(updated.Status)).EqualTo(MediaServerStatus.Healthy));
+            Assert.That(updated, Has.Property(nameof(updated.Status)).EqualTo(IntegrationHealthStatus.Healthy));
             Assert.That(updated, Has.Property(nameof(updated.ModifiedByUserId)).EqualTo(_userId));
             Assert.That(updated, Has.Property(nameof(updated.ModifiedAt)).Not.Null);
         }
@@ -247,14 +304,14 @@ public class MediaServerRepositoryTests
         };
 
         // Act
-        var result = await _subject.UpdateAsync(mediaServer, _userId);
+        var result = await _subject.UpdateAsync(mediaServer, _userId).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.False);
     }
 
     [Test]
-    public async Task UpdateAsync_CreatesAuditRecord()
+    public async Task UpdateAsync_CreatesAuditRecord_WhenServerExists()
     {
         // Arrange
         var mediaServer = new MediaServer
@@ -265,15 +322,15 @@ public class MediaServerRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.MediaServers.Add(mediaServer);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         mediaServer.Name = "Updated";
 
         // Act
-        await _subject.UpdateAsync(mediaServer, _userId);
+        await _subject.UpdateAsync(mediaServer, _userId).ConfigureAwait(false);
 
         // Assert
-        var auditRecords = await _context.AuditRecords.ToListAsync();
+        var auditRecords = await _context.AuditRecords.ToListAsync().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(auditRecords, Has.Count.EqualTo(1));
@@ -294,15 +351,15 @@ public class MediaServerRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.MediaServers.Add(mediaServer);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        var result = await _subject.DeleteAsync(mediaServer.Id, _userId);
+        var result = await _subject.DeleteAsync(mediaServer.Id, _userId).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.True);
 
-        var deleted = await _subject.GetByIdAsync(mediaServer.Id);
+        var deleted = await _subject.GetByIdAsync(mediaServer.Id).ConfigureAwait(false);
         Assert.That(deleted, Is.Null);
     }
 
@@ -310,14 +367,14 @@ public class MediaServerRepositoryTests
     public async Task DeleteAsync_ReturnsFalse_WhenNotExists()
     {
         // Act
-        var result = await _subject.DeleteAsync(Guid.NewGuid(), _userId);
+        var result = await _subject.DeleteAsync(Guid.NewGuid(), _userId).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.False);
     }
 
     [Test]
-    public async Task DeleteAsync_CreatesAuditRecord()
+    public async Task DeleteAsync_CreatesAuditRecord_WhenServerExists()
     {
         // Arrange
         var mediaServer = new MediaServer
@@ -328,13 +385,13 @@ public class MediaServerRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.MediaServers.Add(mediaServer);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        await _subject.DeleteAsync(mediaServer.Id, _userId);
+        await _subject.DeleteAsync(mediaServer.Id, _userId).ConfigureAwait(false);
 
         // Assert
-        var auditRecords = await _context.AuditRecords.ToListAsync();
+        var auditRecords = await _context.AuditRecords.ToListAsync().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(auditRecords, Has.Count.EqualTo(1));
@@ -356,7 +413,7 @@ public class MediaServerRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.MediaServers.Add(mediaServer);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         var patch = new MediaServerPatch
         {
@@ -365,12 +422,12 @@ public class MediaServerRepositoryTests
         };
 
         // Act
-        var result = await _subject.PatchAsync(patch, _userId);
+        var result = await _subject.PatchAsync(patch, _userId).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.True);
 
-        var patched = await _subject.GetByIdAsync(mediaServer.Id);
+        var patched = await _subject.GetByIdAsync(mediaServer.Id).ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(patched, Has.Property(nameof(patched.Name)).EqualTo("PatchedName"));
@@ -391,7 +448,7 @@ public class MediaServerRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.MediaServers.Add(mediaServer);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         var patch = new MediaServerPatch
         {
@@ -400,12 +457,12 @@ public class MediaServerRepositoryTests
         };
 
         // Act
-        var result = await _subject.PatchAsync(patch, _userId);
+        var result = await _subject.PatchAsync(patch, _userId).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.True);
 
-        var patched = await _subject.GetByIdAsync(mediaServer.Id);
+        var patched = await _subject.GetByIdAsync(mediaServer.Id).ConfigureAwait(false);
         Assert.That(patched, Has.Property(nameof(patched.Enabled)).False);
     }
 
@@ -422,7 +479,7 @@ public class MediaServerRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.MediaServers.Add(mediaServer);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         var patch = new MediaServerPatch
         {
@@ -434,12 +491,12 @@ public class MediaServerRepositoryTests
         };
 
         // Act
-        var result = await _subject.PatchAsync(patch, _userId);
+        var result = await _subject.PatchAsync(patch, _userId).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.True);
 
-        var patched = await _subject.GetByIdAsync(mediaServer.Id);
+        var patched = await _subject.GetByIdAsync(mediaServer.Id).ConfigureAwait(false);
         Assert.That(patched, Is.Not.Null);
         using (Assert.EnterMultipleScope())
         {
@@ -461,7 +518,7 @@ public class MediaServerRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.MediaServers.Add(mediaServer);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         var patch = new MediaServerPatch
         {
@@ -473,12 +530,12 @@ public class MediaServerRepositoryTests
         };
 
         // Act
-        var result = await _subject.PatchAsync(patch, _userId);
+        var result = await _subject.PatchAsync(patch, _userId).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.True);
 
-        var patched = await _subject.GetByIdAsync(mediaServer.Id);
+        var patched = await _subject.GetByIdAsync(mediaServer.Id).ConfigureAwait(false);
         Assert.That(patched, Is.Not.Null);
         Assert.That(patched, Has.Property(nameof(patched.Settings)).ContainKey("host").WithValue("newhost"));
     }
@@ -496,7 +553,7 @@ public class MediaServerRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.MediaServers.Add(mediaServer);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         var patch = new MediaServerPatch
         {
@@ -508,12 +565,12 @@ public class MediaServerRepositoryTests
         };
 
         // Act
-        var result = await _subject.PatchAsync(patch, _userId);
+        var result = await _subject.PatchAsync(patch, _userId).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.True);
 
-        var patched = await _subject.GetByIdAsync(mediaServer.Id);
+        var patched = await _subject.GetByIdAsync(mediaServer.Id).ConfigureAwait(false);
         Assert.That(patched, Is.Not.Null);
         using (Assert.EnterMultipleScope())
         {
@@ -534,7 +591,7 @@ public class MediaServerRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.MediaServers.Add(mediaServer);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         var patch = new MediaServerPatch
         {
@@ -543,18 +600,20 @@ public class MediaServerRepositoryTests
         };
 
         // Act
-        var result = await _subject.PatchAsync(patch, _userId);
+        var result = await _subject.PatchAsync(patch, _userId).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.True);
 
         var tag = await _context.Tags
             .Include(t => t.MediaServers)
-            .FirstOrDefaultAsync(t => t.Name == "newtag");
+            .FirstOrDefaultAsync(t => t.Name == "newtag").ConfigureAwait(false);
 
         Assert.That(tag, Is.Not.Null);
-        Assert.That(tag, Has.Property(nameof(tag.MediaServers))
-            .With.One.With.Property(nameof(MediaServer.Id)).EqualTo(mediaServer.Id));
+        Assert.That(
+            tag,
+            Has.Property(nameof(tag.MediaServers))
+                .With.One.With.Property(nameof(MediaServer.Id)).EqualTo(mediaServer.Id));
     }
 
     [Test]
@@ -572,7 +631,7 @@ public class MediaServerRepositoryTests
         tag.MediaServers.Add(mediaServer);
         _context.MediaServers.Add(mediaServer);
         _context.Tags.Add(tag);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         var patch = new MediaServerPatch
         {
@@ -581,18 +640,20 @@ public class MediaServerRepositoryTests
         };
 
         // Act
-        var result = await _subject.PatchAsync(patch, _userId);
+        var result = await _subject.PatchAsync(patch, _userId).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.True);
 
         var updatedTag = await _context.Tags
             .Include(t => t.MediaServers)
-            .FirstOrDefaultAsync(t => t.Name == "existingtag");
+            .FirstOrDefaultAsync(t => t.Name == "existingtag").ConfigureAwait(false);
 
         Assert.That(updatedTag, Is.Not.Null);
-        Assert.That(updatedTag, Has.Property(nameof(updatedTag.MediaServers))
-            .With.None.With.Property(nameof(MediaServer.Id)).EqualTo(mediaServer.Id));
+        Assert.That(
+            updatedTag,
+            Has.Property(nameof(updatedTag.MediaServers))
+                .With.None.With.Property(nameof(MediaServer.Id)).EqualTo(mediaServer.Id));
     }
 
     [Test]
@@ -606,14 +667,14 @@ public class MediaServerRepositoryTests
         };
 
         // Act
-        var result = await _subject.PatchAsync(patch, _userId);
+        var result = await _subject.PatchAsync(patch, _userId).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.False);
     }
 
     [Test]
-    public async Task PatchAsync_CreatesAuditRecord()
+    public async Task PatchAsync_CreatesAuditRecord_WhenPatchSucceeds()
     {
         // Arrange
         var mediaServer = new MediaServer
@@ -624,7 +685,7 @@ public class MediaServerRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.MediaServers.Add(mediaServer);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         var patch = new MediaServerPatch
         {
@@ -633,10 +694,10 @@ public class MediaServerRepositoryTests
         };
 
         // Act
-        await _subject.PatchAsync(patch, _userId);
+        await _subject.PatchAsync(patch, _userId).ConfigureAwait(false);
 
         // Assert
-        var auditRecords = await _context.AuditRecords.ToListAsync();
+        var auditRecords = await _context.AuditRecords.ToListAsync().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(auditRecords, Has.Count.EqualTo(1));
@@ -661,7 +722,7 @@ public class MediaServerRepositoryTests
         existingTag.MediaServers.Add(mediaServer);
         _context.MediaServers.Add(mediaServer);
         _context.Tags.Add(existingTag);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         var patch = new MediaServerPatch
         {
@@ -670,10 +731,10 @@ public class MediaServerRepositoryTests
         };
 
         // Act
-        await _subject.PatchAsync(patch, _userId);
+        await _subject.PatchAsync(patch, _userId).ConfigureAwait(false);
 
         // Assert
-        var auditRecords = await _context.AuditRecords.ToListAsync();
+        var auditRecords = await _context.AuditRecords.ToListAsync().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(auditRecords, Has.Count.EqualTo(3));

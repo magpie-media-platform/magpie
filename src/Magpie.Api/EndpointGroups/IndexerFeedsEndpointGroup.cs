@@ -1,199 +1,170 @@
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 
-using Magpie.Abstractions.Api;
-using Magpie.Abstractions.Repositories;
-using Magpie.Abstractions.Security;
+using Magpie.Models;
+using Magpie.Models.Api;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
+using Magpie.Sdk.Api;
+using Magpie.Sdk.Services;
 
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
 
 namespace Magpie.Api.EndpointGroups;
 
-internal sealed class IndexerFeedsEndpointGroup(IIndexerFeedRepository indexerFeedRepository) : IApiEndpointGroup
+internal sealed class IndexerFeedsEndpointGroup : IApiEndpointGroup
 {
     public string Name => "indexer-feeds";
 
     public void MapEndpoints(IEndpointRouteBuilder builder)
     {
-        builder.MapGet("", GetAllIndexerFeeds)
-            .WithName(nameof(GetAllIndexerFeeds))
-            .Produces<IndexerFeed[]>()
+        builder.MapGet("", GetIndexerFeedsAsync)
+            .WithName(nameof(GetIndexerFeedsAsync))
+            .Produces<IReadOnlyList<IndexerFeedResponse>>()
             .RequireViewer();
 
-        builder.MapGet("{id:guid}", GetIndexerFeedById)
-            .WithName(nameof(GetIndexerFeedById))
-            .Produces<IndexerFeed>()
-            .ProducesProblem(StatusCodes.Status404NotFound)
-            .RequireViewer();
-
-        builder.MapPost("", CreateIndexerFeed)
-            .WithName(nameof(CreateIndexerFeed))
-            .Produces<IndexerFeed>(StatusCodes.Status201Created)
+        builder.MapPost("", CreateIndexerFeedAsync)
+            .WithName(nameof(CreateIndexerFeedAsync))
+            .Produces<IndexerFeedResponse>(StatusCodes.Status201Created)
             .ProducesProblem(StatusCodes.Status400BadRequest)
-            .RequireManager();
+            .RequireAdmin();
 
-        builder.MapPatch("{id:guid}", PatchIndexerFeed)
-            .WithName(nameof(PatchIndexerFeed))
+        builder.MapPost("test", TestIndexerFeedSettingsAsync)
+            .WithName(nameof(TestIndexerFeedSettingsAsync))
+            .Produces<ConfigurationTestResult>()
+            .RequireAdmin();
+
+        builder.MapPatch("{id:guid}", PatchIndexerFeedAsync)
+            .WithName(nameof(PatchIndexerFeedAsync))
             .Produces(StatusCodes.Status204NoContent)
             .ProducesProblem(StatusCodes.Status404NotFound)
-            .ProducesProblem(StatusCodes.Status400BadRequest)
-            .RequireManager();
+            .RequireAdmin();
 
-        builder.MapPost("{id:guid}/enable", EnableIndexerFeed)
-            .WithName(nameof(EnableIndexerFeed))
-            .Produces<IndexerFeed>()
-            .ProducesProblem(StatusCodes.Status404NotFound)
-            .RequireManager();
-
-        builder.MapPost("{id:guid}/disable", DisableIndexerFeed)
-            .WithName(nameof(DisableIndexerFeed))
-            .Produces<IndexerFeed>()
-            .ProducesProblem(StatusCodes.Status404NotFound)
-            .RequireManager();
-
-        builder.MapDelete("{id:guid}", DeleteIndexerFeed)
-            .WithName(nameof(DeleteIndexerFeed))
+        builder.MapDelete("{id:guid}", DeleteIndexerFeedAsync)
+            .WithName(nameof(DeleteIndexerFeedAsync))
             .Produces(StatusCodes.Status204NoContent)
             .ProducesProblem(StatusCodes.Status404NotFound)
-            .RequireManager();
+            .RequireAdmin();
+
+        builder.MapPost("{id:guid}/test", TestIndexerFeedAsync)
+            .WithName(nameof(TestIndexerFeedAsync))
+            .Produces<ConfigurationTestResult>()
+            .RequireAdmin();
     }
 
-    private async Task<IResult> GetAllIndexerFeeds(CancellationToken cancellationToken)
-    {
-        var feeds = await indexerFeedRepository.ListAllAsync(cancellationToken).ConfigureAwait(false);
-        return Results.Ok(feeds);
-    }
-
-    private async Task<IResult> GetIndexerFeedById(Guid id, CancellationToken cancellationToken)
-    {
-        var feed = await indexerFeedRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
-        return feed is null ? Results.NotFound() : Results.Ok(feed);
-    }
-
-    private async Task<IResult> CreateIndexerFeed(
-        HttpContext httpContext,
-        IndexerFeed request,
+    internal async Task<IResult> GetIndexerFeedsAsync(
+        [FromServices] IIndexerService indexerService,
         CancellationToken cancellationToken)
     {
-        var currentUserId = httpContext.User.GetUserId();
+        var feeds = await indexerService.ListFeedsAsync(cancellationToken).ConfigureAwait(false);
 
-        var feed = request with
+        var schemas = new Dictionary<string, IReadOnlyList<SettingSchemaDefinition>>(StringComparer.OrdinalIgnoreCase);
+        var responses = new List<IndexerFeedResponse>(feeds.Count);
+        foreach (var feed in feeds)
         {
-            Id = Guid.NewGuid(),
-            LastSync = null,
-            CreatedAt = DateTime.UtcNow,
-            CreatedByUserId = currentUserId,
-            ModifiedAt = null,
-            ModifiedByUserId = null
-        };
+            if (!schemas.TryGetValue(feed.ProviderType, out var schema))
+            {
+                schema = await indexerService.GetFeedSettingsSchemaAsync(feed.ProviderType, cancellationToken)
+                    .ConfigureAwait(false);
+                schemas[feed.ProviderType] = schema;
+            }
 
-        var created = await indexerFeedRepository.CreateAsync(feed, currentUserId, cancellationToken)
-            .ConfigureAwait(false);
-
-        return Results.Created($"api/{Name}/{created.Id}", created);
-    }
-
-    private async Task<IResult> PatchIndexerFeed(
-        HttpContext httpContext,
-        Guid id,
-        IndexerFeedPatch request,
-        CancellationToken cancellationToken)
-    {
-        var existing = await indexerFeedRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
-
-        if (existing is null)
-        {
-            return Results.NotFound();
+            responses.Add(CreateResponse(feed, schema));
         }
 
-        var currentUserId = httpContext.User.GetUserId();
-
-        var feed = existing with
-        {
-            ProviderType = request.ProviderType ?? existing.ProviderType,
-            Name = request.Name ?? existing.Name,
-            Description = request.Description ?? existing.Description,
-            Settings = request.Settings ?? existing.Settings,
-            Enabled = request.Enabled ?? existing.Enabled,
-            ModifiedAt = DateTime.UtcNow,
-            ModifiedByUserId = currentUserId
-        };
-
-        await indexerFeedRepository.UpdateAsync(feed, currentUserId, cancellationToken)
-            .ConfigureAwait(false);
-
-        return Results.NoContent();
+        return Results.Ok(responses);
     }
 
-    private async Task<IResult> EnableIndexerFeed(
-        HttpContext httpContext,
+    internal async Task<IResult> CreateIndexerFeedAsync(
+        [FromServices] IIndexerService indexerService,
+        AuthenticatedUser user,
+        IndexerFeed feed,
+        CancellationToken cancellationToken)
+    {
+        var created = await indexerService.CreateFeedAsync(feed, user.Id, cancellationToken).ConfigureAwait(false);
+        var schema = await indexerService.GetFeedSettingsSchemaAsync(created.ProviderType, cancellationToken)
+            .ConfigureAwait(false);
+
+        return Results.Created(
+            $"api/{Name}/{created.Id}",
+            CreateResponse(created, schema));
+    }
+
+    internal async Task<IResult> TestIndexerFeedSettingsAsync(
+        [FromServices] IIndexerService indexerService,
+        IntegrationSettingsTestRequest request,
+        CancellationToken cancellationToken)
+    {
+        var result = await indexerService.TestFeedSettingsAsync(
+            request.ProviderType,
+            request.Id,
+            request.Settings ?? new Dictionary<string, string>(),
+            cancellationToken)
+            .ConfigureAwait(false);
+
+        return Results.Ok(result);
+    }
+
+    internal async Task<IResult> PatchIndexerFeedAsync(
+        [FromServices] IIndexerService indexerService,
+        AuthenticatedUser user,
+        Guid id,
+        IndexerFeedPatch patch,
+        CancellationToken cancellationToken)
+    {
+        var patched = await indexerService.PatchFeedAsync(id, patch, user.Id, cancellationToken)
+            .ConfigureAwait(false);
+
+        return patched ? Results.NoContent() : Results.NotFound();
+    }
+
+    internal async Task<IResult> DeleteIndexerFeedAsync(
+        [FromServices] IIndexerService indexerService,
+        AuthenticatedUser user,
         Guid id,
         CancellationToken cancellationToken)
     {
-        var existing = await indexerFeedRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
-
-        if (existing is null)
-        {
-            return Results.NotFound();
-        }
-
-        var currentUserId = httpContext.User.GetUserId();
-
-        var feed = existing with
-        {
-            Enabled = true,
-            ModifiedAt = DateTime.UtcNow,
-            ModifiedByUserId = currentUserId
-        };
-
-        await indexerFeedRepository.UpdateAsync(feed, currentUserId, cancellationToken)
-            .ConfigureAwait(false);
-
-        return Results.Ok(feed);
-    }
-
-    private async Task<IResult> DisableIndexerFeed(
-        HttpContext httpContext,
-        Guid id,
-        CancellationToken cancellationToken)
-    {
-        var existing = await indexerFeedRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
-
-        if (existing is null)
-        {
-            return Results.NotFound();
-        }
-
-        var currentUserId = httpContext.User.GetUserId();
-
-        var feed = existing with
-        {
-            Enabled = false,
-            ModifiedAt = DateTime.UtcNow,
-            ModifiedByUserId = currentUserId
-        };
-
-        await indexerFeedRepository.UpdateAsync(feed, currentUserId, cancellationToken)
-            .ConfigureAwait(false);
-
-        return Results.Ok(feed);
-    }
-
-    private async Task<IResult> DeleteIndexerFeed(
-        HttpContext httpContext,
-        Guid id,
-        CancellationToken cancellationToken)
-    {
-        var currentUserId = httpContext.User.GetUserId();
-
-        var deleted = await indexerFeedRepository.DeleteAsync(id, currentUserId, cancellationToken)
-            .ConfigureAwait(false);
+        var deleted = await indexerService.DeleteFeedAsync(id, user.Id, cancellationToken).ConfigureAwait(false);
 
         return deleted ? Results.NoContent() : Results.NotFound();
     }
+
+    internal async Task<IResult> TestIndexerFeedAsync(
+        [FromServices] IIndexerService indexerService,
+        Guid id,
+        CancellationToken cancellationToken)
+    {
+        var result = await indexerService.TestFeedAsync(id, cancellationToken).ConfigureAwait(false);
+
+        return Results.Ok(result);
+    }
+
+    private static IndexerFeedResponse CreateResponse(
+        IndexerFeed feed,
+        IReadOnlyList<SettingSchemaDefinition> schema)
+    {
+        return new()
+        {
+            Id = feed.Id,
+            ExtensionId = feed.ExtensionId,
+            ProviderType = feed.ProviderType,
+            Name = feed.Name,
+            Description = feed.Description,
+            Enabled = feed.Enabled,
+            LastSync = feed.LastSync,
+            Settings = schema.Count == 0
+                ? []
+                : feed.Settings.RedactSecrets(schema),
+            CreatedAt = feed.CreatedAt,
+            CreatedByUserId = feed.CreatedByUserId,
+            ModifiedAt = feed.ModifiedAt,
+            ModifiedByUserId = feed.ModifiedByUserId,
+        };
+    }
 }
+

@@ -1,26 +1,23 @@
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 import {
     calculateHealthCounts,
-    calculateIndexerHealthCounts,
     mapDownloadState,
     calculateDownloadCounts,
+    mapDownloadStatusCounts,
     mapActiveDownloads,
     mapJobStatus,
-    formatDuration,
     mapRecentJobs,
     calculateContentCounts,
     mapRecentContent,
     mapUpcomingContent,
-    type DashboardIndexer,
-    type IntegrationStatus,
 } from './dashboardTransforms';
 import type { ApiDownload, DownloadStatusValue } from './useDownloads';
 import type { ApiJobExecution, JobExecutionStatusValue } from './useJobs';
 import type { ApiContentHierarchyItem, ApiContentStats } from '@/types/content';
 import type { ApiContentItemWithMetadata } from '@/lib/contentMapping';
 
-function makeHealthItem(status: IntegrationStatus, enabled = true) {
+function makeHealthItem(status: string, enabled = true) {
     return { enabled, status };
 }
 
@@ -30,7 +27,7 @@ function makeDownload(overrides: Partial<ApiDownload> = {}): ApiDownload {
         downloadClientId: 'dc-1',
         externalId: 'ext-1',
         title: 'Test Download',
-        status: 2 as DownloadStatusValue,
+        status: 'Downloading' as DownloadStatusValue,
         createdAt: '2025-01-01T00:00:00Z',
         ...overrides,
     };
@@ -39,9 +36,9 @@ function makeDownload(overrides: Partial<ApiDownload> = {}): ApiDownload {
 function makeJobExecution(overrides: Partial<ApiJobExecution> = {}): ApiJobExecution {
     return {
         id: 'job-1',
-        jobType: 'RefreshMetadata',
-        scope: 0,
-        status: 3 as JobExecutionStatusValue,
+        jobType: 'ContentMetadataRefreshItem',
+        scope: 'System',
+        status: 'Completed' as JobExecutionStatusValue,
         createdAt: '2025-01-01T00:00:00Z',
         ...overrides,
     };
@@ -55,7 +52,8 @@ function makeHierarchyItem(overrides: Partial<ApiContentHierarchyItem> = {}): Ap
         level: 'series',
         slug: 'test-item',
         name: 'Test Item',
-        monitoring: 0,
+        monitoring: null,
+        effectiveMonitoring: true,
         createdAt: '2025-01-01T00:00:00Z',
         ...overrides,
     };
@@ -69,7 +67,8 @@ function makeContentItemWithMetadata(overrides: Partial<ApiContentItemWithMetada
         level: 'series',
         slug: 'test-item',
         name: 'Test Item',
-        monitoring: 0,
+        monitoring: null,
+        effectiveMonitoring: true,
         createdAt: '2025-01-01T00:00:00Z',
         ...overrides,
     };
@@ -77,115 +76,197 @@ function makeContentItemWithMetadata(overrides: Partial<ApiContentItemWithMetada
 
 describe('calculateHealthCounts', () => {
     it('returns all zeros for empty array', () => {
-        expect(calculateHealthCounts([])).toEqual({ healthy: 0, unhealthy: 0, unknown: 0, stale: 0 });
+        expect(calculateHealthCounts([])).toEqual({
+            healthy: 0,
+            unhealthy: 0,
+            degraded: 0,
+            stabilizing: 0,
+            unknown: 0,
+            stale: 0,
+        });
     });
 
     it('counts healthy items', () => {
-        const items = [makeHealthItem(1), makeHealthItem(1)];
-        expect(calculateHealthCounts(items)).toEqual({ healthy: 2, unhealthy: 0, unknown: 0, stale: 0 });
+        const items = [makeHealthItem('Healthy'), makeHealthItem('Healthy')];
+        expect(calculateHealthCounts(items)).toEqual({
+            healthy: 2,
+            unhealthy: 0,
+            degraded: 0,
+            stabilizing: 0,
+            unknown: 0,
+            stale: 0,
+        });
     });
 
     it('counts unhealthy items', () => {
-        const items = [makeHealthItem(2)];
-        expect(calculateHealthCounts(items)).toEqual({ healthy: 0, unhealthy: 1, unknown: 0, stale: 0 });
+        const items = [makeHealthItem('Unhealthy')];
+        expect(calculateHealthCounts(items)).toEqual({
+            healthy: 0,
+            unhealthy: 1,
+            degraded: 0,
+            stabilizing: 0,
+            unknown: 0,
+            stale: 0,
+        });
+    });
+
+    it('counts degraded items', () => {
+        const items = [makeHealthItem('Degraded')];
+        expect(calculateHealthCounts(items)).toEqual({
+            healthy: 0,
+            unhealthy: 0,
+            degraded: 1,
+            stabilizing: 0,
+            unknown: 0,
+            stale: 0,
+        });
+    });
+
+    it('counts stabilizing items', () => {
+        const items = [makeHealthItem('Stabilizing')];
+        expect(calculateHealthCounts(items)).toEqual({
+            healthy: 0,
+            unhealthy: 0,
+            degraded: 0,
+            stabilizing: 1,
+            unknown: 0,
+            stale: 0,
+        });
     });
 
     it('counts stale items', () => {
-        const items = [makeHealthItem(3)];
-        expect(calculateHealthCounts(items)).toEqual({ healthy: 0, unhealthy: 0, unknown: 0, stale: 1 });
+        const items = [makeHealthItem('Stale')];
+        expect(calculateHealthCounts(items)).toEqual({
+            healthy: 0,
+            unhealthy: 0,
+            degraded: 0,
+            stabilizing: 0,
+            unknown: 0,
+            stale: 1,
+        });
     });
 
-    it('counts unknown status (0) as unknown', () => {
-        const items = [makeHealthItem(0)];
-        expect(calculateHealthCounts(items)).toEqual({ healthy: 0, unhealthy: 0, unknown: 1, stale: 0 });
+    it('counts unknown status as unknown', () => {
+        const items = [makeHealthItem('Unknown')];
+        expect(calculateHealthCounts(items)).toEqual({
+            healthy: 0,
+            unhealthy: 0,
+            degraded: 0,
+            stabilizing: 0,
+            unknown: 1,
+            stale: 0,
+        });
     });
 
     it('skips disabled items', () => {
-        const items = [makeHealthItem(1, false), makeHealthItem(2, false)];
-        expect(calculateHealthCounts(items)).toEqual({ healthy: 0, unhealthy: 0, unknown: 0, stale: 0 });
+        const items = [makeHealthItem('Healthy', false), makeHealthItem('Unhealthy', false)];
+        expect(calculateHealthCounts(items)).toEqual({
+            healthy: 0,
+            unhealthy: 0,
+            degraded: 0,
+            stabilizing: 0,
+            unknown: 0,
+            stale: 0,
+        });
     });
 
     it('counts mixed statuses correctly', () => {
         const items = [
-            makeHealthItem(1),
-            makeHealthItem(2),
-            makeHealthItem(3),
-            makeHealthItem(0),
-            makeHealthItem(1, false),
+            makeHealthItem('Healthy'),
+            makeHealthItem('Unhealthy'),
+            makeHealthItem('Degraded'),
+            makeHealthItem('Stabilizing'),
+            makeHealthItem('Stale'),
+            makeHealthItem('Unknown'),
+            makeHealthItem('Healthy', false),
         ];
-        expect(calculateHealthCounts(items)).toEqual({ healthy: 1, unhealthy: 1, unknown: 1, stale: 1 });
-    });
-});
-
-describe('calculateIndexerHealthCounts', () => {
-    it('returns all zeros for empty array', () => {
-        expect(calculateIndexerHealthCounts([])).toEqual({ healthy: 0, unhealthy: 0, unknown: 0, stale: 0 });
-    });
-
-    it('skips indexers with no connections', () => {
-        const indexers: DashboardIndexer[] = [{ connections: [] }, {}];
-        expect(calculateIndexerHealthCounts(indexers)).toEqual({ healthy: 0, unhealthy: 0, unknown: 0, stale: 0 });
+        expect(calculateHealthCounts(items)).toEqual({
+            healthy: 1,
+            unhealthy: 1,
+            degraded: 1,
+            stabilizing: 1,
+            unknown: 1,
+            stale: 1,
+        });
     });
 
-    it('counts connection statuses across indexers', () => {
-        const indexers: DashboardIndexer[] = [
-            {
-                connections: [
-                    { id: 'c1', indexerId: 'i1', name: 'A', enabled: true, status: 1, createdAt: '' },
-                    { id: 'c2', indexerId: 'i1', name: 'B', enabled: true, status: 2, createdAt: '' },
-                ],
-            },
-            {
-                connections: [
-                    { id: 'c3', indexerId: 'i2', name: 'C', enabled: false, status: 1, createdAt: '' },
-                    { id: 'c4', indexerId: 'i2', name: 'D', enabled: true, status: 3, createdAt: '' },
-                ],
-            },
+    it('normalizes lowercase and mixed-case status values before counting', () => {
+        const items = [
+            makeHealthItem('healthy'),
+            makeHealthItem('unhealthy'),
+            makeHealthItem('degraded'),
+            makeHealthItem('dEgRaDeD'),
+            makeHealthItem('stabilizing'),
+            makeHealthItem('stale'),
+            makeHealthItem('unknown'),
+            makeHealthItem('not-a-status'),
         ];
-        expect(calculateIndexerHealthCounts(indexers)).toEqual({ healthy: 1, unhealthy: 1, unknown: 0, stale: 1 });
+
+        expect(calculateHealthCounts(items)).toEqual({
+            healthy: 1,
+            unhealthy: 1,
+            degraded: 2,
+            stabilizing: 1,
+            unknown: 2,
+            stale: 1,
+        });
     });
 });
 
 describe('mapDownloadState', () => {
-    it('maps status 2 to downloading', () => {
-        expect(mapDownloadState(2)).toBe('downloading');
+    it('maps Downloading to downloading', () => {
+        expect(mapDownloadState('Downloading')).toBe('downloading');
     });
 
-    it('maps status 0 to queued', () => {
-        expect(mapDownloadState(0)).toBe('queued');
+    it('maps Grabbed to queued', () => {
+        expect(mapDownloadState('Grabbed')).toBe('queued');
     });
 
-    it('maps status 1 to queued', () => {
-        expect(mapDownloadState(1)).toBe('queued');
+    it('maps Queued to queued', () => {
+        expect(mapDownloadState('Queued')).toBe('queued');
     });
 
-    it('maps status 4 to stalled', () => {
-        expect(mapDownloadState(4)).toBe('stalled');
+    it('maps Stalled to stalled', () => {
+        expect(mapDownloadState('Stalled')).toBe('stalled');
     });
 
-    it('maps status 3 (completed) to null', () => {
-        expect(mapDownloadState(3)).toBeNull();
+    it('maps Paused to paused', () => {
+        expect(mapDownloadState('Paused')).toBe('paused');
     });
 
-    it('maps status 5 to null', () => {
-        expect(mapDownloadState(5)).toBeNull();
+    it('maps Downloaded to null', () => {
+        expect(mapDownloadState('Downloaded')).toBeNull();
     });
 });
 
 describe('calculateDownloadCounts', () => {
     it('returns all zeros for empty array', () => {
-        expect(calculateDownloadCounts([])).toEqual({ downloading: 0, queued: 0, stalled: 0 });
+        expect(calculateDownloadCounts([])).toEqual({ downloading: 0, queued: 0, paused: 0, stalled: 0 });
     });
 
     it('counts download states correctly', () => {
         const downloads = [
-            makeDownload({ id: 'd1', status: 2 }),
-            makeDownload({ id: 'd2', status: 0 }),
-            makeDownload({ id: 'd3', status: 1 }),
-            makeDownload({ id: 'd4', status: 4 }),
-            makeDownload({ id: 'd5', status: 3 }),
+            makeDownload({ id: 'd1', status: 'Downloading' }),
+            makeDownload({ id: 'd2', status: 'Grabbed' }),
+            makeDownload({ id: 'd3', status: 'Queued' }),
+            makeDownload({ id: 'd4', status: 'Stalled' }),
+            makeDownload({ id: 'd5', status: 'Paused' }),
         ];
-        expect(calculateDownloadCounts(downloads)).toEqual({ downloading: 1, queued: 2, stalled: 1 });
+        expect(calculateDownloadCounts(downloads)).toEqual({ downloading: 1, queued: 2, paused: 1, stalled: 1 });
+    });
+});
+
+describe('mapDownloadStatusCounts', () => {
+    it('maps whole-queue status totals to dashboard states', () => {
+        expect(
+            mapDownloadStatusCounts({
+                Grabbed: 2,
+                Queued: 3,
+                Downloading: 4,
+                Paused: 5,
+                Stalled: 6,
+            }),
+        ).toEqual({ downloading: 4, queued: 5, paused: 5, stalled: 6 });
     });
 });
 
@@ -194,19 +275,40 @@ describe('mapActiveDownloads', () => {
         expect(mapActiveDownloads([], 5)).toEqual([]);
     });
 
-    it('filters out completed downloads', () => {
-        const downloads = [makeDownload({ id: 'd1', status: 3 }), makeDownload({ id: 'd2', status: 5 })];
-        expect(mapActiveDownloads(downloads, 5)).toEqual([]);
+    it('includes paused downloads and filters out completed downloads', () => {
+        const downloads = [
+            makeDownload({ id: 'd1', status: 'Paused' }),
+            makeDownload({ id: 'd2', status: 'Downloaded' }),
+        ];
+        expect(mapActiveDownloads(downloads, 5)).toEqual([
+            {
+                id: 'd1',
+                title: 'Test Download',
+                progress: 0,
+                state: 'paused',
+            },
+        ]);
     });
 
     it('maps active downloads with correct shape', () => {
-        const downloads = [makeDownload({ id: 'd1', title: 'My File', status: 2 })];
+        const downloads = [
+            makeDownload({
+                id: 'd1',
+                title: 'My File',
+                contentMetadataTitle: 'Pilot',
+                contentHierarchyItemId: 'episode-1',
+                contentHierarchyParentId: 'season-1',
+                status: 'Downloading',
+            }),
+        ];
         const result = mapActiveDownloads(downloads, 5);
 
         expect(result).toHaveLength(1);
         expect(result[0]).toEqual({
             id: 'd1',
-            title: 'My File',
+            contentId: 'episode-1',
+            parentId: 'season-1',
+            title: 'Pilot',
             progress: 0,
             state: 'downloading',
         });
@@ -214,72 +316,52 @@ describe('mapActiveDownloads', () => {
 
     it('respects limit parameter', () => {
         const downloads = [
-            makeDownload({ id: 'd1', status: 2 }),
-            makeDownload({ id: 'd2', status: 0 }),
-            makeDownload({ id: 'd3', status: 4 }),
+            makeDownload({ id: 'd1', status: 'Downloading' }),
+            makeDownload({ id: 'd2', status: 'Grabbed' }),
+            makeDownload({ id: 'd3', status: 'Stalled' }),
         ];
         const result = mapActiveDownloads(downloads, 2);
         expect(result).toHaveLength(2);
     });
+
+    it('carries live progress through to the dashboard widget', () => {
+        const downloads = [
+            makeDownload({ id: 'd1', status: 'Downloading', progress: 88 }),
+            makeDownload({ id: 'd2', status: 'Stalled', progress: 26 }),
+        ];
+        const result = mapActiveDownloads(downloads, 5);
+        expect(result.map((d) => d.progress)).toEqual([88, 26]);
+    });
+
+    it('falls back to 0 when progress is null', () => {
+        const downloads = [makeDownload({ id: 'd1', status: 'Downloading', progress: null })];
+        expect(mapActiveDownloads(downloads, 5)[0].progress).toBe(0);
+    });
 });
 
 describe('mapJobStatus', () => {
-    it('maps status 3 to completed', () => {
-        expect(mapJobStatus(3)).toBe('completed');
+    it('maps Completed to completed', () => {
+        expect(mapJobStatus('Completed')).toBe('completed');
     });
 
-    it('maps status 1 to running', () => {
-        expect(mapJobStatus(1)).toBe('running');
+    it('maps Queued to running', () => {
+        expect(mapJobStatus('Queued')).toBe('running');
     });
 
-    it('maps status 2 to running', () => {
-        expect(mapJobStatus(2)).toBe('running');
+    it('maps Running to running', () => {
+        expect(mapJobStatus('Running')).toBe('running');
     });
 
-    it('maps status 6 to running', () => {
-        expect(mapJobStatus(6)).toBe('running');
+    it('maps CancellationRequested to running', () => {
+        expect(mapJobStatus('CancellationRequested')).toBe('running');
     });
 
-    it('maps status 4 to failed', () => {
-        expect(mapJobStatus(4)).toBe('failed');
+    it('maps Failed to failed', () => {
+        expect(mapJobStatus('Failed')).toBe('failed');
     });
 
-    it('maps status 5 to failed', () => {
-        expect(mapJobStatus(5)).toBe('failed');
-    });
-
-    it('maps status 0 to failed (default)', () => {
-        expect(mapJobStatus(0)).toBe('failed');
-    });
-});
-
-describe('formatDuration', () => {
-    it('returns undefined when startedAt is null', () => {
-        expect(formatDuration(null, '2025-01-01T00:01:00Z')).toBeUndefined();
-    });
-
-    it('returns undefined when completedAt is null', () => {
-        expect(formatDuration('2025-01-01T00:00:00Z', null)).toBeUndefined();
-    });
-
-    it('returns undefined when both are null', () => {
-        expect(formatDuration(null, null)).toBeUndefined();
-    });
-
-    it('formats sub-second durations in milliseconds', () => {
-        expect(formatDuration('2025-01-01T00:00:00.000Z', '2025-01-01T00:00:00.500Z')).toBe('500ms');
-    });
-
-    it('formats durations under a minute in seconds', () => {
-        expect(formatDuration('2025-01-01T00:00:00Z', '2025-01-01T00:00:45Z')).toBe('45s');
-    });
-
-    it('formats durations over a minute with minutes and seconds', () => {
-        expect(formatDuration('2025-01-01T00:00:00Z', '2025-01-01T00:02:30Z')).toBe('2m 30s');
-    });
-
-    it('formats exact minutes without seconds', () => {
-        expect(formatDuration('2025-01-01T00:00:00Z', '2025-01-01T00:05:00Z')).toBe('5m');
+    it('maps Cancelled to failed', () => {
+        expect(mapJobStatus('Cancelled')).toBe('failed');
     });
 });
 
@@ -299,8 +381,8 @@ describe('mapRecentJobs', () => {
         const jobs = [
             makeJobExecution({
                 id: 'j1',
-                jobType: 'RefreshMetadata',
-                status: 3,
+                jobType: 'ContentMetadataRefreshItem',
+                status: 'Completed',
                 startedAt: '2025-01-01T00:00:00Z',
                 completedAt: '2025-01-01T00:00:02Z',
             }),
@@ -308,7 +390,7 @@ describe('mapRecentJobs', () => {
 
         const result = mapRecentJobs(jobs, 5);
         expect(result).toHaveLength(1);
-        expect(result[0].name).toBe('Refresh Metadata');
+        expect(result[0].name).toBe('Content Metadata Refresh Item');
         expect(result[0].status).toBe('completed');
         expect(result[0].duration).toBe('2s');
     });
@@ -340,6 +422,7 @@ describe('calculateContentCounts', () => {
             upgradable: 10,
             fulfilled: 60,
             fulfilledExternally: 5,
+            partial: 8,
         };
 
         expect(calculateContentCounts(stats)).toEqual({
@@ -348,6 +431,7 @@ describe('calculateContentCounts', () => {
             upgradable: 10,
             fulfilled: 60,
             fulfilledExternally: 5,
+            partial: 8,
         });
     });
 
@@ -358,6 +442,7 @@ describe('calculateContentCounts', () => {
             upgradable: 0,
             fulfilled: 0,
             fulfilledExternally: 0,
+            partial: 0,
         };
 
         expect(calculateContentCounts(stats)).toEqual({
@@ -366,6 +451,7 @@ describe('calculateContentCounts', () => {
             upgradable: 0,
             fulfilled: 0,
             fulfilledExternally: 0,
+            partial: 0,
         });
     });
 });
@@ -386,15 +472,17 @@ describe('mapRecentContent', () => {
         const items = [
             makeHierarchyItem({
                 id: 'h1',
+                parentId: 'root-1',
                 name: 'My Show',
                 createdAt: '2025-01-01T00:00:00Z',
-                contentItem: { id: 'c1', contentHierarchyItemId: 'h1', fulfillment: 2, createdAt: '' },
+                contentItem: { id: 'c1', contentHierarchyItemId: 'h1', fulfillment: 'Fulfilled', createdAt: '' },
             }),
         ];
 
         const result = mapRecentContent(items, 5);
         expect(result).toHaveLength(1);
         expect(result[0].id).toBe('h1');
+        expect(result[0].parentId).toBe('root-1');
         expect(result[0].title).toBe('My Show');
         expect(result[0].fulfillment).toBe('fulfilled');
         expect(result[0].addedAt).toBe('1h ago');
@@ -437,14 +525,31 @@ describe('mapRecentContent', () => {
 });
 
 describe('mapUpcomingContent', () => {
+    beforeEach(() => {
+        vi.useFakeTimers();
+        vi.setSystemTime(new Date('2025-06-01T12:00:00Z'));
+    });
+
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
+    function withPublishDate(date: string, overrides: Partial<ApiContentItemWithMetadata> = {}) {
+        return makeContentItemWithMetadata({
+            metadataContainer: { id: 'mc-1', contributions: [{ ordinal: 0, publishDate: date }] },
+            ...overrides,
+        });
+    }
+
     it('returns empty array for empty input', () => {
         expect(mapUpcomingContent([])).toEqual([]);
     });
 
-    it('maps content items to upcoming items', () => {
+    it('maps future-dated content items to upcoming items', () => {
         const items = [
-            makeContentItemWithMetadata({
+            withPublishDate('2025-06-15', {
                 id: 'ci-1',
+                parentId: 'season-1',
                 name: 'Upcoming Episode',
                 contentType: 'episodes',
             }),
@@ -454,8 +559,9 @@ describe('mapUpcomingContent', () => {
         expect(result).toHaveLength(1);
         expect(result[0].id).toBe('upcoming-ci-1');
         expect(result[0].contentId).toBe('ci-1');
+        expect(result[0].parentId).toBe('season-1');
         expect(result[0].title).toBe('Upcoming Episode');
-        expect(result[0].kind).toBe('episode');
+        expect(result[0].contentType).toBe('episodes');
         expect(result[0].fulfillment).toBe('missing');
     });
 
@@ -465,7 +571,7 @@ describe('mapUpcomingContent', () => {
                 name: 'Fallback',
                 metadataContainer: {
                     id: 'mc-1',
-                    contributions: [{ ordinal: 0, title: 'From Metadata' }],
+                    contributions: [{ ordinal: 0, title: 'From Metadata', publishDate: '2025-06-15' }],
                 },
             }),
         ];
@@ -474,26 +580,23 @@ describe('mapUpcomingContent', () => {
         expect(result[0].title).toBe('From Metadata');
     });
 
-    it('uses publish date from metadata as airDate', () => {
-        const items = [
-            makeContentItemWithMetadata({
-                metadataContainer: {
-                    id: 'mc-1',
-                    contributions: [{ ordinal: 0, publishDate: '2025-06-15' }],
-                },
-            }),
-        ];
-
-        const result = mapUpcomingContent(items);
-        expect(result[0].airDate).toBe('2025-06-15');
+    it('uses publish date from metadata as the date', () => {
+        const result = mapUpcomingContent([withPublishDate('2025-06-15')]);
+        expect(result[0].date).toBe('2025-06-15');
     });
 
-    it('falls back to current date when no publish date', () => {
-        vi.useFakeTimers();
-        vi.setSystemTime(new Date('2025-06-01T12:00:00Z'));
+    it('drops items without a publish date', () => {
+        const result = mapUpcomingContent([makeContentItemWithMetadata()]);
+        expect(result).toEqual([]);
+    });
 
-        const items = [makeContentItemWithMetadata()];
-        const result = mapUpcomingContent(items);
-        expect(result[0].airDate).toBe('2025-06-01T12:00:00.000Z');
+    it('drops already-released items so they are not shown as upcoming', () => {
+        const result = mapUpcomingContent([withPublishDate('2003-06-06')]);
+        expect(result).toEqual([]);
+    });
+
+    it('keeps an item dated exactly today', () => {
+        const result = mapUpcomingContent([withPublishDate('2025-06-01')]);
+        expect(result).toHaveLength(1);
     });
 });

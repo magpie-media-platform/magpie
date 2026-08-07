@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
@@ -6,17 +6,16 @@ import type { ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 import { ToastList, ToastProvider, ToastStateProvider, ToastViewport } from '@/components/ui/Toast';
+import { settingsQueryKeys } from '@/hooks/useSettings';
 
 import { GeneralPage } from './GeneralPage';
 
 const mockApiGet = vi.fn();
 const mockApiPatch = vi.fn();
-const mockIsApiError = vi.fn(() => false);
 
 vi.mock('@/lib/api', () => ({
     apiGet: (...args: unknown[]) => mockApiGet(...args),
     apiPatch: (...args: unknown[]) => mockApiPatch(...args),
-    isApiError: (...args: unknown[]) => mockIsApiError(...args),
 }));
 
 const mockSettingsGroup = {
@@ -42,22 +41,24 @@ const mockSettingsGroup = {
     ],
 };
 
-function createWrapper() {
-    const queryClient = new QueryClient({
-        defaultOptions: {
-            queries: {
-                retry: false,
-                gcTime: 0,
+function createWrapper(queryClient?: QueryClient) {
+    const client =
+        queryClient ??
+        new QueryClient({
+            defaultOptions: {
+                queries: {
+                    retry: false,
+                    gcTime: 0,
+                },
+                mutations: {
+                    retry: false,
+                },
             },
-            mutations: {
-                retry: false,
-            },
-        },
-    });
+        });
 
     return function TestWrapper({ children }: { children: ReactNode }) {
         return (
-            <QueryClientProvider client={queryClient}>
+            <QueryClientProvider client={client}>
                 <MemoryRouter>
                     <ToastProvider>
                         <ToastStateProvider>
@@ -72,10 +73,24 @@ function createWrapper() {
     };
 }
 
+function createTestQueryClient() {
+    return new QueryClient({
+        defaultOptions: {
+            queries: {
+                retry: false,
+                gcTime: 0,
+            },
+            mutations: {
+                retry: false,
+            },
+        },
+    });
+}
+
 describe('GeneralPage', () => {
     beforeEach(() => {
         vi.clearAllMocks();
-        mockApiGet.mockResolvedValue(mockSettingsGroup);
+        mockApiGet.mockResolvedValue([mockSettingsGroup]);
         mockApiPatch.mockResolvedValue(undefined);
     });
 
@@ -91,7 +106,7 @@ describe('GeneralPage', () => {
         render(<GeneralPage />, { wrapper: createWrapper() });
 
         await waitFor(() => {
-            expect(screen.getByRole('heading', { name: 'General', level: 1 })).toBeInTheDocument();
+            expect(screen.getByRole('heading', { name: 'Advanced', level: 1 })).toBeInTheDocument();
         });
     });
 
@@ -133,7 +148,7 @@ describe('GeneralPage', () => {
 describe('GeneralPage form fields', () => {
     beforeEach(() => {
         vi.clearAllMocks();
-        mockApiGet.mockResolvedValue(mockSettingsGroup);
+        mockApiGet.mockResolvedValue([mockSettingsGroup]);
         mockApiPatch.mockResolvedValue(undefined);
     });
 
@@ -176,7 +191,7 @@ describe('GeneralPage form fields', () => {
         render(<GeneralPage />, { wrapper: createWrapper() });
 
         await waitFor(() => {
-            expect(mockApiGet).toHaveBeenCalledWith('/settings/groups/system/general');
+            expect(mockApiGet).toHaveBeenCalledWith('/settings/groups');
         });
     });
 });
@@ -184,7 +199,7 @@ describe('GeneralPage form fields', () => {
 describe('GeneralPage save', () => {
     beforeEach(() => {
         vi.clearAllMocks();
-        mockApiGet.mockResolvedValue(mockSettingsGroup);
+        mockApiGet.mockResolvedValue([mockSettingsGroup]);
         mockApiPatch.mockResolvedValue(undefined);
     });
 
@@ -192,7 +207,7 @@ describe('GeneralPage save', () => {
         render(<GeneralPage />, { wrapper: createWrapper() });
 
         await waitFor(() => {
-            const saveButton = screen.getByRole('button', { name: /save settings/i });
+            const saveButton = document.querySelector('[data-action="save-settings"]') as HTMLButtonElement;
             expect(saveButton).toBeInTheDocument();
             expect(saveButton).toBeDisabled();
         });
@@ -211,8 +226,23 @@ describe('GeneralPage save', () => {
         await user.type(input, 'New Name');
 
         await waitFor(() => {
-            expect(screen.getByRole('button', { name: /save settings/i })).not.toBeDisabled();
+            expect(document.querySelector('[data-action="save-settings"]') as HTMLButtonElement).not.toBeDisabled();
         });
+    });
+
+    it('returns to clean when an edit is reverted to the baseline', async () => {
+        const user = userEvent.setup();
+        render(<GeneralPage />, { wrapper: createWrapper() });
+
+        const input = await screen.findByLabelText('Instance Name');
+        await user.clear(input);
+        await user.type(input, 'Temporary Name');
+        expect(document.querySelector('[data-action="save-settings"]') as HTMLButtonElement).not.toBeDisabled();
+
+        await user.clear(input);
+        await user.type(input, 'My Magpie');
+
+        expect(document.querySelector('[data-action="save-settings"]') as HTMLButtonElement).toBeDisabled();
     });
 
     it('calls PATCH endpoint when save is clicked', async () => {
@@ -227,7 +257,7 @@ describe('GeneralPage save', () => {
         await user.clear(input);
         await user.type(input, 'Updated Name');
 
-        const saveButton = screen.getByRole('button', { name: /save settings/i });
+        const saveButton = document.querySelector('[data-action="save-settings"]') as HTMLButtonElement;
         await user.click(saveButton);
 
         await waitFor(() => {
@@ -255,12 +285,13 @@ describe('GeneralPage save', () => {
         await user.clear(input);
         await user.type(input, 'Failing Name');
 
-        const saveButton = screen.getByRole('button', { name: /save settings/i });
+        const saveButton = document.querySelector('[data-action="save-settings"]') as HTMLButtonElement;
         await user.click(saveButton);
 
         await waitFor(() => {
             expect(screen.getByText('Save Failed')).toBeInTheDocument();
             expect(screen.getByText('Server error')).toBeInTheDocument();
+            expect(document.querySelector('[data-action="save-settings"]') as HTMLButtonElement).not.toBeDisabled();
         });
     });
 
@@ -276,11 +307,284 @@ describe('GeneralPage save', () => {
         await user.clear(input);
         await user.type(input, 'New');
 
-        const saveButton = screen.getByRole('button', { name: /save settings/i });
+        const saveButton = document.querySelector('[data-action="save-settings"]') as HTMLButtonElement;
         await user.click(saveButton);
 
         await waitFor(() => {
-            expect(screen.getByRole('button', { name: /save settings/i })).toBeDisabled();
+            expect(document.querySelector('[data-action="save-settings"]') as HTMLButtonElement).toBeDisabled();
+        });
+    });
+
+    it('processes a completed refetch even when it returns the previously observed settings', async () => {
+        const user = userEvent.setup();
+        const queryClient = createTestQueryClient();
+        render(<GeneralPage />, { wrapper: createWrapper(queryClient) });
+
+        const input = await screen.findByLabelText('Instance Name');
+        await user.clear(input);
+        await user.type(input, 'Submitted Name');
+        await user.click(document.querySelector('[data-action="save-settings"]') as HTMLButtonElement);
+        await screen.findByText('Settings Saved');
+
+        act(() => {
+            queryClient.setQueryData(settingsQueryKeys.systemGroup('general'), mockSettingsGroup);
+        });
+
+        await waitFor(() => {
+            expect(input).toHaveValue('My Magpie');
+            expect(document.querySelector('[data-action="save-settings"]') as HTMLButtonElement).toBeDisabled();
+        });
+    });
+
+    it('keeps dirty edits when refetched settings change', async () => {
+        const user = userEvent.setup();
+        const queryClient = createTestQueryClient();
+
+        render(<GeneralPage />, { wrapper: createWrapper(queryClient) });
+
+        await waitFor(() => {
+            expect(screen.getByLabelText('Instance Name')).toHaveValue('My Magpie');
+        });
+
+        const input = screen.getByLabelText('Instance Name');
+        await user.clear(input);
+        await user.type(input, 'Draft Name');
+
+        await waitFor(() => {
+            expect(input).toHaveValue('Draft Name');
+        });
+
+        act(() => {
+            queryClient.setQueryData(settingsQueryKeys.systemGroup('general'), {
+                ...mockSettingsGroup,
+                settings: mockSettingsGroup.settings.map((setting) =>
+                    setting.key === 'instanceName' ? { ...setting, value: 'Server Name' } : setting,
+                ),
+            });
+        });
+
+        await waitFor(() => {
+            expect(screen.getByLabelText('Instance Name')).toHaveValue('Draft Name');
+            expect(document.querySelector('[data-action="save-settings"]') as HTMLButtonElement).not.toBeDisabled();
+            expect(screen.getByText('Settings changed elsewhere')).toBeInTheDocument();
+        });
+    });
+
+    it('adopts the latest server values when a stale draft is reverted', async () => {
+        const user = userEvent.setup();
+        const queryClient = createTestQueryClient();
+
+        render(<GeneralPage />, { wrapper: createWrapper(queryClient) });
+
+        const input = await screen.findByLabelText('Instance Name');
+        await user.clear(input);
+        await user.type(input, 'Draft Name');
+
+        act(() => {
+            queryClient.setQueryData(settingsQueryKeys.systemGroup('general'), {
+                ...mockSettingsGroup,
+                settings: mockSettingsGroup.settings.map((setting) =>
+                    setting.key === 'instanceName' ? { ...setting, value: 'Server Name' } : setting,
+                ),
+            });
+        });
+        await screen.findByText('Settings changed elsewhere');
+
+        await user.clear(input);
+        await user.type(input, 'My Magpie');
+
+        await waitFor(() => {
+            expect(input).toHaveValue('Server Name');
+            expect(screen.queryByText('Settings changed elsewhere')).not.toBeInTheDocument();
+            expect(document.querySelector('[data-action="save-settings"]') as HTMLButtonElement).toBeDisabled();
+        });
+    });
+
+    it('refreshes a clean form when settings change', async () => {
+        const queryClient = createTestQueryClient();
+
+        render(<GeneralPage />, { wrapper: createWrapper(queryClient) });
+
+        await waitFor(() => {
+            expect(screen.getByLabelText('Instance Name')).toHaveValue('My Magpie');
+        });
+
+        act(() => {
+            queryClient.setQueryData(settingsQueryKeys.systemGroup('general'), {
+                ...mockSettingsGroup,
+                settings: mockSettingsGroup.settings.map((setting) =>
+                    setting.key === 'instanceName' ? { ...setting, value: 'Server Name' } : setting,
+                ),
+            });
+        });
+
+        await waitFor(() => {
+            expect(screen.getByLabelText('Instance Name')).toHaveValue('Server Name');
+            expect(document.querySelector('[data-action="save-settings"]') as HTMLButtonElement).toBeDisabled();
+            expect(screen.queryByText('Settings changed elsewhere')).not.toBeInTheDocument();
+        });
+    });
+
+    it('requires confirmation before overwriting refetched settings', async () => {
+        const user = userEvent.setup();
+        const queryClient = createTestQueryClient();
+        mockApiPatch.mockReturnValue(new Promise(() => {}));
+
+        render(<GeneralPage />, { wrapper: createWrapper(queryClient) });
+
+        const input = await screen.findByLabelText('Instance Name');
+        await user.clear(input);
+        await user.type(input, 'Draft Name');
+
+        act(() => {
+            queryClient.setQueryData(settingsQueryKeys.systemGroup('general'), {
+                ...mockSettingsGroup,
+                settings: mockSettingsGroup.settings.map((setting) =>
+                    setting.key === 'instanceName' ? { ...setting, value: 'Server Name' } : setting,
+                ),
+            });
+        });
+
+        await user.click(document.querySelector('[data-action="save-settings"]') as HTMLButtonElement);
+
+        expect(screen.getByRole('dialog', { name: 'Save over newer changes?' })).toBeInTheDocument();
+        expect(mockApiPatch).not.toHaveBeenCalled();
+
+        await user.click(screen.getByRole('button', { name: 'Save anyway' }));
+
+        await waitFor(() => {
+            expect(mockApiPatch).toHaveBeenCalledTimes(1);
+        });
+    });
+
+    it('keeps edits made while a save is in flight dirty after it succeeds', async () => {
+        const user = userEvent.setup();
+        let resolvePatch: (() => void) | undefined;
+        mockApiPatch.mockReturnValue(
+            new Promise<void>((resolve) => {
+                resolvePatch = resolve;
+            }),
+        );
+
+        render(<GeneralPage />, { wrapper: createWrapper() });
+
+        const input = await screen.findByLabelText('Instance Name');
+        await user.clear(input);
+        await user.type(input, 'Submitted Name');
+        await user.click(document.querySelector('[data-action="save-settings"]') as HTMLButtonElement);
+
+        await waitFor(() => {
+            expect(mockApiPatch).toHaveBeenCalledTimes(1);
+        });
+
+        await user.clear(input);
+        await user.type(input, 'Newer Draft');
+
+        act(() => {
+            resolvePatch?.();
+        });
+
+        await waitFor(() => {
+            expect(input).toHaveValue('Newer Draft');
+            expect(document.querySelector('[data-action="save-settings"]') as HTMLButtonElement).not.toBeDisabled();
+        });
+    });
+
+    it('retains a concurrent external-change warning after a save when newer local edits remain', async () => {
+        const user = userEvent.setup();
+        const queryClient = createTestQueryClient();
+        let resolvePatch: (() => void) | undefined;
+        mockApiPatch.mockReturnValue(
+            new Promise<void>((resolve) => {
+                resolvePatch = resolve;
+            }),
+        );
+
+        render(<GeneralPage />, { wrapper: createWrapper(queryClient) });
+
+        const input = await screen.findByLabelText('Instance Name');
+        await user.clear(input);
+        await user.type(input, 'Submitted Name');
+        await user.click(document.querySelector('[data-action="save-settings"]') as HTMLButtonElement);
+        await waitFor(() => expect(mockApiPatch).toHaveBeenCalledTimes(1));
+
+        await user.clear(input);
+        await user.type(input, 'Newer Draft');
+        act(() => {
+            queryClient.setQueryData(settingsQueryKeys.systemGroup('general'), {
+                ...mockSettingsGroup,
+                settings: mockSettingsGroup.settings.map((setting) =>
+                    setting.key === 'instanceName' ? { ...setting, value: 'Other User Change' } : setting,
+                ),
+            });
+        });
+        await screen.findByText('Settings changed elsewhere');
+
+        mockApiGet.mockResolvedValue([
+            {
+                ...mockSettingsGroup,
+                settings: mockSettingsGroup.settings.map((setting) =>
+                    setting.key === 'instanceName' ? { ...setting, value: 'Other User Change' } : setting,
+                ),
+            },
+        ]);
+        act(() => {
+            resolvePatch?.();
+        });
+
+        await waitFor(() => {
+            expect(input).toHaveValue('Newer Draft');
+            expect(screen.getByText('Settings changed elsewhere')).toBeInTheDocument();
+            expect(document.querySelector('[data-action="save-settings"]') as HTMLButtonElement).not.toBeDisabled();
+        });
+    });
+
+    it('clears an in-flight notification once refetched settings match the submitted snapshot', async () => {
+        const user = userEvent.setup();
+        const queryClient = createTestQueryClient();
+        let resolvePatch: (() => void) | undefined;
+        mockApiPatch.mockReturnValue(
+            new Promise<void>((resolve) => {
+                resolvePatch = resolve;
+            }),
+        );
+
+        render(<GeneralPage />, { wrapper: createWrapper(queryClient) });
+
+        const input = await screen.findByLabelText('Instance Name');
+        await user.clear(input);
+        await user.type(input, 'Submitted Name');
+        await user.click(document.querySelector('[data-action="save-settings"]') as HTMLButtonElement);
+        await waitFor(() => expect(mockApiPatch).toHaveBeenCalledTimes(1));
+
+        await user.clear(input);
+        await user.type(input, 'Newer Draft');
+        act(() => {
+            queryClient.setQueryData(settingsQueryKeys.systemGroup('general'), {
+                ...mockSettingsGroup,
+                settings: mockSettingsGroup.settings.map((setting) =>
+                    setting.key === 'instanceName' ? { ...setting, value: 'Submitted Name' } : setting,
+                ),
+            });
+        });
+        await screen.findByText('Settings changed elsewhere');
+
+        mockApiGet.mockResolvedValue([
+            {
+                ...mockSettingsGroup,
+                settings: mockSettingsGroup.settings.map((setting) =>
+                    setting.key === 'instanceName' ? { ...setting, value: 'Submitted Name' } : setting,
+                ),
+            },
+        ]);
+        act(() => {
+            resolvePatch?.();
+        });
+
+        await waitFor(() => {
+            expect(input).toHaveValue('Newer Draft');
+            expect(screen.queryByText('Settings changed elsewhere')).not.toBeInTheDocument();
+            expect(document.querySelector('[data-action="save-settings"]') as HTMLButtonElement).not.toBeDisabled();
         });
     });
 });
@@ -317,10 +621,8 @@ describe('GeneralPage error state', () => {
         });
     });
 
-    it('shows form with defaults when API returns 404', async () => {
-        const notFoundError = { status: 404, message: 'Not found' };
-        mockIsApiError.mockImplementation((v: unknown) => v === notFoundError);
-        mockApiGet.mockRejectedValue(notFoundError);
+    it('shows form with defaults when the dynamic group is absent from the list', async () => {
+        mockApiGet.mockResolvedValue([]);
 
         render(<GeneralPage />, { wrapper: createWrapper() });
 

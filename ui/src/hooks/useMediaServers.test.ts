@@ -22,19 +22,17 @@ const mockApiServers: ApiMediaServer[] = [
         providerType: 'plex',
         name: 'Plex Media Server',
         enabled: true,
-        status: 1,
+        status: 'Healthy',
         lastChecked: '2024-01-15T10:30:00Z',
-        settings: { host: 'localhost', port: '32400' },
         createdAt: '2024-01-01T00:00:00Z',
     },
     {
         id: 'server-2',
-        providerType: 'jellyfin',
-        name: 'Jellyfin',
+        providerType: 'mediaserver-a',
+        name: 'Mediaserver A',
         enabled: true,
-        status: 2,
+        status: 'Unhealthy',
         lastChecked: '2024-01-15T10:25:00Z',
-        settings: { host: 'localhost', port: '8096' },
         createdAt: '2024-01-02T00:00:00Z',
     },
     {
@@ -42,7 +40,7 @@ const mockApiServers: ApiMediaServer[] = [
         providerType: 'emby',
         name: 'Emby (Disabled)',
         enabled: false,
-        status: 0,
+        status: 'Unknown',
         lastChecked: null,
         createdAt: '2024-01-03T00:00:00Z',
     },
@@ -109,7 +107,7 @@ describe('useMediaServers', () => {
 
             expect(result.current.servers).toHaveLength(3);
             expect(result.current.servers[0].name).toBe('Plex Media Server');
-            expect(result.current.servers[1].name).toBe('Jellyfin');
+            expect(result.current.servers[1].name).toBe('Mediaserver A');
             expect(result.current.servers[2].name).toBe('Emby (Disabled)');
         });
 
@@ -145,9 +143,9 @@ describe('useMediaServers', () => {
     });
 
     describe('toggling server enabled state', () => {
-        it('should enable a server via POST /media-servers/{id}/enable', async () => {
+        it('should enable a server via PATCH /media-servers/{id}', async () => {
             mockApiGet.mockResolvedValue(mockApiServers);
-            mockApiPost.mockResolvedValue({ ...mockApiServers[2], enabled: true });
+            mockApiPatch.mockResolvedValue(undefined);
 
             const { result } = renderHook(() => useMediaServers(), {
                 wrapper: createWrapper(),
@@ -161,12 +159,14 @@ describe('useMediaServers', () => {
                 await result.current.toggleServerEnabled('server-3', true);
             });
 
-            expect(mockApiPost).toHaveBeenCalledWith('/media-servers/server-3/enable');
+            expect(mockApiPatch).toHaveBeenCalledWith('/media-servers/server-3', {
+                enabled: { value: true },
+            });
         });
 
-        it('should disable a server via POST /media-servers/{id}/disable', async () => {
+        it('should disable a server via PATCH /media-servers/{id}', async () => {
             mockApiGet.mockResolvedValue(mockApiServers);
-            mockApiPost.mockResolvedValue({ ...mockApiServers[0], enabled: false });
+            mockApiPatch.mockResolvedValue(undefined);
 
             const { result } = renderHook(() => useMediaServers(), {
                 wrapper: createWrapper(),
@@ -180,17 +180,19 @@ describe('useMediaServers', () => {
                 await result.current.toggleServerEnabled('server-1', false);
             });
 
-            expect(mockApiPost).toHaveBeenCalledWith('/media-servers/server-1/disable');
+            expect(mockApiPatch).toHaveBeenCalledWith('/media-servers/server-1', {
+                enabled: { value: false },
+            });
         });
 
         it('should set isToggling while toggling', async () => {
             mockApiGet.mockResolvedValue(mockApiServers);
 
-            let resolvePost: (value: ApiMediaServer) => void;
-            const postPromise = new Promise<ApiMediaServer>((resolve) => {
-                resolvePost = resolve;
+            let resolvePatch: () => void;
+            const patchPromise = new Promise<void>((resolve) => {
+                resolvePatch = resolve;
             });
-            mockApiPost.mockReturnValue(postPromise);
+            mockApiPatch.mockReturnValue(patchPromise);
 
             const { result } = renderHook(() => useMediaServers(), {
                 wrapper: createWrapper(),
@@ -201,7 +203,7 @@ describe('useMediaServers', () => {
             });
 
             act(() => {
-                result.current.toggleServerEnabled('server-1', false);
+                void result.current.toggleServerEnabled('server-1', false);
             });
 
             await waitFor(() => {
@@ -209,7 +211,7 @@ describe('useMediaServers', () => {
             });
 
             act(() => {
-                resolvePost!({ ...mockApiServers[0], enabled: false });
+                resolvePatch!();
             });
 
             await waitFor(() => {
@@ -226,7 +228,7 @@ describe('useMediaServers', () => {
                 providerType: 'kodi',
                 name: 'New Kodi',
                 enabled: true,
-                status: 0,
+                status: 'Unknown',
                 createdAt: '2024-01-04T00:00:00Z',
             });
 
@@ -273,7 +275,7 @@ describe('useMediaServers', () => {
             });
 
             act(() => {
-                result.current.createServer({
+                void result.current.createServer({
                     providerType: 'kodi',
                     name: 'New Kodi',
                 });
@@ -289,7 +291,7 @@ describe('useMediaServers', () => {
                     providerType: 'kodi',
                     name: 'New Kodi',
                     enabled: true,
-                    status: 0,
+                    status: 'Unknown',
                     createdAt: '2024-01-04T00:00:00Z',
                 });
             });
@@ -377,7 +379,7 @@ describe('useMediaServers', () => {
             });
 
             act(() => {
-                result.current.updateServer('server-1', {
+                void result.current.updateServer('server-1', {
                     name: { value: 'Updated' },
                 });
             });
@@ -434,7 +436,7 @@ describe('useMediaServers', () => {
             });
 
             act(() => {
-                result.current.deleteServer('server-1');
+                void result.current.deleteServer('server-1');
             });
 
             await waitFor(() => {
@@ -468,9 +470,8 @@ describe('useMediaServers', () => {
             expect(server.name).toBe('Plex Media Server');
             expect(server.providerType).toBe('plex');
             expect(server.enabled).toBe(true);
-            expect(server.status).toBe(1);
+            expect(server.status).toBe('Healthy');
             expect(server.lastChecked).toBe('2024-01-15T10:30:00Z');
-            expect(server.settings).toEqual({ host: 'localhost', port: '32400' });
             expect(server.createdAt).toBe('2024-01-01T00:00:00Z');
         });
 
@@ -487,48 +488,25 @@ describe('useMediaServers', () => {
 
             expect(result.current.servers[0].lastChecked).toBeNull();
         });
-
-        it('should handle undefined settings', async () => {
-            mockApiGet.mockResolvedValue([
-                {
-                    id: 'server-4',
-                    providerType: 'test',
-                    name: 'Test',
-                    enabled: true,
-                    status: 0,
-                    createdAt: '2024-01-01T00:00:00Z',
-                },
-            ]);
-
-            const { result } = renderHook(() => useMediaServers(), {
-                wrapper: createWrapper(),
-            });
-
-            await waitFor(() => {
-                expect(result.current.isLoading).toBe(false);
-            });
-
-            expect(result.current.servers[0].settings).toBeUndefined();
-        });
     });
 
     describe('status labels and variants', () => {
         it('should export status labels for all values', async () => {
             const { mediaServerStatusLabels } = await import('./useMediaServers');
 
-            expect(mediaServerStatusLabels[0]).toBe('Unknown');
-            expect(mediaServerStatusLabels[1]).toBe('Healthy');
-            expect(mediaServerStatusLabels[2]).toBe('Unhealthy');
-            expect(mediaServerStatusLabels[3]).toBe('Stale');
+            expect(mediaServerStatusLabels.Unknown).toBe('Unknown');
+            expect(mediaServerStatusLabels.Healthy).toBe('Healthy');
+            expect(mediaServerStatusLabels.Unhealthy).toBe('Unhealthy');
+            expect(mediaServerStatusLabels.Stale).toBe('Stale');
         });
 
         it('should export status variants for all values', async () => {
             const { mediaServerStatusVariants } = await import('./useMediaServers');
 
-            expect(mediaServerStatusVariants[0]).toBe('unknown');
-            expect(mediaServerStatusVariants[1]).toBe('healthy');
-            expect(mediaServerStatusVariants[2]).toBe('unhealthy');
-            expect(mediaServerStatusVariants[3]).toBe('stale');
+            expect(mediaServerStatusVariants.Unknown).toBe('unknown');
+            expect(mediaServerStatusVariants.Healthy).toBe('healthy');
+            expect(mediaServerStatusVariants.Unhealthy).toBe('unhealthy');
+            expect(mediaServerStatusVariants.Stale).toBe('stale');
         });
     });
 });

@@ -1,18 +1,20 @@
-import { Suspense, memo, useState, type ReactNode } from 'react';
-import { BrowserRouter, Navigate, useRoutes, useLocation, Link } from 'react-router-dom';
+import { Suspense, memo, useCallback, useEffect, useState, type ReactNode } from 'react';
+import { createBrowserRouter, RouterProvider, Navigate, Outlet, useLocation, Link } from 'react-router-dom';
 import {
-    CalendarBlank,
-    ClockCountdown,
-    House,
-    Books,
-    DownloadSimple,
-    Gear,
-    Star,
-    Funnel,
-    FilmStrip,
-    Cube,
-    Database,
-    Users,
+    CalendarBlankIcon,
+    ClockCountdownIcon,
+    HouseIcon,
+    BooksIcon,
+    DownloadSimpleIcon,
+    FolderSimplePlusIcon,
+    GaugeIcon,
+    GearIcon,
+    StarIcon,
+    FunnelIcon,
+    DatabaseIcon,
+    UsersIcon,
+    TargetIcon,
+    BinocularsIcon,
 } from '@phosphor-icons/react';
 import { QueryClientProvider } from '@tanstack/react-query';
 
@@ -26,6 +28,7 @@ import {
 } from './components/ui/AppShell';
 import { AdminHeader, AdminSidebar } from './components/ui/AdminShell';
 import { Header } from './components/ui/Header';
+import { CdnPhosphorIcon } from './components/ui/CdnPhosphorIcon';
 import { UserMenu } from './components/ui/UserMenu';
 import {
     Sidebar,
@@ -36,28 +39,37 @@ import {
     SidebarSubMenu,
     SidebarSeparator,
 } from './components/ui/Sidebar';
-import { useLibraryTypes, type LibraryTypeDefinition } from './hooks/useLibraryTypes';
+import { useLibraryTypes, useTypeIconName, type LibraryTypeDefinition } from './hooks/useLibraryTypes';
+import { useSystemInfo } from './hooks/useSystemStatus';
+import { ScanCompletionTrackerProvider } from './hooks/useScanCompletionTracker';
 import { useScrollRestoration } from './hooks/useScrollRestoration';
+import { usePersistentState } from './hooks/usePersistentState';
+import { useGlobalEventStreamConnection } from './hooks/useEventStream';
+import { useMediaQuery } from './hooks/ui/useMediaQuery';
 import { BottomNav, BottomNavItem } from './components/ui/BottomNav';
-import { HeaderSlot, HeaderLeftSlot, HeaderRightSlot, NavMainSlot } from './components/ui/Slot/GlobalSlots';
-import { ToastProvider, ToastViewport, ToastStateProvider, ToastList } from './components/ui/Toast';
+import { HeaderSlot, HeaderLeftSlot, HeaderRightSlot } from './components/ui/Slot/GlobalSlots';
+import { ExtensionMainNavigation } from './components/ui/Slot';
+import { ToastProvider, ToastViewport, ToastStateProvider, ToastList, ToastTray } from './components/ui/Toast';
 import { TooltipProvider } from './components/ui/Tooltip';
 import { LiveAnnouncerProvider } from './components/ui/LiveAnnouncer';
 import { RestartRequiredBanner, RestartRequiredProvider } from './components/ui/RestartRequiredBanner';
 import { AuthProvider, RequireRole, Role, RoleName, useAuth } from './auth';
 import { useSetupStatus } from './hooks/useSetup';
+import { UnsavedChangesGuardProvider, UnsavedChangesBlocker } from './hooks/useUnsavedChangesGuard';
 import { routes, RouteLoadingState, RouteErrorState } from './router';
 import { CommandPalette } from './components/ui/CommandPalette';
 import { ErrorBoundary } from './components/ui/ErrorBoundary';
 import { SkipLink } from './components/ui/SkipLink';
+import { ContentLineageProvider } from './components/content/ContentLineageTitle';
 import { ExtensionProvider } from './extensions';
 import { queryClient } from '@/lib/queryClient';
 import { useIsActive } from '@/lib/routes';
 import { Logo } from './components/ui/Logo';
-import './App.css';
 
 function AppHeader() {
     const { toggleSidebar, sidebarOpen, sidebarCollapsed } = useAppShell();
+    const isDesktopSidebar = useMediaQuery('(min-width: 768px)');
+    const sidebarExpanded = isDesktopSidebar ? !sidebarCollapsed : sidebarOpen;
 
     return (
         <HeaderSlot>
@@ -69,7 +81,7 @@ function AppHeader() {
                     </Link>
                 }
                 onSidebarToggle={toggleSidebar}
-                sidebarOpen={sidebarOpen || !sidebarCollapsed}
+                sidebarOpen={sidebarExpanded}
                 leftSlot={<HeaderLeftSlot />}
                 rightSlot={<HeaderRightSlot />}
                 actions={<UserMenu />}
@@ -83,112 +95,169 @@ interface AppSidebarProps {
     subjectTypes: LibraryTypeDefinition[];
 }
 
+function isRouteWithin(pathname: string, route: string): boolean {
+    return pathname === route || pathname.startsWith(`${route}/`);
+}
+
 const AppSidebar = memo(function AppSidebar({ contentTypes, subjectTypes }: AppSidebarProps) {
     const { sidebarOpen, sidebarCollapsed, toggleSidebarCollapsed, closeSidebar } = useAppShell();
     const location = useLocation();
+    const typeIconName = useTypeIconName();
+    const { data: systemInfo } = useSystemInfo();
+    const version = systemInfo?.version;
 
     const isActive = useIsActive();
 
-    const isLibraryActive = isActive('/library') || isActive('/subjects');
+    const isAddContentActive = isRouteWithin(location.pathname, '/library/add');
+    const isLibraryImportActive = isRouteWithin(location.pathname, '/library/import');
+    const isLibraryActive =
+        (isRouteWithin(location.pathname, '/library') && !isAddContentActive && !isLibraryImportActive) ||
+        isRouteWithin(location.pathname, '/subjects');
 
     return (
         <Sidebar open={sidebarOpen} collapsed={sidebarCollapsed} onCollapsedChange={toggleSidebarCollapsed}>
             <SidebarContent>
-                <NavMainSlot>
-                    <SidebarGroup>
-                        <SidebarItem
-                            to="/"
-                            icon={<House weight="duotone" />}
-                            active={isActive('/')}
-                            onClick={closeSidebar}
-                        >
-                            Dashboard
+                <SidebarGroup>
+                    <SidebarItem
+                        to="/"
+                        icon={<HouseIcon weight="duotone" />}
+                        active={isActive('/')}
+                        onClick={closeSidebar}
+                    >
+                        Dashboard
+                    </SidebarItem>
+                    <SidebarSubMenu
+                        label="Library"
+                        icon={<BooksIcon weight="duotone" />}
+                        active={isLibraryActive}
+                        defaultOpen
+                        collapsedTo="/library"
+                    >
+                        <SidebarItem to="/library" end active={location.pathname === '/library'} onClick={closeSidebar}>
+                            Overview
                         </SidebarItem>
-                        <SidebarSubMenu label="Library" icon={<Books weight="duotone" />} active={isLibraryActive}>
-                            <SidebarItem to="/library" active={location.pathname === '/library'} onClick={closeSidebar}>
-                                Overview
-                            </SidebarItem>
-                            {contentTypes.map((type) => (
+                        {contentTypes.map((type) => {
+                            return (
                                 <SidebarItem
                                     key={type.id}
                                     to={`/library/content/${type.slug}`}
-                                    icon={<FilmStrip weight="duotone" />}
+                                    icon={<CdnPhosphorIcon name={typeIconName(type.slug)} weight="duotone" />}
                                     active={isActive(`/library/content/${type.slug}`)}
                                     onClick={closeSidebar}
                                 >
-                                    {type.name}
+                                    {type.pluralName}
                                 </SidebarItem>
-                            ))}
-                            {subjectTypes.length > 0 && <SidebarSeparator />}
-                            {subjectTypes.map((type) => (
+                            );
+                        })}
+                        {subjectTypes.length > 0 && <SidebarSeparator />}
+                        {subjectTypes.map((type) => {
+                            return (
                                 <SidebarItem
                                     key={type.id}
                                     to={`/library/subjects/${type.slug}`}
-                                    icon={<Cube weight="duotone" />}
+                                    icon={
+                                        <CdnPhosphorIcon
+                                            name={typeIconName(type.slug, { subject: true })}
+                                            weight="duotone"
+                                        />
+                                    }
                                     active={isActive(`/library/subjects/${type.slug}`)}
                                     onClick={closeSidebar}
                                 >
-                                    {type.name}
+                                    {type.pluralName}
                                 </SidebarItem>
-                            ))}
-                        </SidebarSubMenu>
+                            );
+                        })}
+                    </SidebarSubMenu>
+                    <RequireRole min={Role.Manager}>
                         <SidebarItem
-                            to="/downloads"
-                            icon={<DownloadSimple weight="duotone" />}
-                            active={isActive('/downloads')}
+                            to="/library/add"
+                            icon={<BinocularsIcon weight="duotone" />}
+                            active={isAddContentActive}
                             onClick={closeSidebar}
+                            title="Add content to your library"
                         >
-                            Downloads
+                            Add content
                         </SidebarItem>
+                    </RequireRole>
+                    <SidebarItem
+                        to="/filters"
+                        icon={<FunnelIcon weight="duotone" />}
+                        active={isActive('/filters')}
+                        onClick={closeSidebar}
+                        title="Reusable filters for the library and wishlists"
+                    >
+                        Filters
+                    </SidebarItem>
+                    <SidebarItem
+                        to="/wishlists"
+                        icon={<StarIcon weight="duotone" />}
+                        active={isActive('/wishlists')}
+                        onClick={closeSidebar}
+                        title="Named groups of content to monitor and act on in bulk"
+                    >
+                        Wishlists
+                    </SidebarItem>
+                    <SidebarItem
+                        to="/calendar"
+                        icon={<CalendarBlankIcon weight="duotone" />}
+                        active={isActive('/calendar')}
+                        onClick={closeSidebar}
+                    >
+                        Calendar
+                    </SidebarItem>
+                    <SidebarItem
+                        to="/wanted"
+                        icon={<TargetIcon weight="duotone" />}
+                        active={isActive('/wanted')}
+                        onClick={closeSidebar}
+                        title="Monitored content Magpie is actively trying to acquire"
+                    >
+                        Wanted
+                    </SidebarItem>
+                    <SidebarItem
+                        to="/downloads"
+                        icon={<DownloadSimpleIcon weight="duotone" />}
+                        active={isActive('/downloads')}
+                        onClick={closeSidebar}
+                    >
+                        Downloads
+                    </SidebarItem>
+                    <SidebarItem
+                        to="/my-jobs"
+                        icon={<ClockCountdownIcon weight="duotone" />}
+                        active={isActive('/my-jobs')}
+                        onClick={closeSidebar}
+                    >
+                        My Jobs
+                    </SidebarItem>
+                    <RequireRole min={Role.Manager}>
                         <SidebarItem
-                            to="/calendar"
-                            icon={<CalendarBlank weight="duotone" />}
-                            active={isActive('/calendar')}
+                            to="/library/import"
+                            icon={<FolderSimplePlusIcon weight="duotone" />}
+                            active={isLibraryImportActive}
                             onClick={closeSidebar}
                         >
-                            Calendar
+                            Library import
                         </SidebarItem>
+                    </RequireRole>
+                </SidebarGroup>
+                <ExtensionMainNavigation onNavigate={closeSidebar} />
+                <RequireRole min={Role.Admin}>
+                    <SidebarGroup>
                         <SidebarItem
-                            to="/filters"
-                            icon={<Funnel weight="duotone" />}
-                            active={isActive('/filters')}
+                            to="/admin"
+                            icon={<GearIcon weight="duotone" />}
+                            active={isActive('/admin')}
                             onClick={closeSidebar}
                         >
-                            Saved Filters
-                        </SidebarItem>
-                        <SidebarItem
-                            to="/wishlists"
-                            icon={<Star weight="duotone" />}
-                            active={isActive('/wishlists')}
-                            onClick={closeSidebar}
-                        >
-                            Wishlists
-                        </SidebarItem>
-                        <SidebarItem
-                            to="/my-jobs"
-                            icon={<ClockCountdown weight="duotone" />}
-                            active={isActive('/my-jobs')}
-                            onClick={closeSidebar}
-                        >
-                            My Jobs
+                            Admin
                         </SidebarItem>
                     </SidebarGroup>
-                    <RequireRole min={Role.Admin}>
-                        <SidebarGroup>
-                            <SidebarItem
-                                to="/admin"
-                                icon={<Gear weight="duotone" />}
-                                active={isActive('/admin')}
-                                onClick={closeSidebar}
-                            >
-                                Admin
-                            </SidebarItem>
-                        </SidebarGroup>
-                    </RequireRole>
-                </NavMainSlot>
+                </RequireRole>
             </SidebarContent>
             <SidebarFooter>
-                <Link to="/about">Magpie v0.0.0</Link>
+                <Link to="/about">{version ? `Magpie v${version}` : 'Magpie'}</Link>
                 <span aria-hidden="true">|</span>
                 <a href="https://github.com/magpie-media/magpie" target="_blank" rel="noopener noreferrer">
                     GitHub
@@ -203,24 +272,24 @@ function AppBottomNav() {
 
     return (
         <BottomNav>
-            <BottomNavItem to="/" icon={<House weight="duotone" />} label="Dashboard" active={isActive('/')} />
+            <BottomNavItem to="/" icon={<HouseIcon weight="duotone" />} label="Dashboard" active={isActive('/')} />
             <BottomNavItem
                 to="/library"
-                icon={<Books weight="duotone" />}
+                icon={<BooksIcon weight="duotone" />}
                 label="Library"
                 active={isActive('/library')}
             />
             <BottomNavItem
-                to="/downloads"
-                icon={<DownloadSimple weight="duotone" />}
-                label="Downloads"
-                active={isActive('/downloads')}
+                to="/wanted"
+                icon={<TargetIcon weight="duotone" />}
+                label="Wanted"
+                active={isActive('/wanted')}
             />
             <BottomNavItem
-                to="/wishlists"
-                icon={<Star weight="duotone" />}
-                label="Wishlists"
-                active={isActive('/wishlists')}
+                to="/downloads"
+                icon={<DownloadSimpleIcon weight="duotone" />}
+                label="Downloads"
+                active={isActive('/downloads')}
             />
         </BottomNav>
     );
@@ -232,35 +301,34 @@ function AdminBottomNav() {
     return (
         <BottomNav>
             <BottomNavItem
-                to="/admin/general"
-                icon={<Gear weight="duotone" />}
-                label="General"
-                active={isActive('/admin/general')}
+                to="/admin/system"
+                icon={<GaugeIcon weight="duotone" />}
+                label="System"
+                active={isActive('/admin/system')}
             />
             <BottomNavItem
                 to="/admin/users"
-                icon={<Users weight="duotone" />}
+                icon={<UsersIcon weight="duotone" />}
                 label="Users"
                 active={isActive('/admin/users')}
             />
             <BottomNavItem
                 to="/admin/jobs"
-                icon={<ClockCountdown weight="duotone" />}
-                label="Jobs"
+                icon={<ClockCountdownIcon weight="duotone" />}
+                label="System Jobs"
                 active={isActive('/admin/jobs')}
             />
             <BottomNavItem
-                to="/admin/backups"
-                icon={<Database weight="duotone" />}
-                label="Backups"
-                active={isActive('/admin/backups')}
+                to="/admin/database"
+                icon={<DatabaseIcon weight="duotone" />}
+                label="Database"
+                active={isActive('/admin/database')}
             />
         </BottomNav>
     );
 }
 
-function AppRoutes() {
-    const element = useRoutes(routes);
+function RouteOutlet() {
     const location = useLocation();
 
     return (
@@ -268,12 +336,14 @@ function AppRoutes() {
             resetKeys={[location.pathname]}
             fallback={({ resetErrorBoundary }) => <RouteErrorState onRetry={resetErrorBoundary} />}
         >
-            <Suspense fallback={<RouteLoadingState />}>{element}</Suspense>
+            <Suspense fallback={<RouteLoadingState />}>
+                <Outlet />
+            </Suspense>
         </ErrorBoundary>
     );
 }
 
-const STANDALONE_ROUTES: string[] = ['/login', '/setup'];
+const STANDALONE_ROUTES: string[] = ['/login', '/setup', '/forbidden'];
 
 function isStandaloneRoute(pathname: string): boolean {
     return STANDALONE_ROUTES.some((route) => pathname === route || pathname.startsWith(route + '/'));
@@ -287,16 +357,13 @@ function SetupRedirectGate({ children }: { children: ReactNode }) {
     const location = useLocation();
     const { data, isLoading, isError } = useSetupStatus();
 
-    // While the first status check is in flight we render a quiet loading state
-    // so that we never flash the login form to a user on a fresh install.
     if (isLoading) {
         return <RouteLoadingState />;
     }
 
-    // If the status endpoint errors, fall through to the normal app -- callers
-    // (LoginPage, RequireAuth, etc.) will surface their own errors. Don't block
-    // the entire app behind a setup status outage.
-    if (!isError && data?.isRequired && location.pathname !== '/setup') {
+    const loginRequiredForClaimedSetup = data?.isRequired && !data.requiresAdminClaim && location.pathname === '/login';
+
+    if (!isError && data?.isRequired && location.pathname !== '/setup' && !loginRequiredForClaimedSetup) {
         return <Navigate to="/setup" replace />;
     }
 
@@ -304,45 +371,67 @@ function SetupRedirectGate({ children }: { children: ReactNode }) {
 }
 
 function AppLayout() {
-    const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+    const [persistedCollapsed, setPersistedCollapsed] = usePersistentState('magpie.sidebar.collapsed', false);
+
+    const isTablet = useMediaQuery('(min-width: 768px) and (max-width: 1023px)');
+    const [tabletExpanded, setTabletExpanded] = useState(false);
+    useEffect(() => {
+        setTabletExpanded(false);
+    }, [isTablet]);
+
+    const sidebarCollapsed = isTablet ? !tabletExpanded : persistedCollapsed;
+    const setSidebarCollapsed = useCallback(
+        (next: boolean) => {
+            if (isTablet) {
+                setTabletExpanded(!next);
+            } else {
+                setPersistedCollapsed(next);
+            }
+        },
+        [isTablet, setPersistedCollapsed],
+    );
+
     const location = useLocation();
     const { contentTypes, subjectTypes } = useLibraryTypes();
     useScrollRestoration();
 
     if (isStandaloneRoute(location.pathname)) {
-        return <AppRoutes />;
+        return <RouteOutlet />;
     }
 
     const isAdmin = isAdminRoute(location.pathname);
 
     return (
-        <AppShell sidebarCollapsed={sidebarCollapsed} onSidebarCollapsedChange={setSidebarCollapsed}>
-            <SkipLink targetId="main-content" />
-            <AppShellHeader>{isAdmin ? <AdminHeader /> : <AppHeader />}</AppShellHeader>
+        <ContentLineageProvider contentTypes={contentTypes}>
+            <AppShell sidebarCollapsed={sidebarCollapsed} onSidebarCollapsedChange={setSidebarCollapsed}>
+                <SkipLink targetId="main-content" />
+                <AppShellHeader>{isAdmin ? <AdminHeader /> : <AppHeader />}</AppShellHeader>
 
-            <div className="app-shell__body">
-                <AppShellSidebar ariaLabel={isAdmin ? 'Admin navigation' : 'Main navigation'}>
-                    {isAdmin ? (
-                        <AdminSidebar />
-                    ) : (
-                        <AppSidebar contentTypes={contentTypes} subjectTypes={subjectTypes} />
-                    )}
-                </AppShellSidebar>
+                <div className="app-shell__body">
+                    <AppShellSidebar ariaLabel={isAdmin ? 'Admin navigation' : 'Main navigation'}>
+                        {isAdmin ? (
+                            <AdminSidebar />
+                        ) : (
+                            <AppSidebar contentTypes={contentTypes} subjectTypes={subjectTypes} />
+                        )}
+                    </AppShellSidebar>
 
-                <AppShellMain>
-                    <RestartRequiredBanner />
-                    <AppRoutes />
-                </AppShellMain>
-            </div>
+                    <AppShellMain>
+                        <RestartRequiredBanner />
+                        <RouteOutlet />
+                    </AppShellMain>
+                </div>
 
-            <AppShellBottomNav>{isAdmin ? <AdminBottomNav /> : <AppBottomNav />}</AppShellBottomNav>
-            <CommandPalette />
-        </AppShell>
+                <AppShellBottomNav>{isAdmin ? <AdminBottomNav /> : <AppBottomNav />}</AppShellBottomNav>
+                <CommandPalette />
+            </AppShell>
+        </ContentLineageProvider>
     );
 }
 
 function AuthAwareExtensionProvider({ children }: { children: ReactNode }) {
     const { user } = useAuth();
+    useGlobalEventStreamConnection(user !== null);
     return (
         <ExtensionProvider
             userId={user?.id ?? null}
@@ -354,30 +443,43 @@ function AuthAwareExtensionProvider({ children }: { children: ReactNode }) {
     );
 }
 
-function App() {
+function RootLayout() {
     return (
-        <QueryClientProvider client={queryClient}>
-            <BrowserRouter>
-                <LiveAnnouncerProvider>
-                    <ToastStateProvider>
-                        <AuthProvider>
-                            <AuthAwareExtensionProvider>
-                                <TooltipProvider>
-                                    <ToastProvider>
-                                        <RestartRequiredProvider>
+        <LiveAnnouncerProvider>
+            <ToastStateProvider>
+                <AuthProvider>
+                    <AuthAwareExtensionProvider>
+                        <TooltipProvider>
+                            <ToastProvider>
+                                <RestartRequiredProvider>
+                                    <ScanCompletionTrackerProvider>
+                                        <UnsavedChangesGuardProvider>
+                                            <UnsavedChangesBlocker />
                                             <SetupRedirectGate>
                                                 <AppLayout />
                                             </SetupRedirectGate>
-                                        </RestartRequiredProvider>
-                                        <ToastList />
-                                        <ToastViewport position="bottom-right" />
-                                    </ToastProvider>
-                                </TooltipProvider>
-                            </AuthAwareExtensionProvider>
-                        </AuthProvider>
-                    </ToastStateProvider>
-                </LiveAnnouncerProvider>
-            </BrowserRouter>
+                                        </UnsavedChangesGuardProvider>
+                                    </ScanCompletionTrackerProvider>
+                                </RestartRequiredProvider>
+                                <ToastList />
+                                <ToastViewport position="bottom-right">
+                                    <ToastTray />
+                                </ToastViewport>
+                            </ToastProvider>
+                        </TooltipProvider>
+                    </AuthAwareExtensionProvider>
+                </AuthProvider>
+            </ToastStateProvider>
+        </LiveAnnouncerProvider>
+    );
+}
+
+function App() {
+    const [router] = useState(() => createBrowserRouter([{ element: <RootLayout />, children: routes }]));
+
+    return (
+        <QueryClientProvider client={queryClient}>
+            <RouterProvider router={router} />
         </QueryClientProvider>
     );
 }

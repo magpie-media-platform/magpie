@@ -1,0 +1,350 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
+
+using Magpie.Abstractions.Repositories;
+using Magpie.Models;
+using Magpie.Models.Data;
+using Magpie.Models.Enums;
+using Magpie.Models.Jobs;
+using Magpie.Sdk.Events;
+using Magpie.Sdk.Integrations;
+using Magpie.Sdk.Jobs;
+using Magpie.Sdk.Services;
+
+using Microsoft.Extensions.Logging;
+
+namespace Magpie.Core.Jobs;
+
+internal sealed class MediaServerRefreshJob(
+    IMediaServerRepository mediaServerRepository,
+    IContentHierarchyItemRepository contentHierarchyItemRepository,
+    IRootFolderRepository rootFolderRepository,
+    IMaterializedMetadataRepository materializedMetadataRepository,
+    IEnumerable<IMediaServerIntegration> mediaServerIntegrations,
+    IContentTypeRegistry contentTypeRegistry,
+    ILogger<MediaServerRefreshJob> logger,
+    IProgressReporter? progressReporter = null) : IJob
+{
+    public static readonly JobSpec Spec = new()
+    {
+        JobType = "MediaServerRefresh",
+        DisplayName = "Media server refresh",
+        Description = "Asks configured media servers to refresh their libraries.",
+        Category = "Integrations",
+        Scope = JobScope.Administrative,
+        Enabled = true,
+        OnDemand = true,
+        FailurePolicy = JobFailurePolicy.Retry,
+        Timeout = TimeSpan.FromMinutes(5),
+        SupportedTriggerModes = [JobTriggerMode.Manual, JobTriggerMode.Schedule, JobTriggerMode.Event],
+        ConcurrencyScope = ConcurrencyScope.PerType,
+        Parameters =
+        [
+            new(
+                ContentHierarchyItemIdParameter,
+                "Optional content hierarchy item id passed through when the job was event-triggered.",
+                DataType.String,
+                false,
+                null)
+        ],
+    };
+
+    private static readonly IReadOnlyDictionary<string, string> EmptyExternalIds
+        = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+    private const string ContentHierarchyItemIdParameter = "contentHierarchyItemId";
+
+    private static Guid? ResolveContentHierarchyItemId(JobContext context)
+    {
+        if (context.Parameters.TryGetValue(ContentHierarchyItemIdParameter, out var rawParameter) &&
+            !string.IsNullOrWhiteSpace(rawParameter))
+        {
+            if (!Guid.TryParse(rawParameter, out var parsed))
+            {
+                throw new ArgumentException("The content item ID has an invalid format.");
+            }
+
+            return parsed;
+        }
+
+        if (context.Event is { Context: var eventContext } &&
+            eventContext.TryGetValue(MagpieEvents.Keys.ContentHierarchyItemId, out var rawFromEvent) &&
+            !string.IsNullOrWhiteSpace(rawFromEvent))
+        {
+            if (!Guid.TryParse(rawFromEvent, out var parsed))
+            {
+                throw new ArgumentException("The job received an invalid content item ID.");
+            }
+
+            return parsed;
+        }
+
+        return null;
+    }
+
+    public async Task ExecuteAsync(JobContext context, CancellationToken cancellationToken = default)
+    {
+        var contentHierarchyItemId = ResolveContentHierarchyItemId(context);
+        var progress = progressReporter;
+
+        progress?.Report(0, "The refresh will load the media servers.");
+
+        var integrations = BuildIntegrationMap();
+        var enabledServers = (await mediaServerRepository.ListAllAsync(cancellationToken).ConfigureAwait(false))
+            .Where(s => s.Enabled && s.Status != IntegrationHealthStatus.Unhealthy)
+            .OrderBy(s => s.Name, StringComparer.Ordinal)
+            .ThenBy(s => s.Id)
+            .ToArray();
+
+        var scope = await ResolveScopeAsync(contentHierarchyItemId, cancellationToken)
+            .ConfigureAwait(false);
+
+        for (var i = 0; i < enabledServers.Length; i++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var server = enabledServers[i];
+            progress?.ReportFraction(
+                i,
+                enabledServers.Length,
+                $"The media-server refresh will refresh the libraries on {server.Name}.");
+
+            try
+            {
+                if (!integrations.TryGetValue(server.ProviderType, out var integration))
+                {
+                    logger.LogWarning(
+                        "No media server integration exists for provider type {ProviderType}",
+                        server.ProviderType);
+                    continue;
+                }
+
+                if (integration is not IRefreshableMediaServerIntegration refreshableIntegration)
+                {
+                    logger.LogDebug(
+                        "The integration does not support refresh. The job skipped media server {MediaServerName}",
+                        server.Name);
+                    continue;
+                }
+
+                if (scope is not null &&
+                    server.ContentTypes.Count > 0 &&
+                    !server.ContentTypes.Contains(scope.ContentType))
+                {
+                    logger.LogDebug(
+                        "The job skipped the refresh on media server {MediaServerName}. " +
+                        "It is not configured for {ContentType}",
+                        server.Name,
+                        scope.ContentType);
+                    continue;
+                }
+
+                if (scope is not null &&
+                    integration.SupportedContentTypes.Count > 0 &&
+                    !integration.SupportedContentTypes.Contains(scope.ContentType))
+                {
+                    logger.LogDebug(
+                        "The job skipped the refresh on media server {MediaServerName}. " +
+                        "The integration does not support {ContentType}",
+                        server.Name,
+                        scope.ContentType);
+                    continue;
+                }
+
+                var refreshed = await refreshableIntegration.RefreshForContentAsync(
+                    server,
+                    scope?.ExternalIds ?? EmptyExternalIds,
+                    scope?.ContentType ?? string.Empty,
+                    scope?.ContentPath ?? string.Empty,
+                    cancellationToken)
+                    .ConfigureAwait(false);
+
+                if (!refreshed)
+                {
+                    logger.LogWarning(
+                        "Media server {MediaServerName} did not trigger an upstream refresh",
+                        server.Name);
+                    continue;
+                }
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(
+                    ex,
+                    "The job failed to refresh the libraries on media server {MediaServerName}",
+                    server.Name);
+            }
+        }
+
+        progress?.Report(1, "The media-server refresh completed.");
+    }
+
+    private async Task<RefreshScope?> ResolveScopeAsync(
+        Guid? contentHierarchyItemId,
+        CancellationToken cancellationToken)
+    {
+        if (contentHierarchyItemId is null)
+        {
+            return null;
+        }
+
+        IReadOnlyList<ContentHierarchyItem> lineage;
+        try
+        {
+            lineage = await contentHierarchyItemRepository
+                .GetLineageAsync(contentHierarchyItemId.Value, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(
+                ex,
+                "The job failed to load content hierarchy item {ContentHierarchyItemId}, so the " +
+                "media server refresh will continue without a scope",
+                contentHierarchyItemId);
+            return null;
+        }
+
+        var triggeringItem = lineage.FirstOrDefault();
+        if (triggeringItem is null)
+        {
+            logger.LogDebug(
+                "The job did not find content hierarchy item {ContentHierarchyItemId}. " +
+                "The media server refresh will continue without a scope",
+                contentHierarchyItemId);
+            return null;
+        }
+
+        if (string.IsNullOrWhiteSpace(triggeringItem.ContentType))
+        {
+            return null;
+        }
+
+        var effectivePath = string.Empty;
+        try
+        {
+            var rootFolder = await rootFolderRepository
+                .GetByIdAsync(triggeringItem.EffectiveRootFolderId, cancellationToken)
+                .ConfigureAwait(false);
+            if (rootFolder is not null && lineage.Count > 0)
+            {
+                var root = lineage[^1];
+                var subfolder = contentTypeRegistry.GetDefinitionFor(root.ContentType)?.LevelDefinitions
+                    .FirstOrDefault(level => level.Slug == root.Level)?.Subfolder;
+                effectivePath = Path.GetFullPath(string.IsNullOrWhiteSpace(subfolder)
+                    ? rootFolder.Path.Trim()
+                    : Path.Combine(rootFolder.Path.Trim(), subfolder));
+                for (var index = lineage.Count - 1; index >= 0; index--)
+                {
+                    var itemPath = lineage[index].Path;
+                    if (itemPath is null)
+                    {
+                        continue;
+                    }
+
+                    var normalized = itemPath.Trim().Replace('\\', Path.DirectorySeparatorChar)
+                        .Replace('/', Path.DirectorySeparatorChar);
+                    effectivePath = Path.IsPathFullyQualified(normalized)
+                        ? Path.GetFullPath(normalized)
+                        : Path.GetFullPath(Path.Combine(effectivePath, normalized));
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(
+                ex,
+                "The job failed to resolve the path for content hierarchy item {ContentHierarchyItemId}. " +
+                "The media server refresh will use an empty content path",
+                triggeringItem.Id);
+        }
+
+        var externalIds = await ResolveExternalIdsAsync(triggeringItem, cancellationToken).ConfigureAwait(false);
+
+        return new RefreshScope(triggeringItem.ContentType, effectivePath, externalIds);
+    }
+
+    private async Task<IReadOnlyDictionary<string, string>> ResolveExternalIdsAsync(
+        ContentHierarchyItem triggeringItem,
+        CancellationToken cancellationToken)
+    {
+        IReadOnlyList<ExternalId> externalIds;
+        try
+        {
+            var metadata = await materializedMetadataRepository.QueryAsync(
+                new() { ContainerIds = [triggeringItem.MetadataContainerId] },
+                new() { PageNumber = 1, PageSize = 1 },
+                null,
+                cancellationToken).ConfigureAwait(false);
+            externalIds = metadata.Items.FirstOrDefault()?.ExternalIds?.ToList() ?? [];
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(
+                ex,
+                "The job failed to load the materialized metadata for content hierarchy item " +
+                "{ContentHierarchyItemId}, so the media server refresh will use no external ids",
+                triggeringItem.Id);
+            return EmptyExternalIds;
+        }
+
+        if (externalIds.Count == 0)
+        {
+            return EmptyExternalIds;
+        }
+
+        var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var id in externalIds)
+        {
+            if (string.IsNullOrWhiteSpace(id.Source) || string.IsNullOrWhiteSpace(id.Value))
+            {
+                continue;
+            }
+
+            if (!map.ContainsKey(id.Source))
+            {
+                map[id.Source] = id.Value;
+            }
+        }
+
+        return map;
+    }
+
+    private Dictionary<string, IMediaServerIntegration> BuildIntegrationMap()
+    {
+        var map = new Dictionary<string, IMediaServerIntegration>();
+        foreach (var group in mediaServerIntegrations
+            .Where(integration => !string.IsNullOrWhiteSpace(integration.ProviderType))
+            .GroupBy(integration => integration.ProviderType))
+        {
+            var members = group.ToList();
+            var winner = members[^1];
+            if (members.Count > 1)
+            {
+                logger.LogWarning(
+                    "Multiple {ItemLabel} declared {KeyLabel} {Key}. The job will use {Winner} and ignore {Displaced}",
+                    "media-server integrations",
+                    "ProviderType",
+                    group.Key,
+                    winner.GetType().FullName,
+                    string.Join(", ", members.Take(members.Count - 1).Select(member => member.GetType().FullName)));
+            }
+
+            map[group.Key] = winner;
+        }
+
+        return map;
+    }
+
+    private sealed record RefreshScope(
+        string ContentType,
+        string ContentPath,
+        IReadOnlyDictionary<string, string> ExternalIds);
+}

@@ -27,5 +27,3 @@ export function RouteLoadingState() {
 }
 
 RouteLoadingState.displayName = 'RouteLoadingState';
-
-export default RouteLoadingState;

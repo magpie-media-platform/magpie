@@ -1,2 +1,2 @@
 export { RestartRequiredBanner } from './RestartRequiredBanner';
-export { RestartRequiredProvider, useRestartRequired } from './RestartRequiredContext';
+export { RestartRequiredProvider, useRestartRequired } from '@/hooks/ui/useRestartRequired';

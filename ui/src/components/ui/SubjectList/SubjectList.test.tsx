@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -47,6 +47,16 @@ describe('SubjectList', () => {
         expect(screen.getByText('Dune: Part Two')).toBeInTheDocument();
         expect(screen.getByText('Bryan Cranston')).toBeInTheDocument();
         expect(screen.getByText('Abbey Road')).toBeInTheDocument();
+    });
+
+    it('keeps a long unbroken title contained with the full title available', () => {
+        const longTitle = `Subject${'UnbrokenTitleSegment'.repeat(8)}`;
+        render(<SubjectList items={[{ id: 'long-subject', title: longTitle, kind: 'person' }]} />);
+
+        const title = screen.getByText(longTitle);
+        expect(title).toHaveClass('subject-list__title');
+        expect(title).toHaveAttribute('title', longTitle);
+        expect(title.closest('[data-column="title"]')).toBeInTheDocument();
     });
 
     it('renders kind badges', () => {
@@ -101,6 +111,25 @@ describe('SubjectList', () => {
             const placeholder = document.querySelector('.subject-list__image--placeholder');
             expect(placeholder).toBeInTheDocument();
         });
+
+        it('falls back to the placeholder when an image fails to load', () => {
+            const item: SubjectItem[] = [
+                {
+                    id: 'dead-image',
+                    title: 'Dead Poster',
+                    imageUrl: 'https://example.com/dead.jpg',
+                    kind: 'movie',
+                },
+            ];
+
+            render(<SubjectList items={item} />);
+
+            const img = screen.getByAltText('Dead Poster image');
+            fireEvent.error(img);
+
+            expect(screen.queryByAltText('Dead Poster image')).not.toBeInTheDocument();
+            expect(document.querySelector('.subject-list__image--placeholder')).toBeInTheDocument();
+        });
     });
 
     describe('click handling', () => {
@@ -131,7 +160,7 @@ describe('SubjectList', () => {
         it('renders default empty state when no items', () => {
             render(<SubjectList items={[]} />);
 
-            expect(screen.getByText('No subjects found')).toBeInTheDocument();
+            expect(screen.getByText('No matches found')).toBeInTheDocument();
         });
 
         it('renders custom empty state when provided', () => {
@@ -170,7 +199,7 @@ describe('SubjectList', () => {
         it('does not show pagination by default', () => {
             render(<SubjectList items={mockItems} />);
 
-            const pagination = document.querySelector('.data-table__pagination');
+            const pagination = document.querySelector('.data-table__pager');
             expect(pagination).not.toBeInTheDocument();
         });
 
@@ -183,7 +212,7 @@ describe('SubjectList', () => {
 
             render(<SubjectList items={manyItems} enablePagination pageSize={10} />);
 
-            const pagination = document.querySelector('.data-table__pagination');
+            const pagination = document.querySelector('.data-table__pager');
             expect(pagination).toBeInTheDocument();
         });
     });

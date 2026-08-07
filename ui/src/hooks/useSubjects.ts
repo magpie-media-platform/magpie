@@ -1,31 +1,38 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 
-import { apiGet, apiPatch, apiDelete, buildUrl } from '@/lib/api';
+import { apiGet, apiPatch, apiDelete, apiPost, buildUrl } from '@/lib/api';
+import { executeImmediateJobRequest, type JobActionDisposition } from '@/lib/jobActions';
 import { sortedContributions } from '@/lib/metadata';
 import { POLLING_INTERVALS } from '@/lib/queryClient';
 import { queryErrorOrNull } from '@/lib/utils';
+import { useJobAction, type JobActionLifecycleOptions } from '@/hooks/useJobAction';
+import type { EventStreamPayload } from '@/hooks/useEventStream';
+import { useInvalidateQueriesOnEvents } from '@/hooks/useInvalidateQueriesOnEvents';
+import type { PagedList } from '@/types/paging';
+import { tagQueryKeys } from '@/hooks/useTags';
 
-export interface ApiExternalId {
+interface ApiExternalId {
     id: string;
     value: string;
     source?: string | null;
+    url?: string | null;
     ordinal: number;
 }
 
-export interface ApiGenre {
+interface ApiGenre {
     id: string;
     name: string;
     ordinal: number;
 }
 
-export interface ApiContentRating {
+interface ApiContentRating {
     id: string;
     body: string;
     rating: string;
     ordinal: number;
 }
 
-export interface ApiAward {
+interface ApiAward {
     id: string;
     body: string;
     name: string;
@@ -35,7 +42,7 @@ export interface ApiAward {
     ordinal: number;
 }
 
-export interface ApiRelationship {
+interface ApiRelationship {
     id: string;
     kind: string;
     qualifier?: string | null;
@@ -43,7 +50,12 @@ export interface ApiRelationship {
     ordinal: number;
 }
 
-export interface ApiMetadataContribution {
+interface ApiCustomMetadataValue {
+    key: string;
+    value?: string | null;
+}
+
+interface ApiMetadataContribution {
     id: string;
     ordinal: number;
     locked: boolean;
@@ -56,17 +68,34 @@ export interface ApiMetadataContribution {
     overview?: string | null;
     publishDate?: string | null;
     productionStatus?: string | null;
+    birthDate?: string | null;
+    deathDate?: string | null;
+    established?: string | null;
+    dissolved?: string | null;
     images?: ApiMetadataImage[] | null;
     externalIds?: ApiExternalId[] | null;
     genres?: ApiGenre[] | null;
     contentRatings?: ApiContentRating[] | null;
     awards?: ApiAward[] | null;
     relationships?: ApiRelationship[] | null;
+    references?: ApiReference[] | null;
+    customMetadata?: ApiCustomMetadataValue[] | null;
 }
 
-export interface ApiMetadataImage {
+interface ApiReference {
+    ordinal: number;
+    kind: string;
+    source: string;
+    url: string;
+    displayName?: string | null;
+}
+
+interface ApiMetadataImage {
+    id?: string | null;
     type: string;
     url: string;
+    ordinal?: number | null;
+    isPrimary?: boolean | null;
     width?: number | null;
     height?: number | null;
 }
@@ -75,21 +104,6 @@ export interface ApiMetadataContainer {
     id: string;
     createdAt: string;
     contributions: ApiMetadataContribution[];
-}
-
-interface ApiMaterializedMetadata {
-    title?: string | null;
-    originalTitle?: string | null;
-    sortTitle?: string | null;
-    overview?: string | null;
-    releaseDate?: string | null;
-    endDate?: string | null;
-    runtime?: number | null;
-    status?: string | null;
-    images?: ApiMetadataImage[] | null;
-    externalIds?: { source: string; externalId: string; url?: string | null }[] | null;
-    genres?: { name: string }[] | null;
-    contentRatings?: { rating: string; region?: string | null }[] | null;
 }
 
 export interface ApiSubject {
@@ -110,65 +124,14 @@ export interface ApiSubject {
     modifiedByUserId?: string | null;
 
     metadataContainer?: ApiMetadataContainer | null;
-
-    metadata?: ApiMaterializedMetadata | null;
 }
 
-function normalizeSubjectMetadata(subject: ApiSubject): ApiSubject {
-    if (subject.metadataContainer || !subject.metadata) {
-        return subject;
-    }
-
-    const m = subject.metadata;
-    const contribution: ApiMetadataContribution = {
-        id: 'materialized',
-        ordinal: 0,
-        locked: false,
-        title: m.title,
-        originalTitle: m.originalTitle,
-        sortTitle: m.sortTitle,
-        overview: m.overview,
-        publishDate: m.releaseDate,
-        productionStatus: m.status,
-        images: m.images ?? null,
-        externalIds:
-            m.externalIds?.map((e, i) => ({
-                id: `ext-${i}`,
-                value: e.externalId,
-                source: e.source,
-                ordinal: i,
-            })) ?? null,
-        genres:
-            m.genres?.map((g, i) => ({
-                id: `genre-${i}`,
-                name: g.name,
-                ordinal: i,
-            })) ?? null,
-        contentRatings:
-            m.contentRatings?.map((cr, i) => ({
-                id: `cr-${i}`,
-                body: cr.region ?? '',
-                rating: cr.rating,
-                ordinal: i,
-            })) ?? null,
-    };
-
-    return {
-        ...subject,
-        metadataContainer: {
-            id: subject.metadataContainerId,
-            createdAt: subject.createdAt,
-            contributions: [contribution],
-        },
-    };
-}
-
-export interface StringSetPatch {
+interface StringSetPatch {
     add?: string[];
     remove?: string[];
 }
 
-export interface SubjectTagsPatch {
+interface SubjectTagsPatch {
     id: string;
     tags?: StringSetPatch;
 }
@@ -176,6 +139,11 @@ export interface SubjectTagsPatch {
 export interface SubjectQueryParams {
     kind?: string;
     tag?: string;
+    filter?: string;
+    pageNumber?: number;
+    pageSize?: number;
+    sortBy?: string;
+    sortDirection?: 'Ascending' | 'Descending';
 }
 
 export const subjectQueryKeys = {
@@ -184,32 +152,105 @@ export const subjectQueryKeys = {
     detail: (id: string) => ['subjects', 'detail', id] as const,
 };
 
-export function extractLanguage(container?: ApiMetadataContainer | null): string | undefined {
+const SUBJECT_CHANGE_EVENTS = ['subject.created', 'subject.deleted', 'subject.updated'] as const;
+const SUBJECT_METADATA_JOB_EVENTS = ['job.execution.completed'] as const;
+
+function isSubjectMetadataRefresh(event: { context: Record<string, string> }): boolean {
+    return event.context['execution.jobType'] === 'SubjectMetadataRefreshItem';
+}
+
+function useSubjectEvents(
+    queryKey: readonly unknown[],
+    enabled = true,
+    includeContent = false,
+    entityIds?: readonly string[],
+    predicate?: (event: EventStreamPayload) => boolean,
+): void {
+    useInvalidateQueriesOnEvents(
+        enabled
+            ? includeContent
+                ? [
+                      ...SUBJECT_CHANGE_EVENTS,
+                      'content.hierarchyItem.created',
+                      'content.hierarchyItem.deleted',
+                      'content.hierarchyItem.updated',
+                      'content.fulfillment.changed',
+                      'download.imported',
+                  ]
+                : [...SUBJECT_CHANGE_EVENTS]
+            : [],
+        [queryKey],
+        {
+            entityIds,
+            exact: true,
+            owner: 'subjects-query',
+            predicate,
+        },
+    );
+}
+
+export { extractLanguage, extractStatus } from '@/lib/metadata';
+
+function extractScalar(
+    container: ApiMetadataContainer | null | undefined,
+    pick: (contribution: ApiMetadataContribution) => string | null | undefined,
+): string | undefined {
     if (!container?.contributions?.length) {
         return undefined;
     }
-
-    const sorted = sortedContributions(container);
-    for (const contribution of sorted) {
-        if (contribution.language) {
-            return contribution.language;
+    for (const contribution of sortedContributions(container)) {
+        const value = pick(contribution);
+        if (value) {
+            return value;
         }
     }
     return undefined;
 }
 
-export function extractStatus(container?: ApiMetadataContainer | null): string | undefined {
+export function extractBirthDate(container?: ApiMetadataContainer | null): string | undefined {
+    return extractScalar(container, (c) => c.birthDate);
+}
+
+export function extractDeathDate(container?: ApiMetadataContainer | null): string | undefined {
+    return extractScalar(container, (c) => c.deathDate);
+}
+
+export function extractEstablished(container?: ApiMetadataContainer | null): string | undefined {
+    return extractScalar(container, (c) => c.established);
+}
+
+export function extractDissolved(container?: ApiMetadataContainer | null): string | undefined {
+    return extractScalar(container, (c) => c.dissolved);
+}
+
+interface ExtractedCustomValue {
+    key: string;
+    value: string;
+}
+
+export function extractCustomValues(container?: ApiMetadataContainer | null): ExtractedCustomValue[] {
     if (!container?.contributions?.length) {
-        return undefined;
+        return [];
     }
 
     const sorted = sortedContributions(container);
+    const out: ExtractedCustomValue[] = [];
+    const seen = new Set<string>();
+
     for (const contribution of sorted) {
-        if (contribution.productionStatus) {
-            return contribution.productionStatus;
+        if (!contribution.customMetadata?.length) continue;
+        for (const entry of contribution.customMetadata) {
+            const key = entry.key?.trim();
+            const value = entry.value?.trim();
+            if (!key || !value) continue;
+            const dedupeKey = key.toLowerCase();
+            if (seen.has(dedupeKey)) continue;
+            seen.add(dedupeKey);
+            out.push({ key, value });
         }
     }
-    return undefined;
+
+    return out;
 }
 
 export function extractGenres(container?: ApiMetadataContainer | null): string[] {
@@ -270,32 +311,15 @@ export function extractExternalIds(
             if (!seen.has(key)) {
                 seen.add(key);
                 externalIds.push({
-                    source: extId.source ?? 'Unknown',
+                    source: extId.source ?? 'unknown',
                     id: extId.value,
-                    url: buildExternalIdUrl(extId.source, extId.value),
+                    url: extId.url ?? undefined,
                 });
             }
         }
     }
 
     return externalIds;
-}
-
-function buildExternalIdUrl(source?: string | null, value?: string): string | undefined {
-    if (!source || !value) return undefined;
-
-    const sourceLower = source.toLowerCase();
-    switch (sourceLower) {
-        case 'imdb':
-            return `https://www.imdb.com/title/${value}/`;
-        case 'tmdb':
-            return `https://www.themoviedb.org/tv/${value}`;
-        case 'tvdb':
-        case 'thetvdb':
-            return `https://thetvdb.com/?id=${value}&tab=series`;
-        default:
-            return undefined;
-    }
 }
 
 export function extractAwards(container?: ApiMetadataContainer | null): string[] {
@@ -329,23 +353,33 @@ export function extractAwards(container?: ApiMetadataContainer | null): string[]
     return awards;
 }
 
-export function extractImages(
-    container?: ApiMetadataContainer | null,
-): { id: string; url: string; type: string; width?: number; height?: number }[] {
+interface ExtractedImage {
+    id: string;
+    imageId?: string;
+    url: string;
+    type: string;
+    isPrimary: boolean;
+    width?: number;
+    height?: number;
+}
+
+export function extractImages(container?: ApiMetadataContainer | null): ExtractedImage[] {
     if (!container?.contributions?.length) {
         return [];
     }
 
     const sorted = sortedContributions(container);
-    const images: { id: string; url: string; type: string; width?: number; height?: number }[] = [];
+    const images: ExtractedImage[] = [];
 
     for (const contribution of sorted) {
         if (!contribution.images?.length) continue;
         for (const img of contribution.images) {
             images.push({
                 id: `${contribution.id}-${img.url}`,
+                imageId: img.id ?? undefined,
                 url: img.url,
                 type: img.type,
+                isPrimary: img.isPrimary ?? false,
                 width: img.width ?? undefined,
                 height: img.height ?? undefined,
             });
@@ -386,14 +420,13 @@ export function extractRelationships(
     return relationships;
 }
 
-async function fetchSubjects(params?: SubjectQueryParams): Promise<ApiSubject[]> {
+async function fetchSubjects(params?: SubjectQueryParams): Promise<PagedList<ApiSubject>> {
     const url = buildUrl('/subjects', params);
-    return apiGet<ApiSubject[]>(url);
+    return apiGet<PagedList<ApiSubject>>(url);
 }
 
 async function fetchSubjectById(id: string): Promise<ApiSubject> {
-    const subject = await apiGet<ApiSubject>(`/subjects/${id}`);
-    return normalizeSubjectMetadata(subject);
+    return apiGet<ApiSubject>(`/subjects/${id}`);
 }
 
 async function patchSubject(id: string, data: Omit<SubjectTagsPatch, 'id'>): Promise<void> {
@@ -406,29 +439,60 @@ async function deleteSubject(id: string): Promise<void> {
 
 export function useSubjects(params?: SubjectQueryParams) {
     const queryClient = useQueryClient();
+    const hasFilters = Boolean(params?.filter || params?.kind || params?.tag);
+    const subjectMatchesList = (event: EventStreamPayload): boolean => {
+        const current = queryClient.getQueryData<PagedList<ApiSubject>>(subjectQueryKeys.list(params));
+        if (current?.items.some((subject) => subject.id === event.context['subject.id'])) {
+            return true;
+        }
+        if (SUBJECT_CHANGE_EVENTS.some((eventName) => eventName === event.name)) {
+            return true;
+        }
+        if (!hasFilters) {
+            return true;
+        }
+        if (params?.filter) {
+            return false;
+        }
+        return (
+            (!params?.kind || event.context['subject.kind'] === params.kind) &&
+            (!params?.tag || event.context['subject.tags']?.split(',').includes(params.tag))
+        );
+    };
+    useSubjectEvents(subjectQueryKeys.list(params), true, false, undefined, subjectMatchesList);
+    useInvalidateQueriesOnEvents(SUBJECT_METADATA_JOB_EVENTS, [subjectQueryKeys.list(params)], {
+        debounceMs: 150,
+        exact: true,
+        owner: 'subjects:list',
+        predicate: (event) => isSubjectMetadataRefresh(event) && subjectMatchesList(event),
+    });
 
     const subjectsQuery = useQuery({
         queryKey: subjectQueryKeys.list(params),
         queryFn: () => fetchSubjects(params),
-        refetchInterval: POLLING_INTERVALS.slow,
         staleTime: POLLING_INTERVALS.slow / 2,
+        placeholderData: keepPreviousData,
     });
 
     const patchMutation = useMutation({
         mutationFn: ({ id, data }: { id: string; data: Omit<SubjectTagsPatch, 'id'> }) => patchSubject(id, data),
         onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: subjectQueryKeys.all });
+            void queryClient.invalidateQueries({ queryKey: subjectQueryKeys.all });
         },
     });
 
     const deleteMutation = useMutation({
         mutationFn: deleteSubject,
         onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: subjectQueryKeys.all });
+            void queryClient.invalidateQueries({ queryKey: subjectQueryKeys.all });
         },
     });
 
-    const subjects: ApiSubject[] = subjectsQuery.data ?? [];
+    const page = subjectsQuery.data;
+    const subjects: ApiSubject[] = page?.items ?? [];
+    const totalItems = page?.totalItems ?? 0;
+    const pageNumber = page?.pageNumber ?? params?.pageNumber ?? 1;
+    const pageSize = page?.pageSize ?? params?.pageSize ?? subjects.length;
 
     const updateSubjectTags = async (id: string, data: Omit<SubjectTagsPatch, 'id'>): Promise<void> => {
         await patchMutation.mutateAsync({ id, data });
@@ -436,6 +500,9 @@ export function useSubjects(params?: SubjectQueryParams) {
 
     return {
         subjects,
+        totalItems,
+        pageNumber,
+        pageSize,
         isLoading: subjectsQuery.isLoading,
         error: queryErrorOrNull(subjectsQuery),
 
@@ -449,12 +516,33 @@ export function useSubjects(params?: SubjectQueryParams) {
     };
 }
 
+export function useUpdateSubjectTags() {
+    const queryClient = useQueryClient();
+
+    return useMutation({
+        mutationFn: ({ id, tags }: { id: string; tags: StringSetPatch }) => patchSubject(id, { tags }),
+        onSuccess: (_data, request) => {
+            void queryClient.invalidateQueries({ queryKey: subjectQueryKeys.detail(request.id) });
+            void queryClient.invalidateQueries({ queryKey: subjectQueryKeys.all });
+            void queryClient.invalidateQueries({ queryKey: tagQueryKeys.byEntity(request.id) });
+            void queryClient.invalidateQueries({ queryKey: tagQueryKeys.all });
+        },
+    });
+}
+
 export function useSubject(id: string, enabled = true) {
+    useSubjectEvents(subjectQueryKeys.detail(id), enabled && Boolean(id), false, id ? [id] : []);
+    useInvalidateQueriesOnEvents(enabled && id ? SUBJECT_METADATA_JOB_EVENTS : [], [subjectQueryKeys.detail(id)], {
+        debounceMs: 150,
+        entityIds: id ? [id] : [],
+        exact: true,
+        owner: 'subjects:detail',
+        predicate: isSubjectMetadataRefresh,
+    });
     const subjectQuery = useQuery({
         queryKey: subjectQueryKeys.detail(id),
         queryFn: () => fetchSubjectById(id),
         enabled: enabled && Boolean(id),
-        refetchInterval: POLLING_INTERVALS.slow,
         staleTime: POLLING_INTERVALS.slow / 2,
     });
 
@@ -464,4 +552,42 @@ export function useSubject(id: string, enabled = true) {
         error: queryErrorOrNull(subjectQuery),
         refetch: subjectQuery.refetch,
     };
+}
+
+async function refreshSubject(id: string): Promise<JobActionDisposition> {
+    return executeImmediateJobRequest({
+        jobType: 'SubjectMetadataRefreshItem',
+        parameters: { subjectId: id },
+    });
+}
+
+export function useRefreshSubject(options?: JobActionLifecycleOptions<string>) {
+    const queryClient = useQueryClient();
+
+    return useJobAction<string>({
+        mutationFn: refreshSubject,
+        onJobStarted: (disposition, id) => {
+            void queryClient.invalidateQueries({ queryKey: subjectQueryKeys.detail(id) });
+            void queryClient.invalidateQueries({ queryKey: subjectQueryKeys.all });
+            options?.onJobStarted?.(disposition, id);
+        },
+        onJobExecutionSettled: options?.onJobExecutionSettled,
+        trackExecution: options?.trackExecution,
+    });
+}
+
+async function setPrimaryImage(subjectId: string, imageId: string): Promise<void> {
+    await apiPost(`/subjects/${subjectId}/images/${imageId}/primary`);
+}
+
+export function useSetPrimaryImage(subjectId: string) {
+    const queryClient = useQueryClient();
+
+    return useMutation({
+        mutationFn: (imageId: string) => setPrimaryImage(subjectId, imageId),
+        onSuccess: () => {
+            void queryClient.invalidateQueries({ queryKey: subjectQueryKeys.detail(subjectId) });
+            void queryClient.invalidateQueries({ queryKey: subjectQueryKeys.all });
+        },
+    });
 }

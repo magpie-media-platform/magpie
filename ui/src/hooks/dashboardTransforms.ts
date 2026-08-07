@@ -1,30 +1,28 @@
 import { extractContentFields, type ApiContentItemWithMetadata } from '@/lib/contentMapping';
-import { formatRelativeTime } from '@/lib/formatTime';
+import { formatElapsedDuration, formatRelativeTime } from '@/lib/formatTime';
+import { humanizeJobType } from '@/lib/jobExecution';
 import { extractTitle } from '@/lib/metadata';
 import {
     mapFulfillmentStatus,
     type ApiContentHierarchyItem,
     type ApiContentStats,
     type FulfillmentStatus,
-    type FulfillmentStatusValue,
-    type ContentKind,
 } from '@/types/content';
+import { normalizeHealthStatus } from '@/types/healthStatus';
 import type { PagedList } from '@/types/paging';
 import type { ApiDownload, DownloadStatusValue } from './useDownloads';
-import type { ApiIndexerConnection, IndexerStatusValue } from './useIndexers';
+import type { IndexerStatusValue } from './useIndexers';
 import type { ApiJobExecution, JobExecutionStatusValue } from './useJobs';
 
 export type IntegrationStatus = IndexerStatusValue;
 export type DownloadStatus = DownloadStatusValue;
 export type JobExecutionStatus = JobExecutionStatusValue;
 
-export interface DashboardIndexer {
-    connections?: ApiIndexerConnection[];
-}
-
 export interface HealthCounts {
     healthy: number;
     unhealthy: number;
+    degraded: number;
+    stabilizing: number;
     unknown: number;
     stale: number;
 }
@@ -32,14 +30,17 @@ export interface HealthCounts {
 export interface DownloadCounts {
     downloading: number;
     queued: number;
+    paused: number;
     stalled: number;
 }
 
 export interface ActiveDownload {
     id: string;
+    contentId?: string;
+    parentId?: string;
     title: string;
     progress: number;
-    state: 'downloading' | 'queued' | 'stalled';
+    state: 'downloading' | 'queued' | 'paused' | 'stalled';
     size?: string;
     eta?: string;
 }
@@ -58,13 +59,17 @@ export interface ContentCounts {
     upgradable: number;
     fulfilled: number;
     fulfilledExternally: number;
+    partial: number;
 }
 
 export interface RecentContentItem {
     id: string;
+    parentId?: string;
     title: string;
     addedAt: string;
     fulfillment: FulfillmentStatus;
+    monitoring: boolean | null;
+    effectiveMonitoring: boolean;
 }
 
 export type { ApiContentItemWithMetadata as ApiContentItemWithDate };
@@ -74,36 +79,45 @@ export type PagedContentWithDates = PagedList<ApiContentItemWithMetadata>;
 export interface UpcomingContentItem {
     id: string;
     contentId: string;
+    parentId?: string;
     title: string;
     subtitle?: string;
-    airDate: string;
+    date: string;
     posterUrl?: string;
-    kind: ContentKind;
+    contentType: string;
+    level: string;
+    levelLabel?: string;
     fulfillment: FulfillmentStatus;
 }
 
-function accumulateStatus(counts: HealthCounts, status: IntegrationStatus): void {
-    switch (status) {
-        case 1:
+function accumulateStatus(counts: HealthCounts, status: string | null | undefined): void {
+    switch (normalizeHealthStatus(status)) {
+        case 'Healthy':
             counts.healthy++;
             break;
-        case 2:
+        case 'Unhealthy':
             counts.unhealthy++;
             break;
-        case 3:
+        case 'Degraded':
+            counts.degraded++;
+            break;
+        case 'Stabilizing':
+            counts.stabilizing++;
+            break;
+        case 'Stale':
             counts.stale++;
             break;
-        case 0:
+        case 'Unknown':
         default:
             counts.unknown++;
             break;
     }
 }
 
-export function calculateHealthCounts<T extends { enabled: boolean; status: IntegrationStatus }>(
+export function calculateHealthCounts<T extends { enabled: boolean; status: string | null | undefined }>(
     items: T[],
 ): HealthCounts {
-    const counts: HealthCounts = { healthy: 0, unhealthy: 0, unknown: 0, stale: 0 };
+    const counts: HealthCounts = { healthy: 0, unhealthy: 0, degraded: 0, stabilizing: 0, unknown: 0, stale: 0 };
 
     for (const item of items) {
         if (!item.enabled) {
@@ -115,40 +129,28 @@ export function calculateHealthCounts<T extends { enabled: boolean; status: Inte
     return counts;
 }
 
-export function calculateIndexerHealthCounts(indexers: DashboardIndexer[]): HealthCounts {
-    const counts: HealthCounts = { healthy: 0, unhealthy: 0, unknown: 0, stale: 0 };
-
-    for (const indexer of indexers) {
-        if (!indexer.connections?.length) {
-            continue;
-        }
-        for (const conn of indexer.connections) {
-            if (!conn.enabled) {
-                continue;
-            }
-            accumulateStatus(counts, conn.status);
-        }
-    }
-
-    return counts;
-}
-
-export function mapDownloadState(status: DownloadStatus): 'downloading' | 'queued' | 'stalled' | null {
+export function mapDownloadState(status: DownloadStatus): 'downloading' | 'queued' | 'paused' | 'stalled' | null {
     switch (status) {
-        case 2:
+        case 'Downloading':
             return 'downloading';
-        case 0:
-        case 1:
+        case 'Grabbed':
+        case 'Queued':
             return 'queued';
-        case 4:
+        case 'Paused':
+            return 'paused';
+        case 'Stalled':
             return 'stalled';
-        default:
+        case 'Failed':
+        case 'Downloaded':
+        case 'Importing':
+        case 'Imported':
+        case 'Cancelled':
             return null;
     }
 }
 
 export function calculateDownloadCounts(downloads: ApiDownload[]): DownloadCounts {
-    const counts: DownloadCounts = { downloading: 0, queued: 0, stalled: 0 };
+    const counts: DownloadCounts = { downloading: 0, queued: 0, paused: 0, stalled: 0 };
 
     for (const download of downloads) {
         const state = mapDownloadState(download.status);
@@ -160,60 +162,50 @@ export function calculateDownloadCounts(downloads: ApiDownload[]): DownloadCount
     return counts;
 }
 
+export function mapDownloadStatusCounts(statusCounts: Partial<Record<DownloadStatusValue, number>>): DownloadCounts {
+    return {
+        downloading: statusCounts.Downloading ?? 0,
+        queued: (statusCounts.Grabbed ?? 0) + (statusCounts.Queued ?? 0),
+        paused: statusCounts.Paused ?? 0,
+        stalled: statusCounts.Stalled ?? 0,
+    };
+}
+
 export function mapActiveDownloads(downloads: ApiDownload[], limit: number): ActiveDownload[] {
     return downloads
         .filter((d) => mapDownloadState(d.status) !== null)
         .slice(0, limit)
         .map((d) => ({
             id: d.id,
-            title: d.title,
-            progress: 0,
+            ...(d.contentHierarchyItemId ? { contentId: d.contentHierarchyItemId } : {}),
+            ...(d.contentHierarchyParentId ? { parentId: d.contentHierarchyParentId } : {}),
+            title: d.contentMetadataTitle?.trim() || d.contentHierarchyName?.trim() || d.title,
+            progress: d.progress ?? 0,
             state: mapDownloadState(d.status) || 'queued',
         }));
 }
 
 export function mapJobStatus(status: JobExecutionStatus): 'completed' | 'running' | 'failed' {
     switch (status) {
-        case 3:
+        case 'Completed':
             return 'completed';
-        case 2:
-        case 1:
-        case 6:
+        case 'Running':
+        case 'Queued':
+        case 'CancellationRequested':
             return 'running';
-        case 4:
-        case 5:
+        case 'Failed':
+        case 'Cancelled':
         default:
             return 'failed';
     }
 }
 
-export function formatDuration(startedAt?: string | null, completedAt?: string | null): string | undefined {
-    if (!startedAt || !completedAt) {
-        return undefined;
-    }
-
-    const start = new Date(startedAt).getTime();
-    const end = new Date(completedAt).getTime();
-    const ms = end - start;
-
-    if (ms < 1000) {
-        return `${ms}ms`;
-    }
-    if (ms < 60000) {
-        return `${Math.round(ms / 1000)}s`;
-    }
-
-    const minutes = Math.floor(ms / 60000);
-    const seconds = Math.round((ms % 60000) / 1000);
-    return seconds > 0 ? `${minutes}m ${seconds}s` : `${minutes}m`;
-}
-
 export function mapRecentJobs(jobs: ApiJobExecution[], limit: number): RecentJob[] {
     return jobs.slice(0, limit).map((j) => ({
         id: j.id,
-        name: j.jobType.replace(/([A-Z])/g, ' $1').trim(),
+        name: humanizeJobType(j.jobType),
         status: mapJobStatus(j.status),
-        duration: formatDuration(j.startedAt, j.completedAt),
+        duration: formatElapsedDuration(j.startedAt, j.completedAt),
         timestamp: formatRelativeTime(j.startedAt || j.createdAt),
     }));
 }
@@ -225,33 +217,51 @@ export function calculateContentCounts(stats: ApiContentStats): ContentCounts {
         upgradable: stats.upgradable,
         fulfilled: stats.fulfilled,
         fulfilledExternally: stats.fulfilledExternally,
+        partial: stats.partial,
     };
 }
 
 export function mapRecentContent(items: ApiContentHierarchyItem[], limit: number): RecentContentItem[] {
     return items.slice(0, limit).map((item) => ({
         id: item.id,
+        ...(item.parentId ? { parentId: item.parentId } : {}),
         title: extractTitle(item.metadataContainer) ?? item.name,
         addedAt: formatRelativeTime(item.createdAt),
-        fulfillment: item.contentItem
-            ? mapFulfillmentStatus(item.contentItem.fulfillment as FulfillmentStatusValue)
-            : 'missing',
+        fulfillment: item.contentItem ? mapFulfillmentStatus(item.contentItem.fulfillment) : 'missing',
+        monitoring: item.monitoring,
+        effectiveMonitoring: item.effectiveMonitoring,
     }));
 }
 
 export function mapUpcomingContent(items: ApiContentItemWithMetadata[]): UpcomingContentItem[] {
-    return items.map((item) => {
-        const fields = extractContentFields(item);
+    const today = new Date().toISOString().slice(0, 10);
 
-        return {
+    const result: UpcomingContentItem[] = [];
+    for (const item of items) {
+        const fields = extractContentFields(item);
+        if (!fields.date) {
+            continue;
+        }
+        const parsed = new Date(fields.date);
+        if (isNaN(parsed.getTime())) {
+            continue;
+        }
+        if (parsed.toISOString().slice(0, 10) < today) {
+            continue;
+        }
+        result.push({
             id: `upcoming-${item.id}`,
             contentId: item.id,
+            ...(item.parentId ? { parentId: item.parentId } : {}),
             title: fields.title,
             subtitle: fields.subtitle,
-            airDate: fields.date ?? new Date().toISOString(),
+            date: fields.date,
             posterUrl: fields.posterUrl,
-            kind: fields.kind,
+            contentType: fields.contentType,
+            level: fields.level,
+            levelLabel: fields.levelLabel,
             fulfillment: fields.fulfillment,
-        };
-    });
+        });
+    }
+    return result;
 }

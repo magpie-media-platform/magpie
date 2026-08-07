@@ -1,19 +1,25 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions.Repositories;
 using Magpie.Core;
 using Magpie.Core.Repositories;
 using Magpie.Data;
+using Magpie.Models;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
-using Magpie.Test.Shared;
+using Magpie.Sdk.Events;
+using Magpie.Sdk.Services;
 
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
+
+using Moq;
 
 using NUnit.Framework;
 
@@ -24,6 +30,7 @@ public class SettingsRepositoryTests
 {
     private MagpieDbContext _context = null!;
     private ISettingsRepository _subject = null!;
+    private List<MagpieEvent> _publishedEvents = null!;
     private Guid _userId;
     private Guid _extensionId;
 
@@ -63,18 +70,28 @@ public class SettingsRepositoryTests
         _userId = user.Id;
         _extensionId = extension.Id;
 
-        var loggerFactory = LoggerFactory.Create(builder => builder.AddTestLogger());
+        var loggerFactory = NullLoggerFactory.Instance;
 
         var auditRecordRepository = new AuditRecordRepository(
             _context,
-            loggerFactory.CreateLogger<AuditRecordRepository>());
+            Mock.Of<IEventBus>(),
+            loggerFactory.CreateLogger<AuditRecordRepository>(),
+            new TransactionManager(_context, NullLogger<TransactionManager>.Instance));
 
-        var transactionManager = new TransactionManager(_context);
+        var transactionManager = new TransactionManager(_context, NullLogger<TransactionManager>.Instance);
+        _publishedEvents = [];
+        var eventBus = new Mock<IEventBus>();
+        eventBus
+            .Setup(bus => bus.PublishAsync(It.IsAny<MagpieEvent>(), It.IsAny<CancellationToken>()))
+            .Callback((MagpieEvent magpieEvent, CancellationToken _) => _publishedEvents.Add(magpieEvent))
+            .Returns(Task.CompletedTask);
 
         _subject = new SettingsRepository(
             _context,
             auditRecordRepository,
             transactionManager,
+            Mock.Of<IContentHierarchyItemRepository>(),
+            eventBus.Object,
             loggerFactory.CreateLogger<SettingsRepository>());
     }
 
@@ -86,7 +103,7 @@ public class SettingsRepositoryTests
     }
 
     [Test]
-    public async Task ListAllAsync_ReturnsAllSettingsGroups()
+    public async Task ListAllAsync_ReturnsAllSettingsGroups_WhenGroupsExist()
     {
         // Arrange
         var group1 = new SettingsGroup
@@ -102,10 +119,10 @@ public class SettingsRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.SettingsGroups.AddRange(group1, group2);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        var result = await _subject.ListAllAsync(default);
+        var result = await _subject.ListAllAsync(default).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Has.Exactly(2).Items);
@@ -115,14 +132,14 @@ public class SettingsRepositoryTests
     public async Task ListAllAsync_ReturnsEmptyList_WhenNoSettingsGroups()
     {
         // Act
-        var result = await _subject.ListAllAsync(default);
+        var result = await _subject.ListAllAsync(default).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.Empty);
     }
 
     [Test]
-    public async Task ListAllAsync_IncludesSettings()
+    public async Task ListAllAsync_IncludesSettings_WhenGroupsHaveSettings()
     {
         // Arrange
         var group = new SettingsGroup
@@ -132,7 +149,7 @@ public class SettingsRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.SettingsGroups.Add(group);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         var setting = new Setting
         {
@@ -142,10 +159,10 @@ public class SettingsRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.Settings.Add(setting);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        var result = await _subject.ListAllAsync(default);
+        var result = await _subject.ListAllAsync(default).ConfigureAwait(false);
 
         // Assert
         var resultGroup = result.First();
@@ -153,8 +170,10 @@ public class SettingsRepositoryTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(settings, Has.Count.EqualTo(1));
-            Assert.That(settings, Has.One.With.Property(nameof(Setting.Key)).EqualTo("TestKey")
-                .And.Property(nameof(Setting.Value)).EqualTo("TestValue"));
+            Assert.That(
+                settings,
+                Has.One.With.Property(nameof(Setting.Key)).EqualTo("TestKey")
+                    .And.Property(nameof(Setting.Value)).EqualTo("TestValue"));
         }
     }
 
@@ -169,12 +188,12 @@ public class SettingsRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.SettingsGroups.Add(group);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         var lookupKey = new SettingsGroupLookupKey(_extensionId, "TestGroup");
 
         // Act
-        var result = await _subject.GetByIdAsync(lookupKey);
+        var result = await _subject.GetByIdAsync(lookupKey).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -191,7 +210,7 @@ public class SettingsRepositoryTests
         var lookupKey = new SettingsGroupLookupKey(Guid.NewGuid(), "NonExistent");
 
         // Act
-        var result = await _subject.GetByIdAsync(lookupKey);
+        var result = await _subject.GetByIdAsync(lookupKey).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.Null);
@@ -208,12 +227,12 @@ public class SettingsRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.SettingsGroups.Add(group);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         var lookupKey = new SettingsGroupLookupKey(null, "SystemGroup");
 
         // Act
-        var result = await _subject.GetByIdAsync(lookupKey);
+        var result = await _subject.GetByIdAsync(lookupKey).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -224,7 +243,7 @@ public class SettingsRepositoryTests
     }
 
     [Test]
-    public async Task GetByIdAsync_IncludesSettings()
+    public async Task GetByIdAsync_IncludesSettings_WhenGroupHasSettings()
     {
         // Arrange
         var group = new SettingsGroup
@@ -234,7 +253,7 @@ public class SettingsRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.SettingsGroups.Add(group);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         var setting = new Setting
         {
@@ -244,12 +263,12 @@ public class SettingsRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.Settings.Add(setting);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         var lookupKey = new SettingsGroupLookupKey(null, "GroupWithSettings");
 
         // Act
-        var result = await _subject.GetByIdAsync(lookupKey);
+        var result = await _subject.GetByIdAsync(lookupKey).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.Not.Null);
@@ -257,8 +276,10 @@ public class SettingsRepositoryTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(settings, Has.Count.EqualTo(1));
-            Assert.That(settings, Has.One.With.Property(nameof(Setting.Key)).EqualTo("SettingKey")
-                .And.Property(nameof(Setting.Value)).EqualTo("SettingValue"));
+            Assert.That(
+                settings,
+                Has.One.With.Property(nameof(Setting.Key)).EqualTo("SettingKey")
+                    .And.Property(nameof(Setting.Value)).EqualTo("SettingValue"));
         }
     }
 
@@ -273,12 +294,13 @@ public class SettingsRepositoryTests
         };
 
         // Act
-        var result = await _subject.PatchAsync(patch, _userId);
+        var result = await _subject.PatchAsync(patch, _userId).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.True);
 
-        var created = await _context.SettingsGroups.FirstOrDefaultAsync(sg => sg.Name == "NewGroup");
+        var created = await _context.SettingsGroups.FirstOrDefaultAsync(sg => sg.Name == "NewGroup")
+            .ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(created, Is.Not.Null);
@@ -300,13 +322,13 @@ public class SettingsRepositoryTests
         };
 
         // Act
-        var result = await _subject.PatchAsync(patch, _userId);
+        var result = await _subject.PatchAsync(patch, _userId).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.True);
 
         var created = await _context.SettingsGroups.FirstOrDefaultAsync(
-            sg => sg.Name == "ExtensionGroup" && sg.ExtensionId == _extensionId);
+            sg => sg.Name == "ExtensionGroup" && sg.ExtensionId == _extensionId).ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(created, Is.Not.Null);
@@ -331,22 +353,26 @@ public class SettingsRepositoryTests
         };
 
         // Act
-        var result = await _subject.PatchAsync(patch, _userId);
+        var result = await _subject.PatchAsync(patch, _userId).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.True);
 
         var group = await _context.SettingsGroups
             .Include(sg => sg.Settings)
-            .FirstOrDefaultAsync(sg => sg.Name == "GroupWithNewSettings");
+            .FirstOrDefaultAsync(sg => sg.Name == "GroupWithNewSettings").ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(group, Is.Not.Null);
             Assert.That(group, Has.Property(nameof(group.Settings)).With.Count.EqualTo(2));
-            Assert.That(group, Has.Property(nameof(group.Settings)).With.One.With.Property(nameof(Setting.Key))
-                .EqualTo("Key1"));
-            Assert.That(group, Has.Property(nameof(group.Settings)).With.One.With.Property(nameof(Setting.Key))
-                .EqualTo("Key2"));
+            Assert.That(
+                group,
+                Has.Property(nameof(group.Settings)).With.One.With.Property(nameof(Setting.Key))
+                    .EqualTo("Key1"));
+            Assert.That(
+                group,
+                Has.Property(nameof(group.Settings)).With.One.With.Property(nameof(Setting.Key))
+                    .EqualTo("Key2"));
         }
     }
 
@@ -361,7 +387,7 @@ public class SettingsRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.SettingsGroups.Add(group);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         var settingsToAdd = new Dictionary<string, string>
         {
@@ -375,26 +401,28 @@ public class SettingsRepositoryTests
         };
 
         // Act
-        var result = await _subject.PatchAsync(patch, _userId);
+        var result = await _subject.PatchAsync(patch, _userId).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.True);
 
         var updated = await _context.SettingsGroups
             .Include(sg => sg.Settings)
-            .FirstOrDefaultAsync(sg => sg.Name == "ExistingGroup");
+            .FirstOrDefaultAsync(sg => sg.Name == "ExistingGroup").ConfigureAwait(false);
         Assert.That(updated, Is.Not.Null);
         var settings = updated!.Settings.ToList();
         using (Assert.EnterMultipleScope())
         {
             Assert.That(settings, Has.Count.EqualTo(1));
-            Assert.That(settings, Has.One.With.Property(nameof(Setting.Key)).EqualTo("NewKey")
-                .And.Property(nameof(Setting.Value)).EqualTo("NewValue"));
+            Assert.That(
+                settings,
+                Has.One.With.Property(nameof(Setting.Key)).EqualTo("NewKey")
+                    .And.Property(nameof(Setting.Value)).EqualTo("NewValue"));
         }
     }
 
     [Test]
-    public async Task PatchAsync_UpdatesSettings()
+    public async Task PatchAsync_UpdatesSettings_WhenUpdatesAreProvided()
     {
         // Arrange
         var group = new SettingsGroup
@@ -404,7 +432,7 @@ public class SettingsRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.SettingsGroups.Add(group);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         var setting = new Setting
         {
@@ -414,7 +442,7 @@ public class SettingsRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.Settings.Add(setting);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         var settingsToUpdate = new Dictionary<string, string>
         {
@@ -428,12 +456,12 @@ public class SettingsRepositoryTests
         };
 
         // Act
-        var result = await _subject.PatchAsync(patch, _userId);
+        var result = await _subject.PatchAsync(patch, _userId).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.True);
 
-        var updated = await _context.Settings.FirstOrDefaultAsync(s => s.Key == "UpdateKey");
+        var updated = await _context.Settings.FirstOrDefaultAsync(s => s.Key == "UpdateKey").ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(updated, Has.Property(nameof(updated.Value)).EqualTo("UpdatedValue"));
@@ -443,7 +471,7 @@ public class SettingsRepositoryTests
     }
 
     [Test]
-    public async Task PatchAsync_RemovesSettings()
+    public async Task PatchAsync_RemovesSettings_WhenRemovalsAreProvided()
     {
         // Arrange
         var group = new SettingsGroup
@@ -453,7 +481,7 @@ public class SettingsRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.SettingsGroups.Add(group);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         var setting1 = new Setting
         {
@@ -470,7 +498,7 @@ public class SettingsRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.Settings.AddRange(setting1, setting2);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         var patch = new SettingsGroupPatch
         {
@@ -480,14 +508,14 @@ public class SettingsRepositoryTests
         };
 
         // Act
-        var result = await _subject.PatchAsync(patch, _userId);
+        var result = await _subject.PatchAsync(patch, _userId).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.True);
 
         var updatedGroup = await _context.SettingsGroups
             .Include(sg => sg.Settings)
-            .FirstOrDefaultAsync(sg => sg.Name == "GroupToRemoveFrom");
+            .FirstOrDefaultAsync(sg => sg.Name == "GroupToRemoveFrom").ConfigureAwait(false);
         Assert.That(updatedGroup, Is.Not.Null);
         var settings = updatedGroup!.Settings.ToList();
         using (Assert.EnterMultipleScope())
@@ -508,7 +536,7 @@ public class SettingsRepositoryTests
             CreatedAt = DateTime.UtcNow.AddDays(-1)
         };
         _context.SettingsGroups.Add(group);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         var patch = new SettingsGroupPatch
         {
@@ -518,12 +546,13 @@ public class SettingsRepositoryTests
         };
 
         // Act
-        var result = await _subject.PatchAsync(patch, _userId);
+        var result = await _subject.PatchAsync(patch, _userId).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.True);
 
-        var updated = await _context.SettingsGroups.FirstOrDefaultAsync(sg => sg.Name == "GroupToModify");
+        var updated = await _context.SettingsGroups.FirstOrDefaultAsync(sg => sg.Name == "GroupToModify")
+            .ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(updated, Has.Property(nameof(updated.ModifiedByUserId)).EqualTo(_userId));
@@ -543,10 +572,10 @@ public class SettingsRepositoryTests
         };
 
         // Act
-        await _subject.PatchAsync(patch, _userId);
+        await _subject.PatchAsync(patch, _userId).ConfigureAwait(false);
 
         // Assert
-        var auditRecords = await _context.AuditRecords.ToListAsync();
+        var auditRecords = await _context.AuditRecords.ToListAsync().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(auditRecords, Has.One.With.Property(nameof(AuditRecord.Operation)).EqualTo("Create"));
@@ -571,15 +600,17 @@ public class SettingsRepositoryTests
         };
 
         // Act
-        await _subject.PatchAsync(patch, _userId);
+        await _subject.PatchAsync(patch, _userId).ConfigureAwait(false);
 
         // Assert
-        var auditRecords = await _context.AuditRecords.ToListAsync();
+        var auditRecords = await _context.AuditRecords.ToListAsync().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(auditRecords, Has.One.With.Property(nameof(AuditRecord.EntityType)).EqualTo("Setting"));
-            Assert.That(auditRecords, Has.One.With.Property(nameof(AuditRecord.Operation)).EqualTo("Create")
-                .And.Property(nameof(AuditRecord.EntityType)).EqualTo("Setting"));
+            Assert.That(
+                auditRecords,
+                Has.One.With.Property(nameof(AuditRecord.Operation)).EqualTo("Create")
+                    .And.Property(nameof(AuditRecord.EntityType)).EqualTo("Setting"));
         }
     }
 
@@ -594,7 +625,7 @@ public class SettingsRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.SettingsGroups.Add(group);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         var setting = new Setting
         {
@@ -604,7 +635,7 @@ public class SettingsRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.Settings.Add(setting);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         var settingsToUpdate = new Dictionary<string, string>
         {
@@ -618,10 +649,10 @@ public class SettingsRepositoryTests
         };
 
         // Act
-        await _subject.PatchAsync(patch, _userId);
+        await _subject.PatchAsync(patch, _userId).ConfigureAwait(false);
 
         // Assert
-        var auditRecords = await _context.AuditRecords.ToListAsync();
+        var auditRecords = await _context.AuditRecords.ToListAsync().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(auditRecords, Has.One.With.Property(nameof(AuditRecord.Operation)).EqualTo("Update"));
@@ -640,7 +671,7 @@ public class SettingsRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.SettingsGroups.Add(group);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         var setting = new Setting
         {
@@ -650,7 +681,7 @@ public class SettingsRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.Settings.Add(setting);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         var patch = new SettingsGroupPatch
         {
@@ -660,10 +691,10 @@ public class SettingsRepositoryTests
         };
 
         // Act
-        await _subject.PatchAsync(patch, _userId);
+        await _subject.PatchAsync(patch, _userId).ConfigureAwait(false);
 
         // Assert
-        var auditRecords = await _context.AuditRecords.ToListAsync();
+        var auditRecords = await _context.AuditRecords.ToListAsync().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(auditRecords, Has.One.With.Property(nameof(AuditRecord.Operation)).EqualTo("Delete"));
@@ -687,12 +718,12 @@ public class SettingsRepositoryTests
         };
 
         // Act
-        var result = await _subject.PatchAsync(patch, _userId);
+        var result = await _subject.PatchAsync(patch, _userId).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.True);
 
-        var setting = await _context.Settings.FirstOrDefaultAsync(s => s.Key == "NullValueKey");
+        var setting = await _context.Settings.FirstOrDefaultAsync(s => s.Key == "NullValueKey").ConfigureAwait(false);
         Assert.That(setting, Has.Property(nameof(setting.Value)).EqualTo(string.Empty));
     }
 
@@ -707,7 +738,7 @@ public class SettingsRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.SettingsGroups.Add(group);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         var setting = new Setting
         {
@@ -717,7 +748,7 @@ public class SettingsRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.Settings.Add(setting);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         var settingsToUpdate = new Dictionary<string, string?>
         {
@@ -731,12 +762,12 @@ public class SettingsRepositoryTests
         };
 
         // Act
-        var result = await _subject.PatchAsync(patch, _userId);
+        var result = await _subject.PatchAsync(patch, _userId).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.True);
 
-        var updated = await _context.Settings.FirstOrDefaultAsync(s => s.Key == "NullUpdateKey");
+        var updated = await _context.Settings.FirstOrDefaultAsync(s => s.Key == "NullUpdateKey").ConfigureAwait(false);
         Assert.That(updated, Has.Property(nameof(updated.Value)).EqualTo(string.Empty));
     }
 
@@ -751,7 +782,7 @@ public class SettingsRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.SettingsGroups.Add(group);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         var settingsToUpdate = new Dictionary<string, string>
         {
@@ -765,12 +796,13 @@ public class SettingsRepositoryTests
         };
 
         // Act
-        var result = await _subject.PatchAsync(patch, _userId);
+        var result = await _subject.PatchAsync(patch, _userId).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.True);
 
-        var settings = await _context.Settings.Where(s => s.SettingsGroupId == group.Id).ToListAsync();
+        var settings = await _context.Settings.Where(s => s.SettingsGroupId == group.Id).ToListAsync()
+            .ConfigureAwait(false);
         Assert.That(settings, Is.Empty);
     }
 
@@ -785,7 +817,7 @@ public class SettingsRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.SettingsGroups.Add(group);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         var patch = new SettingsGroupPatch
         {
@@ -795,7 +827,7 @@ public class SettingsRepositoryTests
         };
 
         // Act
-        var result = await _subject.PatchAsync(patch, _userId);
+        var result = await _subject.PatchAsync(patch, _userId).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.True);
@@ -812,7 +844,7 @@ public class SettingsRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.SettingsGroups.Add(group);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         var setting1 = new Setting
         {
@@ -829,7 +861,7 @@ public class SettingsRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.Settings.AddRange(setting1, setting2);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         var patch = new SettingsGroupPatch
         {
@@ -844,25 +876,72 @@ public class SettingsRepositoryTests
         };
 
         // Act
-        var result = await _subject.PatchAsync(patch, _userId);
+        var result = await _subject.PatchAsync(patch, _userId).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.True);
 
         var updatedGroup = await _context.SettingsGroups
         .Include(sg => sg.Settings)
-        .FirstOrDefaultAsync(sg => sg.Name == "GroupForCombinedPatch");
+        .FirstOrDefaultAsync(sg => sg.Name == "GroupForCombinedPatch").ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(updatedGroup, Has.Property(nameof(updatedGroup.Settings)).With.Count.EqualTo(2));
-            Assert.That(updatedGroup, Has.Property(nameof(updatedGroup.Settings))
-                .With.One.With.Property(nameof(Setting.Key)).EqualTo("AddMe")
-                .And.Property(nameof(Setting.Value)).EqualTo("AddValue"));
-            Assert.That(updatedGroup, Has.Property(nameof(updatedGroup.Settings))
-                .With.One.With.Property(nameof(Setting.Key)).EqualTo("UpdateMe")
-                .And.Property(nameof(Setting.Value)).EqualTo("NewValue"));
-            Assert.That(updatedGroup, Has.Property(nameof(updatedGroup.Settings))
-                .With.None.With.Property(nameof(Setting.Key)).EqualTo("DeleteMe"));
+            Assert.That(
+                updatedGroup,
+                Has.Property(nameof(updatedGroup.Settings))
+                    .With.One.With.Property(nameof(Setting.Key)).EqualTo("AddMe")
+                    .And.Property(nameof(Setting.Value)).EqualTo("AddValue"));
+            Assert.That(
+                updatedGroup,
+                Has.Property(nameof(updatedGroup.Settings))
+                    .With.One.With.Property(nameof(Setting.Key)).EqualTo("UpdateMe")
+                    .And.Property(nameof(Setting.Value)).EqualTo("NewValue"));
+            Assert.That(
+                updatedGroup,
+                Has.Property(nameof(updatedGroup.Settings))
+                    .With.None.With.Property(nameof(Setting.Key)).EqualTo("DeleteMe"));
+        }
+    }
+
+    [Test]
+    public async Task PatchAsync_PublishesUpdatedEvent_WithSortedDistinctChangedFields()
+    {
+        // Arrange
+        var group = new SettingsGroup
+        {
+            Name = "sorted-keys",
+            CreatedAt = DateTime.UtcNow
+        };
+        group.Settings.Add(new Setting { Key = "middle", Value = "before", CreatedAt = DateTime.UtcNow });
+        _context.SettingsGroups.Add(group);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        var patch = new SettingsGroupPatch
+        {
+            Name = group.Name,
+            Settings = new()
+            {
+                Add = new Dictionary<string, string>
+                {
+                    ["zeta"] = "last",
+                    ["alpha"] = "temporary"
+                },
+                Update = new Dictionary<string, string> { ["middle"] = "after" },
+                Remove = ["alpha"]
+            }
+        };
+
+        // Act
+        await _subject.PatchAsync(patch, _userId).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(_publishedEvents, Has.Count.EqualTo(1));
+            Assert.That(_publishedEvents[0].Name, Is.EqualTo(MagpieEvents.Names.SettingsGroupUpdated));
+            Assert.That(_publishedEvents[0].Context.Values, Does.Contain(group.Name));
+            Assert.That(_publishedEvents[0].Context.Values, Does.Contain("alpha,middle,zeta"));
         }
     }
 }

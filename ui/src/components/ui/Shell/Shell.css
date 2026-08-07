@@ -54,12 +54,9 @@
         @media (max-width: 767px) {
             display: block;
             position: fixed;
-            top: var(--header-height, 56px);
-            left: 0;
-            right: 0;
-            bottom: 0;
-            z-index: calc(var(--z-overlay) - 1);
-            background-color: rgba(0, 0, 0, 0);
+            inset: 0;
+            z-index: calc(var(--z-overlay) + 1);
+            background-color: rgb(0 0 0 / 0%);
             pointer-events: none;
             transition: background-color var(--duration-normal) var(--easing-default);
 
@@ -76,7 +73,7 @@
             position: fixed;
             top: var(--header-height, 56px);
             left: 0;
-            z-index: var(--z-overlay);
+            z-index: calc(var(--z-overlay) + 2);
             height: calc(100dvh - var(--header-height, 56px));
             width: var(--sidebar-width);
             min-width: var(--sidebar-width);
@@ -91,6 +88,13 @@
                 min-width: var(--sidebar-width);
             }
         }
+
+        .app-shell__sidebar-close,
+        .admin-shell__sidebar-close {
+            align-self: flex-start;
+            margin: var(--space-sm);
+            margin-bottom: 0;
+        }
     }
 
     .app-shell__main,
@@ -104,6 +108,11 @@
         &:focus {
             outline: none;
         }
+
+        @media (max-width: 767px) {
+            overflow-y: auto;
+            overscroll-behavior-y: contain;
+        }
     }
 
     .app-shell__main-wrapper,
@@ -113,6 +122,12 @@
         flex: 1;
         min-height: 0;
         overflow-y: auto;
+
+        @media (max-width: 767px) {
+            flex: none;
+            min-height: 100%;
+            overflow: visible;
+        }
     }
 
     .app-shell__bottom-nav,

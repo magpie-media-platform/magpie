@@ -6,7 +6,11 @@ vi.mock('react-router-dom', () => ({
     useLocation: () => mockLocation,
 }));
 
-import { useScrollRestoration, __resetScrollRestorationLru } from './useScrollRestoration';
+vi.mock('./ui/useMediaQuery', () => ({
+    useMediaQuery: () => false,
+}));
+
+import { useScrollRestoration } from './useScrollRestoration';
 
 function createMockWrapper() {
     let scrollTop = 0;
@@ -41,30 +45,33 @@ function createMockWrapper() {
 
 describe('useScrollRestoration', () => {
     let wrapper: ReturnType<typeof createMockWrapper>;
-    let originalQuerySelector: typeof document.querySelector;
-    let rafCallbacks: FrameRequestCallback[];
+    let rafCallbacks: Map<number, FrameRequestCallback>;
+    let nextRafId: number;
 
     beforeEach(() => {
         wrapper = createMockWrapper();
-        originalQuerySelector = document.querySelector.bind(document);
 
         vi.spyOn(document, 'querySelector').mockImplementation((selector: string) => {
             if (selector === '.app-shell__main-wrapper, .admin-shell__main-wrapper') {
                 return wrapper as unknown as HTMLElement;
             }
-            return originalQuerySelector(selector);
+            return null;
         });
 
-        rafCallbacks = [];
+        rafCallbacks = new Map();
+        nextRafId = 1;
         vi.spyOn(window, 'requestAnimationFrame').mockImplementation((cb) => {
-            rafCallbacks.push(cb);
-            return rafCallbacks.length;
+            const id = nextRafId++;
+            rafCallbacks.set(id, cb);
+            return id;
+        });
+        vi.spyOn(window, 'cancelAnimationFrame').mockImplementation((id) => {
+            rafCallbacks.delete(id);
         });
 
         sessionStorage.clear();
         mockLocation.key = 'abc123';
         mockLocation.pathname = '/list';
-        __resetScrollRestorationLru();
     });
 
     afterEach(() => {
@@ -72,12 +79,12 @@ describe('useScrollRestoration', () => {
     });
 
     function flushRaf() {
-        const cbs = [...rafCallbacks];
-        rafCallbacks = [];
+        const cbs = [...rafCallbacks.values()];
+        rafCallbacks.clear();
         cbs.forEach((cb) => cb(performance.now()));
     }
 
-    it('scrolls to top for a new location key', () => {
+    it('scrolls to top for a new pathname', () => {
         wrapper.scrollTop = 500;
 
         renderHook(() => useScrollRestoration());
@@ -85,8 +92,8 @@ describe('useScrollRestoration', () => {
         expect(wrapper.scrollTop).toBe(0);
     });
 
-    it('restores saved scroll position for a known location key', () => {
-        sessionStorage.setItem('magpie_scroll_abc123', '350');
+    it('restores saved scroll position for a known pathname', () => {
+        sessionStorage.setItem('magpie_scroll_/list', '350');
 
         renderHook(() => useScrollRestoration());
         flushRaf();
@@ -101,7 +108,7 @@ describe('useScrollRestoration', () => {
         wrapper.dispatchScroll();
         flushRaf();
 
-        expect(sessionStorage.getItem('magpie_scroll_abc123')).toBe('200');
+        expect(sessionStorage.getItem('magpie_scroll_/list')).toBe('200');
     });
 
     it('saves final scroll position on cleanup', () => {
@@ -110,7 +117,7 @@ describe('useScrollRestoration', () => {
         wrapper.scrollTop = 750;
         unmount();
 
-        expect(sessionStorage.getItem('magpie_scroll_abc123')).toBe('750');
+        expect(sessionStorage.getItem('magpie_scroll_/list')).toBe('750');
     });
 
     it('removes scroll listener on cleanup', () => {
@@ -123,20 +130,29 @@ describe('useScrollRestoration', () => {
         expect(wrapper.getListenerCount('scroll')).toBe(0);
     });
 
+    it('cancels a pending save before another route can change the shared scroller', () => {
+        const { unmount } = renderHook(() => useScrollRestoration());
+        wrapper.scrollTop = 200;
+        wrapper.dispatchScroll();
+
+        unmount();
+        wrapper.scrollTop = 900;
+        flushRaf();
+
+        expect(sessionStorage.getItem('magpie_scroll_/list')).toBe('200');
+    });
+
     it('does nothing when wrapper element is not found', () => {
-        vi.mocked(document.querySelector).mockReturnValue(null);
+        vi.spyOn(document, 'querySelector').mockReturnValue(null);
 
         const { unmount } = renderHook(() => useScrollRestoration());
         unmount();
     });
 
     it('evicts the oldest sessionStorage entry once the cap is exceeded', () => {
-        // Simulate visiting many distinct routes by changing the location key
-        // and remounting the hook for each one. The hook caps the in-memory
-        // LRU at 50, so the 51st visit should evict the first key.
         const totalVisits = 52;
         for (let i = 0; i < totalVisits; i++) {
-            mockLocation.key = `key-${i}`;
+            mockLocation.pathname = `/path-${i}`;
             const { unmount } = renderHook(() => useScrollRestoration());
             wrapper.scrollTop = i * 10;
             wrapper.dispatchScroll();
@@ -144,10 +160,8 @@ describe('useScrollRestoration', () => {
             unmount();
         }
 
-        // The first two keys should have been evicted.
-        expect(sessionStorage.getItem('magpie_scroll_key-0')).toBeNull();
-        expect(sessionStorage.getItem('magpie_scroll_key-1')).toBeNull();
-        // The most recent key should still be present.
-        expect(sessionStorage.getItem(`magpie_scroll_key-${totalVisits - 1}`)).not.toBeNull();
+        expect(sessionStorage.getItem('magpie_scroll_/path-0')).toBeNull();
+        expect(sessionStorage.getItem('magpie_scroll_/path-1')).toBeNull();
+        expect(sessionStorage.getItem(`magpie_scroll_/path-${totalVisits - 1}`)).not.toBeNull();
     });
 });

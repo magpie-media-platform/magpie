@@ -1,27 +1,32 @@
 namespace Magpie.Models.Enums;
 
 /// <summary>
-/// The data type of a parameter.
+/// The data type of a configurable setting value.
 /// </summary>
 public enum DataType
 {
     /// <summary>
-    /// Represents a string value.
+    /// A string value.
     /// </summary>
     String = 0,
 
     /// <summary>
-    /// Represents a numeric value.
+    /// A number value.
     /// </summary>
     Number,
 
     /// <summary>
-    /// Represents a boolean value.
+    /// A boolean value.
     /// </summary>
     Boolean,
 
     /// <summary>
-    /// Represents a Date value
+    /// A date value.
     /// </summary>
-    Date
+    Date,
+
+    /// <summary>
+    /// A list of mapping rows.
+    /// </summary>
+    MappingsList
 }

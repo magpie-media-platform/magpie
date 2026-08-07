@@ -1,73 +1,157 @@
-import { useMemo, useCallback } from 'react';
-import { Link } from 'react-router-dom';
+import { useMemo, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { Link, useParams, useSearchParams } from 'react-router-dom';
+import { useQueryClient } from '@tanstack/react-query';
 import {
-    ArrowLeft,
-    ArrowClockwise,
-    MagnifyingGlass,
-    ListBullets,
-    File,
-    ClockCounterClockwise,
-    Info,
+    ArrowLeftIcon,
+    ArrowClockwiseIcon,
+    MagnifyingGlassIcon,
+    FileMagnifyingGlassIcon,
+    ListMagnifyingGlassIcon,
+    ListBulletsIcon,
+    FileIcon,
+    PulseIcon,
+    DownloadSimpleIcon,
+    InfoIcon,
+    TagIcon,
+    TrashIcon,
+    UsersThreeIcon,
+    FilmSlateIcon,
+    ImagesIcon,
+    PuzzlePieceIcon,
 } from '@phosphor-icons/react';
 
+import { useAuth } from '@/auth';
+import { Badge } from '@/components/ui/Badge';
 import { Breadcrumb, type BreadcrumbItem } from '@/components/ui/Breadcrumb';
+import { CdnPhosphorIcon } from '@/components/ui/CdnPhosphorIcon';
+import { DeleteConfirmDialog } from '@/components/ui/DeleteConfirmDialog';
+import { ReleaseDetailsDialog } from '@/components/releases/ReleaseDetailsDialog';
 import { ErrorBoundary } from '@/components/ui/ErrorBoundary';
+import { ImagesGallery } from '@/components/ui/ImagesGallery';
+import { DetailInfoGrid, DetailInfoRow } from '@/components/ui/DetailInfoGrid';
+import { CollapsibleChipList } from '@/components/ui/CollapsibleChipList';
 import { Button } from '@/components/ui/Button';
 import { Skeleton } from '@/components/ui/Skeleton';
 import {
     ContentDetailsHeader,
     type ContentDetailItem,
     type ParentContentRef,
-} from '@/components/ui/ContentDetailsHeader';
-import { ContentDetailsHeaderSlot } from '@/components/ui/Slot/ContentSlots';
-import { ExtensionTabTriggers, ExtensionTabContents } from '@/components/ui/Slot/ExtensionTabs';
-import { QuickActionsButton, type QuickAction } from '@/components/ui/QuickActionsButton';
-import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/Tabs';
+} from '@/components/content/ContentDetailsHeader';
 import {
-    OverviewTab,
+    ContentDetailsActionsSlot,
+    ContentDetailsFilesSlot,
+    ContentDetailsHeaderSlot,
+    ContentDetailsMetadataSlot,
+    ContentDetailsOverviewSlot,
+} from '@/components/ui/Slot/ContentSlots';
+import { ExtensionTabContents, useTabSlotExtensions } from '@/components/ui/Slot/ExtensionTabs';
+import { QuickActionsButton, type QuickAction } from '@/components/ui/QuickActionsButton';
+import { Tabs, TabsContent, DetailTabTrigger, DetailTabsList } from '@/components/ui/Tabs';
+import {
+    ContentFactsPanel,
     ChildrenTab,
     FilesTab,
-    HistoryTab,
-    type OverviewMetadata,
+    ReleasesTab,
+    PreviewsTab,
+    type ContentFacts,
     type ChildItem,
     type MediaFile,
-    type HistoryEvent,
-} from '@/components/ui/ContentTabs';
+    type ReleaseRow,
+} from '@/components/content/ContentTabs';
+import type { PreviewClip } from '@/components/ui/PreviewPlayer';
 import { useToast } from '@/components/ui/Toast';
 import {
     useContentHierarchy,
-    useContentChildren,
+    useContentAncestors,
+    useContentList,
+    useAcquisitionStatus,
+    usePendingRefresh,
     useRefreshContent,
     useSearchContentReleases,
+    useRescanContentMediaInfo,
+    contentQueryKeys,
 } from '@/hooks/useContent';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
-import { isNotFoundError } from '@/lib/errors';
+import { useGrabRelease } from '@/hooks/useReleases';
+import { useReleaseGrabGuard } from '@/hooks/useReleaseGrabGuard';
+import { useContentReleases } from '@/hooks/useContentReleases';
+import { useDeleteContentFile } from '@/hooks/useDeleteContentFile';
+import { useRemoveContent } from '@/hooks/useRemoveContent';
+import { useLatestDownloadForRelease } from '@/hooks/useDownloads';
+import { useLibraryTypes, useTypeIconName, getRootLevels } from '@/hooks/useLibraryTypes';
+import { isApiError } from '@/lib/api';
+import { isNoDownloadClientError, isNotFoundError } from '@/lib/errors';
+import { formatShortDate } from '@/lib/dateFormatting';
+import { humanizeSlug, resolveContentTypeLabel } from '@/lib/contentTypeDisplay';
 import type { ContentListItem } from '@/types';
 
+import { RelatedSubjectsTab } from './RelatedSubjectsTab';
+import { ActivityTab } from './ActivityTab';
+import { ContentViewOnLinks } from './ContentViewOnLinks';
+import { RootFolderControl } from './RootFolderControl';
+import { QualityTierControl } from './QualityTierControl';
+import { MetadataInspector } from '@/components/metadata-inspector/MetadataInspector';
+import { MonitoringControl } from './MonitoringControl';
+import { PathControl } from './PathControl';
+import { RefreshStatusBadge } from './RefreshStatusBadge';
+import { TagsChipStrip } from './TagsChipStrip';
+import { deriveFileQuality } from './deriveFileQuality';
 import { useContentDetailParams } from './useContentDetailParams';
 import './ContentDetailPage.css';
+import '../DetailPageStates.css';
+
+const RELATED_TAB = 'related';
+const CHILDREN_TAB = 'children';
+const CHILDREN_FETCH_LIMIT = 1000;
+
+interface TabDef {
+    value: string;
+    label: string;
+    icon?: ReactNode;
+    count?: number;
+}
+
+function pluralizeLevelLabel(label: string): string {
+    const trimmed = label.trim();
+    if (!trimmed) {
+        return trimmed;
+    }
+    if (trimmed.length <= 4 && trimmed === trimmed.toUpperCase()) {
+        return trimmed;
+    }
+    if (trimmed.toLowerCase().endsWith('s')) {
+        return trimmed;
+    }
+    return `${trimmed}s`;
+}
+
+function isUnresolvableContentError(error: unknown): boolean {
+    return isApiError(error) && error.message.startsWith('Expected JSON response');
+}
 
 export function ContentDetailPage() {
     useDocumentTitle('Content');
-    const {
-        contentId,
-        childId,
-        grandchildId,
-        activeContentId,
-        parentId,
-        rootId,
-        activeTab,
-        setActiveTab,
-        navigate,
-        childrenBasePath,
-    } = useContentDetailParams();
-    const { toast } = useToast();
+    const { contentId, childId, grandchildId } = useParams<{
+        contentId: string;
+        childId?: string;
+        grandchildId?: string;
+    }>();
+    const activeContentId = grandchildId || childId || contentId;
+    const parentId = grandchildId ? childId : childId ? contentId : undefined;
+    const rootId = grandchildId ? contentId : undefined;
 
-    const {
-        content: contentQuery,
-        parent: parentQuery,
-        root: rootQuery,
-    } = useContentHierarchy(activeContentId, parentId, rootId);
+    const { data: childrenResult, isLoading: isChildrenLoading } = useContentList(
+        activeContentId
+            ? {
+                  parentId: activeContentId,
+                  sortBy: 'SequenceNumber',
+                  sortDirection: 'Ascending',
+                  pageSize: CHILDREN_FETCH_LIMIT,
+              }
+            : undefined,
+        { enabled: !!activeContentId },
+    );
+    const { content: contentQuery, parent: parentQuery } = useContentHierarchy(activeContentId, parentId, rootId);
 
     const {
         data: contentData,
@@ -76,12 +160,81 @@ export function ContentDetailPage() {
         refetch: refetchContent,
     } = contentQuery;
     const { data: parentData } = parentQuery;
-    const { data: rootData } = rootQuery;
 
-    const { data: childrenResult } = useContentChildren(activeContentId);
+    const { contentTypes, isLoading: isLibraryTypesLoading, error: libraryTypesError } = useLibraryTypes();
+
+    const showChildrenTab = useMemo(() => {
+        if (!contentData?.level || !contentData.contentType) {
+            return false;
+        }
+        const typeDef = contentTypes.find((t) => t.slug === contentData.contentType);
+        return typeDef?.levels.some((l) => l.parentSlug === contentData.level) ?? false;
+    }, [contentData?.level, contentData?.contentType, contentTypes]);
+
+    const defaultTab = showChildrenTab ? CHILDREN_TAB : RELATED_TAB;
+
+    const { activeTab, setActiveTab, navigate, childrenBasePath } = useContentDetailParams(defaultTab);
+    const [searchParams] = useSearchParams();
+    const rawTab = searchParams.get('tab');
+
+    const { toast } = useToast();
+    const queryClient = useQueryClient();
+    const { hasPermission } = useAuth();
+    const canEditContent = hasPermission('content.edit');
+    const canRequestContent = hasPermission('content.request');
+    const canManageContent = hasPermission('content.delete');
+    const { ancestors } = useContentAncestors(contentData?.parentId);
+
+    const typeIconName = useTypeIconName();
+
+    const { tabs: extensionTabs, isReady: areExtensionTabsReady } = useTabSlotExtensions('content.details.tabs');
 
     const refreshMutation = useRefreshContent();
     const searchMutation = useSearchContentReleases();
+    const rescanMediaInfoMutation = useRescanContentMediaInfo();
+    const grabMutation = useGrabRelease();
+    const {
+        pendingReleaseIds: grabbingReleaseIds,
+        succeededReleaseIds,
+        tryBeginGrab,
+        markGrabSucceeded,
+        markGrabFailed,
+        clearGrab,
+    } = useReleaseGrabGuard();
+    const [pendingGrab, setPendingGrab] = useState<ReleaseRow | null>(null);
+    const deleteFileMutation = useDeleteContentFile();
+    const [filePendingDelete, setFilePendingDelete] = useState<MediaFile | null>(null);
+    const removeContentMutation = useRemoveContent();
+    const [removeDialogOpen, setRemoveDialogOpen] = useState(false);
+    const [removeDeleteFiles, setRemoveDeleteFiles] = useState(false);
+
+    const { data: pendingRefresh } = usePendingRefresh(activeContentId, { enabled: !!activeContentId });
+    const refreshWasInFlightRef = useRef(false);
+    useEffect(() => {
+        const state = pendingRefresh?.state;
+        const inFlight = state === 'Queued' || state === 'Running';
+        if (inFlight) {
+            refreshWasInFlightRef.current = true;
+            return;
+        }
+        if (refreshWasInFlightRef.current && activeContentId) {
+            refreshWasInFlightRef.current = false;
+            void queryClient.invalidateQueries({ queryKey: contentQueryKeys.detail(activeContentId) });
+        }
+    }, [pendingRefresh?.state, activeContentId, queryClient]);
+
+    const releasesQuery = useContentReleases(activeContentId, { enabled: !!activeContentId });
+
+    const [detailsRelease, setDetailsRelease] = useState<ReleaseRow | null>(null);
+    const { download: detailsDownload, isLoading: detailsDownloadLoading } = useLatestDownloadForRelease(
+        detailsRelease?.acquisitionStatus ? detailsRelease.id : undefined,
+    );
+
+    const { data: acquisitionStatus } = useAcquisitionStatus(activeContentId, { enabled: !!activeContentId });
+    const acquisitionBlockReason =
+        acquisitionStatus && !acquisitionStatus.canAutoGrab
+            ? (acquisitionStatus.blockReasonDetail ?? 'This item cannot be auto-grabbed.')
+            : null;
 
     const content: ContentDetailItem | null = useMemo(() => {
         if (!contentData) {
@@ -91,51 +244,68 @@ export function ContentDetailPage() {
             id: contentData.id,
             title: contentData.title,
             posterUrl: contentData.posterUrl,
-            kind: contentData.kind,
+            level: contentData.level,
+            levelLabel: contentData.levelLabel,
+            contentType: contentData.contentType,
             monitoring: contentData.monitoring,
+            effectiveMonitoring: contentData.effectiveMonitoring,
             fulfillment: contentData.fulfillment,
+            acquisitionStatus: contentData.acquisitionStatus,
             year: contentData.year,
+            publishDate: contentData.publishDate,
             overview: contentData.overview,
-            subjectId: contentData.subjectId,
-            subjectName: contentData.subjectName,
         };
     }, [contentData]);
 
     const breadcrumbs = useMemo((): BreadcrumbItem[] => {
         const items: BreadcrumbItem[] = [{ id: 'library', label: 'Library', to: '/library' }];
 
-        if (contentId) {
-            const rootTitle = grandchildId ? rootData?.title : childId ? parentData?.title : contentData?.title;
+        const rootItem = ancestors[0] ?? contentData;
+        const contentType = contentData?.contentType ?? rootItem?.contentType;
+
+        if (contentType) {
+            const typeDef = contentTypes.find((t) => t.slug === contentType);
+            const typeName = typeDef?.name;
+            const iconName = typeIconName(contentType);
 
             items.push({
-                id: contentId,
-                label: rootTitle ?? '',
-                loading: !rootTitle,
-                to: `/library/${contentId}`,
+                id: `content-type:${contentType}`,
+                label: typeName ?? humanizeSlug(contentType),
+                loading: !typeName,
+                to: `/library/content/${contentType}`,
+                icon: <CdnPhosphorIcon name={iconName} weight="regular" />,
+            });
+
+            const rootLevels = getRootLevels(typeDef);
+            if (rootLevels.length > 1 && rootItem?.level) {
+                items.push({
+                    id: `content-level:${contentType}:${rootItem.level}`,
+                    label: pluralizeLevelLabel(
+                        resolveContentTypeLabel({ level: rootItem.level, contentType }, contentTypes),
+                    ),
+                    to: `/library/content/${contentType}/${rootItem.level}`,
+                });
+            }
+        }
+
+        for (const ancestor of ancestors) {
+            items.push({
+                id: ancestor.id,
+                label: ancestor.title,
+                to: `/library/${ancestor.id}`,
             });
         }
 
-        if (childId) {
-            const childTitle = grandchildId ? parentData?.title : contentData?.title;
-
+        if (contentData) {
             items.push({
-                id: childId,
-                label: childTitle ?? '',
-                loading: !childTitle,
-                to: `/library/${contentId}/${childId}`,
-            });
-        }
-
-        if (grandchildId && contentData) {
-            items.push({
-                id: grandchildId,
+                id: contentData.id,
                 label: contentData.title,
-                to: `/library/${contentId}/${childId}/${grandchildId}`,
+                to: `/library/${contentData.id}`,
             });
         }
 
         return items;
-    }, [contentId, childId, grandchildId, contentData, parentData, rootData]);
+    }, [contentData, ancestors, contentTypes, typeIconName]);
 
     const parentRef = useMemo((): ParentContentRef | undefined => {
         if (!parentData) {
@@ -159,39 +329,240 @@ export function ContentDetailPage() {
         return undefined;
     }, [contentId, childId, grandchildId, parentData]);
 
-    const overviewData: OverviewMetadata = useMemo(() => {
+    const previews: PreviewClip[] = useMemo(() => {
+        return (contentData?.previews ?? []).map((p) => ({
+            url: p.url,
+            kind: p.kind,
+            title: p.title,
+            mimeType: p.mimeType,
+            embedKind: p.embedKind,
+            language: p.language,
+        }));
+    }, [contentData?.previews]);
+
+    const hasPreviews = previews.length > 0;
+
+    const imageCount = contentData?.images?.length || 0;
+
+    const heroPreview = useMemo<PreviewClip | undefined>(() => {
+        if (previews.length === 0) {
+            return undefined;
+        }
+        return previews[0];
+    }, [previews]);
+
+    const genres = contentData?.genres ?? [];
+
+    const contentFacts: ContentFacts = useMemo(() => {
+        const typeDef = contentTypes.find((t) => t.slug === contentData?.contentType);
+        const levelDef = typeDef?.levels.find((l) => l.slug === contentData?.level);
         return {
-            overview: contentData?.overview,
+            factFields: levelDef?.standardFactFields ?? [],
+            factValues: contentData?.factValues,
+            externalIds: (contentData?.externalIds ?? []).map((extId) => ({
+                source: extId.source,
+                id: extId.value,
+                url: extId.url,
+            })),
+            customValues: contentData?.customValues,
         };
-    }, [contentData]);
+    }, [contentData, contentTypes]);
 
     const childrenData: ChildItem[] = useMemo(() => {
         if (!childrenResult?.items) {
             return [];
         }
-        return childrenResult.items.map((item: ContentListItem, index: number) => ({
+        return childrenResult.items.map((item: ContentListItem) => ({
             id: item.id,
             title: item.title,
-            number: index + 1,
+            number: item.sequenceNumber,
+            posterUrl: item.posterUrl,
             monitoring: item.monitoring,
+            effectiveMonitoring: item.effectiveMonitoring,
             fulfillment: item.fulfillment,
+            acquisitionStatus: item.acquisitionStatus,
+            date: item.publishDate,
         }));
     }, [childrenResult?.items]);
 
-    const filesData: MediaFile[] = useMemo(() => [], []);
-    const historyData: HistoryEvent[] = useMemo(() => [], []);
+    const filesData: MediaFile[] = useMemo(() => {
+        const apiFiles = contentData?.mediaFiles ?? [];
+        return apiFiles.map((f): MediaFile => {
+            const lastSep = Math.max(f.filePath.lastIndexOf('/'), f.filePath.lastIndexOf('\\'));
+            return {
+                id: f.id,
+                relativePath: f.filePath,
+                fileName: lastSep >= 0 ? f.filePath.slice(lastSep + 1) : f.filePath,
+                size: f.fileSize,
+                dateAdded: f.createdAt,
+                quality: deriveFileQuality(f.mediaInfo),
+                mediaInfo: f.mediaInfo ?? undefined,
+            };
+        });
+    }, [contentData?.mediaFiles]);
 
-    const hasChildren = childrenData.length > 0;
+    useEffect(() => {
+        for (const release of releasesQuery.rows) {
+            if (!succeededReleaseIds.has(release.id) || !release.acquisitionStatus) {
+                continue;
+            }
+
+            if (release.acquisitionStatus !== 'Failed' && release.acquisitionStatus !== 'Cancelled') {
+                clearGrab(release.id);
+            }
+        }
+    }, [clearGrab, releasesQuery.rows, succeededReleaseIds]);
+
+    const releasesData: ReleaseRow[] = useMemo(() => {
+        return releasesQuery.rows.map((release) => ({
+            id: release.id,
+            title: release.title,
+            indexerName: release.indexerName ?? null,
+            protocol: release.protocol,
+            publishDate: release.publishDate,
+            size: release.size ?? null,
+            infoUrl: release.infoUrl ?? null,
+            externalId: release.externalId ?? null,
+            categories: release.categories ?? [],
+            languages: release.languages ?? [],
+            properties: release.properties ?? null,
+            isMatch: release.isMatch ?? null,
+            rejectionReason: release.rejectionReason ?? null,
+            acquisitionStatus: succeededReleaseIds.has(release.id)
+                ? release.acquisitionStatus &&
+                  release.acquisitionStatus !== 'Failed' &&
+                  release.acquisitionStatus !== 'Cancelled'
+                    ? release.acquisitionStatus
+                    : 'Queued'
+                : (release.acquisitionStatus ?? null),
+            failureReason: release.failureReason ?? null,
+        }));
+    }, [releasesQuery.rows, succeededReleaseIds]);
 
     const childrenTabLabel = useMemo(() => {
-        if (childId) {
-            return 'Episodes';
+        const currentLevel = contentData?.level;
+        const currentContentType = contentData?.contentType;
+        if (currentLevel && currentContentType) {
+            const typeDef = contentTypes.find((t) => t.slug === currentContentType);
+            const childLevel = typeDef?.levels.find((l) => l.parentSlug === currentLevel);
+            const childLevelDisplayName = childLevel?.displayName?.trim();
+            if (childLevelDisplayName) {
+                return pluralizeLevelLabel(childLevelDisplayName);
+            }
         }
-        return 'Seasons';
-    }, [childId]);
+        return 'Items';
+    }, [contentData?.level, contentData?.contentType, contentTypes]);
+
+    const childrenDateHeader = useMemo(() => {
+        const currentLevel = contentData?.level;
+        const currentContentType = contentData?.contentType;
+        if (currentLevel && currentContentType) {
+            const typeDef = contentTypes.find((t) => t.slug === currentContentType);
+            const childLevel = typeDef?.levels.find((l) => l.parentSlug === currentLevel);
+            const dateField = childLevel?.standardFactFields?.find((f) => f.dataType?.toLowerCase() === 'date');
+            const dateFieldLabel = dateField?.displayName?.trim();
+            if (dateFieldLabel) {
+                return dateFieldLabel;
+            }
+        }
+        return 'Date';
+    }, [contentData?.level, contentData?.contentType, contentTypes]);
+
+    const tabDefs: TabDef[] = useMemo(() => {
+        const defs: TabDef[] = [];
+        if (showChildrenTab) {
+            defs.push({
+                value: 'children',
+                label: childrenTabLabel,
+                icon: <ListBulletsIcon weight="bold" aria-hidden="true" />,
+                count: childrenResult?.totalItems,
+            });
+        }
+        defs.push(
+            { value: 'related', label: 'Related', icon: <UsersThreeIcon weight="bold" aria-hidden="true" /> },
+            { value: 'details', label: 'Details', icon: <InfoIcon weight="bold" aria-hidden="true" /> },
+            {
+                value: 'previews',
+                label: 'Previews',
+                icon: <FilmSlateIcon weight="bold" aria-hidden="true" />,
+                count: hasPreviews ? previews.length : undefined,
+            },
+        );
+        if (imageCount > 0) {
+            defs.push({
+                value: 'images',
+                label: 'Images',
+                icon: <ImagesIcon weight="bold" aria-hidden="true" />,
+                count: imageCount,
+            });
+        }
+        defs.push(
+            {
+                value: 'releases',
+                label: 'Releases',
+                icon: <DownloadSimpleIcon weight="bold" aria-hidden="true" />,
+                count: releasesData.length > 0 ? releasesData.length : undefined,
+            },
+            {
+                value: 'files',
+                label: 'Files',
+                icon: <FileIcon weight="bold" aria-hidden="true" />,
+                count: filesData.length > 0 ? filesData.length : undefined,
+            },
+            { value: 'metadata', label: 'Metadata', icon: <TagIcon weight="bold" aria-hidden="true" /> },
+            { value: 'activity', label: 'Activity', icon: <PulseIcon weight="bold" aria-hidden="true" /> },
+        );
+        for (const ext of extensionTabs) {
+            defs.push({
+                value: `ext-${ext.id}`,
+                label: ext.attributes?.['tab-label'] ?? ext.name,
+                icon: <PuzzlePieceIcon weight="bold" aria-hidden="true" />,
+            });
+        }
+        return defs;
+    }, [
+        showChildrenTab,
+        childrenTabLabel,
+        childrenResult?.totalItems,
+        hasPreviews,
+        previews.length,
+        imageCount,
+        releasesData.length,
+        filesData.length,
+        extensionTabs,
+    ]);
+
+    const effectiveTab = tabDefs.some((tab) => tab.value === activeTab) ? activeTab : defaultTab;
+
+    useEffect(() => {
+        if (
+            !contentData ||
+            contentError ||
+            isContentLoading ||
+            isLibraryTypesLoading ||
+            libraryTypesError ||
+            !areExtensionTabsReady ||
+            (activeTab === effectiveTab && rawTab !== '')
+        ) {
+            return;
+        }
+
+        setActiveTab(effectiveTab);
+    }, [
+        activeTab,
+        areExtensionTabsReady,
+        contentData,
+        contentError,
+        effectiveTab,
+        isContentLoading,
+        isLibraryTypesLoading,
+        libraryTypesError,
+        rawTab,
+        setActiveTab,
+    ]);
 
     const handleChildClick = (child: ChildItem) => {
-        navigate(`${childrenBasePath}/${child.id}`);
+        void navigate(`${childrenBasePath}/${child.id}`);
     };
 
     const handleRefresh = useCallback(() => {
@@ -202,8 +573,8 @@ export function ContentDetailPage() {
         refreshMutation.mutate(activeContentId, {
             onSuccess: () => {
                 toast({
-                    title: 'Refresh started',
-                    description: 'Metadata refresh has been queued.',
+                    title: 'Refresh complete',
+                    description: 'Metadata refresh finished.',
                     variant: 'success',
                 });
             },
@@ -222,42 +593,251 @@ export function ContentDetailPage() {
             return;
         }
 
-        searchMutation.mutate(activeContentId, {
+        searchMutation.mutate(
+            { id: activeContentId },
+            {
+                onSuccess: () => {
+                    toast({
+                        title: 'Search complete',
+                        description: 'Release search complete.',
+                        variant: 'success',
+                    });
+                },
+                onError: () => {
+                    toast({
+                        title: 'Search failed',
+                        description: 'Failed to start release search. Please try again.',
+                        variant: 'error',
+                    });
+                },
+            },
+        );
+    }, [activeContentId, searchMutation, toast]);
+
+    const handleInteractiveSearch = useCallback(() => {
+        if (!activeContentId) {
+            return;
+        }
+
+        void navigate(`/interactive-search/${activeContentId}`);
+    }, [activeContentId, navigate]);
+
+    const handleRescanMediaInfo = useCallback(() => {
+        if (!activeContentId) {
+            return;
+        }
+
+        rescanMediaInfoMutation.mutate(activeContentId, {
             onSuccess: () => {
                 toast({
-                    title: 'Search started',
-                    description: 'Release search has been queued.',
+                    title: 'Media info re-scan complete',
+                    description: "Media info was re-probed for this item's files.",
                     variant: 'success',
                 });
             },
             onError: () => {
                 toast({
-                    title: 'Search failed',
-                    description: 'Failed to start release search. Please try again.',
+                    title: 'Media info re-scan failed',
+                    description: 'Failed to start the media info re-scan. Please try again.',
                     variant: 'error',
                 });
             },
         });
-    }, [activeContentId, searchMutation, toast]);
+    }, [activeContentId, rescanMediaInfoMutation, toast]);
+
+    const performGrabRelease = useCallback(
+        (release: ReleaseRow) => {
+            if (!activeContentId || !tryBeginGrab(release.id)) {
+                return;
+            }
+
+            grabMutation.mutate(
+                {
+                    id: release.id,
+                    contentHierarchyItemId: activeContentId,
+                },
+                {
+                    onSuccess: () => {
+                        markGrabSucceeded(release.id);
+                        toast({
+                            title: 'Release grabbed',
+                            description: 'Release acquisition finished.',
+                            variant: 'success',
+                        });
+                    },
+                    onError: (error) => {
+                        markGrabFailed(release.id);
+                        if (isNoDownloadClientError(error)) {
+                            toast({
+                                title: 'No download client configured',
+                                description: 'Add a download client on the Download Clients page to download releases.',
+                                variant: 'warning',
+                            });
+                            return;
+                        }
+                        toast({
+                            title: 'Grab failed',
+                            description: 'Failed to queue release acquisition. Please try again.',
+                            variant: 'error',
+                        });
+                    },
+                },
+            );
+        },
+        [activeContentId, grabMutation, markGrabFailed, markGrabSucceeded, toast, tryBeginGrab],
+    );
+
+    const handleGrabRelease = useCallback(
+        (release: ReleaseRow) => {
+            if (release.isMatch === false) {
+                setPendingGrab(release);
+                return;
+            }
+
+            performGrabRelease(release);
+        },
+        [performGrabRelease],
+    );
+
+    const handleRequestDeleteFile = useCallback((file: MediaFile) => {
+        setFilePendingDelete(file);
+    }, []);
+
+    const handleConfirmDeleteFile = useCallback(() => {
+        if (!activeContentId || !filePendingDelete) {
+            return;
+        }
+        const file = filePendingDelete;
+        deleteFileMutation.mutate(
+            { contentHierarchyItemId: activeContentId, mediaFileId: file.id },
+            {
+                onSuccess: (result) => {
+                    toast({
+                        title: 'File deleted',
+                        description: result.fileWasMissingOnDisk
+                            ? `Removed "${file.fileName}" (the file was already missing on disk).`
+                            : `Deleted "${file.fileName}" from disk.`,
+                        variant: 'success',
+                    });
+                    setFilePendingDelete(null);
+                },
+                onError: () => {
+                    toast({
+                        title: 'Delete failed',
+                        description: `Failed to delete "${file.fileName}". The file remains in place.`,
+                        variant: 'error',
+                    });
+                },
+            },
+        );
+    }, [activeContentId, filePendingDelete, deleteFileMutation, toast]);
+
+    const handleOpenRemoveDialog = useCallback(() => {
+        setRemoveDeleteFiles(false);
+        setRemoveDialogOpen(true);
+    }, []);
+
+    const handleConfirmRemove = useCallback(() => {
+        if (!activeContentId) {
+            return;
+        }
+        removeContentMutation.mutate(
+            { contentHierarchyItemId: activeContentId, deleteFiles: removeDeleteFiles },
+            {
+                onSuccess: () => {
+                    toast({
+                        title: 'Removed from library',
+                        description: removeDeleteFiles
+                            ? 'Magpie removed the item and its library files.'
+                            : 'Magpie removed the item from the library. The files remain on disk.',
+                        variant: 'success',
+                    });
+                    setRemoveDialogOpen(false);
+                    void navigate('/library');
+                },
+                onError: () => {
+                    toast({
+                        title: 'Remove failed',
+                        description: removeDeleteFiles
+                            ? 'Failed to remove this item because Magpie failed to delete a file. The library remains unchanged.'
+                            : 'Failed to remove this item from the library. Try again.',
+                        variant: 'error',
+                    });
+                },
+            },
+        );
+    }, [activeContentId, removeContentMutation, removeDeleteFiles, toast, navigate]);
 
     const quickActions: QuickAction[] = useMemo(
         () => [
-            {
-                id: 'refresh',
-                label: 'Refresh Metadata',
-                icon: <ArrowClockwise weight="bold" />,
-                onClick: handleRefresh,
-            },
-            {
-                id: 'search',
-                label: 'Search Now',
-                icon: <MagnifyingGlass weight="bold" />,
-                onClick: handleSearchNow,
-                variant: 'primary' as const,
-            },
+            ...(canEditContent
+                ? [
+                      {
+                          id: 'refresh',
+                          label: 'Refresh Metadata',
+                          icon: <ArrowClockwiseIcon weight="bold" />,
+                          onClick: handleRefresh,
+                      },
+                      {
+                          id: 'rescan-media-info',
+                          label: 'Rescan media info',
+                          icon: <FileMagnifyingGlassIcon weight="bold" />,
+                          onClick: handleRescanMediaInfo,
+                      },
+                  ]
+                : []),
+            ...(canRequestContent
+                ? [
+                      {
+                          id: 'search',
+                          label: 'Search Now',
+                          icon: <MagnifyingGlassIcon weight="bold" />,
+                          onClick: handleSearchNow,
+                          variant: 'primary' as const,
+                      },
+                      ...(activeContentId
+                          ? [
+                                {
+                                    id: 'interactive-search',
+                                    label: 'Interactive Search',
+                                    icon: <ListMagnifyingGlassIcon weight="bold" />,
+                                    onClick: handleInteractiveSearch,
+                                },
+                            ]
+                          : []),
+                  ]
+                : []),
+            ...(canManageContent
+                ? [
+                      {
+                          id: 'remove-from-library',
+                          label: 'Remove from library',
+                          icon: <TrashIcon weight="bold" />,
+                          onClick: handleOpenRemoveDialog,
+                          variant: 'destructive' as const,
+                      },
+                  ]
+                : []),
         ],
-        [handleRefresh, handleSearchNow],
+        [
+            canEditContent,
+            handleRefresh,
+            handleRescanMediaInfo,
+            canRequestContent,
+            handleSearchNow,
+            activeContentId,
+            handleInteractiveSearch,
+            canManageContent,
+            handleOpenRemoveDialog,
+        ],
     );
+
+    const releasesLoading = releasesQuery.isLoading;
+    const isRefreshing = refreshMutation.isPending;
+    const isRescanningMediaInfo = rescanMediaInfoMutation.isPending;
+    const isSearching = searchMutation.isPending;
+    const isDeletingFile = deleteFileMutation.isPending;
+    const isRemoving = removeContentMutation.isPending;
 
     if (isContentLoading) {
         return (
@@ -278,7 +858,7 @@ export function ContentDetailPage() {
     }
 
     if (contentError || !content) {
-        const notFound = !contentError || isNotFoundError(contentError);
+        const notFound = !contentError || isNotFoundError(contentError) || isUnresolvableContentError(contentError);
         return (
             <div className="content-detail-page" data-page="content-detail">
                 <div className="content-detail-page__not-found">
@@ -290,12 +870,12 @@ export function ContentDetailPage() {
                     </p>
                     {notFound ? (
                         <Link to="/library" className="content-detail-page__back-link">
-                            <ArrowLeft weight="bold" aria-hidden="true" />
+                            <ArrowLeftIcon weight="bold" aria-hidden="true" />
                             Back to Library
                         </Link>
                     ) : (
                         <Button variant="secondary" onClick={() => refetchContent()}>
-                            <ArrowClockwise weight="bold" aria-hidden="true" />
+                            <ArrowClockwiseIcon weight="bold" aria-hidden="true" />
                             Retry
                         </Button>
                     )}
@@ -304,71 +884,207 @@ export function ContentDetailPage() {
         );
     }
 
+    const contentSlotEntityType = 'content';
+
     const headerActions = (
-        <>
-            <Button
-                variant="secondary"
-                size="sm"
-                onClick={handleRefresh}
-                loading={refreshMutation.isPending}
-                data-action="refresh"
-            >
-                <ArrowClockwise weight="bold" aria-hidden="true" />
-                Refresh
-            </Button>
-            <Button
-                variant="secondary"
-                size="sm"
-                onClick={handleSearchNow}
-                disabled={searchMutation.isPending}
-                data-action="search"
-            >
-                <MagnifyingGlass weight="bold" aria-hidden="true" />
-                Search Now
-            </Button>
-        </>
+        <ContentDetailsActionsSlot entityId={activeContentId} entityType={contentSlotEntityType}>
+            {canEditContent && (
+                <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={handleRefresh}
+                    loading={isRefreshing}
+                    data-action="refresh"
+                >
+                    <ArrowClockwiseIcon weight="bold" aria-hidden="true" />
+                    Refresh
+                </Button>
+            )}
+            {canEditContent && (
+                <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={handleRescanMediaInfo}
+                    loading={isRescanningMediaInfo}
+                    data-action="rescan-media-info"
+                    title="Re-probe and refresh media info for this item's files"
+                >
+                    <FileMagnifyingGlassIcon weight="bold" aria-hidden="true" />
+                    Rescan media info
+                </Button>
+            )}
+            {canRequestContent && (
+                <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={handleSearchNow}
+                    disabled={isSearching}
+                    data-action="search"
+                    title="Automatic: search indexers and grab the best release for you"
+                >
+                    <MagnifyingGlassIcon weight="bold" aria-hidden="true" />
+                    Search Now
+                </Button>
+            )}
+            {canRequestContent && activeContentId && (
+                <Button variant="secondary" size="sm" asChild>
+                    <Link
+                        to={`/interactive-search/${activeContentId}`}
+                        data-action="interactive-search"
+                        title="Interactive: run a live search and pick a release yourself"
+                    >
+                        <ListMagnifyingGlassIcon weight="bold" aria-hidden="true" />
+                        Interactive Search
+                    </Link>
+                </Button>
+            )}
+            {canManageContent && (
+                <Button
+                    variant="destructive"
+                    size="sm"
+                    onClick={handleOpenRemoveDialog}
+                    data-action="remove-from-library"
+                    title="Remove this item and everything nested under it from the library"
+                >
+                    <TrashIcon weight="bold" aria-hidden="true" />
+                    Remove
+                </Button>
+            )}
+        </ContentDetailsActionsSlot>
     );
+
+    const detailSlotProps = {
+        entityId: activeContentId,
+        entityType: contentSlotEntityType,
+    };
 
     return (
         <div className="content-detail-page" data-page="content-detail">
             <Breadcrumb items={breadcrumbs} className="content-detail-page__breadcrumb" />
 
-            <ContentDetailsHeaderSlot>
-                <ContentDetailsHeader content={content} parent={parentRef} actions={headerActions} />
+            <ContentDetailsHeaderSlot {...detailSlotProps}>
+                <ContentDetailsHeader
+                    content={content}
+                    parent={parentRef}
+                    heroPreview={heroPreview}
+                    actions={headerActions}
+                    hideMobileActions
+                />
             </ContentDetailsHeaderSlot>
 
-            <Tabs value={activeTab} onValueChange={setActiveTab} className="content-detail-page__tabs">
-                <TabsList>
-                    <TabsTrigger value="overview">
-                        <Info weight="bold" aria-hidden="true" />
-                        <span>Overview</span>
-                    </TabsTrigger>
-                    {hasChildren && (
-                        <TabsTrigger value="children">
-                            <ListBullets weight="bold" aria-hidden="true" />
-                            <span>{childrenTabLabel}</span>
-                            <span className="tab-count">{childrenData.length}</span>
-                        </TabsTrigger>
-                    )}
-                    <TabsTrigger value="files">
-                        <File weight="bold" aria-hidden="true" />
-                        <span>Files</span>
-                        {filesData.length > 0 && <span className="tab-count">{filesData.length}</span>}
-                    </TabsTrigger>
-                    <TabsTrigger value="history">
-                        <ClockCounterClockwise weight="bold" aria-hidden="true" />
-                        <span>History</span>
-                    </TabsTrigger>
-                    <ExtensionTabTriggers slot="content.details.tabs" />
-                </TabsList>
+            <ContentDetailsMetadataSlot className="content-detail-page__metadata-slot" {...detailSlotProps} />
 
-                <TabsContent value="overview">
+            <RefreshStatusBadge contentId={activeContentId} />
+
+            {activeContentId && contentData && (
+                <DetailInfoGrid
+                    aria-label="Content supporting information"
+                    className="detail-info-grid--under-header"
+                    data-testid="content-policy-settings"
+                >
+                    <MonitoringControl
+                        contentId={activeContentId}
+                        monitoring={contentData.monitoring}
+                        effectiveMonitoring={contentData.effectiveMonitoring}
+                        canEdit={canEditContent}
+                    />
+                    <PathControl
+                        contentHierarchyItemId={activeContentId}
+                        rawPath={contentData.path}
+                        canEdit={canEditContent}
+                    />
+                    <RootFolderControl
+                        contentHierarchyItemId={activeContentId}
+                        contentType={contentData.contentType}
+                        canEdit={canEditContent}
+                    />
+                    <QualityTierControl
+                        contentHierarchyItemId={activeContentId}
+                        contentType={contentData.contentType}
+                        level={contentData.level}
+                        fulfillment={content.fulfillment}
+                        canEdit={canEditContent}
+                    />
+                    <TagsChipStrip contentId={activeContentId} canEdit={canEditContent} />
+                    <DetailInfoRow
+                        label="Publish Date"
+                        value={formatShortDate(contentData.publishDate, '--')}
+                        data-testid="content-publish-date-row"
+                    />
+                    <ContentViewOnLinks
+                        contentId={activeContentId}
+                        externalIds={contentData.externalIds}
+                        references={contentData.references}
+                    />
+                    {genres.length > 0 && (
+                        <DetailInfoRow
+                            label="Genres"
+                            data-component="content-genres"
+                            value={
+                                <CollapsibleChipList
+                                    aria-label="Genres"
+                                    items={genres.map((genre) => ({
+                                        key: genre,
+                                        node: (
+                                            <Badge variant="default" size="sm">
+                                                {genre}
+                                            </Badge>
+                                        ),
+                                    }))}
+                                />
+                            }
+                        />
+                    )}
+                </DetailInfoGrid>
+            )}
+
+            <Tabs
+                value={effectiveTab}
+                onValueChange={setActiveTab}
+                holdHeightOnValueChange
+                className="content-detail-page__tabs"
+            >
+                <DetailTabsList className="content-detail-page__tab-strip">
+                    {tabDefs.map((tab, i) => (
+                        <DetailTabTrigger
+                            key={`${tab.value}:${i}`}
+                            value={tab.value}
+                            label={tab.label}
+                            icon={tab.icon}
+                            count={tab.count}
+                        />
+                    ))}
+                </DetailTabsList>
+
+                <TabsContent value="details">
+                    <ContentDetailsOverviewSlot {...detailSlotProps}>
+                        <ErrorBoundary>
+                            <ContentFactsPanel facts={contentFacts} />
+                        </ErrorBoundary>
+                    </ContentDetailsOverviewSlot>
+                </TabsContent>
+
+                <TabsContent value="related">
                     <ErrorBoundary>
-                        <OverviewTab metadata={overviewData} />
+                        <RelatedSubjectsTab contentId={activeContentId} />
                     </ErrorBoundary>
                 </TabsContent>
 
-                {hasChildren && (
+                <TabsContent value="previews">
+                    <ErrorBoundary>
+                        <PreviewsTab previews={previews} posterUrl={contentData?.posterUrl} />
+                    </ErrorBoundary>
+                </TabsContent>
+
+                {imageCount > 0 && (
+                    <TabsContent value="images">
+                        <ErrorBoundary>
+                            <ImagesGallery images={contentData?.images ?? []} altPrefix={content.title} />
+                        </ErrorBoundary>
+                    </TabsContent>
+                )}
+
+                {showChildrenTab && (
                     <TabsContent value="children">
                         <ErrorBoundary>
                             <ChildrenTab
@@ -376,28 +1092,139 @@ export function ContentDetailPage() {
                                 parentId={activeContentId!}
                                 onChildClick={handleChildClick}
                                 basePath={childrenBasePath}
+                                dateColumnHeader={childrenDateHeader}
+                                loading={isChildrenLoading}
                                 emptyMessage={`No ${childrenTabLabel.toLowerCase()} found`}
                             />
                         </ErrorBoundary>
                     </TabsContent>
                 )}
 
+                <TabsContent value="releases">
+                    <ErrorBoundary>
+                        <ReleasesTab
+                            releases={releasesData}
+                            loading={releasesLoading}
+                            grabbingReleaseIds={grabbingReleaseIds}
+                            canGrab={canRequestContent}
+                            onGrab={handleGrabRelease}
+                            onTitleClick={setDetailsRelease}
+                            acquisitionBlockReason={acquisitionBlockReason}
+                        />
+                    </ErrorBoundary>
+                </TabsContent>
+
                 <TabsContent value="files">
                     <ErrorBoundary>
-                        <FilesTab files={filesData} emptyMessage="No files attached to this content" />
+                        <ContentDetailsFilesSlot {...detailSlotProps}>
+                            <FilesTab
+                                files={filesData}
+                                emptyMessage="No files attached to this content"
+                                onDeleteFile={canManageContent ? handleRequestDeleteFile : undefined}
+                                deletingFileId={isDeletingFile ? (filePendingDelete?.id ?? null) : null}
+                            />
+                        </ContentDetailsFilesSlot>
                     </ErrorBoundary>
                 </TabsContent>
 
-                <TabsContent value="history">
+                <TabsContent value="metadata">
                     <ErrorBoundary>
-                        <HistoryTab events={historyData} emptyMessage="No history for this content" />
+                        <MetadataInspector contentId={activeContentId} />
                     </ErrorBoundary>
                 </TabsContent>
 
-                <ExtensionTabContents slot="content.details.tabs" />
+                <TabsContent value="activity">
+                    <ErrorBoundary>
+                        {activeContentId ? <ActivityTab contentHierarchyItemId={activeContentId} /> : null}
+                    </ErrorBoundary>
+                </TabsContent>
+
+                <ExtensionTabContents
+                    slot="content.details.tabs"
+                    entityId={activeContentId}
+                    entityType={contentSlotEntityType}
+                />
             </Tabs>
 
             <QuickActionsButton actions={quickActions} title="Content Actions" data-content-id={activeContentId} />
+
+            <ReleaseDetailsDialog
+                release={detailsRelease}
+                download={detailsDownload}
+                downloadLoading={detailsDownloadLoading}
+                open={detailsRelease !== null}
+                onOpenChange={(open) => {
+                    if (!open) {
+                        setDetailsRelease(null);
+                    }
+                }}
+            />
+
+            <DeleteConfirmDialog
+                open={filePendingDelete !== null}
+                itemType="file"
+                itemName={filePendingDelete?.fileName ?? ''}
+                description={
+                    <>
+                        Delete &quot;{filePendingDelete?.fileName}&quot; from disk? This removes the file from disk and
+                        the library. This cannot be undone.
+                    </>
+                }
+                isDeleting={isDeletingFile}
+                onConfirm={handleConfirmDeleteFile}
+                onCancel={() => {
+                    if (!isDeletingFile) {
+                        setFilePendingDelete(null);
+                    }
+                }}
+            />
+
+            <DeleteConfirmDialog
+                open={removeDialogOpen}
+                itemType="item"
+                itemName={content.title}
+                description={
+                    <>
+                        Remove &quot;{content.title}&quot; from the library? Everything nested under it will be removed
+                        too. Download history is kept. By default the media files stay on disk; tick the box below to
+                        also delete them. This cannot be undone.
+                    </>
+                }
+                extraToggle={{
+                    label: 'Also delete files from disk',
+                    checked: removeDeleteFiles,
+                    onChange: setRemoveDeleteFiles,
+                }}
+                isDeleting={isRemoving}
+                onConfirm={handleConfirmRemove}
+                onCancel={() => {
+                    if (!isRemoving) {
+                        setRemoveDialogOpen(false);
+                    }
+                }}
+            />
+
+            <DeleteConfirmDialog
+                open={pendingGrab !== null}
+                title="Grab anyway?"
+                itemType="release"
+                itemName={pendingGrab?.title ?? ''}
+                description={
+                    pendingGrab
+                        ? `This release does not match this item: ${pendingGrab.rejectionReason?.trim() || 'no reason was reported'}. Grab anyway?`
+                        : ''
+                }
+                confirmVariant="warning"
+                confirmLabel="Grab anyway"
+                confirmIcon={<DownloadSimpleIcon weight="bold" aria-hidden="true" />}
+                onConfirm={() => {
+                    if (pendingGrab) {
+                        performGrabRelease(pendingGrab);
+                    }
+                    setPendingGrab(null);
+                }}
+                onCancel={() => setPendingGrab(null)}
+            />
         </div>
     );
 }

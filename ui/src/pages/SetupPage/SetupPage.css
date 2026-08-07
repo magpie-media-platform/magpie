@@ -7,7 +7,7 @@
         justify-content: center;
         min-height: 100dvh;
         padding: var(--space-xl);
-        background-color: var(--bg-canvas, var(--bg-secondary));
+        background-color: var(--bg-primary);
     }
 
     .setup-page__card {
@@ -34,7 +34,7 @@
     .setup-page__title {
         margin: 0;
         font-size: var(--text-2xl);
-        font-weight: var(--font-weight-bold);
+        font-weight: var(--weight-bold);
         color: var(--text-primary);
     }
 
@@ -66,8 +66,78 @@
         border-radius: var(--radius-md);
     }
 
+    .setup-page__status-error {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-md);
+    }
+
     .setup-page__submit {
         justify-content: center;
         margin-top: var(--space-sm);
+    }
+
+    .setup-page__legend {
+        margin-bottom: var(--space-xs);
+        font-size: var(--text-sm);
+        font-weight: var(--weight-medium);
+        color: var(--text-primary);
+    }
+
+    .setup-page__radio-row {
+        display: flex;
+        gap: var(--space-sm);
+        align-items: center;
+        padding: var(--space-xs) 0;
+        font-size: var(--text-sm);
+        color: var(--text-primary);
+        cursor: pointer;
+    }
+
+    .setup-page__hint {
+        margin: 0;
+        font-size: var(--text-xs);
+        color: var(--text-secondary);
+    }
+
+    .setup-page__metadata-groups {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-md);
+    }
+
+    .setup-page__metadata-group {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-sm);
+        padding: var(--space-md);
+        background-color: var(--bg-secondary);
+        border: 1px solid var(--border-default);
+        border-radius: var(--radius-md);
+    }
+
+    .setup-page__metadata-fields {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-sm);
+    }
+
+    .setup-page__summary-list {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-xs);
+        padding: var(--space-md);
+        margin: 0;
+        list-style: none;
+        background-color: var(--bg-secondary);
+        border: 1px solid var(--border-default);
+        border-radius: var(--radius-md);
+    }
+
+    .setup-page__summary-row {
+        display: flex;
+        justify-content: space-between;
+        font-size: var(--text-sm);
+        color: var(--text-primary);
     }
 }

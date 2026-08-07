@@ -1,10 +1,11 @@
 import { useEffect } from 'react';
 import { useLocation } from 'react-router-dom';
 
+import { useMediaQuery } from './ui/useMediaQuery';
+
 const SCROLL_STORAGE_PREFIX = 'magpie_scroll_';
 const MAX_SCROLL_ENTRIES = 50;
 
-// LRU bound on sessionStorage entries.
 const recentKeys: string[] = [];
 
 function touchKey(key: string) {
@@ -19,63 +20,66 @@ function touchKey(key: string) {
             try {
                 sessionStorage.removeItem(SCROLL_STORAGE_PREFIX + evicted);
             } catch {
-                /* swallow quota / unavailable */
+                void 0;
             }
         }
     }
 }
 
 export function useScrollRestoration() {
-    const { key } = useLocation();
+    const { pathname } = useLocation();
+    const isMobile = useMediaQuery('(max-width: 767px)');
 
     useEffect(() => {
-        const wrapper = document.querySelector<HTMLElement>('.app-shell__main-wrapper, .admin-shell__main-wrapper');
-        if (!wrapper) {
+        const scroller = document.querySelector<HTMLElement>(
+            isMobile ? '.app-shell__main, .admin-shell__main' : '.app-shell__main-wrapper, .admin-shell__main-wrapper',
+        );
+        if (!scroller) {
             return;
         }
 
-        const saved = sessionStorage.getItem(SCROLL_STORAGE_PREFIX + key);
+        let restoreFrame: number | null = null;
+        const saved = sessionStorage.getItem(SCROLL_STORAGE_PREFIX + pathname);
         if (saved != null) {
-            requestAnimationFrame(() => {
-                wrapper.scrollTop = parseInt(saved, 10);
+            restoreFrame = requestAnimationFrame(() => {
+                scroller.scrollTop = parseInt(saved, 10);
+                restoreFrame = null;
             });
         } else {
-            wrapper.scrollTop = 0;
+            scroller.scrollTop = 0;
         }
 
-        let ticking = false;
+        let saveFrame: number | null = null;
         const onScroll = () => {
-            if (!ticking) {
-                ticking = true;
-                requestAnimationFrame(() => {
+            if (saveFrame === null) {
+                saveFrame = requestAnimationFrame(() => {
                     try {
-                        sessionStorage.setItem(SCROLL_STORAGE_PREFIX + key, String(wrapper.scrollTop));
-                        touchKey(key);
+                        sessionStorage.setItem(SCROLL_STORAGE_PREFIX + pathname, String(scroller.scrollTop));
+                        touchKey(pathname);
                     } catch {
-                        /* swallow quota / unavailable */
+                        void 0;
                     }
-                    ticking = false;
+                    saveFrame = null;
                 });
             }
         };
 
-        wrapper.addEventListener('scroll', onScroll, { passive: true });
+        scroller.addEventListener('scroll', onScroll, { passive: true });
 
         return () => {
-            try {
-                sessionStorage.setItem(SCROLL_STORAGE_PREFIX + key, String(wrapper.scrollTop));
-                touchKey(key);
-            } catch {
-                /* swallow quota / unavailable */
+            if (restoreFrame !== null) {
+                cancelAnimationFrame(restoreFrame);
             }
-            wrapper.removeEventListener('scroll', onScroll);
+            if (saveFrame !== null) {
+                cancelAnimationFrame(saveFrame);
+            }
+            try {
+                sessionStorage.setItem(SCROLL_STORAGE_PREFIX + pathname, String(scroller.scrollTop));
+                touchKey(pathname);
+            } catch {
+                void 0;
+            }
+            scroller.removeEventListener('scroll', onScroll);
         };
-    }, [key]);
-}
-
-/**
- * Test-only: reset the in-memory LRU. Not exported from index.
- */
-export function __resetScrollRestorationLru() {
-    recentKeys.length = 0;
+    }, [isMobile, pathname]);
 }

@@ -3,12 +3,12 @@ using Magpie.Models.Filtering;
 namespace Magpie.Models.Data;
 
 /// <summary>
-/// Filter criteria for <see cref="Genre"/>.
+/// Filter criteria for genres.
 /// </summary>
 public sealed record GenreCriteria
 {
     /// <summary>
-    /// The criteria for <see cref="Genre.Name"/>.
+    /// Criteria for the display name of the genre.
     /// </summary>
     public CriteriaSet<PropertyCriterion<string>> Name { get; init; } = new();
 }

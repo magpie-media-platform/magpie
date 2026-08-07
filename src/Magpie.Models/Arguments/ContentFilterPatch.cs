@@ -4,22 +4,22 @@ using Magpie.Models.Patch;
 namespace Magpie.Models.Arguments;
 
 /// <summary>
-/// Patch for <see cref="ContentFilter"/>.
+/// The partial-update arguments for a content filter.
 /// </summary>
 public sealed record ContentFilterPatch : TagsPatch
 {
     /// <summary>
-    /// The <see cref="ContentFilter.Name"/> to patch.
+    /// The patch for the display name of the filter.
     /// </summary>
     public ScalarPatch<string>? Name { get; init; }
 
     /// <summary>
-    /// The <see cref="ContentFilter.Criteria"/> to patch.
+    /// The patch for the filter criteria.
     /// </summary>
     public ScalarPatch<ContentFilterCriteria>? Criteria { get; init; }
 
     /// <summary>
-    /// The <see cref="ContentFilter.OwnerLock"/> to patch.
+    /// The patch for whether only the owner can edit the filter.
     /// </summary>
     public ScalarPatch<bool?>? OwnerLock { get; init; }
 }

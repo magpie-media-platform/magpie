@@ -1,17 +1,25 @@
-import { useState, useMemo, useCallback, useRef } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
+import { HardDrivesIcon, PlusIcon, WarningCircleIcon } from '@phosphor-icons/react';
+import { type ColumnDef, type SortingState } from '@tanstack/react-table';
 
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { useToggle } from '@/hooks/useToggle';
-import { QuickActionsButton, type QuickAction } from '@/components/ui/QuickActionsButton';
-import { HardDrives, Trash, PencilSimple, Clock, Power, Plus } from '@phosphor-icons/react';
+import { useUrlTableState } from '@/hooks/useUrlTableState';
 
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
-import { Switch } from '@/components/ui/Switch';
+import { ClearFiltersButton } from '@/components/ui/ClearFiltersButton';
+import { ColumnHeaderFilter, type FacetOption } from '@/components/ui/ColumnHeaderFilter';
+import { DataTable } from '@/components/ui/DataTable';
+import { EmptyState } from '@/components/ui/EmptyState';
+import { Pager } from '@/components/ui/Pager';
+import { MultiSelectColumnFilter, encodeMultiValue, decodeMultiValue } from '@/components/ui/MultiSelectColumnFilter';
+import { PageHeader } from '@/components/ui/PageHeader';
 import { PullToRefresh } from '@/components/ui/PullToRefresh';
+import { QuickActionsButton, type QuickAction } from '@/components/ui/QuickActionsButton';
 import { DeleteConfirmDialog } from '@/components/ui/DeleteConfirmDialog/DeleteConfirmDialog';
-import { Select, SelectTrigger, SelectContent, SelectItem } from '@/components/ui/Select';
+import { IntegrationEmptyState } from '@/components/integrations/IntegrationEmptyState';
+import { IntegrationRowActions } from '@/components/integrations/IntegrationRowActions';
 import { useToast } from '@/components/ui/Toast';
 import {
     useDownloadClients,
@@ -20,41 +28,34 @@ import {
     downloadClientStatusLabels,
     downloadClientStatusVariants,
 } from '@/hooks/useDownloadClients';
-import { useTestDownloadClient } from '@/hooks/useTestConnection';
+import {
+    useTestDownloadClient,
+    useTestDownloadClientSettings,
+    type IntegrationSettingsTestRequest,
+} from '@/hooks/useTestConnection';
+import { isAbortError } from '@/lib/api';
+import { getErrorMessage } from '@/lib/errors';
 import { formatRelativeTime } from '@/lib/formatTime';
+import { buildSettingsPatch, toStringSettings } from '@/lib/integrationSettings';
 import { mapStatusParam } from '@/lib/urlParams';
 
-import { DownloadClientForm, type DownloadClientFormValues } from './DownloadClientForm';
-import { toStringSettings, buildSettingsPatch } from './downloadClientUtils';
-
-import { EmptyState } from '@/components/ui/EmptyState';
+import { DownloadClientForm, type DownloadClientFormValues } from '@/components/configuration/DownloadClientForm';
 
 import './DownloadClientsPage.css';
 import '@/styles/card-actions.css';
-import '@/styles/list-toolbar.css';
 
-import { Tooltip } from '@/components/ui/Tooltip';
-
-export interface DownloadClientItem {
+interface DownloadClientItem {
     id: string;
     name: string;
     provider: string;
     enabled: boolean;
     status: DownloadClientStatusValue;
     lastCheckedAt: string | null;
+    cleanupDeleteFiles: boolean;
+    keepFailedOnClient: boolean;
     settings: Record<string, string | number | boolean | undefined>;
     createdAt: string;
 }
-
-interface ClientFilterState {
-    status: string;
-
-    enabled: string;
-
-    provider: string;
-}
-
-const ALL_VALUE = '__all__';
 
 function transformClient(client: ApiDownloadClient): DownloadClientItem {
     return {
@@ -64,44 +65,57 @@ function transformClient(client: ApiDownloadClient): DownloadClientItem {
         enabled: client.enabled,
         status: client.status,
         lastCheckedAt: client.lastChecked ?? null,
+        cleanupDeleteFiles: client.cleanupDeleteFiles,
+        keepFailedOnClient: client.keepFailedOnClient,
         settings: client.settings ?? {},
         createdAt: client.createdAt,
     };
 }
 
-const statusOptions = [
-    { value: 'all', label: 'All Status' },
-    { value: '0', label: 'Unknown' },
-    { value: '1', label: 'Healthy' },
-    { value: '2', label: 'Unhealthy' },
-    { value: '3', label: 'Stale' },
-];
+function toDownloadClientFormValues(client: DownloadClientItem): DownloadClientFormValues {
+    return {
+        id: client.id,
+        name: client.name,
+        provider: client.provider,
+        enabled: client.enabled,
+        cleanupDeleteFiles: client.cleanupDeleteFiles,
+        keepFailedOnClient: client.keepFailedOnClient,
+        settings: client.settings,
+    };
+}
 
-const enabledOptions = [
-    { value: 'all', label: 'All Enabled' },
+const PAGE_SIZE = 25;
+
+const DEFAULT_SORTING: SortingState = [{ id: 'name', desc: false }];
+
+const SORT_KEYS = ['name', 'provider', 'status', 'enabled', 'checked'] as const;
+
+const DEFAULT_FILTERS = { provider: '', status: '', enabled: '' };
+
+const enabledOptions: FacetOption[] = [
     { value: 'true', label: 'Enabled' },
     { value: 'false', label: 'Disabled' },
 ];
 
-const initialFilters: ClientFilterState = { status: '', enabled: '', provider: '' };
-
 export function DownloadClientsPage() {
     useDocumentTitle('Download Clients');
-    const [searchParams] = useSearchParams();
 
-    const [filters, setFilters] = useState<ClientFilterState>(() => {
-        const statusParam = searchParams.get('status');
-        return {
-            status: mapStatusParam(statusParam),
-            enabled: '',
-            provider: '',
-        };
+    const { sorting, filters, page, setSorting, setFilters, setPage } = useUrlTableState({
+        defaultSort: DEFAULT_SORTING,
+        defaultFilters: DEFAULT_FILTERS,
+        sortKeys: SORT_KEYS,
     });
+
+    const provider = useMemo(() => decodeMultiValue(filters.provider), [filters.provider]);
+    const status = useMemo(() => mapStatusParam(filters.status), [filters.status]);
+    const enabled = filters.enabled;
+
     const [clientFormOpen, , openClientForm, closeClientForm] = useToggle();
     const returnFocusRef = useRef<HTMLElement | null>(null);
     const [editingClient, setEditingClient] = useState<DownloadClientFormValues | null>(null);
     const [deletingClient, setDeletingClient] = useState<DownloadClientItem | null>(null);
     const [isDeleting, setIsDeleting] = useState(false);
+    const [testingId, setTestingId] = useState<string | null>(null);
     const { toast } = useToast();
 
     const {
@@ -112,81 +126,70 @@ export function DownloadClientsPage() {
         deleteClient,
         isCreating,
         isUpdating,
+        isLoading,
+        error,
         refetch,
     } = useDownloadClients();
 
-    const { test: testClient, isPending: isTesting } = useTestDownloadClient();
+    const { test: testClient } = useTestDownloadClient();
+    const {
+        test: testClientSettings,
+        cancel: cancelTestClientSettings,
+        isPending: isTestingSettings,
+    } = useTestDownloadClientSettings();
+    const testClosedRef = useRef(false);
+
+    useEffect(() => () => cancelTestClientSettings(), [cancelTestClientSettings]);
 
     const clients = useMemo(() => apiClients.map(transformClient), [apiClients]);
+    const currentEditingClient = useMemo(() => {
+        if (!editingClient?.id) {
+            return editingClient;
+        }
+        const client = clients.find((candidate) => candidate.id === editingClient.id);
+        return client ? toDownloadClientFormValues(client) : editingClient;
+    }, [clients, editingClient]);
 
     const filteredClients = useMemo(() => {
-        let items = [...clients];
+        return clients.filter((c) => {
+            if (provider.length > 0 && !provider.includes(c.provider)) {
+                return false;
+            }
+            if (status && c.status !== status) {
+                return false;
+            }
+            if (enabled && c.enabled !== (enabled === 'true')) {
+                return false;
+            }
+            return true;
+        });
+    }, [clients, provider, status, enabled]);
 
-        if (filters.status) {
-            items = items.filter((c) => c.status === Number(filters.status));
-        }
-
-        if (filters.enabled) {
-            items = items.filter((c) => c.enabled === (filters.enabled === 'true'));
-        }
-
-        if (filters.provider) {
-            items = items.filter((c) => c.provider === filters.provider);
-        }
-
-        return items;
-    }, [clients, filters]);
-
-    const providerOptions = useMemo(() => {
-        const unique = [...new Set(clients.map((c) => c.provider))].sort();
-        return unique.map((p) => ({ value: p, label: p }));
+    const providerOptions = useMemo(() => [...new Set(clients.map((c) => c.provider))].sort(), [clients]);
+    const statusOptions = useMemo<FacetOption[]>(() => {
+        const present = [...new Set(clients.map((c) => c.status))];
+        return present.map((s) => ({ value: s, label: downloadClientStatusLabels[s] }));
     }, [clients]);
 
-    const statusCounts = useMemo(
-        () => ({
-            unknown: clients.filter((c) => c.status === 0).length,
-            healthy: clients.filter((c) => c.status === 1).length,
-            unhealthy: clients.filter((c) => c.status === 2).length,
-            stale: clients.filter((c) => c.status === 3).length,
-        }),
-        [clients],
+    const setMulti = useCallback(
+        (key: 'provider', next: string[]) => {
+            setFilters({ [key]: encodeMultiValue(next) });
+        },
+        [setFilters],
     );
 
-    const totalClients = clients.length;
-
-    const handleStatusChange = useCallback((value: string) => {
-        setFilters((prev) => ({
-            ...prev,
-            status: value === ALL_VALUE ? '' : value,
-        }));
-    }, []);
-
-    const handleEnabledChange = useCallback((value: string) => {
-        setFilters((prev) => ({
-            ...prev,
-            enabled: value === ALL_VALUE ? '' : value,
-        }));
-    }, []);
-
-    const handleProviderFilterChange = useCallback((value: string) => {
-        setFilters((prev) => ({
-            ...prev,
-            provider: value === ALL_VALUE ? '' : value,
-        }));
-    }, []);
-
     const handleClearFilters = useCallback(() => {
-        setFilters(initialFilters);
-    }, []);
+        setFilters({ provider: '', status: '', enabled: '' });
+    }, [setFilters]);
 
     const handleToggleClientEnabled = useCallback(
-        async (id: string, enabled: boolean) => {
+        async (id: string, isEnabled: boolean) => {
             try {
-                await toggleClientEnabled(id, enabled);
-            } catch {
+                await toggleClientEnabled(id, isEnabled);
+            } catch (error) {
                 toast({
                     title: 'Error',
-                    description: `Failed to ${enabled ? 'enable' : 'disable'} client`,
+                    description: getErrorMessage(error, `Failed to ${isEnabled ? 'enable' : 'disable'} client`),
                     variant: 'error',
                 });
             }
@@ -198,6 +201,7 @@ export function DownloadClientsPage() {
         async (id: string) => {
             const client = clients.find((c) => c.id === id);
             const name = client?.name ?? 'Download client';
+            setTestingId(id);
             try {
                 const result = await testClient(id);
                 toast({
@@ -211,9 +215,51 @@ export function DownloadClientsPage() {
                     description: error instanceof Error ? error.message : 'Failed to test connection',
                     variant: 'error',
                 });
+            } finally {
+                setTestingId(null);
             }
         },
         [clients, testClient, toast],
+    );
+
+    const handleFormTest = useCallback(
+        async (request: IntegrationSettingsTestRequest) => {
+            const name = currentEditingClient?.name || 'Download client';
+            testClosedRef.current = false;
+            try {
+                const result = await testClientSettings(request);
+                if (testClosedRef.current) {
+                    return;
+                }
+                toast({
+                    title: name,
+                    description: result.message,
+                    variant: result.success ? 'success' : 'error',
+                });
+            } catch (error) {
+                if (testClosedRef.current || isAbortError(error)) {
+                    return;
+                }
+                toast({
+                    title: name,
+                    description: error instanceof Error ? error.message : 'Failed to test connection',
+                    variant: 'error',
+                });
+            }
+        },
+        [currentEditingClient, testClientSettings, toast],
+    );
+
+    const handleFormClose = useCallback(
+        (open: boolean) => {
+            if (!open) {
+                testClosedRef.current = true;
+                cancelTestClientSettings();
+                closeClientForm();
+                setEditingClient(null);
+            }
+        },
+        [closeClientForm, cancelTestClientSettings],
     );
 
     const handleAddClient = useCallback(() => {
@@ -227,13 +273,7 @@ export function DownloadClientsPage() {
             returnFocusRef.current = document.activeElement as HTMLElement;
             const client = clients.find((c) => c.id === id);
             if (client) {
-                setEditingClient({
-                    id: client.id,
-                    name: client.name,
-                    provider: client.provider,
-                    enabled: client.enabled,
-                    settings: client.settings,
-                });
+                setEditingClient(toDownloadClientFormValues(client));
                 openClientForm();
             }
         },
@@ -287,12 +327,16 @@ export function DownloadClientsPage() {
                 const stringSettings = toStringSettings(values.settings);
 
                 if (values.id) {
-                    const existing = apiClients.find((c) => c.id === values.id);
-                    const settings = buildSettingsPatch(stringSettings, existing?.settings ?? {});
+                    const settings = buildSettingsPatch(
+                        stringSettings,
+                        toStringSettings(currentEditingClient?.settings ?? {}),
+                    );
 
                     await updateClient(values.id, {
                         name: { value: values.name },
                         enabled: { value: values.enabled },
+                        cleanupDeleteFiles: { value: values.cleanupDeleteFiles },
+                        keepFailedOnClient: { value: values.keepFailedOnClient },
                         settings,
                     });
                     toast({
@@ -305,6 +349,8 @@ export function DownloadClientsPage() {
                         providerType: values.provider,
                         name: values.name,
                         enabled: values.enabled,
+                        cleanupDeleteFiles: values.cleanupDeleteFiles,
+                        keepFailedOnClient: values.keepFailedOnClient,
                         settings: stringSettings,
                     });
                     toast({
@@ -314,15 +360,16 @@ export function DownloadClientsPage() {
                     });
                 }
                 closeClientForm();
-            } catch {
+            } catch (error) {
                 toast({
                     title: values.name || 'Error',
                     description: `Failed to ${values.id ? 'update' : 'create'} download client`,
                     variant: 'error',
                 });
+                throw error;
             }
         },
-        [apiClients, createClient, updateClient, toast, closeClientForm],
+        [createClient, currentEditingClient, updateClient, toast, closeClientForm],
     );
 
     const handleRefresh = useCallback(async () => {
@@ -330,177 +377,214 @@ export function DownloadClientsPage() {
     }, [refetch]);
 
     const addClientActions: QuickAction[] = useMemo(
-        () => [{ id: 'add-client', label: 'Add Client', icon: <Plus weight="bold" />, onClick: handleAddClient }],
+        () => [{ id: 'add-client', label: 'Add Client', icon: <PlusIcon weight="bold" />, onClick: handleAddClient }],
         [handleAddClient],
     );
 
-    const hasActiveFilters = filters.status !== '' || filters.enabled !== '' || filters.provider !== '';
+    const columns = useMemo<ColumnDef<DownloadClientItem>[]>(
+        () => [
+            {
+                id: 'name',
+                accessorFn: (row) => row.name,
+                header: 'Name',
+                size: 240,
+                cell: ({ row }) => (
+                    <span className="download-clients-table__name" title={row.original.name}>
+                        {row.original.name}
+                    </span>
+                ),
+            },
+            {
+                id: 'provider',
+                accessorFn: (row) => row.provider,
+                header: () => (
+                    <MultiSelectColumnFilter
+                        label="Provider"
+                        options={providerOptions}
+                        value={provider}
+                        onChange={(next) => setMulti('provider', next)}
+                    />
+                ),
+                meta: { headerLabel: 'Provider' },
+                size: 200,
+                cell: ({ row }) => <span className="download-clients-table__provider">{row.original.provider}</span>,
+            },
+            {
+                id: 'status',
+                accessorFn: (row) => row.status,
+                header: () => (
+                    <ColumnHeaderFilter
+                        type="facet"
+                        label="Status"
+                        active={status !== ''}
+                        options={statusOptions}
+                        value={status}
+                        onChange={(value) => setFilters({ status: value })}
+                    />
+                ),
+                meta: { headerLabel: 'Status' },
+                size: 140,
+                cell: ({ row }) => {
+                    const variant = downloadClientStatusVariants[row.original.status];
+                    return (
+                        <Badge variant={variant as Parameters<typeof Badge>[0]['variant']} size="sm" dot>
+                            {downloadClientStatusLabels[row.original.status]}
+                        </Badge>
+                    );
+                },
+            },
+            {
+                id: 'enabled',
+                accessorFn: (row) => row.enabled,
+                header: () => (
+                    <ColumnHeaderFilter
+                        type="facet"
+                        label="Enabled"
+                        active={enabled !== ''}
+                        options={enabledOptions}
+                        value={enabled}
+                        onChange={(value) => setFilters({ enabled: value })}
+                    />
+                ),
+                meta: { headerLabel: 'Enabled' },
+                size: 140,
+                cell: ({ row }) => (
+                    <Badge variant={row.original.enabled ? 'healthy' : 'unknown'} size="sm">
+                        {row.original.enabled ? 'Enabled' : 'Disabled'}
+                    </Badge>
+                ),
+            },
+            {
+                id: 'checked',
+                accessorFn: (row) => {
+                    const time = row.lastCheckedAt ? new Date(row.lastCheckedAt).getTime() : NaN;
+                    return isNaN(time) ? undefined : time;
+                },
+                sortUndefined: 'last',
+                header: 'Checked',
+                size: 150,
+                cell: ({ row }) => (
+                    <span className="download-clients-table__checked">
+                        {formatRelativeTime(row.original.lastCheckedAt)}
+                    </span>
+                ),
+            },
+            {
+                id: 'actions',
+                header: '',
+                enableSorting: false,
+                size: 180,
+                cell: ({ row }) => (
+                    <IntegrationRowActions
+                        prefix="download-clients-page"
+                        name={row.original.name}
+                        id={row.original.id}
+                        enabled={row.original.enabled}
+                        isTesting={testingId === row.original.id}
+                        onTest={() => handleTestClient(row.original.id)}
+                        onToggleEnabled={(value) => handleToggleClientEnabled(row.original.id, value)}
+                        onEdit={() => handleEditClient(row.original.id)}
+                        onDelete={() => handleDeleteClient(row.original.id)}
+                    />
+                ),
+            },
+        ],
+        [
+            providerOptions,
+            statusOptions,
+            provider,
+            status,
+            enabled,
+            setMulti,
+            setFilters,
+            testingId,
+            handleTestClient,
+            handleToggleClientEnabled,
+            handleEditClient,
+            handleDeleteClient,
+        ],
+    );
 
-    const statusLabel = filters.status
-        ? (statusOptions.find((o) => o.value === filters.status)?.label ?? 'Unknown')
-        : 'Status';
+    const hasActiveFilters = provider.length > 0 || status !== '' || enabled !== '';
 
-    const enabledLabel = filters.enabled
-        ? (enabledOptions.find((o) => o.value === filters.enabled)?.label ?? 'Unknown')
-        : 'Enabled';
+    const pageCount = Math.max(1, Math.ceil(filteredClients.length / PAGE_SIZE));
+    const currentPage = Math.min(page, pageCount);
+    const pagination = useMemo(() => ({ pageIndex: currentPage - 1, pageSize: PAGE_SIZE }), [currentPage]);
 
-    const providerLabel = filters.provider
-        ? (providerOptions.find((o) => o.value === filters.provider)?.label ?? 'Unknown')
-        : 'Provider';
+    const getRowId = useCallback((row: DownloadClientItem) => row.id, []);
+
+    const emptyState = (
+        <IntegrationEmptyState
+            icon={<HardDrivesIcon weight="duotone" />}
+            entity="download clients"
+            hasActiveFilters={hasActiveFilters}
+            addDescription="Add a download client to start downloading content"
+            onClearFilters={handleClearFilters}
+        />
+    );
+
+    const errorState = (
+        <EmptyState
+            icon={<WarningCircleIcon weight="duotone" />}
+            title="Failed to load download clients"
+            action={
+                <Button variant="secondary" size="sm" onClick={() => refetch()}>
+                    Retry
+                </Button>
+            }
+        />
+    );
 
     return (
         <div className="download-clients-page" data-page="download-clients">
             <PullToRefresh onRefresh={handleRefresh} className="download-clients-page__pull-to-refresh">
-                <header className="download-clients-page__header">
-                    <div className="download-clients-page__header-left">
-                        <HardDrives
-                            weight="duotone"
-                            className="download-clients-page__icon"
-                            aria-hidden="true"
-                            data-testid="download-clients-page__icon"
-                        />
-                        <h1 className="download-clients-page__title">Download Clients</h1>
-                        <span
-                            className="page-count download-clients-page__count"
-                            data-testid="download-clients-page__count"
-                        >
-                            {totalClients}
-                        </span>
-                    </div>
-                    <div className="download-clients-page__header-actions">
-                        <Button variant="primary" size="sm" data-action="add-client" onClick={handleAddClient}>
-                            <Plus weight="bold" aria-hidden="true" />
-                            <span className="download-clients-page__add-label">Add Client</span>
-                        </Button>
-                    </div>
-                </header>
-
-                <div className="list-toolbar__summary" aria-label="Health summary">
-                    <Badge variant="healthy" size="sm" badgeStyle="outline" dot count={statusCounts.healthy}>
-                        Healthy
-                    </Badge>
-                    <Badge variant="unhealthy" size="sm" badgeStyle="outline" dot count={statusCounts.unhealthy}>
-                        Unhealthy
-                    </Badge>
-                    <Badge variant="stale" size="sm" badgeStyle="outline" dot count={statusCounts.stale}>
-                        Stale
-                    </Badge>
-                    <Badge variant="unknown" size="sm" badgeStyle="outline" dot count={statusCounts.unknown}>
-                        Unknown
-                    </Badge>
-                </div>
-
-                <div className="list-toolbar__filters" data-component="client-filters">
-                    <div className="list-toolbar__filters-controls">
-                        <Select value={filters.status || ALL_VALUE} onValueChange={handleStatusChange}>
-                            <SelectTrigger
-                                size="sm"
-                                placeholder="Status"
-                                aria-label="Filter by status"
-                                data-filter="status"
-                            >
-                                {statusLabel}
-                            </SelectTrigger>
-                            <SelectContent>
-                                <SelectItem value={ALL_VALUE}>All Status</SelectItem>
-                                {statusOptions
-                                    .filter((o) => o.value !== 'all')
-                                    .map((opt) => (
-                                        <SelectItem key={opt.value} value={opt.value}>
-                                            {opt.label}
-                                        </SelectItem>
-                                    ))}
-                            </SelectContent>
-                        </Select>
-
-                        <Select value={filters.enabled || ALL_VALUE} onValueChange={handleEnabledChange}>
-                            <SelectTrigger
-                                size="sm"
-                                placeholder="All"
-                                aria-label="Filter by enabled state"
-                                data-filter="enabled"
-                            >
-                                {enabledLabel}
-                            </SelectTrigger>
-                            <SelectContent>
-                                <SelectItem value={ALL_VALUE}>All</SelectItem>
-                                {enabledOptions
-                                    .filter((o) => o.value !== 'all')
-                                    .map((opt) => (
-                                        <SelectItem key={opt.value} value={opt.value}>
-                                            {opt.label}
-                                        </SelectItem>
-                                    ))}
-                            </SelectContent>
-                        </Select>
-
-                        <Select value={filters.provider || ALL_VALUE} onValueChange={handleProviderFilterChange}>
-                            <SelectTrigger
-                                size="sm"
-                                placeholder="Provider"
-                                aria-label="Filter by provider type"
-                                data-filter="provider"
-                            >
-                                {providerLabel}
-                            </SelectTrigger>
-                            <SelectContent>
-                                <SelectItem value={ALL_VALUE}>All Providers</SelectItem>
-                                {providerOptions.map((opt) => (
-                                    <SelectItem key={opt.value} value={opt.value}>
-                                        {opt.label}
-                                    </SelectItem>
-                                ))}
-                            </SelectContent>
-                        </Select>
-
-                        {hasActiveFilters && (
-                            <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={handleClearFilters}
-                                className="list-toolbar__clear-filters"
-                                data-action="clear-filters"
-                            >
-                                Clear
+                <PageHeader
+                    className="download-clients-page__header"
+                    title="Download Clients"
+                    description="Download clients Magpie uses to send releases."
+                    icon={
+                        <HardDrivesIcon weight="duotone" aria-hidden="true" data-testid="download-clients-page__icon" />
+                    }
+                    actions={
+                        <div className="download-clients-page__header-actions">
+                            {hasActiveFilters && <ClearFiltersButton onClick={handleClearFilters} />}
+                            <Button variant="primary" size="sm" data-action="add-client" onClick={handleAddClient}>
+                                <PlusIcon weight="bold" aria-hidden="true" />
+                                <span className="download-clients-page__add-label">Add Client</span>
                             </Button>
-                        )}
-                    </div>
-                </div>
+                        </div>
+                    }
+                />
 
-                <div className="download-clients-page__list" role="list" aria-label="Download clients">
-                    {filteredClients.length === 0 ? (
-                        <EmptyState
-                            icon={<HardDrives weight="duotone" />}
-                            title="No download clients found"
-                            description={
-                                hasActiveFilters
-                                    ? 'Try adjusting your filters'
-                                    : 'Add a download client to start downloading content'
-                            }
-                            action={
-                                !hasActiveFilters ? (
-                                    <Button
-                                        variant="primary"
-                                        size="sm"
-                                        onClick={handleAddClient}
-                                        data-action="add-client-empty"
-                                    >
-                                        <Plus weight="bold" aria-hidden="true" />
-                                        <span>Add Client</span>
-                                    </Button>
-                                ) : undefined
-                            }
+                <div className="download-clients-table" data-area="clients">
+                    <DataTable<DownloadClientItem>
+                        columns={columns}
+                        data={filteredClients}
+                        enableSorting
+                        sorting={sorting}
+                        onSortingChange={(updater) =>
+                            setSorting(typeof updater === 'function' ? updater(sorting) : updater)
+                        }
+                        enablePagination={filteredClients.length > PAGE_SIZE}
+                        hidePagination
+                        pageSize={PAGE_SIZE}
+                        pagination={pagination}
+                        getRowId={getRowId}
+                        loading={isLoading}
+                        emptyState={error ? errorState : emptyState}
+                        keepHeaderWhenEmpty={hasActiveFilters}
+                        aria-label="Download clients"
+                    />
+                    {filteredClients.length > PAGE_SIZE && (
+                        <Pager
+                            className="download-clients-table__pager"
+                            page={currentPage}
+                            pageCount={pageCount}
+                            onFirst={() => setPage(1)}
+                            onPrevious={() => setPage(Math.max(1, currentPage - 1))}
+                            onNext={() => setPage(Math.min(pageCount, currentPage + 1))}
+                            onLast={() => setPage(pageCount)}
                         />
-                    ) : (
-                        filteredClients.map((client) => (
-                            <ClientRow
-                                key={client.id}
-                                client={client}
-                                onToggleEnabled={handleToggleClientEnabled}
-                                onEdit={handleEditClient}
-                                onDelete={handleDeleteClient}
-                            />
-                        ))
                     )}
                 </div>
             </PullToRefresh>
@@ -509,17 +593,12 @@ export function DownloadClientsPage() {
 
             <DownloadClientForm
                 open={clientFormOpen}
-                onOpenChange={(open) => {
-                    if (!open) {
-                        closeClientForm();
-                        setEditingClient(null);
-                    }
-                }}
-                initialValues={editingClient}
+                onOpenChange={handleFormClose}
+                initialValues={currentEditingClient}
                 onSubmit={handleClientFormSubmit}
                 isSubmitting={isCreating || isUpdating}
-                onTest={editingClient?.id ? () => handleTestClient(editingClient.id!) : undefined}
-                isTesting={isTesting}
+                onTest={handleFormTest}
+                isTesting={isTestingSettings}
                 returnFocusRef={returnFocusRef}
             />
 
@@ -536,84 +615,5 @@ export function DownloadClientsPage() {
 }
 
 DownloadClientsPage.displayName = 'DownloadClientsPage';
-
-interface ClientRowProps {
-    client: DownloadClientItem;
-    onToggleEnabled: (id: string, enabled: boolean) => void;
-    onEdit: (id: string) => void;
-    onDelete: (id: string) => void;
-}
-
-function ClientRow({ client, onToggleEnabled, onEdit, onDelete }: ClientRowProps) {
-    const variant = downloadClientStatusVariants[client.status];
-    const statusLabel = downloadClientStatusLabels[client.status];
-
-    return (
-        <div
-            className={`download-clients-page__item${client.enabled ? '' : ' download-clients-page__item--disabled'}`}
-            role="listitem"
-            data-testid="download-clients-page__item"
-            data-client-id={client.id}
-            data-status={variant}
-            data-enabled={client.enabled}
-        >
-            <div className="download-clients-page__item-main">
-                <div className="download-clients-page__item-info">
-                    <div className="download-clients-page__item-header">
-                        <span className="download-clients-page__item-name">{client.name}</span>
-                        <Badge variant={variant as Parameters<typeof Badge>[0]['variant']} size="sm" dot>
-                            {statusLabel}
-                        </Badge>
-                    </div>
-                    <div className="download-clients-page__item-meta">
-                        <span className="download-clients-page__item-provider">{client.provider}</span>
-                        <span className="download-clients-page__item-checked">
-                            <Clock weight="regular" aria-hidden="true" />
-                            Checked {formatRelativeTime(client.lastCheckedAt)}
-                        </span>
-                    </div>
-                </div>
-                <div className="download-clients-page__item-actions card-actions">
-                    <div className="download-clients-page__item-toggle" title={client.enabled ? 'Disable' : 'Enable'}>
-                        <Power weight="bold" className="download-clients-page__toggle-icon" aria-hidden="true" />
-                        <Switch
-                            checked={client.enabled}
-                            onCheckedChange={(checked) => onToggleEnabled(client.id, checked)}
-                            aria-label={`${client.enabled ? 'Disable' : 'Enable'} ${client.name}`}
-                            data-action="toggle-enabled"
-                            data-target={client.id}
-                        />
-                    </div>
-                    <Tooltip content="Edit">
-                        <button
-                            type="button"
-                            className="download-clients-page__action-btn card-actions__btn"
-                            data-testid="download-clients-page__action-btn"
-                            onClick={() => onEdit(client.id)}
-                            aria-label={`Edit ${client.name}`}
-                            data-action="edit"
-                            data-target={client.id}
-                        >
-                            <PencilSimple weight="bold" />
-                        </button>
-                    </Tooltip>
-                    <Tooltip content="Delete">
-                        <button
-                            type="button"
-                            className="download-clients-page__action-btn download-clients-page__action-btn--danger card-actions__btn card-actions__btn--danger"
-                            data-testid="download-clients-page__action-btn"
-                            onClick={() => onDelete(client.id)}
-                            aria-label={`Delete ${client.name}`}
-                            data-action="delete"
-                            data-target={client.id}
-                        >
-                            <Trash weight="bold" />
-                        </button>
-                    </Tooltip>
-                </div>
-            </div>
-        </div>
-    );
-}
 
 export default DownloadClientsPage;

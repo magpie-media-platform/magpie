@@ -9,9 +9,9 @@ const renderWithRouter = (ui: React.ReactElement) => {
 };
 
 const mockJobs: JobExecution[] = [
-    { id: '1', name: 'Refresh Metadata', status: 'completed', duration: '2m 15s', timestamp: '5 min ago' },
+    { id: '1', name: 'Content metadata refresh item', status: 'completed', duration: '2m 15s', timestamp: '5 min ago' },
     { id: '2', name: 'Search Missing', status: 'running', duration: '45s', timestamp: '10 min ago' },
-    { id: '3', name: 'Import Downloads', status: 'failed', duration: '1m 30s', timestamp: '15 min ago' },
+    { id: '3', name: 'Download import item', status: 'failed', duration: '1m 30s', timestamp: '15 min ago' },
     { id: '4', name: 'Sync Libraries', status: 'cancelled', timestamp: '1h ago' },
     { id: '5', name: 'Clean Up Files', status: 'completed', duration: '30s', timestamp: '2h ago' },
 ];
@@ -36,9 +36,9 @@ describe('RecentJobsWidget', () => {
     it('displays job names', () => {
         renderWithRouter(<RecentJobsWidget jobs={mockJobs} />);
 
-        expect(screen.getByText('Refresh Metadata')).toBeInTheDocument();
+        expect(screen.getByText('Content metadata refresh item')).toBeInTheDocument();
         expect(screen.getByText('Search Missing')).toBeInTheDocument();
-        expect(screen.getByText('Import Downloads')).toBeInTheDocument();
+        expect(screen.getByText('Download import item')).toBeInTheDocument();
     });
 
     it('displays job statuses', () => {
@@ -139,9 +139,9 @@ describe('RecentJobsWidget maxItems', () => {
     it('limits displayed jobs to maxItems', () => {
         renderWithRouter(<RecentJobsWidget jobs={mockJobs} maxItems={3} />);
 
-        expect(screen.getByText('Refresh Metadata')).toBeInTheDocument();
+        expect(screen.getByText('Content metadata refresh item')).toBeInTheDocument();
         expect(screen.getByText('Search Missing')).toBeInTheDocument();
-        expect(screen.getByText('Import Downloads')).toBeInTheDocument();
+        expect(screen.getByText('Download import item')).toBeInTheDocument();
         expect(screen.queryByText('Sync Libraries')).not.toBeInTheDocument();
         expect(screen.queryByText('Clean Up Files')).not.toBeInTheDocument();
     });
@@ -149,7 +149,7 @@ describe('RecentJobsWidget maxItems', () => {
     it('defaults to 5 items', () => {
         renderWithRouter(<RecentJobsWidget jobs={mockJobs} />);
 
-        expect(screen.getByText('Refresh Metadata')).toBeInTheDocument();
+        expect(screen.getByText('Content metadata refresh item')).toBeInTheDocument();
         expect(screen.getByText('Clean Up Files')).toBeInTheDocument();
     });
 
@@ -175,7 +175,7 @@ describe('RecentJobsWidget loading state', () => {
 
     it('does not show job names when loading', () => {
         renderWithRouter(<RecentJobsWidget jobs={mockJobs} loading />);
-        expect(screen.queryByText('Refresh Metadata')).not.toBeInTheDocument();
+        expect(screen.queryByText('Content metadata refresh item')).not.toBeInTheDocument();
     });
 
     it('does not show view all link when loading', () => {
@@ -209,7 +209,7 @@ describe('RecentJobsWidget navigation', () => {
 
         renderWithRouter(<RecentJobsWidget jobs={mockJobs} getJobUrl={getJobUrl} />);
 
-        const link = screen.getByText('Refresh Metadata').closest('a');
+        const link = screen.getByText('Content metadata refresh item').closest('a');
         expect(link).toBeInTheDocument();
         expect(link).toHaveAttribute('href', '/jobs/1');
     });
@@ -217,7 +217,7 @@ describe('RecentJobsWidget navigation', () => {
     it('renders job items as divs when getJobUrl is not provided', () => {
         renderWithRouter(<RecentJobsWidget jobs={mockJobs} />);
 
-        const item = screen.getByText('Refresh Metadata').closest('.recent-jobs-widget__item');
+        const item = screen.getByText('Content metadata refresh item').closest('.recent-jobs-widget__item');
         expect(item?.tagName).toBe('DIV');
     });
 
@@ -226,7 +226,7 @@ describe('RecentJobsWidget navigation', () => {
 
         renderWithRouter(<RecentJobsWidget jobs={mockJobs} getJobUrl={getJobUrl} />);
 
-        const item = screen.getByText('Refresh Metadata').closest('.recent-jobs-widget__item');
+        const item = screen.getByText('Content metadata refresh item').closest('.recent-jobs-widget__item');
         expect(item).toHaveAttribute('data-clickable');
     });
 
@@ -243,9 +243,9 @@ describe('RecentJobsWidget navigation', () => {
 
         renderWithRouter(<RecentJobsWidget jobs={mockJobs} getJobUrl={getJobUrl} />);
 
-        const refreshLink = screen.getByText('Refresh Metadata').closest('a');
+        const refreshLink = screen.getByText('Content metadata refresh item').closest('a');
         const searchLink = screen.getByText('Search Missing').closest('a');
-        const importLink = screen.getByText('Import Downloads').closest('a');
+        const importLink = screen.getByText('Download import item').closest('a');
 
         expect(refreshLink).toHaveAttribute('href', '/jobs/1');
         expect(searchLink).toHaveAttribute('href', '/jobs/2');
@@ -312,8 +312,8 @@ describe('RecentJobsWidget accessibility', () => {
         const getJobUrl = (job: JobExecution) => `/jobs/${job.id}`;
         renderWithRouter(<RecentJobsWidget jobs={mockJobs} getJobUrl={getJobUrl} />);
 
-        const item = screen.getByText('Refresh Metadata').closest('.recent-jobs-widget__item');
-        expect(item).toHaveAttribute('aria-label', 'View Refresh Metadata job details');
+        const item = screen.getByText('Content metadata refresh item').closest('.recent-jobs-widget__item');
+        expect(item).toHaveAttribute('aria-label', 'View Content metadata refresh item job details');
     });
 
     it('icon is hidden from screen readers', () => {

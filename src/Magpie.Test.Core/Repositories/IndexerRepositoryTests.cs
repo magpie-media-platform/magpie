@@ -8,10 +8,10 @@ using Magpie.Core.Repositories;
 using Magpie.Data;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
-using Magpie.Test.Shared;
 
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 using NUnit.Framework;
 
@@ -48,18 +48,21 @@ public class IndexerRepositoryTests
 
         _userId = user.Id;
 
-        var loggerFactory = LoggerFactory.Create(builder => builder.AddTestLogger());
+        var loggerFactory = NullLoggerFactory.Instance;
 
         var auditRecordRepository = new AuditRecordRepository(
             _context,
-            loggerFactory.CreateLogger<AuditRecordRepository>());
+            Moq.Mock.Of<Sdk.Services.IEventBus>(),
+            loggerFactory.CreateLogger<AuditRecordRepository>(),
+            new TransactionManager(_context, NullLogger<TransactionManager>.Instance));
 
-        var transactionManager = new TransactionManager(_context);
+        var transactionManager = new TransactionManager(_context, NullLogger<TransactionManager>.Instance);
 
         _subject = new IndexerRepository(
             _context,
             auditRecordRepository,
             transactionManager,
+            Moq.Mock.Of<Sdk.Services.IEventBus>(),
             loggerFactory.CreateLogger<IndexerRepository>());
     }
 
@@ -80,15 +83,15 @@ public class IndexerRepositoryTests
             Name = "TestIndexer",
             Description = "Test indexer description",
             Availability = IndexerAvailability.Public,
-            Categories = ["movies", "tv"],
+            Categories = ["type-a", "type-c"],
             Languages = ["en", "fr"],
             CreatedAt = DateTime.UtcNow
         };
         _context.Indexers.Add(indexer);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        var result = await _subject.GetByIdAsync(indexer.Id);
+        var result = await _subject.GetByIdAsync(indexer.Id).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -104,14 +107,14 @@ public class IndexerRepositoryTests
     public async Task GetByIdAsync_ReturnsNull_WhenNotExists()
     {
         // Act
-        var result = await _subject.GetByIdAsync(Guid.NewGuid());
+        var result = await _subject.GetByIdAsync(Guid.NewGuid()).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.Null);
     }
 
     [Test]
-    public async Task ListAllAsync_ReturnsAllIndexers()
+    public async Task ListAllAsync_ReturnsAllIndexers_WhenIndexersExist()
     {
         // Arrange
         var indexer1 = new Indexer
@@ -129,10 +132,10 @@ public class IndexerRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.Indexers.AddRange(indexer1, indexer2);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        var result = await _subject.ListAllAsync(default);
+        var result = await _subject.ListAllAsync(default).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Has.Exactly(2).Items);
@@ -142,14 +145,14 @@ public class IndexerRepositoryTests
     public async Task ListAllAsync_ReturnsEmptyList_WhenNoIndexers()
     {
         // Act
-        var result = await _subject.ListAllAsync(default);
+        var result = await _subject.ListAllAsync(default).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.Empty);
     }
 
     [Test]
-    public async Task CreateAsync_CreatesIndexer()
+    public async Task CreateAsync_CreatesIndexer_WhenRequestIsValid()
     {
         // Arrange
         var indexer = new Indexer
@@ -158,12 +161,12 @@ public class IndexerRepositoryTests
             Name = "NewIndexer",
             Description = "A new indexer",
             Availability = IndexerAvailability.SemiPrivate,
-            Categories = ["movies"],
+            Categories = ["type-a"],
             Languages = ["en"]
         };
 
         // Act
-        var result = await _subject.CreateAsync(indexer, _userId);
+        var result = await _subject.CreateAsync(indexer, _userId).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -179,7 +182,7 @@ public class IndexerRepositoryTests
     }
 
     [Test]
-    public async Task CreateAsync_CreatesAuditRecord()
+    public async Task CreateAsync_CreatesAuditRecord_WhenIndexerIsCreated()
     {
         // Arrange
         var indexer = new Indexer
@@ -190,10 +193,10 @@ public class IndexerRepositoryTests
         };
 
         // Act
-        await _subject.CreateAsync(indexer, _userId);
+        await _subject.CreateAsync(indexer, _userId).ConfigureAwait(false);
 
         // Assert
-        var auditRecords = await _context.AuditRecords.ToListAsync();
+        var auditRecords = await _context.AuditRecords.ToListAsync().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(auditRecords, Has.Count.EqualTo(1));
@@ -216,7 +219,7 @@ public class IndexerRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.Indexers.Add(indexer);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         indexer.Name = "UpdatedIndexer";
         indexer.Description = "Updated description";
@@ -224,12 +227,12 @@ public class IndexerRepositoryTests
         indexer.ProviderType = "torznab";
 
         // Act
-        var result = await _subject.UpdateAsync(indexer, _userId);
+        var result = await _subject.UpdateAsync(indexer, _userId).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.True);
 
-        var updated = await _subject.GetByIdAsync(indexer.Id);
+        var updated = await _subject.GetByIdAsync(indexer.Id).ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(updated, Has.Property(nameof(updated.Name)).EqualTo("UpdatedIndexer"));
@@ -254,14 +257,14 @@ public class IndexerRepositoryTests
         };
 
         // Act
-        var result = await _subject.UpdateAsync(indexer, _userId);
+        var result = await _subject.UpdateAsync(indexer, _userId).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.False);
     }
 
     [Test]
-    public async Task UpdateAsync_CreatesAuditRecord()
+    public async Task UpdateAsync_CreatesAuditRecord_WhenIndexerIsUpdated()
     {
         // Arrange
         var indexer = new Indexer
@@ -272,15 +275,15 @@ public class IndexerRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.Indexers.Add(indexer);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         indexer.Name = "Updated";
 
         // Act
-        await _subject.UpdateAsync(indexer, _userId);
+        await _subject.UpdateAsync(indexer, _userId).ConfigureAwait(false);
 
         // Assert
-        var auditRecords = await _context.AuditRecords.ToListAsync();
+        var auditRecords = await _context.AuditRecords.ToListAsync().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(auditRecords, Has.Count.EqualTo(1));
@@ -302,10 +305,10 @@ public class IndexerRepositoryTests
         };
 
         // Act
-        await _subject.UpdateAsync(indexer, _userId);
+        await _subject.UpdateAsync(indexer, _userId).ConfigureAwait(false);
 
         // Assert
-        var auditRecords = await _context.AuditRecords.ToListAsync();
+        var auditRecords = await _context.AuditRecords.ToListAsync().ConfigureAwait(false);
         Assert.That(auditRecords, Is.Empty);
     }
 
@@ -321,15 +324,15 @@ public class IndexerRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.Indexers.Add(indexer);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        var result = await _subject.DeleteAsync(indexer.Id, _userId);
+        var result = await _subject.DeleteAsync(indexer.Id, _userId).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.True);
 
-        var deleted = await _subject.GetByIdAsync(indexer.Id);
+        var deleted = await _subject.GetByIdAsync(indexer.Id).ConfigureAwait(false);
         Assert.That(deleted, Is.Null);
     }
 
@@ -337,14 +340,14 @@ public class IndexerRepositoryTests
     public async Task DeleteAsync_ReturnsFalse_WhenNotExists()
     {
         // Act
-        var result = await _subject.DeleteAsync(Guid.NewGuid(), _userId);
+        var result = await _subject.DeleteAsync(Guid.NewGuid(), _userId).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.False);
     }
 
     [Test]
-    public async Task DeleteAsync_CreatesAuditRecord()
+    public async Task DeleteAsync_CreatesAuditRecord_WhenIndexerIsDeleted()
     {
         // Arrange
         var indexer = new Indexer
@@ -355,13 +358,13 @@ public class IndexerRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.Indexers.Add(indexer);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        await _subject.DeleteAsync(indexer.Id, _userId);
+        await _subject.DeleteAsync(indexer.Id, _userId).ConfigureAwait(false);
 
         // Assert
-        var auditRecords = await _context.AuditRecords.ToListAsync();
+        var auditRecords = await _context.AuditRecords.ToListAsync().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(auditRecords, Has.Count.EqualTo(1));
@@ -375,15 +378,15 @@ public class IndexerRepositoryTests
     public async Task DeleteAsync_DoesNotCreateAuditRecord_WhenNotExists()
     {
         // Act
-        await _subject.DeleteAsync(Guid.NewGuid(), _userId);
+        await _subject.DeleteAsync(Guid.NewGuid(), _userId).ConfigureAwait(false);
 
         // Assert
-        var auditRecords = await _context.AuditRecords.ToListAsync();
+        var auditRecords = await _context.AuditRecords.ToListAsync().ConfigureAwait(false);
         Assert.That(auditRecords, Is.Empty);
     }
 
     [Test]
-    public async Task DeleteAsync_DeletesRelatedConnections()
+    public async Task DeleteAsync_DeletesRelatedConnections_WhenIndexerIsDeleted()
     {
         // Arrange
         var indexer = new Indexer
@@ -394,14 +397,14 @@ public class IndexerRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.Indexers.Add(indexer);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         var connection1 = new IndexerConnection
         {
             IndexerId = indexer.Id,
             Name = "Connection1",
             Enabled = true,
-            Status = IndexerStatus.Healthy,
+            Status = IntegrationHealthStatus.Healthy,
             CreatedAt = DateTime.UtcNow
         };
         var connection2 = new IndexerConnection
@@ -409,29 +412,29 @@ public class IndexerRepositoryTests
             IndexerId = indexer.Id,
             Name = "Connection2",
             Enabled = false,
-            Status = IndexerStatus.Unknown,
+            Status = IntegrationHealthStatus.Unknown,
             CreatedAt = DateTime.UtcNow
         };
         _context.IndexerConnections.AddRange(connection1, connection2);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        var result = await _subject.DeleteAsync(indexer.Id, _userId);
+        var result = await _subject.DeleteAsync(indexer.Id, _userId).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.True);
 
         var remainingConnections = await _context.IndexerConnections
             .Where(c => c.IndexerId == indexer.Id)
-            .ToListAsync();
+            .ToListAsync().ConfigureAwait(false);
         Assert.That(remainingConnections, Is.Empty);
     }
 
     [Test]
-    public async Task CreateAsync_SetsCategories()
+    public async Task CreateAsync_SetsCategories_WhenCategoriesAreProvided()
     {
         // Arrange
-        var categories = new[] { "movies", "tv", "music" }.ToList();
+        var categories = new[] { "type-a", "type-c", "type-d" }.ToList();
         var indexer = new Indexer
         {
             ProviderType = "newznab",
@@ -441,15 +444,15 @@ public class IndexerRepositoryTests
         };
 
         // Act
-        var result = await _subject.CreateAsync(indexer, _userId);
+        var result = await _subject.CreateAsync(indexer, _userId).ConfigureAwait(false);
 
         // Assert
-        var retrieved = await _subject.GetByIdAsync(result.Id);
+        var retrieved = await _subject.GetByIdAsync(result.Id).ConfigureAwait(false);
         Assert.That(retrieved!.Categories, Is.EqualTo(categories));
     }
 
     [Test]
-    public async Task CreateAsync_SetsLanguages()
+    public async Task CreateAsync_SetsLanguages_WhenLanguagesAreProvided()
     {
         // Arrange
         var languages = new[] { "en", "fr", "de" }.ToList();
@@ -462,15 +465,15 @@ public class IndexerRepositoryTests
         };
 
         // Act
-        var result = await _subject.CreateAsync(indexer, _userId);
+        var result = await _subject.CreateAsync(indexer, _userId).ConfigureAwait(false);
 
         // Assert
-        var retrieved = await _subject.GetByIdAsync(result.Id);
+        var retrieved = await _subject.GetByIdAsync(result.Id).ConfigureAwait(false);
         Assert.That(retrieved!.Languages, Is.EqualTo(languages));
     }
 
     [Test]
-    public async Task UpdateAsync_UpdatesCategories()
+    public async Task UpdateAsync_UpdatesCategories_WhenCategoriesAreProvided()
     {
         // Arrange
         var indexer = new Indexer
@@ -478,25 +481,25 @@ public class IndexerRepositoryTests
             ProviderType = "newznab",
             Name = "UpdateCategoriesIndexer",
             Availability = IndexerAvailability.Public,
-            Categories = ["movies"],
+            Categories = ["type-a"],
             CreatedAt = DateTime.UtcNow
         };
         _context.Indexers.Add(indexer);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
-        var newCategories = new[] { "tv", "music", "books" }.ToList();
+        var newCategories = new[] { "type-c", "type-d", "type-b" }.ToList();
         indexer.Categories = newCategories;
 
         // Act
-        await _subject.UpdateAsync(indexer, _userId);
+        await _subject.UpdateAsync(indexer, _userId).ConfigureAwait(false);
 
         // Assert
-        var updated = await _subject.GetByIdAsync(indexer.Id);
+        var updated = await _subject.GetByIdAsync(indexer.Id).ConfigureAwait(false);
         Assert.That(updated!.Categories, Is.EqualTo(newCategories));
     }
 
     [Test]
-    public async Task UpdateAsync_UpdatesLanguages()
+    public async Task UpdateAsync_UpdatesLanguages_WhenLanguagesAreProvided()
     {
         // Arrange
         var indexer = new Indexer
@@ -508,16 +511,16 @@ public class IndexerRepositoryTests
             CreatedAt = DateTime.UtcNow
         };
         _context.Indexers.Add(indexer);
-        await _context.SaveChangesAsync();
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         var newLanguages = new[] { "fr", "de", "es" }.ToList();
         indexer.Languages = newLanguages;
 
         // Act
-        await _subject.UpdateAsync(indexer, _userId);
+        await _subject.UpdateAsync(indexer, _userId).ConfigureAwait(false);
 
         // Assert
-        var updated = await _subject.GetByIdAsync(indexer.Id);
+        var updated = await _subject.GetByIdAsync(indexer.Id).ConfigureAwait(false);
         Assert.That(updated!.Languages, Is.EqualTo(newLanguages));
     }
 }

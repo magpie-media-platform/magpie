@@ -1,5 +1,6 @@
 @layer components {
     .disk-space-widget {
+        min-width: 0;
         background-color: var(--bg-secondary);
         border: 1px solid var(--border-default);
         border-radius: var(--radius-lg);

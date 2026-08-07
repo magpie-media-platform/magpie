@@ -1,9 +1,11 @@
-.restart-required-banner {
-    width: 100%;
-    padding: var(--spacing-2, 0.5rem) var(--spacing-3, 0.75rem) 0;
-    box-sizing: border-box;
-}
+@layer components {
+    .restart-required-banner {
+        width: 100%;
+        padding: var(--space-sm) var(--space-md) 0;
+        box-sizing: border-box;
+    }
 
-.restart-required-banner [data-component='alert'] {
-    margin: 0;
+    .restart-required-banner [data-component='alert'] {
+        margin: 0;
+    }
 }

@@ -24,11 +24,20 @@ export interface UserCreate {
     username: string;
     password: string;
     role: Role;
+    enabled: boolean;
 }
 
 export interface UserUpdate {
     role?: Role;
     enabled?: boolean;
+}
+
+export interface UserExternalCreate {
+    username: string;
+    providerType: string;
+    externalId: string;
+    role: Role;
+    email?: string | null;
 }
 
 export interface ApiKeyItem {
@@ -46,15 +55,8 @@ export interface ApiKeyItem {
 }
 
 export interface ApiKeyCreatedItem {
-    id: string;
-    userId: string;
-    name: string;
-    key: string;
-    keyPrefix: string;
-    enabled: boolean;
-    expiresAt: string | null;
-    createdAt: string;
-    createdByUserId: string | null;
+    key: ApiKeyItem;
+    plaintextKey: string;
 }
 
 export interface ApiKeyCreate {

@@ -1,36 +1,31 @@
 using System.Threading;
 using System.Threading.Tasks;
 
+using Magpie.Models.Security;
+
 namespace Magpie.Abstractions.Security;
 
 /// <summary>
-/// Provides password hashing and verification functionality.
+/// The service contract for password hashes.
 /// </summary>
 public interface IPasswordHasher
 {
     /// <summary>
-    /// A hashed password with a salt.
+    /// Hashes a password with a new salt.
     /// </summary>
-    /// <param name="Hash">The hashed password.</param>
-    /// <param name="Salt">The salt used to hash the password.</param>
-    public sealed record HashedPassword(string Hash, string Salt);
-
-    /// <summary>
-    /// Hash a password and generates a salt.
-    /// </summary>
-    /// <param name="password">The plaintext password to hash.</param>
-    /// <param name="cancellationToken">The cancellation token.</param>
-    /// <returns>A result containing the hashed password and salt.</returns>
+    /// <param name="password">The plaintext password to hash</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    /// <returns>The hash and the salt</returns>
     Task<HashedPassword> HashPasswordAsync(string password, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Verify a password against a stored hash and salt.
+    /// Validates a password against a stored hash and salt.
     /// </summary>
-    /// <param name="password">The plaintext password to verify.</param>
-    /// <param name="hash">The password hash.</param>
-    /// <param name="salt">The password salt.</param>
-    /// <param name="cancellationToken">The cancellation token.</param>
-    /// <returns><see langword="true"/> if the password matches the hash, otherwise <see langword="false"/>.</returns>
+    /// <param name="password">The plaintext password to validate</param>
+    /// <param name="hash">The stored hash of the password</param>
+    /// <param name="salt">The stored salt of the password</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    /// <returns><see langword="true"/> when the password matches the hash, otherwise <see langword="false"/></returns>
     Task<bool> VerifyPasswordAsync(
         string password,
         string hash,
@@ -38,22 +33,10 @@ public interface IPasswordHasher
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Hash a password with no salt.
+    /// Hashes a password without a salt.
     /// </summary>
-    /// <param name="password">The plaintext password to hash.</param>
-    /// <param name="cancellationToken">The cancellation token.</param>
-    /// <returns>A result containing the hashed password, or a failure.</returns>
+    /// <param name="password">The plaintext password to hash</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    /// <returns>The hash of the password</returns>
     Task<string> HashPasswordUnsaltedAsync(string password, CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Verify a password against a stored hash with no salt.
-    /// </summary>
-    /// <param name="password">The plaintext password to verify.</param>
-    /// <param name="hash">The password hash.</param>
-    /// <param name="cancellationToken">The cancellation token.</param>
-    /// <returns><see langword="true"/> if the password matches the hash, otherwise <see langword="false"/>.</returns>
-    Task<bool> VerifyPasswordUnsaltedAsync(
-        string password,
-        string hash,
-        CancellationToken cancellationToken = default);
 }

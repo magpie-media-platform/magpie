@@ -4,6 +4,7 @@ export const filterQueryHighlight = styleTags({
     Identifier: t.variableName,
     String: t.string,
     Number: t.number,
+    'true false': t.bool,
     'contains startswith endswith': t.operatorKeyword,
     NotContains: t.operatorKeyword,
     NotStartsWith: t.operatorKeyword,
