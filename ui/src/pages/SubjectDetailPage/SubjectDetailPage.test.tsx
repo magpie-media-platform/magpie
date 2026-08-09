@@ -172,9 +172,9 @@ const mockApiSubject: ApiSubject = {
                     {
                         ordinal: 0,
                         kind: 'database',
-                        source: 'IAFD',
-                        url: 'https://www.iafd.com/person.rme/id=walt',
-                        displayName: 'IAFD profile',
+                        source: 'IMDb',
+                        url: 'https://www.imdb.com/name/walt',
+                        displayName: 'IMDb profile',
                     },
                 ],
             },
@@ -859,8 +859,8 @@ describe('SubjectDetailPage', () => {
             renderWithRouter('subject-1');
 
             await waitFor(() => {
-                const link = screen.getByRole('link', { name: /IAFD profile/ });
-                expect(link).toHaveAttribute('href', 'https://www.iafd.com/person.rme/id=walt');
+                const link = screen.getByRole('link', { name: /IMDb profile/ });
+                expect(link).toHaveAttribute('href', 'https://www.imdb.com/name/walt');
                 expect(link).toHaveAttribute('target', '_blank');
                 expect(link).toHaveAttribute('rel', 'noopener noreferrer');
             });
@@ -1342,7 +1342,7 @@ describe('SubjectDetailPage', () => {
             renderWithRouter('subject-1');
 
             await waitFor(() => {
-                const link = screen.getByRole('link', { name: /IAFD profile/ });
+                const link = screen.getByRole('link', { name: /IMDb profile/ });
                 expect(link).toHaveAttribute('target', '_blank');
                 expect(link).toHaveAttribute('rel', 'noopener noreferrer');
             });

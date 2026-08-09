@@ -93,6 +93,7 @@ function fromProviderMetadataCandidate(candidate: ProviderMetadataCandidate): Ad
         overview: candidate.overview,
         thumbnailUrl: candidate.thumbnailUrl,
         inLibrary: candidate.inLibrary ?? false,
+        existingContentHierarchyItemId: candidate.existingContentHierarchyItemId ?? undefined,
     };
 }
 
@@ -112,6 +113,8 @@ function mergeEquivalentCandidates(primary: AddableCandidate, secondary: Addable
         overview: primary.overview || secondary.overview,
         thumbnailUrl: primary.thumbnailUrl || secondary.thumbnailUrl,
         inLibrary: primary.inLibrary || secondary.inLibrary,
+        existingContentHierarchyItemId:
+            primary.existingContentHierarchyItemId ?? secondary.existingContentHierarchyItemId,
     };
 }
 
@@ -164,6 +167,7 @@ export function LibraryAddPage() {
     const [page, setPage] = useState<number>(1);
     const [addingKey, setAddingKey] = useState<string | null>(null);
     const [addedKeys, setAddedKeys] = useState<Set<string>>(() => new Set());
+    const [addedItemIds, setAddedItemIds] = useState<Map<string, string>>(() => new Map());
     const [previewCandidate, setPreviewCandidate] = useState<AddableCandidate | null>(null);
     const [previewOpen, setPreviewOpen] = useState(false);
 
@@ -207,8 +211,9 @@ export function LibraryAddPage() {
     );
 
     const handleAddSuccess = useCallback(
-        (candidateKey: string, title: string) => {
+        (candidateKey: string, title: string, contentHierarchyItemId: string) => {
             setAddedKeys((current) => new Set(current).add(candidateKey));
+            setAddedItemIds((current) => new Map(current).set(candidateKey, contentHierarchyItemId));
             toast({
                 title: 'Added to library',
                 description: `Magpie added "${title}" to the library. Magpie queued a metadata refresh.`,
@@ -237,7 +242,8 @@ export function LibraryAddPage() {
                     rootFolderId,
                 },
                 {
-                    onSuccess: () => handleAddSuccess(candidate.key, candidate.title),
+                    onSuccess: (contentHierarchyItemId) =>
+                        handleAddSuccess(candidate.key, candidate.title, contentHierarchyItemId),
                     onError: () => {
                         toast({
                             title: 'Failed to add content',
@@ -310,7 +316,8 @@ export function LibraryAddPage() {
                     rootFolderId,
                 },
                 {
-                    onSuccess: () => handleAddSuccess(candidateKey, target.fallbackTitle),
+                    onSuccess: (contentHierarchyItemId) =>
+                        handleAddSuccess(candidateKey, target.fallbackTitle, contentHierarchyItemId),
                     onError: () => {
                         toast({
                             title: 'Failed to add content',
@@ -565,10 +572,20 @@ export function LibraryAddPage() {
     const candidates: AddableCandidate[] = useMemo(
         () =>
             coalesceEquivalentCandidates(
-                (providerCandidateSearch.data?.candidates ?? []).map(fromProviderMetadataCandidate),
+                (providerCandidateSearch.data?.candidates ?? []).map((candidate) => {
+                    const addableCandidate = fromProviderMetadataCandidate(candidate);
+                    const addedItemId = addedItemIds.get(addableCandidate.key);
+                    return addedItemId
+                        ? {
+                              ...addableCandidate,
+                              inLibrary: true,
+                              existingContentHierarchyItemId: addedItemId,
+                          }
+                        : addableCandidate;
+                }),
                 rootLevelKeys,
             ),
-        [providerCandidateSearch.data, rootLevelKeys],
+        [addedItemIds, providerCandidateSearch.data, rootLevelKeys],
     );
 
     const ownedCount = candidates.filter((candidate) => candidate.inLibrary).length;

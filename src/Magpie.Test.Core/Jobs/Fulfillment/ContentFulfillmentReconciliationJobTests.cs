@@ -1,10 +1,14 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
+using Magpie.Abstractions;
+using Magpie.Abstractions.Content;
 using Magpie.Abstractions.Releases;
 using Magpie.Abstractions.Repositories;
+using Magpie.Core.Content;
 using Magpie.Core.Jobs.Fulfillment;
 using Magpie.Models;
 using Magpie.Models.Arguments;
@@ -109,6 +113,126 @@ public sealed class ContentFulfillmentReconciliationJobTests
             _releaseEvaluationService.Object,
             TimeProvider.System,
             NullLogger<ContentFulfillmentReconciliationJob>.Instance);
+    }
+
+    [Test]
+    public async Task MaterializeFulfillmentStatusAsync_PreservesLeafAndRollsUpParent_WhenSelfIsExcluded()
+    {
+        // Arrange
+        var leaf = new ContentHierarchyItem
+        {
+            Id = Guid.NewGuid(),
+            ContentType = "movie",
+            Level = "movie",
+            Slug = "leaf",
+            Name = "Leaf"
+        };
+        var parent = new ContentHierarchyItem
+        {
+            Id = Guid.NewGuid(),
+            ContentType = "movie",
+            Level = "collection",
+            Slug = "parent",
+            Name = "Parent"
+        };
+        var leafContent = new ContentItem
+        {
+            Id = Guid.NewGuid(),
+            ContentHierarchyItemId = leaf.Id,
+            Fulfillment = FulfillmentStatus.Upgradable,
+            QualityStatus = QualityStatus.UpgradeWanted
+        };
+        var parentContent = new ContentItem
+        {
+            Id = Guid.NewGuid(),
+            ContentHierarchyItemId = parent.Id,
+            Fulfillment = FulfillmentStatus.Missing
+        };
+        var hierarchyRepository = new Mock<IContentHierarchyItemRepository>();
+        hierarchyRepository
+            .Setup(repository => repository.GetLineageAsync(leaf.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync([leaf, parent]);
+        hierarchyRepository
+            .Setup(repository => repository.QueryAsync(
+                It.IsAny<ContentHierarchyItemCriteria>(),
+                It.IsAny<PagingParameter>(),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync((
+                ContentHierarchyItemCriteria criteria,
+                PagingParameter _,
+                SortParameter? _,
+                CancellationToken _) => new PagedList<ContentHierarchyItem>
+                {
+                    Items = criteria.ParentId.And.Single().Value == parent.Id ? [leaf] : []
+                });
+        hierarchyRepository
+            .Setup(repository => repository.GetByIdAsync(leaf.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(leaf);
+        var contentRepository = new Mock<IContentRepository>();
+        contentRepository
+            .Setup(repository => repository.QueryAsync(
+                It.IsAny<ContentItemQuery>(),
+                It.IsAny<PagingParameter>(),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync((ContentItemQuery query, PagingParameter _, SortParameter? _, CancellationToken _) =>
+                new PagedList<ContentItem>
+                {
+                    Items = query.ContentHierarchyItemId == leaf.Id ? [leafContent] : [parentContent]
+                });
+        contentRepository
+            .Setup(repository => repository.UpdateAsync(
+                It.IsAny<ContentItem>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        var transactionManager = new Mock<ITransactionManager>();
+        transactionManager
+            .Setup(manager => manager.ExecuteWithTransactionAsync(
+                It.IsAny<Func<CancellationToken, Task>>(),
+                It.IsAny<CancellationToken>()))
+            .Returns((Func<CancellationToken, Task> operation, CancellationToken cancellationToken) =>
+                operation(cancellationToken));
+        var subject = new ContentService(
+            hierarchyRepository.Object,
+            contentRepository.Object,
+            Mock.Of<IAuditRecordRepository>(),
+            Mock.Of<IRootFolderRepository>(),
+            Mock.Of<IMetadataContainerRepository>(),
+            [],
+            Mock.Of<IDownloadRepository>(),
+            Mock.Of<IDownloadClientRepository>(),
+            [],
+            transactionManager.Object,
+            Mock.Of<IContentTypeRegistry>(),
+            Mock.Of<IContentFileService>(),
+            TimeProvider.System,
+            NullLogger<ContentService>.Instance);
+
+        // Act
+        await subject.MaterializeFulfillmentStatusAsync(leaf.Id, _userId, includeSelf: false).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(leafContent.Fulfillment, Is.EqualTo(FulfillmentStatus.Upgradable));
+            Assert.That(parentContent.Fulfillment, Is.EqualTo(FulfillmentStatus.Upgradable));
+        }
+
+        contentRepository.Verify(
+            repository => repository.UpdateAsync(
+                It.Is<ContentItem>(item => item.ContentHierarchyItemId == leaf.Id),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()),
+            Times.Never);
+        contentRepository.Verify(
+            repository => repository.UpdateAsync(
+                It.Is<ContentItem>(item => item.ContentHierarchyItemId == parent.Id &&
+                    item.Fulfillment == FulfillmentStatus.Upgradable),
+                _userId,
+                It.IsAny<CancellationToken>()),
+            Times.Once);
     }
 
     [Test]

@@ -147,14 +147,6 @@ internal sealed class CardigannIndexerIntegration(
         return new Uri(uri.AbsoluteUri + "/", UriKind.Absolute);
     }
 
-    public bool ReleaseMatchesCategories(
-        IReadOnlyList<string> releaseCategories,
-        IReadOnlyList<string> contentCategories,
-        out bool recognised)
-    {
-        return releaseCategories.MatchesContentCategories(contentCategories, out recognised);
-    }
-
     public async Task<IEnumerable<Release>> SearchAsync(
         ReleaseSearchRequest request,
         IReadOnlyDictionary<string, string> settings,

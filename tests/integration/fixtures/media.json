@@ -1,0 +1,27 @@
+{
+  "_comment": "Minimal valid media fixtures generated with ffmpeg. Each entry becomes one file under the media-fixtures root that the mock download client copies into the download folder on grab. The integration media-info shim reads these files. Keep them tiny (1s) so the image stays small.",
+  "fixtures": [
+    {
+      "name": "movie-720p.mkv",
+      "durationSeconds": 1,
+      "width": 1280,
+      "height": 720,
+      "videoCodec": "libx264",
+      "audioCodec": "aac"
+    },
+    {
+      "name": "episode-720p.mkv",
+      "durationSeconds": 1,
+      "width": 1280,
+      "height": 720,
+      "videoCodec": "libx264",
+      "audioCodec": "aac"
+    },
+    {
+      "name": "track.flac",
+      "kind": "audio",
+      "durationSeconds": 1,
+      "audioCodec": "flac"
+    }
+  ]
+}

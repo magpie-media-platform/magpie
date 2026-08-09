@@ -26,6 +26,8 @@ export interface ProviderMetadataCandidate {
     thumbnailUrl?: string | null;
 
     inLibrary?: boolean;
+
+    existingContentHierarchyItemId?: string | null;
 }
 
 export interface ProviderMetadataCandidateSearchResult {
@@ -48,9 +50,11 @@ interface ProviderSearchPageInfo {
 
 export interface ProviderMetadataCandidateSearchResponse {
     matches: Array<{
-        candidate: Omit<ProviderMetadataCandidate, 'inLibrary'>;
+        candidate: Omit<ProviderMetadataCandidate, 'inLibrary' | 'existingContentHierarchyItemId'>;
 
         inLibrary: boolean;
+
+        existingContentHierarchyItemId?: string | null;
     }>;
 
     pageItemCount: number;
@@ -77,6 +81,7 @@ export function normalizeProviderMetadataCandidateSearchResult(
         candidates: response.matches.map((match) => ({
             ...match.candidate,
             inLibrary: match.inLibrary,
+            existingContentHierarchyItemId: match.existingContentHierarchyItemId,
         })),
         pageItemCount: response.pageItemCount,
         excludedCount: response.existsInLibraryCount,

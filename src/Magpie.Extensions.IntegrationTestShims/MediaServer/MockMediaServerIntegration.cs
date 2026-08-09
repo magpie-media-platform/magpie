@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -164,7 +165,7 @@ internal sealed class MockMediaServerIntegration :
         return response.Refreshed;
     }
 
-    public Task<Uri?> BuildItemDeepLinkAsync(
+    public async Task<Uri?> BuildItemDeepLinkAsync(
         MediaServerEntity server,
         IReadOnlyDictionary<string, string> externalIds,
         string contentType,
@@ -172,16 +173,38 @@ internal sealed class MockMediaServerIntegration :
         string title,
         CancellationToken cancellationToken = default)
     {
+        const string method = nameof(BuildItemDeepLinkAsync);
+        var discriminator = externalIds
+            .Where(pair => !string.IsNullOrWhiteSpace(pair.Key) && !string.IsNullOrWhiteSpace(pair.Value))
+            .OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase)
+            .Select(pair => pair.Value)
+            .FirstOrDefault();
+        DeepLinkResponse? response;
+        try
+        {
+            response = await _scenarioReader
+                .ReadAsync<DeepLinkResponse>(method, discriminator, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (ScenarioFileMissingException)
+        {
+            response = null;
+        }
+
+        if (response is not null)
+        {
+            return Uri.TryCreate(response.Url, UriKind.Absolute, out var overridden) ? overridden : null;
+        }
+
         var encoded = EncodeExternalIds(externalIds);
         if (string.IsNullOrEmpty(encoded))
         {
-            return Task.FromResult<Uri?>(null);
+            return null;
         }
 
-        var uri = Uri.TryCreate($"{DeepLinkBase}?ids={encoded}", UriKind.Absolute, out var parsed)
+        return Uri.TryCreate($"{DeepLinkBase}?ids={encoded}", UriKind.Absolute, out var parsed)
             ? parsed
             : null;
-        return Task.FromResult(uri);
     }
 
     internal sealed class TestConnectionRequest
@@ -204,5 +227,10 @@ internal sealed class MockMediaServerIntegration :
     internal sealed class RefreshForContentResponse
     {
         public bool Refreshed { get; set; }
+    }
+
+    internal sealed class DeepLinkResponse
+    {
+        public string? Url { get; set; }
     }
 }

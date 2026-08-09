@@ -98,7 +98,7 @@ internal sealed class MetadataSearchService(
             ? int.MaxValue
             : requestedPage * ProviderSearchPageSize;
         var seen = new HashSet<(string, string)>();
-        var inLibraryCandidateKeys = new HashSet<(string, string)>();
+        var existingLibraryItems = new Dictionary<(string, string), Guid>();
         var groups = new List<IReadOnlyList<MetadataSearchCandidate>>();
         var mergedCount = 0;
         var validQueries = new List<(string ContentType, ContentHierarchyItemCriteria Query)>();
@@ -220,7 +220,7 @@ internal sealed class MetadataSearchService(
                 result.Matches,
                 prepared,
                 defaultLanguagePreference,
-                inLibraryCandidateKeys,
+                existingLibraryItems,
                 cancellationToken).ConfigureAwait(false);
             var guarded = FilterCandidatesAgainstCriteria(candidates, prepared.Criteria);
             var group = new List<MetadataSearchCandidate>(guarded.Count);
@@ -260,12 +260,18 @@ internal sealed class MetadataSearchService(
         var pageMatches = offset > int.MaxValue
             ? []
             : ranked.Skip((int)offset).Take(ProviderSearchPageSize).ToList();
-        var matches = pageMatches.Select(candidate => new MetadataSearchMatch
+        var matches = pageMatches.Select(candidate =>
         {
-            Candidate = candidate,
-            InLibrary = inLibraryCandidateKeys.Contains((
+            var key = (
                 candidate.ExternalIdSource.ToLowerInvariant(),
-                candidate.ExternalId.ToLowerInvariant()))
+                candidate.ExternalId.ToLowerInvariant());
+            var inLibrary = existingLibraryItems.TryGetValue(key, out var existingContentHierarchyItemId);
+            return new MetadataSearchMatch
+            {
+                Candidate = candidate,
+                InLibrary = inLibrary,
+                ExistingContentHierarchyItemId = inLibrary ? existingContentHierarchyItemId : null
+            };
         }).ToArray();
         var ownedCount = matches.Count(match => match.InLibrary);
         logger.LogInformation(
@@ -1418,7 +1424,7 @@ internal sealed class MetadataSearchService(
         IReadOnlyList<MetadataSearchCandidate> candidates,
         PreparedSearch prepared,
         string defaultLanguagePreference,
-        HashSet<(string, string)> inLibraryCandidateKeys,
+        Dictionary<(string, string), Guid> existingLibraryItems,
         CancellationToken cancellationToken)
     {
         if (candidates.Count == 0)
@@ -1426,9 +1432,13 @@ internal sealed class MetadataSearchService(
             return [];
         }
 
-        var existingCandidateKeys = await FindExistingCandidateKeysAsync(candidates, cancellationToken)
+        var existingCandidates = await FindExistingCandidatesAsync(candidates, cancellationToken)
             .ConfigureAwait(false);
-        inLibraryCandidateKeys.UnionWith(existingCandidateKeys);
+        foreach (var existingCandidate in existingCandidates)
+        {
+            existingLibraryItems.TryAdd(existingCandidate.Key, existingCandidate.Value);
+        }
+
         var hydrated = new MetadataSearchCandidate?[candidates.Count];
         await Task.WhenAll(
             Enumerable.Range(0, candidates.Count).Select(
@@ -1438,7 +1448,7 @@ internal sealed class MetadataSearchService(
                 var candidateKey = (
                     candidate.ExternalIdSource.ToLowerInvariant(),
                     candidate.ExternalId.ToLowerInvariant());
-                if (existingCandidateKeys.Contains(candidateKey))
+                if (existingCandidates.ContainsKey(candidateKey))
                 {
                     hydrated[index] = candidate;
                     return;
@@ -1483,7 +1493,7 @@ internal sealed class MetadataSearchService(
         return [.. hydrated.Where(candidate => candidate is not null).Select(candidate => candidate!)];
     }
 
-    private async Task<HashSet<(string, string)>> FindExistingCandidateKeysAsync(
+    private async Task<Dictionary<(string, string), Guid>> FindExistingCandidatesAsync(
         IReadOnlyList<MetadataSearchCandidate> candidates,
         CancellationToken cancellationToken)
     {
@@ -1492,18 +1502,21 @@ internal sealed class MetadataSearchService(
             return [];
         }
 
-        var idValues = candidates
-            .Select(c => c.ExternalId.ToLowerInvariant())
-            .Where(v => !string.IsNullOrWhiteSpace(v))
+        var externalIds = candidates
+            .Select(c => (
+                Source: c.ExternalIdSource.ToLowerInvariant(),
+                Value: c.ExternalId.ToLowerInvariant()))
+            .Where(id => !string.IsNullOrWhiteSpace(id.Source) && !string.IsNullOrWhiteSpace(id.Value))
             .Distinct()
             .ToArray();
-        if (idValues.Length == 0)
+        if (externalIds.Length == 0)
         {
             return [];
         }
 
         var criteria = new ContentHierarchyItemCriteria
         {
+            RootLevelOnly = true,
             Metadata = new()
             {
                 And =
@@ -1514,9 +1527,10 @@ internal sealed class MetadataSearchService(
                         {
                             Some =
                             [
-                                [.. idValues.Select(value => new ExternalIdCriteria
+                                [.. externalIds.Select(id => new ExternalIdCriteria
                                 {
-                                    Value = new() { And = [new() { Value = value }] }
+                                    Source = new() { And = [new() { Value = id.Source }] },
+                                    Value = new() { And = [new() { Value = id.Value }] }
                                 })]
                             ]
                         }
@@ -1524,7 +1538,7 @@ internal sealed class MetadataSearchService(
                 ]
             }
         };
-        var pageSize = Math.Max(1, idValues.Length);
+        var pageSize = Math.Max(1, externalIds.Length);
         var pageNumber = 1;
         var existingItems = new List<ContentHierarchyItem>();
         while (true)
@@ -1550,17 +1564,17 @@ internal sealed class MetadataSearchService(
             return [];
         }
 
-        var existingCandidateKeys = new HashSet<(string, string)>();
+        var existingCandidates = new Dictionary<(string, string), Guid>();
         foreach (var item in existingItems)
         {
             foreach (var externalId in item.MetadataContainer?.Contributions.SelectMany(c => c.ExternalIds) ?? [])
             {
                 var key = ((externalId.Source ?? string.Empty).ToLowerInvariant(), externalId.Value.ToLowerInvariant());
-                existingCandidateKeys.Add(key);
+                existingCandidates.TryAdd(key, item.Id);
             }
         }
 
-        return existingCandidateKeys;
+        return existingCandidates;
     }
 
     private sealed record PreparedSearch(

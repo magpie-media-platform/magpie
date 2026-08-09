@@ -167,7 +167,7 @@ interface QualityTierPatch {
     rules?: { value: ApiQualityTierRule[] };
 }
 
-const qualityTierListQueryKeys = {
+export const qualityTierListQueryKeys = {
     all: ['quality-tier-lists'] as const,
     list: (options?: QualityTierListQueryOptions) =>
         options?.tag || options?.contentType || options?.level
@@ -187,7 +187,7 @@ interface QualityTierListQueryOptions {
     enabled?: boolean;
 }
 
-async function fetchQualityTierLists(options?: QualityTierListQueryOptions): Promise<ApiQualityTierList[]> {
+export async function fetchQualityTierLists(options?: QualityTierListQueryOptions): Promise<ApiQualityTierList[]> {
     return apiGet<ApiQualityTierList[]>(
         buildUrl('/quality-tier-lists', {
             tag: options?.tag,

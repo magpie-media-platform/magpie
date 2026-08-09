@@ -20,6 +20,7 @@ internal sealed class MockNotificationProvider : INotificationProvider
 
     private readonly AuditWriter _audit = new(ProviderTypeName);
     private readonly LatencyInjector _latency = new(ProviderTypeName);
+    private readonly ScenarioReader _scenarios = new(ProviderTypeName);
 
     public string ProviderType => ProviderTypeName;
 
@@ -71,9 +72,24 @@ internal sealed class MockNotificationProvider : INotificationProvider
             },
         };
 
-        await _audit
-            .WriteAsync(SendMethod, request, new SendResponse { Delivered = true }, cancellationToken)
-            .ConfigureAwait(false);
+        SendResponse response;
+        try
+        {
+            response = await _scenarios
+                .ReadAsync<SendResponse>(SendMethod, cancellationToken: cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (ScenarioFileMissingException)
+        {
+            response = new SendResponse { Delivered = true };
+        }
+
+        await _audit.WriteAsync(SendMethod, request, response, cancellationToken).ConfigureAwait(false);
+
+        if (!response.Delivered)
+        {
+            throw new InvalidOperationException("The mock notification scenario rejected the delivery.");
+        }
     }
 
     internal sealed class SendRequest

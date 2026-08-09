@@ -1,0 +1,86 @@
+name: magpie-integration
+
+services:
+  magpie:
+    image: magpie-integration:latest
+    build:
+      context: ../..
+      dockerfile: tests/integration/Dockerfile.host
+      target: host
+    ports:
+      - "${MAGPIE_INTEGRATION_PORT:-8080}:8080"
+    environment:
+      Magpie__Database__Provider: "${MAGPIE_DATABASE_PROVIDER:-sqlite}"
+      Magpie__Database__ConnectionString: "${MAGPIE_DATABASE_CONNECTION_STRING:-Data Source=/app/data/magpie.db}"
+      Magpie__Auth__RateLimit__LoginPermitLimit: "0"
+      Magpie__Auth__RateLimit__RefreshPermitLimit: "0"
+      TZ: UTC
+    init: true
+    depends_on:
+      package-feed:
+        condition: service_healthy
+    volumes:
+      - ./db:/app/data
+      - ./test-fixtures:/test-fixtures
+      - ./downloads:/downloads
+      - ./library:/library
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/api/system/ready"]
+      interval: 2s
+      timeout: 3s
+      retries: 45
+      start_period: 30s
+    restart: "no"
+
+  package-feed:
+    image: magpie-integration-package-feed:latest
+    build:
+      context: ../..
+      dockerfile: tests/integration/Dockerfile.host
+      target: package-feed
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:8081/index.json"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+    restart: "no"
+
+  tests:
+    container_name: magpie-integration-tests
+    image: magpie-integration-tests:latest
+    build:
+      context: ../..
+      dockerfile: tests/integration/Dockerfile.tests
+    depends_on:
+      magpie:
+        condition: service_healthy
+    environment:
+      MAGPIE_BASE_URL: http://magpie:8080
+      MAGPIE_SKIP_BOOT: "true"
+      MAGPIE_INTEGRATION_PROFILE: "${MAGPIE_INTEGRATION_PROFILE:-sqlite-single-node}"
+      # Remote mode prevents the tests process from opening the host's writable SQLite file concurrently.
+      MAGPIE_CLI_MODE: "${MAGPIE_CLI_MODE:-remote}"
+      MAGPIE_CLI_URL: http://magpie:8080
+      MAGPIE_CLI_APPHOST: /app/Magpie.App
+      Magpie__Database__Provider: "${MAGPIE_DATABASE_PROVIDER:-sqlite}"
+      Magpie__Database__ConnectionString: "${MAGPIE_DATABASE_CONNECTION_STRING:-Data Source=/app/data/magpie.db}"
+      Magpie__Data__Path: /app/data
+      Magpie__Extensions__Path: /app/data/extensions
+      MAGPIE_TEST_FIXTURES_ROOT: /tests/test-fixtures
+      MAGPIE_TEST_DOWNLOADS_ROOT: /tests/downloads
+      TZ: UTC
+      CI: "true"
+    volumes:
+      - ./specs:/tests/specs
+      - ./helpers:/tests/helpers
+      - ./playwright.config.ts:/tests/playwright.config.ts
+      - ./tsconfig.json:/tests/tsconfig.json
+      - ./test-fixtures:/tests/test-fixtures
+      - ./downloads:/tests/downloads
+      - ./library:/tests/library
+      - ./checkpoints:/tests/checkpoints
+      - ./db:/app/data
+      - ./test-results:/tests/test-results
+      - ./playwright-report:/tests/playwright-report
+    profiles: ["test"]
+    restart: "no"

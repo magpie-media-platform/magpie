@@ -159,6 +159,31 @@ public class RefreshTokenRepositoryTests
     }
 
     [Test]
+    public async Task GetByHashAsync_ReturnsRefreshToken_WhenHashLooksLikeGuid()
+    {
+        // Arrange
+        var token = new RefreshToken
+        {
+            UserId = _userId,
+            TokenHash = "11111111-1111-1111-1111-111111111111",
+            AccessTokenJti = "22222222-2222-2222-2222-222222222222",
+            ExpiresAt = DateTime.UtcNow.AddDays(7),
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.RefreshTokens.Add(token);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        var result = await _subject.GetByHashAsync("11111111-1111-1111-1111-111111111111")
+            .ConfigureAwait(false);
+
+        // Assert
+        Assert.That(
+            result,
+            Has.Property(nameof(RefreshToken.TokenHash)).EqualTo("11111111-1111-1111-1111-111111111111"));
+    }
+
+    [Test]
     public async Task DeleteAsync_DeletesRefreshToken_WhenExists()
     {
         // Arrange
@@ -289,6 +314,44 @@ public class RefreshTokenRepositoryTests
         {
             Assert.That(first, Is.Not.Null);
             Assert.That(second, Is.Null);
+        }
+    }
+
+    [Test]
+    public async Task ConsumeAsync_LeavesSecondSession_WhenFirstSessionIsConsumed()
+    {
+        // Arrange
+        _context.RefreshTokens.AddRange(
+            new RefreshToken
+            {
+                UserId = _userId,
+                TokenHash = "first-session-hash",
+                AccessTokenJti = "11111111-1111-1111-1111-111111111111",
+                ExpiresAt = DateTime.UtcNow.AddDays(7),
+                CreatedAt = DateTime.UtcNow
+            },
+            new RefreshToken
+            {
+                UserId = _userId,
+                TokenHash = "second-session-hash",
+                AccessTokenJti = "22222222-2222-2222-2222-222222222222",
+                ExpiresAt = DateTime.UtcNow.AddDays(7),
+                CreatedAt = DateTime.UtcNow
+            });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        await _subject.ConsumeAsync("first-session-hash", DateTime.UtcNow).ConfigureAwait(false);
+
+        // Assert
+        var first = await _subject.GetByAccessTokenJtiAsync("11111111-1111-1111-1111-111111111111")
+            .ConfigureAwait(false);
+        var second = await _subject.GetByAccessTokenJtiAsync("22222222-2222-2222-2222-222222222222")
+            .ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(first, Is.Null);
+            Assert.That(second, Is.Not.Null);
         }
     }
 }

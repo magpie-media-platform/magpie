@@ -401,6 +401,62 @@ public class ExtensionRepositoryTests
     }
 
     [Test]
+    public async Task DeleteAsync_DeletesSettings_WhenExtensionHasSettings()
+    {
+        // Arrange
+        var extension = new Extension
+        {
+            Id = Guid.NewGuid(),
+            Name = "ConfiguredExtension",
+            Version = "1.0.0",
+            FilePath = "/path/to/configured.dll",
+            AssemblyName = "ConfiguredExtension, Version=1.0.0.0",
+            Enabled = true,
+            LoadOrder = 100,
+            Managed = false,
+            AutoUpgrade = false,
+            CreatedAt = DateTime.UtcNow
+        };
+        var settingsGroup = new SettingsGroup
+        {
+            Id = Guid.NewGuid(),
+            Name = "ConfiguredExtensionSettings",
+            ExtensionId = extension.Id,
+            CreatedAt = DateTime.UtcNow
+        };
+        var setting = new Setting
+        {
+            Id = Guid.NewGuid(),
+            SettingsGroupId = settingsGroup.Id,
+            Key = "api-key",
+            Value = "secret",
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.Extensions.Add(extension);
+        _context.SettingsGroups.Add(settingsGroup);
+        _context.Settings.Add(setting);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        var result = await _subject.DeleteAsync(extension.Id, _userId).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Is.True);
+            Assert.That(
+                await _context.Extensions.AnyAsync(e => e.Id == extension.Id).ConfigureAwait(false),
+                Is.False);
+            Assert.That(
+                await _context.SettingsGroups.AnyAsync(group => group.Id == settingsGroup.Id).ConfigureAwait(false),
+                Is.False);
+            Assert.That(
+                await _context.Settings.AnyAsync(value => value.Id == setting.Id).ConfigureAwait(false),
+                Is.False);
+        }
+    }
+
+    [Test]
     public async Task DeleteAsync_ReturnsFalse_WhenNotFound()
     {
         // Act

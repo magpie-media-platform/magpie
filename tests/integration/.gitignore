@@ -1,0 +1,10 @@
+db/
+checkpoints/
+downloads/
+library/
+test-fixtures/
+
+node_modules/
+playwright-report/
+test-results/
+.playwright/

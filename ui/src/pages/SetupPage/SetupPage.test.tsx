@@ -142,10 +142,11 @@ const SETTINGS_GROUP_WITH_KEYS: ApiSettingsGroup = {
             id: 'set-1',
             settingsGroupId: 'group-1',
             key: 'apiKey',
-            value: '',
+            value: 'configured-key',
             createdAt: '2024-01-01T00:00:00Z',
         },
     ],
+    schema: [{ key: 'apiKey', type: 'String' }],
 };
 
 describe('SetupPage', () => {
@@ -468,7 +469,7 @@ describe('SetupPage', () => {
         expect(document.querySelector('[data-step="metadata"]')).toBeNull();
     });
 
-    it('shows the metadata step when an extension settings group exists', async () => {
+    it('continues from configured metadata without marking it skipped', async () => {
         const user = userEvent.setup();
         mockAdminClaim();
         mockApiGet([SETTINGS_GROUP_WITH_KEYS]);
@@ -478,6 +479,22 @@ describe('SetupPage', () => {
 
         await waitForStep('metadata');
         expect(await screen.findByText('Provider A')).toBeInTheDocument();
+
+        await user.click(screen.getByRole('button', { name: 'Continue' }));
+        await waitForStep('indexer');
+        await user.click(screen.getByRole('button', { name: /skip for now/i }));
+        await waitForStep('download');
+        await user.click(screen.getByRole('button', { name: /skip for now/i }));
+        await waitForStep('root');
+        await user.click(screen.getByRole('button', { name: /skip for now/i }));
+        await waitForStep('server');
+        await user.click(screen.getByRole('button', { name: /skip for now/i }));
+
+        await waitForStep('done');
+        const metadataSummary = screen.getByText('Metadata-provider configs').closest('li');
+        expect(metadataSummary).toHaveTextContent('1');
+        expect(metadataSummary).toHaveTextContent('Provider A');
+        expect(metadataSummary).not.toHaveTextContent('Skipped');
     });
 
     it('keeps the claimed-admin form disabled until extension settings finish loading', async () => {

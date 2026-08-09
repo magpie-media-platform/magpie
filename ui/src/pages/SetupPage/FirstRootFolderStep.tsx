@@ -11,7 +11,7 @@ import { AddAnotherActions } from './AddAnotherActions';
 import { useAddAnotherStep } from './useAddAnotherStep';
 
 interface FirstRootFolderStepProps {
-    onAdvance: () => void;
+    onAdvance: (skipped?: boolean) => void;
 }
 
 export function FirstRootFolderStep({ onAdvance }: FirstRootFolderStepProps): ReactNode {
@@ -88,7 +88,7 @@ export function FirstRootFolderStep({ onAdvance }: FirstRootFolderStepProps): Re
                         type="button"
                         variant="secondary"
                         size="lg"
-                        onClick={onAdvance}
+                        onClick={() => onAdvance(true)}
                         className="setup-page__submit"
                         data-action="skip-root-folder"
                     >

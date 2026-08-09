@@ -859,6 +859,215 @@ public class DownloadServiceTests
     }
 
     [Test]
+    public async Task BulkRemoveAsync_RemovesFilteredTargetsAndDeletesRows_WhenFilterExcludesIds()
+    {
+        // Arrange
+        var firstDownloadId = Guid.Parse("77777777-7777-7777-7777-777777777777");
+        var secondDownloadId = Guid.Parse("88888888-8888-8888-8888-888888888888");
+        var excludedDownloadId = Guid.Parse("99999999-9999-9999-9999-999999999999");
+        var clientId = Guid.Parse("aaaaaaaa-1111-1111-1111-111111111111");
+        var settings = new Dictionary<string, string> { ["host"] = "127.0.0.1" };
+        var client = new DownloadClient
+        {
+            Id = clientId,
+            Name = "Mock client",
+            ProviderType = "fake",
+            Enabled = true,
+            Status = IntegrationHealthStatus.Healthy,
+            Settings = settings,
+            CreatedAt = DateTime.UtcNow
+        };
+        var firstDownload = new Download
+        {
+            Id = firstDownloadId,
+            ReleaseId = Guid.Parse("aaaaaaaa-2222-2222-2222-222222222222"),
+            DownloadClientId = clientId,
+            ExternalId = "ext-first",
+            Title = "First download",
+            Status = DownloadStatus.Imported,
+            CreatedAt = DateTime.UtcNow
+        };
+        var secondDownload = new Download
+        {
+            Id = secondDownloadId,
+            ReleaseId = Guid.Parse("aaaaaaaa-3333-3333-3333-333333333333"),
+            DownloadClientId = clientId,
+            ExternalId = "ext-second",
+            Title = "Second download",
+            Status = DownloadStatus.Downloaded,
+            CreatedAt = DateTime.UtcNow
+        };
+        var filter = new DownloadQuery
+        {
+            Statuses = [DownloadStatus.Imported, DownloadStatus.Downloaded],
+            ExcludeIds = [excludedDownloadId]
+        };
+        var clientRepository = new Mock<IDownloadClientRepository>();
+        clientRepository
+            .Setup(r => r.GetByIdAsync(clientId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(client);
+        _downloadRepository
+            .Setup(r => r.QueryAsync(
+                filter,
+                It.Is<PagingParameter>(paging => paging.PageNumber == 1 && paging.PageSize == 500),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<Download>
+            {
+                Items = [firstDownload, secondDownload],
+                PageNumber = 1,
+                PageSize = 500,
+                TotalItems = 2
+            });
+        _downloadRepository
+            .Setup(r => r.DeleteAsync(It.IsAny<Guid>(), null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        _integration
+            .Setup(i => i.RemoveDownloadAsync(
+                It.IsAny<string>(),
+                true,
+                settings,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        var service = new DownloadService(
+            [_integration.Object],
+            clientRepository.Object,
+            _downloadRepository.Object,
+            Mock.Of<IJobExecutionRepository>(),
+            Mock.Of<IJobManager>(),
+            Mock.Of<ITransactionManager>(),
+            TimeProvider.System,
+            NullLogger<DownloadService>.Instance);
+
+        // Act
+        var result = await service
+            .BulkRemoveAsync(new BulkAction<DownloadQuery> { Filter = filter }, CancellationToken.None)
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.Count, Is.EqualTo(2));
+            _integration.Verify(
+                i => i.RemoveDownloadAsync("ext-first", true, settings, It.IsAny<CancellationToken>()),
+                Times.Once);
+            _integration.Verify(
+                i => i.RemoveDownloadAsync("ext-second", true, settings, It.IsAny<CancellationToken>()),
+                Times.Once);
+            _downloadRepository.Verify(
+                r => r.DeleteAsync(firstDownloadId, null, It.IsAny<CancellationToken>()),
+                Times.Once);
+            _downloadRepository.Verify(
+                r => r.DeleteAsync(secondDownloadId, null, It.IsAny<CancellationToken>()),
+                Times.Once);
+            _downloadRepository.Verify(
+                r => r.DeleteAsync(excludedDownloadId, null, It.IsAny<CancellationToken>()),
+                Times.Never);
+        }
+    }
+
+    [Test]
+    public async Task BulkRemoveAsync_ContinuesRemovingAndDeleting_WhenClientRemovalFails()
+    {
+        // Arrange
+        var firstDownloadId = Guid.Parse("bbbbbbbb-1111-1111-1111-111111111111");
+        var secondDownloadId = Guid.Parse("bbbbbbbb-2222-2222-2222-222222222222");
+        var clientId = Guid.Parse("bbbbbbbb-3333-3333-3333-333333333333");
+        var settings = new Dictionary<string, string> { ["host"] = "127.0.0.1" };
+        var client = new DownloadClient
+        {
+            Id = clientId,
+            Name = "Mock client",
+            ProviderType = "fake",
+            Enabled = true,
+            Status = IntegrationHealthStatus.Healthy,
+            Settings = settings,
+            CreatedAt = DateTime.UtcNow
+        };
+        var firstDownload = new Download
+        {
+            Id = firstDownloadId,
+            ReleaseId = Guid.Parse("bbbbbbbb-4444-4444-4444-444444444444"),
+            DownloadClientId = clientId,
+            ExternalId = "ext-failing",
+            Title = "Failing client removal",
+            Status = DownloadStatus.Imported,
+            CreatedAt = DateTime.UtcNow
+        };
+        var secondDownload = new Download
+        {
+            Id = secondDownloadId,
+            ReleaseId = Guid.Parse("bbbbbbbb-5555-5555-5555-555555555555"),
+            DownloadClientId = clientId,
+            ExternalId = "ext-continuing",
+            Title = "Continuing client removal",
+            Status = DownloadStatus.Downloaded,
+            CreatedAt = DateTime.UtcNow
+        };
+        var clientRepository = new Mock<IDownloadClientRepository>();
+        clientRepository
+            .Setup(r => r.GetByIdAsync(clientId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(client);
+        _downloadRepository
+            .Setup(r => r.GetByIdAsync(firstDownloadId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(firstDownload);
+        _downloadRepository
+            .Setup(r => r.GetByIdAsync(secondDownloadId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(secondDownload);
+        _downloadRepository
+            .Setup(r => r.DeleteAsync(It.IsAny<Guid>(), null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        _integration
+            .Setup(i => i.RemoveDownloadAsync(
+                "ext-failing",
+                true,
+                settings,
+                It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("client removal failed"));
+        _integration
+            .Setup(i => i.RemoveDownloadAsync(
+                "ext-continuing",
+                true,
+                settings,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        var service = new DownloadService(
+            [_integration.Object],
+            clientRepository.Object,
+            _downloadRepository.Object,
+            Mock.Of<IJobExecutionRepository>(),
+            Mock.Of<IJobManager>(),
+            Mock.Of<ITransactionManager>(),
+            TimeProvider.System,
+            NullLogger<DownloadService>.Instance);
+
+        // Act
+        var result = await service
+            .BulkRemoveAsync(
+                new BulkAction<DownloadQuery> { Ids = [firstDownloadId, secondDownloadId] },
+                CancellationToken.None)
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.Count, Is.EqualTo(2));
+            _integration.Verify(
+                i => i.RemoveDownloadAsync("ext-failing", true, settings, It.IsAny<CancellationToken>()),
+                Times.Once);
+            _integration.Verify(
+                i => i.RemoveDownloadAsync("ext-continuing", true, settings, It.IsAny<CancellationToken>()),
+                Times.Once);
+            _downloadRepository.Verify(
+                r => r.DeleteAsync(firstDownloadId, null, It.IsAny<CancellationToken>()),
+                Times.Once);
+            _downloadRepository.Verify(
+                r => r.DeleteAsync(secondDownloadId, null, It.IsAny<CancellationToken>()),
+                Times.Once);
+        }
+    }
+
+    [Test]
     public async Task QueryAsync_StampsCapabilityFields_FromDistinctIntegrationInterfaces()
     {
         // Arrange

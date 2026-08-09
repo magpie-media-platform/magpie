@@ -1795,7 +1795,7 @@ internal sealed class DownloadImportItemJob(
                         .MaterializeFulfillmentStatusAsync(
                             contentItem.ContentHierarchyItemId,
                             userId,
-                            includeSelf: true,
+                            includeSelf: false,
                             ct)
                         .ConfigureAwait(false);
                 }

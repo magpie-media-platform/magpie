@@ -69,6 +69,8 @@ export interface AuthProviderProps {
 
 const TOKEN_REFRESH_BUFFER_MS = 60_000;
 
+const permissionsQueryKey = (userId: string | undefined) => ['auth', 'permissions', userId] as const;
+
 function isAuthenticationFailure(error: unknown): boolean {
     return isApiError(error) && (error.status === 401 || error.status === 403);
 }
@@ -95,7 +97,7 @@ export function AuthProvider({
     const isAuthenticated = user !== null;
 
     const permissionsQuery = useQuery({
-        queryKey: ['auth', 'permissions', user?.id],
+        queryKey: permissionsQueryKey(user?.id),
         queryFn: fetchEffectivePermissions,
         enabled: isAuthenticated && initialPermissions === undefined,
         initialData: initialPermissions,
@@ -228,7 +230,12 @@ export function AuthProvider({
                     const jwtUser = getCurrentUserFromToken();
                     if (jwtUser) {
                         try {
-                            await fetchEffectivePermissions();
+                            await queryClient.fetchQuery({
+                                queryKey: permissionsQueryKey(jwtUser.id),
+                                queryFn: fetchEffectivePermissions,
+                                retry: false,
+                                staleTime: Infinity,
+                            });
                         } catch (error) {
                             if (isAuthenticationFailure(error)) {
                                 clearAuthStorage();
@@ -252,7 +259,7 @@ export function AuthProvider({
         }
 
         void initSession();
-    }, [skipSessionInit, initialUser, initialLoading]);
+    }, [skipSessionInit, initialUser, initialLoading, queryClient]);
 
     useEffect(() => {
         if (user && !skipSessionInit) {

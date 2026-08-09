@@ -76,7 +76,7 @@ describe('MetadataProviderStep', () => {
         expect(onAdvance).toHaveBeenCalled();
     });
 
-    it('shows an editable card per extension settings group', async () => {
+    it('shows an editable card per extension settings schema group', async () => {
         const onAdvance = vi.fn();
         vi.mocked(apiModule.apiGet).mockResolvedValue([
             {
@@ -93,6 +93,7 @@ describe('MetadataProviderStep', () => {
                         createdAt: '2024-01-01T00:00:00Z',
                     },
                 ],
+                schema: [{ key: 'apiKey', type: 'String' }],
             },
         ]);
 
@@ -102,7 +103,7 @@ describe('MetadataProviderStep', () => {
         expect(screen.getByLabelText(/apiKey/i)).toBeInTheDocument();
     });
 
-    it('hides extension groups with no settings keys', async () => {
+    it('shows schema-only extension groups with their default values', async () => {
         const onAdvance = vi.fn();
         vi.mocked(apiModule.apiGet).mockResolvedValue([
             {
@@ -111,12 +112,41 @@ describe('MetadataProviderStep', () => {
                 extensionId: 'ext-1',
                 createdAt: '2024-01-01T00:00:00Z',
                 settings: [],
+                schema: [{ key: 'providerType', type: 'String', defaultValue: 'provider-a' }],
             },
         ]);
 
         renderStep(onAdvance);
 
         await screen.findByRole('button', { name: /skip for now/i });
-        expect(screen.queryByText('Empty')).not.toBeInTheDocument();
+        expect(await screen.findByText('Empty')).toBeInTheDocument();
+        expect(screen.getByLabelText('providerType')).toHaveValue('provider-a');
+    });
+
+    it('hides extension groups with persisted settings but no schema', async () => {
+        const onAdvance = vi.fn();
+        vi.mocked(apiModule.apiGet).mockResolvedValue([
+            {
+                id: 'group-no-schema',
+                name: 'No Schema',
+                extensionId: 'ext-1',
+                createdAt: '2024-01-01T00:00:00Z',
+                settings: [
+                    {
+                        id: 'set-1',
+                        settingsGroupId: 'group-no-schema',
+                        key: 'apiKey',
+                        value: 'configured',
+                        createdAt: '2024-01-01T00:00:00Z',
+                    },
+                ],
+                schema: [],
+            },
+        ]);
+
+        renderStep(onAdvance);
+
+        await screen.findByRole('button', { name: /skip for now/i });
+        expect(screen.queryByText('No Schema')).not.toBeInTheDocument();
     });
 });

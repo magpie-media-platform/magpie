@@ -507,6 +507,7 @@ describe('useUpdateExtensionSettingsGroup', () => {
 
     it('should call PATCH /settings/groups/{extensionId}/{name}', async () => {
         mockApiPatch.mockResolvedValue(undefined);
+        const invalidateQueries = vi.spyOn(QueryClient.prototype, 'invalidateQueries');
 
         const { result } = renderHook(() => useUpdateExtensionSettingsGroup('ext-abc', 'config'), {
             wrapper: createWrapper(),
@@ -526,6 +527,7 @@ describe('useUpdateExtensionSettingsGroup', () => {
                 },
             },
         });
+        expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: settingsQueryKeys.all });
     });
 
     it('should set isUpdating during mutation', async () => {

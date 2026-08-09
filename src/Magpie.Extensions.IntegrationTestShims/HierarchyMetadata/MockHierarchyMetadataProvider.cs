@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -47,12 +48,13 @@ internal sealed class MockHierarchyMetadataProvider : IContentHierarchyMetadataR
         var ancestorLanguagePreferences = request.AncestorLanguagePreferences;
         var defaultLanguagePreference = request.DefaultLanguagePreference;
         var ancestorMetadata = request.AncestorMetadata;
+        var externalId = ResolveExternalId(existingMetadata);
 
         const string method = "tryGetMetadataAsync";
         await _latency.DelayAsync(method, cancellationToken).ConfigureAwait(false);
 
         var contribution = await _scenarios
-            .ReadAsync<MetadataContribution>(method, cancellationToken: cancellationToken)
+            .ReadAsync<MetadataContribution>(method, externalId, cancellationToken)
             .ConfigureAwait(false);
 
         await _audit
@@ -70,7 +72,11 @@ internal sealed class MockHierarchyMetadataProvider : IContentHierarchyMetadataR
                 cancellationToken)
             .ConfigureAwait(false);
 
-        var children = await DiscoverChildrenAsync(contentHierarchyItem, existingMetadata, cancellationToken)
+        var children = await DiscoverChildrenAsync(
+            contentHierarchyItem,
+            existingMetadata,
+            externalId,
+            cancellationToken)
             .ConfigureAwait(false);
 
         return new ContentHierarchyMetadataResult { Contribution = contribution, Children = children };
@@ -79,13 +85,14 @@ internal sealed class MockHierarchyMetadataProvider : IContentHierarchyMetadataR
     private async Task<IReadOnlyList<ChildHierarchyDefinition>> DiscoverChildrenAsync(
         ContentHierarchyItem parent,
         IEnumerable<MetadataContribution> existingMetadata,
+        string? externalId,
         CancellationToken cancellationToken)
     {
         const string method = "expandChildrenAsync";
         await _latency.DelayAsync(method, cancellationToken).ConfigureAwait(false);
 
         var response = await _scenarios
-            .ReadAsync<List<ChildHierarchyDefinition>>(method, cancellationToken: cancellationToken)
+            .ReadAsync<List<ChildHierarchyDefinition>>(method, externalId, cancellationToken)
             .ConfigureAwait(false);
 
         await _audit
@@ -93,6 +100,16 @@ internal sealed class MockHierarchyMetadataProvider : IContentHierarchyMetadataR
             .ConfigureAwait(false);
 
         return response ?? [];
+    }
+
+    private string? ResolveExternalId(IEnumerable<MetadataContribution> existingMetadata)
+    {
+        return existingMetadata
+            .Where(contribution => string.Equals(contribution.ProviderType, ProviderType, StringComparison.Ordinal))
+            .OrderBy(contribution => contribution.Ordinal)
+            .SelectMany(contribution => contribution.ExternalIds.OrderBy(externalId => externalId.Ordinal))
+            .Select(externalId => externalId.Value)
+            .FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
     }
 
     public async Task<IReadOnlyList<SubjectRelationshipDefinition>> GetRelationshipsAsync(
@@ -103,12 +120,13 @@ internal sealed class MockHierarchyMetadataProvider : IContentHierarchyMetadataR
         var contribution = request.Contribution;
         var existingMetadata = request.ExistingMetadata;
         var ancestorMetadata = request.AncestorMetadata;
+        var externalId = ResolveExternalId(existingMetadata);
 
         const string method = "expandRelatedSubjectsAsync";
         await _latency.DelayAsync(method, cancellationToken).ConfigureAwait(false);
 
         var response = await _scenarios
-            .ReadAsync<List<SubjectRelationshipDefinition>>(method, cancellationToken: cancellationToken)
+            .ReadAsync<List<SubjectRelationshipDefinition>>(method, externalId, cancellationToken)
             .ConfigureAwait(false);
 
         await _audit

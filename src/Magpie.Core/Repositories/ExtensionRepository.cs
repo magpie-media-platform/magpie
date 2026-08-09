@@ -209,12 +209,30 @@ internal sealed class ExtensionRepository(
     {
         try
         {
-            var deleted = await context.Extensions
-                .Where(e => e.Id == id)
-                .ExecuteDeleteAsync(cancellationToken)
-                .ConfigureAwait(false);
+            return await transactionManager.ExecuteWithTransactionAsync(
+                async _ =>
+                {
+                    await context.Settings
+                        .Where(setting => context.SettingsGroups
+                            .Where(group => group.ExtensionId == id)
+                            .Select(group => group.Id)
+                            .Contains(setting.SettingsGroupId))
+                        .ExecuteDeleteAsync(cancellationToken)
+                        .ConfigureAwait(false);
+                    await context.SettingsGroups
+                        .Where(group => group.ExtensionId == id)
+                        .ExecuteDeleteAsync(cancellationToken)
+                        .ConfigureAwait(false);
 
-            return deleted > 0;
+                    var deleted = await context.Extensions
+                        .Where(e => e.Id == id)
+                        .ExecuteDeleteAsync(cancellationToken)
+                        .ConfigureAwait(false);
+
+                    return deleted > 0;
+                },
+                cancellationToken)
+                .ConfigureAwait(false);
         }
         catch (Exception ex)
         {

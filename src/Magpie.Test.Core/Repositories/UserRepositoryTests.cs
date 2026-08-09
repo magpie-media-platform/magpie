@@ -337,6 +337,78 @@ public class UserRepositoryTests
     }
 
     [Test]
+    public async Task DeleteAsync_DeletesRefreshTokens_WhenUserOwnsRefreshToken()
+    {
+        // Arrange
+        var user = new User
+        {
+            Username = "RefreshTokenOwner",
+            ProviderType = "local",
+            Enabled = true,
+            Role = Role.Viewer
+        };
+        var created = await _subject.CreateAsync(user, _adminUserId).ConfigureAwait(false);
+        _context.RefreshTokens.Add(new()
+        {
+            UserId = created.Id,
+            TokenHash = "refresh-token-hash",
+            ExpiresAt = new DateTime(2030, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            CreatedAt = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc)
+        });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        var result = await _subject.DeleteAsync(created.Id, _adminUserId).ConfigureAwait(false);
+
+        // Assert
+        var deleted = await _subject.GetByIdAsync(created.Id).ConfigureAwait(false);
+        var refreshTokens = await _context.RefreshTokens.ToListAsync().ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Is.True);
+            Assert.That(deleted, Is.Null);
+            Assert.That(refreshTokens, Is.Empty);
+        }
+    }
+
+    [Test]
+    public async Task DeleteAsync_DeletesApiKeys_WhenUserOwnsApiKey()
+    {
+        // Arrange
+        var user = new User
+        {
+            Username = "ApiKeyOwner",
+            ProviderType = "local",
+            Enabled = true,
+            Role = Role.Viewer
+        };
+        var created = await _subject.CreateAsync(user, _adminUserId).ConfigureAwait(false);
+        _context.ApiKeys.Add(new()
+        {
+            UserId = created.Id,
+            Name = "Deletion test key",
+            KeyHash = "api-key-hash",
+            KeyPrefix = "delete",
+            Enabled = true,
+            CreatedAt = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc)
+        });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        var result = await _subject.DeleteAsync(created.Id, _adminUserId).ConfigureAwait(false);
+
+        // Assert
+        var deleted = await _subject.GetByIdAsync(created.Id).ConfigureAwait(false);
+        var apiKeys = await _context.ApiKeys.ToListAsync().ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Is.True);
+            Assert.That(deleted, Is.Null);
+            Assert.That(apiKeys, Is.Empty);
+        }
+    }
+
+    [Test]
     public async Task DeleteAsync_ReturnsFalse_WhenNotExists()
     {
         // Act
@@ -806,6 +878,67 @@ public class UserRepositoryTests
                     .And.Property(nameof(AuditRecord.Category)).EqualTo("Security")
                     .And.Property(nameof(AuditRecord.EntityType)).EqualTo("User")
                     .And.Property(nameof(AuditRecord.UserId)).EqualTo(_adminUserId));
+        }
+    }
+
+    [Test]
+    public async Task SetPasswordAsync_DeletesRefreshTokens_WhenPasswordChanges()
+    {
+        // Arrange
+        var changedUser = new User
+        {
+            Username = "PasswordSessionUser",
+            ProviderType = "local",
+            Enabled = true,
+            Role = Role.Viewer,
+            PasswordHash = "old-hash",
+            PasswordSalt = "old-salt"
+        };
+        var otherUser = new User
+        {
+            Username = "OtherPasswordSessionUser",
+            ProviderType = "local",
+            Enabled = true,
+            Role = Role.Viewer,
+            PasswordHash = "other-hash",
+            PasswordSalt = "other-salt"
+        };
+        var changed = await _subject.CreateAsync(changedUser, _adminUserId).ConfigureAwait(false);
+        var other = await _subject.CreateAsync(otherUser, _adminUserId).ConfigureAwait(false);
+        _context.RefreshTokens.AddRange(
+            new RefreshToken
+            {
+                UserId = changed.Id,
+                TokenHash = "stale-session-hash",
+                AccessTokenJti = "11111111-1111-1111-1111-111111111111",
+                ExpiresAt = DateTime.UtcNow.AddDays(7),
+                CreatedAt = DateTime.UtcNow
+            },
+            new RefreshToken
+            {
+                UserId = other.Id,
+                TokenHash = "other-session-hash",
+                AccessTokenJti = "22222222-2222-2222-2222-222222222222",
+                ExpiresAt = DateTime.UtcNow.AddDays(7),
+                CreatedAt = DateTime.UtcNow
+            });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        await _subject
+            .SetPasswordAsync(changed.Id, "new-hash", "new-salt", _adminUserId)
+            .ConfigureAwait(false);
+
+        // Assert
+        var refreshTokens = await _context.RefreshTokens.AsNoTracking().ToListAsync().ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(refreshTokens, Has.Count.EqualTo(1));
+            Assert.That(refreshTokens, Has.None.With.Property(nameof(RefreshToken.UserId)).EqualTo(changed.Id));
+            Assert.That(refreshTokens, Has.One.With.Property(nameof(RefreshToken.UserId)).EqualTo(other.Id));
+            Assert.That(
+                refreshTokens,
+                Has.One.With.Property(nameof(RefreshToken.TokenHash)).EqualTo("other-session-hash"));
         }
     }
 

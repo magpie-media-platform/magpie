@@ -42,36 +42,6 @@ internal static class CategoryExtensions
         return filtered.Count == 0 && recognised ? null : filtered;
     }
 
-    public static bool MatchesContentCategories(
-        this IReadOnlyList<string> releaseCategories,
-        IReadOnlyList<string> contentCategories,
-        out bool recognised)
-    {
-        recognised = false;
-
-        var bands = ResolveBands(contentCategories);
-        if (releaseCategories.Count == 0 || bands.Count == 0)
-        {
-            return true;
-        }
-
-        foreach (var category in releaseCategories)
-        {
-            if (!TryResolveBand(category, out var band))
-            {
-                continue;
-            }
-
-            recognised = true;
-            if (bands.Contains(band))
-            {
-                return true;
-            }
-        }
-
-        return !recognised;
-    }
-
     private static HashSet<int> ResolveBands(IReadOnlyList<string> contentCategories)
     {
         var bands = new HashSet<int>();

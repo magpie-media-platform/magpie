@@ -159,7 +159,7 @@ internal sealed class AuthService(
 
         var accessToken = await tokenService.GenerateAccessTokenAsync(user, cancellationToken).ConfigureAwait(false);
         var refreshToken = await tokenService
-            .GenerateRefreshTokenAsync(user.Id, cancellationToken)
+            .GenerateRefreshTokenAsync(user.Id, accessToken.Jti, cancellationToken)
             .ConfigureAwait(false);
 
         return new AuthSession
@@ -194,7 +194,7 @@ internal sealed class AuthService(
 
         var accessToken = await tokenService.GenerateAccessTokenAsync(user, cancellationToken).ConfigureAwait(false);
         var rotatedToken = await tokenService
-            .GenerateRefreshTokenAsync(user.Id, cancellationToken)
+            .GenerateRefreshTokenAsync(user.Id, accessToken.Jti, cancellationToken)
             .ConfigureAwait(false);
 
         return new AuthSession

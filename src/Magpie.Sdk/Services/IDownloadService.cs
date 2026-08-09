@@ -98,6 +98,15 @@ public interface IDownloadService
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Removes every selected download, including its files and record.
+    /// </summary>
+    /// <param name="action">The selection of downloads to act on</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    Task<BulkResult> BulkRemoveAsync(
+        BulkAction<DownloadQuery> action,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Pauses every download the action selects.
     /// </summary>
     /// <param name="action">The selection of downloads to act on</param>

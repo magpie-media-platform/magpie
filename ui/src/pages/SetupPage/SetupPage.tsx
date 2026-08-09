@@ -48,12 +48,15 @@ export function SetupPage(): ReactNode {
     });
     const stepAvailability = useMemo<SetupStepAvailability>(
         () => ({
-            includeMetadata: (groupsQuery.data ?? []).some((group) => group.extensionId && group.settings.length > 0),
+            includeMetadata: (groupsQuery.data ?? []).some(
+                (group) => group.extensionId && (group.schema?.length ?? 0) > 0,
+            ),
         }),
         [groupsQuery.data],
     );
 
     const [stepId, setStepId] = useState<SetupStepId | null>(null);
+    const [skippedSteps, setSkippedSteps] = useState<SetupStepId[]>([]);
 
     const resolvedStepId = useMemo<SetupStepId | null>(() => {
         if (stepId !== null) {
@@ -65,30 +68,36 @@ export function SetupPage(): ReactNode {
         return pickInitialStep(status);
     }, [stepId, status]);
 
-    const handleAdvance = useCallback(async () => {
-        if (!resolvedStepId) {
-            return;
-        }
+    const handleAdvance = useCallback(
+        async (skipped = false) => {
+            if (!resolvedStepId) {
+                return;
+            }
 
-        const availability =
-            resolvedStepId === 'admin'
-                ? {
-                      includeMetadata: (
-                          await queryClient.fetchQuery({
-                              queryKey: settingsQueryKeys.all,
-                              queryFn: () => apiGet<ApiSettingsGroup[]>('/settings/groups'),
-                              retry: false,
-                          })
-                      ).some((group) => group.extensionId && group.settings.length > 0),
-                  }
-                : stepAvailability;
-        const next = nextStepAfter(resolvedStepId, availability);
-        if (next === null) {
-            void navigate(isAuthenticated ? '/' : '/login', { replace: true });
-            return;
-        }
-        setStepId(next);
-    }, [resolvedStepId, queryClient, stepAvailability, navigate, isAuthenticated]);
+            const availability =
+                resolvedStepId === 'admin'
+                    ? {
+                          includeMetadata: (
+                              await queryClient.fetchQuery({
+                                  queryKey: settingsQueryKeys.all,
+                                  queryFn: () => apiGet<ApiSettingsGroup[]>('/settings/groups'),
+                                  retry: false,
+                              })
+                          ).some((group) => group.extensionId && (group.schema?.length ?? 0) > 0),
+                      }
+                    : stepAvailability;
+            const next = nextStepAfter(resolvedStepId, availability);
+            if (next === null) {
+                void navigate(isAuthenticated ? '/' : '/login', { replace: true });
+                return;
+            }
+            if (skipped) {
+                setSkippedSteps((steps) => [...steps, resolvedStepId]);
+            }
+            setStepId(next);
+        },
+        [resolvedStepId, queryClient, stepAvailability, navigate, isAuthenticated],
+    );
 
     if ((statusQuery.isLoading && resolvedStepId === null) || isAuthLoading) {
         return <RouteLoadingState />;
@@ -147,7 +156,7 @@ export function SetupPage(): ReactNode {
                 ) : resolvedStepId === 'server' ? (
                     <FirstMediaServerStep onAdvance={handleAdvance} />
                 ) : resolvedStepId === 'done' ? (
-                    <CompletionStep onAdvance={handleAdvance} />
+                    <CompletionStep onAdvance={handleAdvance} skippedSteps={skippedSteps} />
                 ) : null}
             </div>
         </div>

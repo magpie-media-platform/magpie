@@ -28,6 +28,14 @@ public interface IRefreshTokenRepository : IRepository
     Task<RefreshToken?> GetByHashAsync(string tokenHash, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Gets a refresh token by its associated access token identifier.
+    /// </summary>
+    /// <param name="jti">The access token identifier to find</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    /// <returns>The refresh token, or <see langword="null"/> when no token matches</returns>
+    Task<RefreshToken?> GetByAccessTokenJtiAsync(string jti, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Redeems a single-use refresh token that is valid and not expired.
     /// </summary>
     /// <param name="tokenHash">The hash of the refresh token to redeem</param>

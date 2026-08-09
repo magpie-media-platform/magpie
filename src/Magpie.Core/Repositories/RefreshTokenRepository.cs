@@ -78,6 +78,24 @@ internal sealed class RefreshTokenRepository(
         }
     }
 
+    public async Task<RefreshToken?> GetByAccessTokenJtiAsync(
+        string jti,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            return await context.RefreshTokens
+                .AsNoTracking()
+                .FirstOrDefaultAsync(rt => rt.AccessTokenJti == jti, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "The refresh token repository failed to read the access token session.");
+            throw;
+        }
+    }
+
     public async Task<RefreshToken?> ConsumeAsync(
         string tokenHash,
         DateTime now,

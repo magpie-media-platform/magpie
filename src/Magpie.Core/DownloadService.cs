@@ -369,9 +369,7 @@ internal sealed class DownloadService(
             return false;
         }
 
-        await TryRemoveFromClientAsync(download, cancellationToken).ConfigureAwait(false);
-
-        return await downloadRepository.DeleteAsync(id, null, cancellationToken).ConfigureAwait(false);
+        return await DeleteWithFilesAsync(download, cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<BulkResult> BulkCancelAsync(
@@ -404,6 +402,23 @@ internal sealed class DownloadService(
         CancellationToken cancellationToken = default)
     {
         return await downloadRepository.BulkDeleteAsync(action, null, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<BulkResult> BulkRemoveAsync(
+        BulkAction<DownloadQuery> action,
+        CancellationToken cancellationToken = default)
+    {
+        var removed = 0;
+        var targets = await ListBulkTargetsAsync(action, cancellationToken).ConfigureAwait(false);
+        foreach (var download in targets)
+        {
+            if (await DeleteWithFilesAsync(download, cancellationToken).ConfigureAwait(false))
+            {
+                removed++;
+            }
+        }
+
+        return new BulkResult { Count = removed };
     }
 
     public async Task<BulkResult> BulkPauseAsync(
@@ -917,6 +932,13 @@ internal sealed class DownloadService(
                 download.ExternalId,
                 download.DownloadClientId);
         }
+    }
+
+    private async Task<bool> DeleteWithFilesAsync(Download download, CancellationToken cancellationToken)
+    {
+        await TryRemoveFromClientAsync(download, cancellationToken).ConfigureAwait(false);
+
+        return await downloadRepository.DeleteAsync(download.Id, null, cancellationToken).ConfigureAwait(false);
     }
 
     private List<DownloadQueueEntry> WithDownloadClientCapabilities(IEnumerable<DownloadQueueEntry> entries)

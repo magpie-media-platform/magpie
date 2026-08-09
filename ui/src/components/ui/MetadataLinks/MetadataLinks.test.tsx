@@ -6,7 +6,7 @@ import type { ContentReference } from '@/lib/metadata';
 import { MetadataLinks } from './MetadataLinks';
 
 const references: ContentReference[] = [
-    { url: 'https://iafd.com/x', displayName: 'IAFD page', source: 'IAFD', kind: 'database' },
+    { url: 'https://imdb.com/x', displayName: 'IMDb page', source: 'IMDb', kind: 'database' },
     { url: 'https://studio.example', displayName: 'Studio', source: 'Studio', kind: 'homepage' },
 ];
 
@@ -14,10 +14,10 @@ describe('MetadataLinks', () => {
     it('renders references as external links opening in a new tab', () => {
         render(<MetadataLinks references={references} />);
 
-        const iafd = screen.getByRole('link', { name: /IAFD page/ });
-        expect(iafd).toHaveAttribute('href', 'https://iafd.com/x');
-        expect(iafd).toHaveAttribute('target', '_blank');
-        expect(iafd).toHaveAttribute('rel', 'noopener noreferrer');
+        const imdb = screen.getByRole('link', { name: /IMDb page/ });
+        expect(imdb).toHaveAttribute('href', 'https://imdb.com/x');
+        expect(imdb).toHaveAttribute('target', '_blank');
+        expect(imdb).toHaveAttribute('rel', 'noopener noreferrer');
 
         const studio = screen.getByRole('link', { name: /Studio/ });
         expect(studio).toHaveAttribute('href', 'https://studio.example/');

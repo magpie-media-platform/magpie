@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, useEffect } from 'react';
+import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
     CloudArrowDownIcon,
@@ -11,7 +11,7 @@ import {
     LinkBreakIcon,
     XIcon,
 } from '@phosphor-icons/react';
-import { type SortingState } from '@tanstack/react-table';
+import { type CellContext, type SortingState } from '@tanstack/react-table';
 
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { useUrlTableState } from '@/hooks/useUrlTableState';
@@ -326,6 +326,19 @@ export function DownloadsPage() {
     }, [refetchQueue, refetchHistory]);
 
     const { toast } = useToast();
+
+    const showBulkResultError = useCallback(
+        (error: string | null) => {
+            if (!error) {
+                return false;
+            }
+
+            toast({ title: 'Error', description: error, variant: 'error' });
+            return true;
+        },
+        [toast],
+    );
+
     const { hasPermission } = useAuth();
     const canControlDownloads = hasPermission('downloads.control');
     const canManageDownloads = hasPermission('downloads.manage');
@@ -413,8 +426,25 @@ export function DownloadsPage() {
         }
         setIsForgetting(true);
         try {
+            let count = forgetTarget.count;
             if (forgetTarget.allPages) {
-                await bulkForgetDownloads({ filter: forgetTarget.filter, excludeIds: forgetTarget.excludeIds });
+                const result = await bulkForgetDownloads({
+                    filter: forgetTarget.filter,
+                    excludeIds: forgetTarget.excludeIds,
+                });
+                if (showBulkResultError(result.error)) {
+                    return;
+                }
+                if (result.count === 0) {
+                    toast({
+                        title: 'No downloads forgotten',
+                        description: 'The selected downloads no longer exist.',
+                        variant: 'warning',
+                    });
+                    forgetTarget.selection?.clear();
+                    return;
+                }
+                count = result.count;
             } else {
                 const { succeededIds, failedCount } = await runPerDownloadActions(
                     forgetTarget.records.map((download) => download.id),
@@ -430,7 +460,6 @@ export function DownloadsPage() {
                     return;
                 }
             }
-            const count = forgetTarget.count;
             toast({
                 title: count === 1 ? 'Download forgotten' : `${count} downloads forgotten`,
                 description: 'Magpie stopped tracking it. The transfer is left in the download client.',
@@ -443,7 +472,7 @@ export function DownloadsPage() {
             setIsForgetting(false);
             setForgetTarget(null);
         }
-    }, [forgetTarget, bulkForgetDownloads, removeDownload, showPerDownloadFailures, toast]);
+    }, [forgetTarget, bulkForgetDownloads, removeDownload, showBulkResultError, showPerDownloadFailures, toast]);
 
     const handleConfirmRemove = useCallback(async () => {
         if (!removeTarget || removeTarget.count === 0) {
@@ -451,8 +480,25 @@ export function DownloadsPage() {
         }
         setIsRemoving(true);
         try {
+            let count = removeTarget.count;
             if (removeTarget.allPages) {
-                await bulkRemoveDownloads({ filter: removeTarget.filter, excludeIds: removeTarget.excludeIds });
+                const result = await bulkRemoveDownloads({
+                    filter: removeTarget.filter,
+                    excludeIds: removeTarget.excludeIds,
+                });
+                if (showBulkResultError(result.error)) {
+                    return;
+                }
+                if (result.count === 0) {
+                    toast({
+                        title: 'No downloads removed',
+                        description: 'The selected downloads no longer exist.',
+                        variant: 'warning',
+                    });
+                    removeTarget.selection?.clear();
+                    return;
+                }
+                count = result.count;
             } else {
                 const { succeededIds, failedCount } = await runPerDownloadActions(
                     removeTarget.records.map((download) => download.id),
@@ -468,7 +514,6 @@ export function DownloadsPage() {
                     return;
                 }
             }
-            const count = removeTarget.count;
             toast({
                 title: count === 1 ? 'Download removed' : `${count} downloads removed`,
                 description: 'Removed the download and its files from the download client.',
@@ -481,7 +526,14 @@ export function DownloadsPage() {
             setIsRemoving(false);
             setRemoveTarget(null);
         }
-    }, [removeTarget, bulkRemoveDownloads, deleteDownloadWithFiles, showPerDownloadFailures, toast]);
+    }, [
+        removeTarget,
+        bulkRemoveDownloads,
+        deleteDownloadWithFiles,
+        showBulkResultError,
+        showPerDownloadFailures,
+        toast,
+    ]);
 
     const handleStop = useCallback(
         async (id: string) => {
@@ -554,7 +606,10 @@ export function DownloadsPage() {
                 const resolved = selection.resolve();
                 if (resolved.mode === 'all') {
                     const result = await bulkAction({ filter, excludeIds: resolved.excludeIds });
-                    if (emptyTitle && result.affected === 0) {
+                    if (showBulkResultError(result.error)) {
+                        return;
+                    }
+                    if (emptyTitle && result.count === 0) {
                         toast({
                             title: emptyTitle,
                             description: 'No selected downloads support this action in their current state.',
@@ -579,7 +634,7 @@ export function DownloadsPage() {
                 toast({ title: 'Error', description: errorMessage, variant: 'error' });
             }
         },
-        [showPerDownloadFailures, toast],
+        [showBulkResultError, showPerDownloadFailures, toast],
     );
 
     const handleBulkPause = useCallback(
@@ -642,6 +697,17 @@ export function DownloadsPage() {
         [handlePause, handleResume, handleForceStart, handleStop, handleForget, handleRemove, handleViewDetails],
     );
 
+    const rowActionsRef = useRef({ rowHandlers, canControlDownloads, canManageDownloads });
+    rowActionsRef.current = { rowHandlers, canControlDownloads, canManageDownloads };
+    const actionsCell = useCallback(({ row }: CellContext<ApiDownload, unknown>) => {
+        const {
+            rowHandlers: handlers,
+            canControlDownloads: canControl,
+            canManageDownloads: canManage,
+        } = rowActionsRef.current;
+        return <RowActions download={row.original} handlers={handlers} canControl={canControl} canManage={canManage} />;
+    }, []);
+
     const clientFacetOptions: FacetOption[] = useMemo(
         () => clients.map((client) => ({ value: client.id, label: client.name })),
         [clients],
@@ -665,7 +731,7 @@ export function DownloadsPage() {
                 canControlDownloads,
                 canManageDownloads,
                 getClientName,
-                rowHandlers,
+                actionsCell,
             }),
         [
             queueFilters,
@@ -676,7 +742,7 @@ export function DownloadsPage() {
             canControlDownloads,
             canManageDownloads,
             getClientName,
-            rowHandlers,
+            actionsCell,
         ],
     );
     const historyColumns = useMemo(
@@ -691,7 +757,7 @@ export function DownloadsPage() {
                 canControlDownloads,
                 canManageDownloads,
                 getClientName,
-                rowHandlers,
+                actionsCell,
             }),
         [
             historyFilters,
@@ -702,7 +768,7 @@ export function DownloadsPage() {
             canControlDownloads,
             canManageDownloads,
             getClientName,
-            rowHandlers,
+            actionsCell,
         ],
     );
 

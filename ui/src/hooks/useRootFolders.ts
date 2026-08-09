@@ -81,7 +81,7 @@ export const rootFolderQueryKeys = {
     detail: (id: string) => ['root-folders', 'detail', id] as const,
 };
 
-async function fetchRootFolders(): Promise<ApiRootFolder[]> {
+export async function fetchRootFolders(): Promise<ApiRootFolder[]> {
     return apiGet<ApiRootFolder[]>('/root-folders');
 }
 

@@ -385,9 +385,9 @@ describe('extractReferences', () => {
                         {
                             ordinal: 1,
                             kind: 'database',
-                            source: 'IAFD',
-                            url: 'https://iafd.com/x',
-                            displayName: 'IAFD',
+                            source: 'IMDb',
+                            url: 'https://imdb.com/x',
+                            displayName: 'IMDb',
                         },
                         { ordinal: 0, kind: 'homepage', source: 'Site', url: 'https://site.example' },
                     ],
@@ -395,7 +395,7 @@ describe('extractReferences', () => {
                 {
                     ordinal: 0,
                     references: [
-                        { ordinal: 0, kind: 'database', source: 'IAFD', url: 'https://IAFD.com/x' },
+                        { ordinal: 0, kind: 'database', source: 'IMDb', url: 'https://IMDb.com/x' },
                         {
                             ordinal: 1,
                             kind: 'studio',
@@ -411,13 +411,13 @@ describe('extractReferences', () => {
         const result = extractReferences(container);
 
         expect(result.map((r) => r.url)).toEqual([
-            'https://IAFD.com/x',
+            'https://IMDb.com/x',
             'https://studio.example',
             'https://site.example',
         ]);
         expect(result.find((r) => r.url === 'https://studio.example')?.displayName).toBe('Studio home');
         expect(result.find((r) => r.url === 'https://site.example')?.displayName).toBe('https://site.example');
-        expect(result.find((r) => r.url === 'https://IAFD.com/x')?.displayName).toBe('https://IAFD.com/x');
+        expect(result.find((r) => r.url === 'https://IMDb.com/x')?.displayName).toBe('https://IMDb.com/x');
     });
 
     it('drops references without a non-empty url and returns empty for no container', () => {

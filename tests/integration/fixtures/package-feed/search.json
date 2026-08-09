@@ -1,0 +1,14 @@
+{
+  "totalHits": 1,
+  "data": [
+    {
+      "id": "Magpie.Extensions.IntegrationTestLifecycle",
+      "version": "1.1.0",
+      "title": "Lifecycle fixture",
+      "description": "Exercises extension installation, activation, upgrade, and removal.",
+      "authors": ["Magpie integration tests"],
+      "totalDownloads": 0,
+      "tags": ["magpie", "integration-test"]
+    }
+  ]
+}

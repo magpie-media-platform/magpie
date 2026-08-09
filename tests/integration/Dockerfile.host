@@ -1,0 +1,95 @@
+ARG DOTNET_SDK_VERSION=10.0.301
+ARG DOTNET_RUNTIME_VERSION=10.0
+ARG NODE_MAJOR=20
+
+FROM mcr.microsoft.com/dotnet/sdk:${DOTNET_SDK_VERSION} AS sdk
+
+ARG NODE_MAJOR
+ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl gnupg \
+    && curl -fsSL https://deb.nodesource.com/setup_${NODE_MAJOR}.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && corepack enable \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+COPY . .
+
+RUN cd ui && pnpm install --frozen-lockfile
+RUN dotnet publish src/Magpie.App/Magpie.App.csproj -c Release -o /app/publish -nodeReuse:false
+RUN dotnet pack src/Magpie.Extensions.IntegrationTestShims/Magpie.Extensions.IntegrationTestShims.csproj -c Release -o /app/packages -p:PackageVersion=1.0.0 -nodeReuse:false
+RUN dotnet pack src/Magpie.Extensions.IntegrationTestShims/Magpie.Extensions.IntegrationTestShims.csproj -c Release -o /app/packages -p:PackageVersion=1.1.0 -nodeReuse:false
+RUN dotnet pack src/Magpie.Extensions.Movies/Magpie.Extensions.Movies.csproj -c Release -o /app/packages -nodeReuse:false
+RUN dotnet pack src/Magpie.Extensions.Tv/Magpie.Extensions.Tv.csproj -c Release -o /app/packages -nodeReuse:false
+RUN dotnet pack src/Magpie.Extensions.Music/Magpie.Extensions.Music.csproj -c Release -o /app/packages -nodeReuse:false
+RUN dotnet pack src/Magpie.Extensions.Books/Magpie.Extensions.Books.csproj -c Release -o /app/packages -nodeReuse:false
+RUN dotnet pack tests/integration/fixtures/LifecycleExtension/Magpie.Extensions.IntegrationTestLifecycle.csproj -c Release -o /app/packages -p:PackageVersion=1.0.0 -nodeReuse:false
+RUN dotnet pack tests/integration/fixtures/LifecycleExtension/Magpie.Extensions.IntegrationTestLifecycle.csproj -c Release -o /app/packages -p:PackageVersion=1.1.0 -nodeReuse:false
+RUN dotnet pack tests/integration/fixtures/BrokenExtension/Magpie.Extensions.IntegrationTestBrokenAssembly.csproj -c Release -o /app/packages -p:PackageVersion=1.0.0 -nodeReuse:false
+RUN dotnet pack src/Magpie.Extensions.OpenLibrary/Magpie.Extensions.OpenLibrary.csproj -c Release -o /app/packages -p:PackageVersion=1.0.0 -nodeReuse:false
+RUN dotnet pack src/Magpie.Extensions.OpenLibrary/Magpie.Extensions.OpenLibrary.csproj -c Release -o /app/packages -p:PackageVersion=1.1.0 -nodeReuse:false
+RUN cp tests/integration/fixtures/BrokenExtension/broken-package.txt \
+    /app/packages/Magpie.Extensions.IntegrationTestBroken.nupkg
+RUN mkdir -p \
+    /app/feed/v3-flatcontainer/magpie.extensions.integrationtestlifecycle/1.0.0 \
+    /app/feed/v3-flatcontainer/magpie.extensions.integrationtestlifecycle/1.1.0 \
+    /app/feed/v3-flatcontainer/magpie.extensions.integrationtestshims/1.0.0 \
+    /app/feed/v3-flatcontainer/magpie.extensions.integrationtestshims/1.1.0 \
+    && cp tests/integration/fixtures/package-feed/index.json /app/feed/index.json \
+    && cp tests/integration/fixtures/package-feed/search.json /app/feed/search.json \
+    && cp tests/integration/fixtures/package-feed/lifecycle-index.json \
+    /app/feed/v3-flatcontainer/magpie.extensions.integrationtestlifecycle/index.json \
+    && cp tests/integration/fixtures/package-feed/shims-index.json \
+    /app/feed/v3-flatcontainer/magpie.extensions.integrationtestshims/index.json \
+    && cp /app/packages/Magpie.Extensions.IntegrationTestLifecycle.1.0.0.nupkg \
+    /app/feed/v3-flatcontainer/magpie.extensions.integrationtestlifecycle/1.0.0/magpie.extensions.integrationtestlifecycle.1.0.0.nupkg \
+    && cp /app/packages/Magpie.Extensions.IntegrationTestLifecycle.1.1.0.nupkg \
+    /app/feed/v3-flatcontainer/magpie.extensions.integrationtestlifecycle/1.1.0/magpie.extensions.integrationtestlifecycle.1.1.0.nupkg \
+    && cp /app/packages/Magpie.Extensions.IntegrationTestShims.1.0.0.nupkg \
+    /app/feed/v3-flatcontainer/magpie.extensions.integrationtestshims/1.0.0/magpie.extensions.integrationtestshims.1.0.0.nupkg \
+    && cp /app/packages/Magpie.Extensions.IntegrationTestShims.1.1.0.nupkg \
+    /app/feed/v3-flatcontainer/magpie.extensions.integrationtestshims/1.1.0/magpie.extensions.integrationtestshims.1.1.0.nupkg
+RUN dotnet build-server shutdown
+
+FROM mcr.microsoft.com/dotnet/aspnet:${DOTNET_RUNTIME_VERSION} AS host
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ffmpeg curl ca-certificates jq \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY --from=sdk /app/publish ./
+COPY --from=sdk /app/packages /app/test-packages
+RUN mkdir -p /app/data /downloads /library
+
+COPY tests/integration/fixtures/build-media.sh tests/integration/fixtures/media.json /build/
+RUN chmod +x /build/build-media.sh && /build/build-media.sh /build/media.json /media-fixtures
+COPY tests/integration/fixtures/movie.en.srt tests/integration/fixtures/book.pdf /media-fixtures/
+
+COPY tests/integration/docker-entrypoint.sh /app/docker-entrypoint.sh
+RUN chmod +x /app/docker-entrypoint.sh
+
+ENV ASPNETCORE_URLS=http://+:8080 \
+    ASPNETCORE_ENVIRONMENT=Production \
+    DOTNET_RUNNING_IN_CONTAINER=true \
+    DOTNET_GENERATE_ASPNET_CERTIFICATE=false \
+    Magpie__Extensions__Path=/app/data/extensions \
+    MAGPIE_TEST_FIXTURES_ROOT=/test-fixtures \
+    MAGPIE_TEST_DOWNLOADS_ROOT=/downloads \
+    MAGPIE_TEST_MEDIA_FIXTURES_ROOT=/media-fixtures
+
+EXPOSE 8080
+
+HEALTHCHECK --interval=2s --timeout=3s --start-period=30s --retries=45 \
+    CMD curl -fsS http://localhost:8080/api/system/ready || exit 1
+
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
+
+FROM busybox:1.37.0 AS package-feed
+
+COPY --from=sdk /app/feed /www
+
+EXPOSE 8081
+
+CMD ["httpd", "-f", "-p", "8081", "-h", "/www"]

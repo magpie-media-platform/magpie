@@ -6,6 +6,7 @@ import type { ReactNode } from 'react';
 import {
     useContentList,
     useContentDetail,
+    useContentHierarchy,
     useContentTags,
     useRefreshContent,
     useSearchContentReleases,
@@ -17,12 +18,15 @@ import {
     useMetadataInspector,
     usePatchMetadataInspector,
     useReorderMetadataContributions,
+    useEffectiveRootFolder,
     useEffectiveQualityTierList,
     useSetQualityTierList,
     contentQueryKeys,
 } from './useContent';
 import { contentReleaseQueryKeys } from './useContentReleases';
 import { useEventStream } from './useEventStream';
+import { useRootFolders } from './useRootFolders';
+import { useQualityTierLists } from './useQualityTierLists';
 import { tagQueryKeys } from './useTags';
 import * as api from '@/lib/api';
 
@@ -330,6 +334,76 @@ describe('useContent hooks', () => {
                 contentItemId: '33333333-3333-3333-3333-333333333333',
                 acquisitionStatus: undefined,
             });
+        });
+
+        it('coalesces canonical dependency reads across query owners', async () => {
+            vi.mocked(api.apiGet).mockImplementation((path: string) => {
+                if (path === `/content/${mockContentItem.id}`) {
+                    return Promise.resolve(mockContentItem);
+                }
+                if (path === '/root-folders' || path === '/quality-tier-lists') {
+                    return Promise.resolve([]);
+                }
+                return Promise.reject(new Error(`Unexpected path: ${path}`));
+            });
+
+            const { result } = renderHook(
+                () => ({
+                    hierarchy: useContentHierarchy(mockContentItem.id, undefined, undefined),
+                    rootFolder: useEffectiveRootFolder(mockContentItem.id),
+                    qualityTierList: useEffectiveQualityTierList(mockContentItem.id),
+                    rootFolders: useRootFolders(),
+                    qualityTierLists: useQualityTierLists(),
+                }),
+                { wrapper: createWrapper(queryClient) },
+            );
+
+            await waitFor(() => {
+                expect(result.current.hierarchy.content.isSuccess).toBe(true);
+                expect(result.current.rootFolder.isSuccess).toBe(true);
+                expect(result.current.qualityTierList.isSuccess).toBe(true);
+                expect(result.current.rootFolders.isLoading).toBe(false);
+                expect(result.current.qualityTierLists.isLoading).toBe(false);
+            });
+
+            expect(
+                vi.mocked(api.apiGet).mock.calls.filter(([path]) => path === `/content/${mockContentItem.id}`),
+            ).toHaveLength(1);
+            expect(vi.mocked(api.apiGet).mock.calls.filter(([path]) => path === '/root-folders')).toHaveLength(1);
+            expect(vi.mocked(api.apiGet).mock.calls.filter(([path]) => path === '/quality-tier-lists')).toHaveLength(1);
+
+            vi.mocked(api.apiGet).mockClear();
+            let resolveContentRefresh: ((value: typeof mockContentItem) => void) | undefined;
+            vi.mocked(api.apiGet).mockImplementation((path: string) => {
+                if (path === `/content/${mockContentItem.id}`) {
+                    return new Promise<typeof mockContentItem>((resolve) => {
+                        resolveContentRefresh = resolve;
+                    });
+                }
+                if (path === '/root-folders' || path === '/quality-tier-lists') {
+                    return Promise.resolve([]);
+                }
+                return Promise.reject(new Error(`Unexpected path: ${path}`));
+            });
+            const event = {
+                name: 'content.hierarchyItem.updated',
+                context: { 'content.hierarchyItemId': mockContentItem.id },
+            };
+
+            act(() => {
+                for (const [handler, options] of mockedUseEventStream.mock.calls) {
+                    const eventNames = options?.eventName;
+                    if (Array.isArray(eventNames) && eventNames.includes(event.name)) {
+                        handler(event);
+                    }
+                }
+            });
+            await act(() => new Promise((resolve) => setTimeout(resolve, 250)));
+
+            expect(
+                vi.mocked(api.apiGet).mock.calls.filter(([path]) => path === `/content/${mockContentItem.id}`),
+            ).toHaveLength(1);
+            resolveContentRefresh?.(mockContentItem);
         });
 
         it('does not fetch when id is undefined', () => {

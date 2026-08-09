@@ -1,0 +1,13 @@
+{
+  "version": "3.0.0",
+  "resources": [
+    {
+      "@id": "http://package-feed:8081/search.json",
+      "@type": "SearchQueryService"
+    },
+    {
+      "@id": "http://package-feed:8081/v3-flatcontainer/",
+      "@type": "PackageBaseAddress/3.0.0"
+    }
+  ]
+}

@@ -43,9 +43,10 @@ function createTestQueryClient() {
 
 interface RenderOptions {
     authed?: boolean;
+    skippedSteps?: ('metadata' | 'indexer' | 'download' | 'root' | 'server')[];
 }
 
-function renderStep(onAdvance: () => void, { authed = false }: RenderOptions = {}) {
+function renderStep(onAdvance: () => void, { authed = false, skippedSteps }: RenderOptions = {}) {
     const queryClient = createTestQueryClient();
     return render(
         <QueryClientProvider client={queryClient}>
@@ -58,7 +59,10 @@ function renderStep(onAdvance: () => void, { authed = false }: RenderOptions = {
                     <ToastStateProvider>
                         <ToastProvider>
                             <Routes>
-                                <Route path="/setup" element={<CompletionStep onAdvance={onAdvance} />} />
+                                <Route
+                                    path="/setup"
+                                    element={<CompletionStep onAdvance={onAdvance} skippedSteps={skippedSteps} />}
+                                />
                                 <Route path="/login" element={<div>Login page</div>} />
                                 <Route path="/" element={<div>Home page</div>} />
                             </Routes>
@@ -112,6 +116,7 @@ describe('CompletionStep', () => {
                                 createdAt: '2024-01-01T00:00:00Z',
                             },
                         ],
+                        schema: [{ key: 'apiKey', type: 'String' }],
                     },
                     {
                         id: 'metadata-configured',
@@ -127,6 +132,7 @@ describe('CompletionStep', () => {
                                 createdAt: '2024-01-01T00:00:00Z',
                             },
                         ],
+                        schema: [{ key: 'apiKey', type: 'String' }],
                     },
                 ] as never;
             }
@@ -168,10 +174,41 @@ describe('CompletionStep', () => {
         await waitFor(() => {
             expect(screen.getByText('Metadata-provider configs').nextElementSibling).toHaveTextContent('1');
         });
+        expect(screen.getByText('Metadata-provider configs').parentElement).toHaveTextContent('Provider D');
         expect(screen.getByText('Indexers').nextElementSibling).toHaveTextContent('2');
         expect(screen.getByText('Download clients').nextElementSibling).toHaveTextContent('1');
         expect(screen.getByText('Media servers').nextElementSibling).toHaveTextContent('1');
         expect(screen.getByText('Root folders').nextElementSibling).toHaveTextContent('1');
+    });
+
+    it('marks explicitly skipped steps in the summary regardless of count', async () => {
+        const onAdvance = vi.fn();
+        vi.mocked(apiModule.apiGet).mockImplementation(async (path: string) => {
+            if (path === '/media-servers') {
+                return [{ id: 'server-1' }] as never;
+            }
+            return [] as never;
+        });
+        renderStep(onAdvance, { skippedSteps: ['server'] });
+
+        await screen.findByRole('button', { name: /finish setup/i });
+
+        await waitFor(() => {
+            expect(screen.getByText('Media servers').parentElement).toHaveTextContent('Skipped');
+        });
+        expect(screen.getByText('Media servers').nextElementSibling).toHaveTextContent('1');
+        expect(screen.getByText('Indexers').parentElement).not.toHaveTextContent('Skipped');
+    });
+
+    it('marks the metadata step skipped in the summary', async () => {
+        const onAdvance = vi.fn();
+        renderStep(onAdvance, { skippedSteps: ['metadata'] });
+
+        await screen.findByRole('button', { name: /finish setup/i });
+
+        await waitFor(() => {
+            expect(screen.getByText('Metadata-provider configs').parentElement).toHaveTextContent('Skipped');
+        });
     });
 
     it('calls the complete endpoint and navigates unauthed users to /login', async () => {

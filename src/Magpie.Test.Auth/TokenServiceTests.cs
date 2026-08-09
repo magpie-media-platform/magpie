@@ -99,6 +99,7 @@ public class TokenServiceTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(accessToken, Has.Property(nameof(accessToken.ExpiresAt)).GreaterThan(DateTime.UtcNow));
+            Assert.That(jwt.Id, Is.EqualTo(accessToken.Jti));
             Assert.That(
                 jwt,
                 Has.Property(nameof(jwt.Claims)).With.One.With.Property(nameof(Claim.Type))
@@ -228,6 +229,16 @@ public class TokenServiceTests
             new KeyStoreHmacCryptoProviderFactory(),
             TimeProvider.System);
         var accessToken = await subject.GenerateAccessTokenAsync(user, default).ConfigureAwait(false);
+        _refreshTokenRepository
+            .Setup(m => m.GetByAccessTokenJtiAsync(accessToken.Jti, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new RefreshToken
+            {
+                UserId = user.Id,
+                TokenHash = "refresh-hash",
+                AccessTokenJti = accessToken.Jti,
+                ExpiresAt = DateTime.UtcNow.AddDays(1),
+                CreatedAt = DateTime.UtcNow
+            });
 
         // Act
         var result = await subject.TryValidateAccessTokenAsync(accessToken.Token, default)
@@ -324,12 +335,22 @@ public class TokenServiceTests
     {
         // Arrange
         var userId = Guid.NewGuid();
+        var user = new User
+        {
+            Id = userId,
+            ProviderType = "local",
+            Username = "testuser",
+            Enabled = true,
+            Role = Role.Viewer,
+            CreatedAt = DateTime.UtcNow
+        };
         _refreshTokenRepository
             .Setup(m => m.CreateAsync(It.IsAny<RefreshToken>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((RefreshToken t, CancellationToken _) => t);
+        var accessToken = await _subject.GenerateAccessTokenAsync(user).ConfigureAwait(false);
 
         // Act
-        var result = await _subject.GenerateRefreshTokenAsync(userId).ConfigureAwait(false);
+        var result = await _subject.GenerateRefreshTokenAsync(userId, accessToken.Jti).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.Not.Null);
@@ -340,7 +361,9 @@ public class TokenServiceTests
         }
 
         _refreshTokenRepository.Verify(
-            r => r.CreateAsync(It.Is<RefreshToken>(t => t.UserId == userId), It.IsAny<CancellationToken>()),
+            r => r.CreateAsync(
+                It.Is<RefreshToken>(t => t.UserId == userId && t.AccessTokenJti == accessToken.Jti),
+                It.IsAny<CancellationToken>()),
             Times.Once);
     }
 
@@ -357,7 +380,9 @@ public class TokenServiceTests
             .ReturnsAsync((RefreshToken t, CancellationToken _) => t);
 
         // Act
-        await _subject.GenerateRefreshTokenAsync(userId).ConfigureAwait(false);
+        await _subject
+            .GenerateRefreshTokenAsync(userId, "11111111-1111-1111-1111-111111111111")
+            .ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -507,6 +532,16 @@ public class TokenServiceTests
             CreatedAt = DateTime.UtcNow,
         };
         var accessToken = await _subject.GenerateAccessTokenAsync(user).ConfigureAwait(false);
+        _refreshTokenRepository
+            .Setup(m => m.GetByAccessTokenJtiAsync(accessToken.Jti, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new RefreshToken
+            {
+                UserId = user.Id,
+                TokenHash = "refresh-hash",
+                AccessTokenJti = accessToken.Jti,
+                ExpiresAt = DateTime.UtcNow.AddDays(1),
+                CreatedAt = DateTime.UtcNow
+            });
 
         // Act
         var result = await _subject.TryValidateAccessTokenAsync(accessToken.Token).ConfigureAwait(false);
@@ -517,6 +552,28 @@ public class TokenServiceTests
             Is.Not.Null
                 .With.Property(nameof(ClaimsIdentity.Claims))
                 .With.One.Property(nameof(Claim.Type)).EqualTo(ClaimTypes.NameIdentifier));
+    }
+
+    [Test]
+    public async Task TryValidateAccessTokenAsync_ReturnsNull_WhenSessionDoesNotExist()
+    {
+        // Arrange
+        var user = new User
+        {
+            Id = Guid.NewGuid(),
+            ProviderType = "local",
+            Username = "testuser",
+            Enabled = true,
+            Role = Role.Viewer,
+            CreatedAt = DateTime.UtcNow
+        };
+        var accessToken = await _subject.GenerateAccessTokenAsync(user).ConfigureAwait(false);
+
+        // Act
+        var result = await _subject.TryValidateAccessTokenAsync(accessToken.Token).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(result, Is.Null);
     }
 
     [Test]

@@ -39,18 +39,6 @@ public interface IIndexerIntegration
     bool SupportsKeywordSearch { get; }
 
     /// <summary>
-    /// Determines whether the categories of a release match the requested content categories.
-    /// </summary>
-    /// <param name="releaseCategories">The categories of the release</param>
-    /// <param name="contentCategories">The generic categories of the content type</param>
-    /// <param name="recognised">Whether the indexer recognised any of the release categories</param>
-    /// <returns><see langword="true"/> when the release matches, otherwise <see langword="false"/>.</returns>
-    bool ReleaseMatchesCategories(
-        IReadOnlyList<string> releaseCategories,
-        IReadOnlyList<string> contentCategories,
-        out bool recognised);
-
-    /// <summary>
     /// Searches the indexer for releases.
     /// </summary>
     /// <param name="request">The criteria of the release search</param>

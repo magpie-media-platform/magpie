@@ -538,8 +538,17 @@ internal sealed class ExtensionService(
         Guid? actingUserId,
         CancellationToken cancellationToken = default)
     {
-        var extension = await InstallFromStreamInternalAsync(package, fileName, actingUserId, cancellationToken)
-            .ConfigureAwait(false);
+        Extension extension;
+        try
+        {
+            extension = await InstallFromStreamInternalAsync(package, fileName, actingUserId, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (InvalidDataException exception)
+        {
+            logger.LogError(exception, "The uploaded package {FileName} is not a valid archive", fileName);
+            throw new MagpieException("The uploaded file is not a valid extension package.");
+        }
 
         return new ExtensionInstallResult { Extension = extension, RestartRequired = true };
     }
@@ -663,7 +672,6 @@ internal sealed class ExtensionService(
         }
 
         await lifecycleManager.InvokeUninstallAsync(existing, cancellationToken).ConfigureAwait(false);
-        RemoveExtensionDirectory(existing);
         var deleted = await extensionRepository.DeleteAsync(extensionId, actingUserId, cancellationToken)
             .ConfigureAwait(false);
         if (!deleted)
@@ -671,6 +679,7 @@ internal sealed class ExtensionService(
             return false;
         }
 
+        RemoveExtensionDirectory(existing);
         await PublishActivationChangedAsync(cancellationToken).ConfigureAwait(false);
         await eventBus.PublishAsync(
             ExtensionEventBuilder.BuildExtensionUninstalledEvent(extensionId, existing.AssemblyName, existing.FilePath),

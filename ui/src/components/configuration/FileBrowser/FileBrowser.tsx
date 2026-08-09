@@ -193,6 +193,7 @@ export function FileBrowser({
     const handleManualPathSubmit = useCallback(
         (e: React.SubmitEvent) => {
             e.preventDefault();
+            e.stopPropagation();
             if (manualPath.trim()) {
                 navigateTo(manualPath.trim());
             }

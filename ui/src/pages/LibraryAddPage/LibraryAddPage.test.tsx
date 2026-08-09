@@ -230,9 +230,10 @@ function candidateSearchResult(
 ) {
     const pageItemCount = overrides.pageItemCount ?? candidates.length;
     return {
-        matches: candidates.map(({ inLibrary, ...candidate }) => ({
+        matches: candidates.map(({ inLibrary, existingContentHierarchyItemId, ...candidate }) => ({
             candidate,
             inLibrary: inLibrary === true,
+            existingContentHierarchyItemId,
         })),
         pageItemCount,
         existsInLibraryCount: overrides.existsInLibraryCount ?? candidates.filter((c) => c.inLibrary === true).length,
@@ -599,7 +600,7 @@ describe('LibraryAddPage', () => {
         it('adds provider warning context to the no-results state', async () => {
             mockApiGetByPath({});
             mockCandidateSearchResponse = candidateSearchResult([], {
-                warnings: ['Provider search is too broad. Add more search details.'],
+                warnings: ['TMDb search is too broad. Add more search details.'],
             });
             const user = userEvent.setup();
 
@@ -679,6 +680,7 @@ describe('LibraryAddPage', () => {
                 externalId: '550',
                 title: 'Fight Club',
                 inLibrary: true,
+                existingContentHierarchyItemId: '3db97837-8a29-4b92-937b-13f948bfd62d',
             };
             mockCandidateSearchResponse = candidateSearchResult([owned, candidateSearchedCandidate]);
             const user = userEvent.setup();
@@ -700,12 +702,17 @@ describe('LibraryAddPage', () => {
             expect(ownedRow).not.toBeNull();
             expect(ownedRow.querySelector('[data-action="add-content"]')).toBeNull();
             expect(ownedRow.querySelector('[data-action="preview-content"]')).toBeNull();
+            expect(ownedRow.querySelector('[data-action="open-library-item"]')).toHaveAttribute(
+                'href',
+                '/library/3db97837-8a29-4b92-937b-13f948bfd62d',
+            );
 
             const addableRow = table.querySelector('[data-row-id$=":603"]') as HTMLElement;
             expect(addableRow).not.toBeNull();
             const addableAdd = addableRow.querySelector('[data-action="add-content"]') as HTMLButtonElement;
             expect(addableAdd).not.toBeNull();
             expect(addableAdd.disabled).toBe(false);
+            expect(addableRow.querySelector('[data-action="open-library-item"]')).toBeNull();
             expect(within(addableRow).getByRole('button', { name: 'The Matrix' })).toHaveAttribute(
                 'data-action',
                 'preview-content',
@@ -782,10 +789,8 @@ describe('LibraryAddPage', () => {
                     contentType: 'movies',
                 });
             });
-            await waitFor(() => {
-                expect(resultsTable().getByRole('button', { name: /^added$/i })).toBeDisabled();
-            });
-            expect(resultsTable().getByRole('button', { name: 'The Matrix' })).toBeInTheDocument();
+            const openLibraryItem = await resultsTable().findByRole('link', { name: 'The Matrix' });
+            expect(openLibraryItem).toHaveAttribute('href', '/library/new-matrix-id');
             expect(screen.getByRole('tab', { name: /live filter/i })).toHaveAttribute('aria-selected', 'true');
             expect(document.querySelector('[data-component="filter-bar"]')).toBeInTheDocument();
             expect(resultsTable().getByText('The Matrix')).toBeInTheDocument();
@@ -812,10 +817,8 @@ describe('LibraryAddPage', () => {
             expect(await screen.findByTestId('preview-drawer')).toBeInTheDocument();
             await user.click(screen.getByRole('button', { name: /^add to library$/i }));
 
-            await waitFor(() => {
-                expect(resultsTable().getByRole('button', { name: /^added$/i })).toBeDisabled();
-            });
-            expect(resultsTable().getByRole('button', { name: 'The Matrix' })).toBeInTheDocument();
+            const openLibraryItem = await resultsTable().findByRole('link', { name: 'The Matrix' });
+            expect(openLibraryItem).toHaveAttribute('href', '/library/drawer-matrix-id');
             expect(screen.queryByTestId('preview-drawer')).not.toBeInTheDocument();
             expect(screen.getByRole('tab', { name: /live filter/i })).toHaveAttribute('aria-selected', 'true');
             expect(mockNavigate).not.toHaveBeenCalledWith('/library/drawer-matrix-id');
@@ -1010,10 +1013,8 @@ describe('LibraryAddPage', () => {
                     contentType: 'movies',
                 });
             });
-            await waitFor(() => {
-                expect(resultsTable().getByRole('button', { name: /^added$/i })).toBeDisabled();
-            });
-            expect(resultsTable().getByRole('button', { name: 'The Matrix' })).toBeInTheDocument();
+            const openLibraryItem = await resultsTable().findByRole('link', { name: 'The Matrix' });
+            expect(openLibraryItem).toHaveAttribute('href', '/library/new-content-uuid');
             expect(mockNavigate).not.toHaveBeenCalledWith('/library/new-content-uuid');
         });
 

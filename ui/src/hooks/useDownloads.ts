@@ -161,27 +161,33 @@ interface DownloadBulkArgs {
 }
 
 export interface DownloadBulkActionResult {
-    affected: number;
+    count: number;
+
+    error: string | null;
 }
 
-async function bulkForgetDownloads({ filter, excludeIds }: DownloadBulkArgs): Promise<void> {
-    return apiDelete(buildUrl('/downloads', { ...filter, excludeIds, removeFromClient: false }));
+function bulkDownloads(route: string, { filter, excludeIds }: DownloadBulkArgs): Promise<DownloadBulkActionResult> {
+    return apiPost<DownloadBulkActionResult>(route, { filter: { ...filter, excludeIds } });
 }
 
-async function bulkRemoveDownloads({ filter, excludeIds }: DownloadBulkArgs): Promise<void> {
-    return apiDelete(buildUrl('/downloads', { ...filter, excludeIds, removeFromClient: true, deleteFiles: true }));
+function bulkForgetDownloads(args: DownloadBulkArgs): Promise<DownloadBulkActionResult> {
+    return bulkDownloads('/downloads/bulk/delete', args);
 }
 
-async function bulkPauseDownloads({ filter, excludeIds }: DownloadBulkArgs): Promise<DownloadBulkActionResult> {
-    return apiPost<DownloadBulkActionResult>(buildUrl('/downloads/bulk/pause', { ...filter, excludeIds }));
+function bulkRemoveDownloads(args: DownloadBulkArgs): Promise<DownloadBulkActionResult> {
+    return bulkDownloads('/downloads/bulk/remove', args);
 }
 
-async function bulkResumeDownloads({ filter, excludeIds }: DownloadBulkArgs): Promise<DownloadBulkActionResult> {
-    return apiPost<DownloadBulkActionResult>(buildUrl('/downloads/bulk/resume', { ...filter, excludeIds }));
+function bulkPauseDownloads(args: DownloadBulkArgs): Promise<DownloadBulkActionResult> {
+    return bulkDownloads('/downloads/bulk/pause', args);
 }
 
-async function bulkStopDownloads({ filter, excludeIds }: DownloadBulkArgs): Promise<DownloadBulkActionResult> {
-    return apiPost<DownloadBulkActionResult>(buildUrl('/downloads/bulk/stop', { ...filter, excludeIds }));
+function bulkResumeDownloads(args: DownloadBulkArgs): Promise<DownloadBulkActionResult> {
+    return bulkDownloads('/downloads/bulk/resume', args);
+}
+
+function bulkStopDownloads(args: DownloadBulkArgs): Promise<DownloadBulkActionResult> {
+    return bulkDownloads('/downloads/bulk/stop', args);
 }
 
 export const downloadQueryKeys = {

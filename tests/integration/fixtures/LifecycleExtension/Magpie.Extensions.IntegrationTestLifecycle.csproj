@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>netstandard2.1</TargetFramework>
+    <OutputType>Library</OutputType>
+    <LangVersion>preview</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Version>1.0.0</Version>
+    <PackageVersion Condition="'$(PackageVersion)' == ''">$(Version)</PackageVersion>
+    <InformationalVersion>$(PackageVersion)</InformationalVersion>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+    <Title>Lifecycle fixture</Title>
+    <Authors>Magpie integration tests</Authors>
+    <Description>Exercises extension installation, activation, upgrade, and removal.</Description>
+    <PackageTags>magpie integration-test</PackageTags>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\..\src\Magpie.Sdk\Magpie.Sdk.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Assets\lifecycle.js" LogicalName="Magpie.Extensions.IntegrationTestLifecycle.Assets.lifecycle.js" />
+  </ItemGroup>
+
+</Project>

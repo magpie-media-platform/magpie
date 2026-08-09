@@ -13,17 +13,22 @@ import { useRootFolders } from '@/hooks/useRootFolders';
 import { useCompleteSetup } from '@/hooks/useSetup';
 import { apiGet, isApiError } from '@/lib/api';
 import { hasConfiguredExtensionSettings, settingsQueryKeys, type ApiSettingsGroup } from '@/hooks/useSettings';
+import type { SetupStepId } from './setupSteps';
 
 interface CompletionStepProps {
     onAdvance: () => void;
+    skippedSteps?: SetupStepId[];
 }
 
 interface SummaryRow {
     label: string;
     count: number | null;
+    detail?: string;
 }
 
-export function CompletionStep({ onAdvance }: CompletionStepProps): ReactNode {
+const EMPTY_SKIPPED_STEPS: SetupStepId[] = [];
+
+export function CompletionStep({ onAdvance, skippedSteps = EMPTY_SKIPPED_STEPS }: CompletionStepProps): ReactNode {
     const { toast } = useToast();
     const { isAuthenticated } = useAuth();
     const navigate = useNavigate();
@@ -42,15 +47,39 @@ export function CompletionStep({ onAdvance }: CompletionStepProps): ReactNode {
     const rows = useMemo<SummaryRow[]>(() => {
         const settingsAvailable =
             settingsQuery.data !== undefined || (settingsQuery.error !== null && !isApiError(settingsQuery.error));
-        const metadataExtensions = settingsAvailable
-            ? (settingsQuery.data ?? []).filter(hasConfiguredExtensionSettings).length
+        const metadataGroups = settingsAvailable
+            ? (settingsQuery.data ?? []).filter(hasConfiguredExtensionSettings)
             : null;
+        const metadataExtensions = metadataGroups?.length ?? null;
+        const skipped = (step: SetupStepId) => skippedSteps.includes(step);
         return [
-            { label: 'Metadata-provider configs', count: metadataExtensions },
-            { label: 'Indexers', count: countConfiguredIndexerInstances(indexers.indexers) },
-            { label: 'Download clients', count: downloadClients.clients?.length ?? null },
-            { label: 'Media servers', count: mediaServers.servers?.length ?? null },
-            { label: 'Root folders', count: rootFolders.folders?.length ?? null },
+            {
+                label: 'Metadata-provider configs',
+                count: metadataExtensions,
+                detail: skipped('metadata')
+                    ? 'Skipped'
+                    : metadataGroups?.map((group) => group.name).join(', ') || undefined,
+            },
+            {
+                label: 'Indexers',
+                count: countConfiguredIndexerInstances(indexers.indexers),
+                detail: skipped('indexer') ? 'Skipped' : undefined,
+            },
+            {
+                label: 'Download clients',
+                count: downloadClients.clients?.length ?? null,
+                detail: skipped('download') ? 'Skipped' : undefined,
+            },
+            {
+                label: 'Media servers',
+                count: mediaServers.servers?.length ?? null,
+                detail: skipped('server') ? 'Skipped' : undefined,
+            },
+            {
+                label: 'Root folders',
+                count: rootFolders.folders?.length ?? null,
+                detail: skipped('root') ? 'Skipped' : undefined,
+            },
         ];
     }, [
         settingsQuery.data,
@@ -59,6 +88,7 @@ export function CompletionStep({ onAdvance }: CompletionStepProps): ReactNode {
         downloadClients.clients,
         mediaServers.servers,
         rootFolders.folders,
+        skippedSteps,
     ]);
 
     const handleFinish = useCallback(async () => {
@@ -90,7 +120,10 @@ export function CompletionStep({ onAdvance }: CompletionStepProps): ReactNode {
                 {rows.map((row) => (
                     <li key={row.label} className="setup-page__summary-row">
                         <span>{row.label}</span>
-                        <strong>{row.count === null ? '--' : row.count}</strong>
+                        <span className="setup-page__summary-value">
+                            <strong>{row.count === null ? '--' : row.count}</strong>
+                            {row.detail && <span>{row.detail}</span>}
+                        </span>
                     </li>
                 ))}
             </ul>

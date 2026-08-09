@@ -201,6 +201,15 @@ internal sealed class UserRepository(
                         return false;
                     }
 
+                    await context.RefreshTokens
+                        .Where(token => token.UserId == id)
+                        .ExecuteDeleteAsync(cancellationToken)
+                        .ConfigureAwait(false);
+                    await context.ApiKeys
+                        .Where(key => key.UserId == id)
+                        .ExecuteDeleteAsync(cancellationToken)
+                        .ConfigureAwait(false);
+
                     var deleted = await context.Users
                         .Where(u => u.Id == id)
                         .ExecuteDeleteAsync(cancellationToken)
@@ -338,6 +347,11 @@ internal sealed class UserRepository(
 
                     if (updated > 0)
                     {
+                        await context.RefreshTokens
+                            .Where(token => token.UserId == userId)
+                            .ExecuteDeleteAsync(cancellationToken)
+                            .ConfigureAwait(false);
+
                         await auditRecordRepository.CreateAsync(
                             new()
                             {

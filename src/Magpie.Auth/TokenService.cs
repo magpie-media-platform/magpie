@@ -58,7 +58,7 @@ internal sealed class TokenService(
         return Convert.ToBase64String(SHA256.HashData(Encoding.UTF8.GetBytes(token)));
     }
 
-    public async Task<IssuedToken> GenerateAccessTokenAsync(
+    public async Task<IssuedAccessToken> GenerateAccessTokenAsync(
         User user,
         CancellationToken cancellationToken)
     {
@@ -68,9 +68,10 @@ internal sealed class TokenService(
         var issuedAt = timeProvider.GetUtcNow().UtcDateTime;
         var expiresAt = issuedAt.Add(options.AccessTokenLifetime);
         var issuedAtSeconds = new DateTimeOffset(issuedAt).ToUnixTimeSeconds().ToString(CultureInfo.InvariantCulture);
+        var accessTokenJti = Guid.NewGuid().ToString();
         var principal = user.ToPrincipal(
         [
-            new(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString()),
+            new(JwtRegisteredClaimNames.Jti, accessTokenJti),
             new(JwtRegisteredClaimNames.Iat, issuedAtSeconds, ClaimValueTypes.Integer64)
         ]);
 
@@ -88,13 +89,16 @@ internal sealed class TokenService(
         };
 
         var token = _tokenHandler.CreateToken(tokenDescriptor);
-        return new IssuedToken(_tokenHandler.WriteToken(token), expiresAt);
+        return new IssuedAccessToken(_tokenHandler.WriteToken(token), expiresAt, accessTokenJti);
     }
 
     public async Task<IssuedToken> GenerateRefreshTokenAsync(
         Guid userId,
+        string accessTokenJti,
         CancellationToken cancellationToken)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(accessTokenJti);
+
         var tokenBytes = RandomNumberGenerator.GetBytes(64);
         var token = Convert.ToBase64String(tokenBytes);
         var tokenHash = ComputeHash(token);
@@ -106,6 +110,7 @@ internal sealed class TokenService(
             {
                 UserId = userId,
                 TokenHash = tokenHash,
+                AccessTokenJti = accessTokenJti,
                 ExpiresAt = expiresAt,
                 CreatedAt = now
             },
@@ -169,7 +174,17 @@ internal sealed class TokenService(
                     ValidateLifetime = true,
                     ClockSkew = TimeSpan.Zero
                 }).ConfigureAwait(false);
-            return validationResult.IsValid
+            if (!validationResult.IsValid ||
+                validationResult.ClaimsIdentity.FindFirst(JwtRegisteredClaimNames.Jti)?.Value is not { } jti)
+            {
+                return null;
+            }
+
+            var session = await refreshTokenRepository
+                .GetByAccessTokenJtiAsync(jti, cancellationToken)
+                .ConfigureAwait(false);
+            return session?.ExpiresAt > timeProvider.GetUtcNow().UtcDateTime &&
+                string.Equals(session.AccessTokenJti, jti, StringComparison.Ordinal)
                 ? new ClaimsPrincipal(validationResult.ClaimsIdentity)
                 : null;
         }

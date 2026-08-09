@@ -62,7 +62,7 @@ interface DownloadColumnConfig {
     canControlDownloads: boolean;
     canManageDownloads: boolean;
     getClientName: (download: ApiDownload) => string;
-    rowHandlers: RowActionHandlers;
+    actionsCell: NonNullable<ColumnDef<ApiDownload>['cell']>;
 }
 
 function displayTitle(download: ApiDownload): string {
@@ -313,7 +313,7 @@ export function buildDownloadColumns(config: DownloadColumnConfig): ColumnDef<Ap
         canControlDownloads,
         canManageDownloads,
         getClientName,
-        rowHandlers,
+        actionsCell,
     } = config;
     const setClient = (client: string) => onChange({ ...filters, client });
     const setState = (state: string) => onChange({ ...filters, state });
@@ -463,14 +463,7 @@ export function buildDownloadColumns(config: DownloadColumnConfig): ColumnDef<Ap
             header: '',
             enableSorting: false,
             size: 48,
-            cell: ({ row }) => (
-                <RowActions
-                    download={row.original}
-                    handlers={rowHandlers}
-                    canControl={canControlDownloads}
-                    canManage={canManageDownloads}
-                />
-            ),
+            cell: actionsCell,
         },
     ];
 }

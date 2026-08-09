@@ -189,7 +189,10 @@ internal sealed class MockDownloadClientIntegration :
         const string method = "DownloadReleaseAsync";
         await _latencyInjector.DelayAsync(method, cancellationToken).ConfigureAwait(false);
         var scenario = await _scenarioReader
-            .ReadAsync<DownloadReleaseScenario>(method, cancellationToken: cancellationToken)
+            .ReadAsync<DownloadReleaseScenario>(
+                method,
+                discriminator: release.ExternalId,
+                cancellationToken: cancellationToken)
             .ConfigureAwait(false);
 
         var externalId = ResolveExternalId(scenario.ExternalId, release.ExternalId);
@@ -302,6 +305,11 @@ internal sealed class MockDownloadClientIntegration :
         await _auditWriter
             .WriteAsync(method, new { downloadId, deleteFiles, settings }, response, cancellationToken)
             .ConfigureAwait(false);
+
+        if (deleteFiles && LandedFolder(downloadId) is { } landedFolder && Directory.Exists(landedFolder))
+        {
+            Directory.Delete(landedFolder, recursive: true);
+        }
 
         return response;
     }

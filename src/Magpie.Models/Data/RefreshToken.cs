@@ -23,6 +23,11 @@ public record RefreshToken
     public required string TokenHash { get; set; }
 
     /// <summary>
+    /// The id of the access token bound to this session.
+    /// </summary>
+    public string? AccessTokenJti { get; set; }
+
+    /// <summary>
     /// The UTC time after which the token is no longer valid.
     /// </summary>
     public DateTime ExpiresAt { get; set; }

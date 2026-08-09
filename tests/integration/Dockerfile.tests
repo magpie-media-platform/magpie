@@ -1,0 +1,21 @@
+ARG DOTNET_RUNTIME_VERSION=10.0
+
+FROM mcr.microsoft.com/dotnet/aspnet:${DOTNET_RUNTIME_VERSION} AS dotnet-runtime
+FROM magpie-integration:latest AS app
+
+FROM mcr.microsoft.com/playwright:v1.49.1-jammy
+
+COPY --from=dotnet-runtime /usr/share/dotnet /usr/share/dotnet
+RUN ln -s /usr/share/dotnet/dotnet /usr/bin/dotnet
+
+COPY --from=app /app /app
+COPY --from=app /media-fixtures /media-fixtures
+
+WORKDIR /tests
+
+RUN npm install --global pnpm@10.33.0
+
+COPY tests/integration/package.json tests/integration/pnpm-lock.yaml ./
+RUN pnpm install --frozen-lockfile
+
+CMD ["pnpm", "exec", "playwright", "test"]

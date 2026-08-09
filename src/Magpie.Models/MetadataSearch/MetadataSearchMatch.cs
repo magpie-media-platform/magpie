@@ -1,3 +1,5 @@
+using System;
+
 namespace Magpie.Models.MetadataSearch;
 
 /// <summary>
@@ -14,4 +16,9 @@ public sealed record MetadataSearchMatch
     /// Whether the candidate exists in the library.
     /// </summary>
     public required bool InLibrary { get; init; }
+
+    /// <summary>
+    /// Existing content hierarchy item identifier.
+    /// </summary>
+    public Guid? ExistingContentHierarchyItemId { get; init; }
 }

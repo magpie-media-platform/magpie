@@ -38,6 +38,11 @@ internal sealed class DownloadsEndpointGroup : IApiEndpointGroup
             .Produces<BulkResult>()
             .RequireManager();
 
+        builder.MapPost("bulk/remove", BulkRemoveDownloadsAsync)
+            .WithName(nameof(BulkRemoveDownloadsAsync))
+            .Produces<BulkResult>()
+            .RequireManager();
+
         builder.MapPost("bulk/pause", BulkPauseDownloadsAsync)
             .WithName(nameof(BulkPauseDownloadsAsync))
             .Produces<BulkResult>()
@@ -240,6 +245,16 @@ internal sealed class DownloadsEndpointGroup : IApiEndpointGroup
         CancellationToken cancellationToken)
     {
         var result = await downloadService.BulkDeleteAsync(action, cancellationToken).ConfigureAwait(false);
+
+        return Results.Ok(result);
+    }
+
+    internal async Task<IResult> BulkRemoveDownloadsAsync(
+        [FromServices] IDownloadService downloadService,
+        BulkAction<DownloadQuery> action,
+        CancellationToken cancellationToken)
+    {
+        var result = await downloadService.BulkRemoveAsync(action, cancellationToken).ConfigureAwait(false);
 
         return Results.Ok(result);
     }

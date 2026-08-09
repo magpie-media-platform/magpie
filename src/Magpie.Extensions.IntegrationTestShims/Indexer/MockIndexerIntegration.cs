@@ -81,15 +81,6 @@ internal sealed class MockIndexerIntegration : IIndexerIntegration
 
     public bool SupportsKeywordSearch { get; }
 
-    public bool ReleaseMatchesCategories(
-        IReadOnlyList<string> releaseCategories,
-        IReadOnlyList<string> contentCategories,
-        out bool recognised)
-    {
-        recognised = false;
-        return true;
-    }
-
     private string? ComputeSearchDiscriminator(ReleaseSearchRequest request)
     {
         var label = request.Title;

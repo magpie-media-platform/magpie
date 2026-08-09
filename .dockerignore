@@ -16,9 +16,17 @@ node_modules/
 **/.npm/
 **/.pnpm-store/
 
-# Integration files mounted into the test container
-tests/integration/*/
-!tests/integration/fixtures/
+# Integration runtime state 
+tests/integration/db/
+tests/integration/test-fixtures/
+tests/integration/downloads/
+tests/integration/library/
+tests/integration/node_modules/
+tests/integration/playwright-report/
+tests/integration/test-results/
+tests/integration/media-fixtures/
+tests/integration/checkpoints/
+tests/integration/.playwright/
 
 # .NET build output
 bin/

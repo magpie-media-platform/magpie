@@ -324,6 +324,41 @@ describe('useDownloads', () => {
         });
     });
 
+    describe('bulk downloads', () => {
+        it.each([
+            ['bulkForgetDownloads', '/downloads/bulk/delete'],
+            ['bulkRemoveDownloads', '/downloads/bulk/remove'],
+            ['bulkPauseDownloads', '/downloads/bulk/pause'],
+            ['bulkResumeDownloads', '/downloads/bulk/resume'],
+            ['bulkStopDownloads', '/downloads/bulk/stop'],
+        ] as const)('posts %s with its filtered selection body', async (action, route) => {
+            mockApiGet.mockResolvedValue(mockPagedResponse);
+            mockApiPost.mockResolvedValue({ count: 2, error: null });
+
+            const { result } = renderHook(() => useDownloads(), {
+                wrapper: createWrapper(),
+            });
+
+            await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+            await act(async () => {
+                await result.current[action]({
+                    filter: { status: 'Downloading', downloadClientId: 'client-1' },
+                    excludeIds: ['download-2'],
+                });
+            });
+
+            expect(mockApiPost).toHaveBeenCalledWith(route, {
+                filter: {
+                    status: 'Downloading',
+                    downloadClientId: 'client-1',
+                    excludeIds: ['download-2'],
+                },
+            });
+            expect(mockApiDelete).not.toHaveBeenCalled();
+        });
+    });
+
     describe('cancelling downloads', () => {
         it('should cancel a download via POST /downloads/{id}/cancel', async () => {
             mockApiGet.mockResolvedValue(mockPagedResponse);

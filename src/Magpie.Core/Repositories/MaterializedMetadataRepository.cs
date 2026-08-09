@@ -727,21 +727,25 @@ internal sealed class MaterializedMetadataRepository(
                     from c in context.MetadataContributions.AsNoTracking()
                     join value in GetReferencesProjection() on c.Id equals value.MetadataContributionId
                     where c.MetadataContainerId == mc.Id
+                    orderby c.Ordinal, value.Ordinal
                     select value).ToList(),
                 Relationships = (
                     from c in context.MetadataContributions.AsNoTracking()
                     join value in GetRelationshipsProjection() on c.Id equals value.MetadataContributionId
                     where c.MetadataContainerId == mc.Id
+                    orderby c.Ordinal, value.Ordinal
                     select value).ToList(),
                 Images = (
                     from c in context.MetadataContributions.AsNoTracking()
                     join value in GetImagesProjection() on c.Id equals value.MetadataContributionId
                     where c.MetadataContainerId == mc.Id
+                    orderby c.Ordinal, value.Ordinal
                     select value).ToList(),
                 Previews = (
                     from c in context.MetadataContributions.AsNoTracking()
                     join value in GetPreviewsProjection() on c.Id equals value.MetadataContributionId
                     where c.MetadataContainerId == mc.Id
+                    orderby c.Ordinal, value.Ordinal
                     select value).ToList(),
                 CustomMetadata = (
                     from c in context.MetadataContributions.AsNoTracking()
@@ -844,7 +848,6 @@ internal sealed class MaterializedMetadataRepository(
                 where i2.Type.ToLower() == i.Type.ToLower()
                 orderby c2.Ordinal
                 select c2.Id).FirstOrDefault()
-            orderby c.Ordinal, i.Ordinal
             select i;
     }
 
@@ -860,7 +863,6 @@ internal sealed class MaterializedMetadataRepository(
                 where p2.Kind.ToLower() == p.Kind.ToLower()
                 orderby c2.Ordinal
                 select c2.Id).FirstOrDefault()
-            orderby c.Ordinal, p.Ordinal
             select p;
     }
 
@@ -880,7 +882,6 @@ internal sealed class MaterializedMetadataRepository(
                     (r2.Language != null && r.Language != null && r2.Language.ToLower() == r.Language.ToLower())
                 orderby c2.Ordinal
                 select c2.Id).FirstOrDefault()
-            orderby c.Ordinal, r.Ordinal
             select r;
     }
 
@@ -908,7 +909,6 @@ internal sealed class MaterializedMetadataRepository(
                     (r2.Qualifier != null && r.Qualifier != null && r2.Qualifier.ToLower() == r.Qualifier.ToLower())
                 orderby c2.Ordinal
                 select c2.Id).FirstOrDefault()
-            orderby c.Ordinal, r.Ordinal
             select r;
     }
 }

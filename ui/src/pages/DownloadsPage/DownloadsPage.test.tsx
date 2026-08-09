@@ -755,6 +755,35 @@ describe('DownloadsPage row actions', () => {
 
     afterEach(() => vi.restoreAllMocks());
 
+    it('keeps an open row menu mounted when refetched download data arrives', async () => {
+        const user = userEvent.setup();
+        let source = mockApiDownloads;
+        vi.mocked(apiGet).mockImplementation((url: string) => {
+            if (url.startsWith('/downloads')) {
+                return Promise.resolve(respondDownloads(url, source));
+            }
+            if (url === '/download-clients') {
+                return Promise.resolve(mockApiClients);
+            }
+            return Promise.resolve([]);
+        });
+
+        const queryClient = createTestQueryClient();
+        render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
+
+        await waitFor(() => expect(within(getTable()).getByText('Breaking Bad')).toBeInTheDocument());
+        await openRowMenu(user, /actions for breaking bad/i);
+        expect(await screen.findByRole('menuitem', { name: /view details/i })).toBeInTheDocument();
+
+        source = mockApiDownloads.map((download) =>
+            download.id === 'dl-1' ? { ...download, progress: 43 } : download,
+        );
+        await queryClient.invalidateQueries({ queryKey: ['downloads', 'list'] });
+
+        await waitFor(() => expect(within(getTable()).getByText('43%')).toBeInTheDocument());
+        expect(screen.getByRole('menuitem', { name: /view details/i })).toBeInTheDocument();
+    });
+
     it('offers Pause for a downloading row and calls the pause endpoint', async () => {
         const user = userEvent.setup();
         const mockApiPost = vi.mocked(apiPost);
@@ -2139,8 +2168,8 @@ describe('DownloadsPage select all across pages', () => {
 
     it('bulk Forget across pages sends one filtered request, not a per-id delete', async () => {
         const user = userEvent.setup();
-        const mockApiDelete = vi.mocked(apiDelete);
-        mockApiDelete.mockResolvedValue(undefined);
+        const mockApiPost = vi.mocked(apiPost);
+        mockApiPost.mockResolvedValue({ count: 40, error: null });
         render(<DownloadsPage />, { wrapper: createTestWrapper(createTestQueryClient()) });
 
         await selectWholePage(user);
@@ -2154,11 +2183,109 @@ describe('DownloadsPage select all across pages', () => {
         const dialog = await screen.findByRole('dialog');
         await user.click(within(dialog).getByRole('button', { name: /^forget$/i }));
 
-        await waitFor(() => expect(mockApiDelete).toHaveBeenCalledTimes(1));
-        const url = mockApiDelete.mock.calls[0][0] as string;
-        expect(url).toContain('/downloads?');
-        expect(url).toContain('removeFromClient=false');
-        expect(mockApiDelete).not.toHaveBeenCalledWith('/downloads/dl-1');
+        await waitFor(() => expect(mockApiPost).toHaveBeenCalledTimes(1));
+        expect(mockApiPost).toHaveBeenCalledWith('/downloads/bulk/delete', {
+            filter: {
+                downloadClientId: undefined,
+                statuses: ['Grabbed', 'Queued', 'Downloading', 'Paused', 'Stalled'],
+                excludeIds: [],
+            },
+        });
+        expect(apiDelete).not.toHaveBeenCalled();
+    });
+
+    it.each([
+        {
+            action: 'Forget',
+            route: '/downloads/bulk/delete',
+            successTitle: '17 downloads forgotten',
+        },
+        {
+            action: 'Remove',
+            route: '/downloads/bulk/remove',
+            successTitle: '17 downloads removed',
+        },
+    ])('bulk $action across History pages uses the filtered result count', async (config) => {
+        const user = userEvent.setup();
+        const mockApiPost = vi.mocked(apiPost);
+        mockApiPost.mockResolvedValue({ count: 17, error: null });
+        render(<DownloadsPage />, { wrapper: createTestWrapper(createTestQueryClient()) });
+
+        await user.click(screen.getByRole('tab', { name: /history/i }));
+        await selectWholePage(user, 'The Bear');
+
+        const banner = document.querySelector('[data-component="select-all-banner"]') as HTMLElement;
+        await user.click(within(banner).getByRole('button', { name: /select all 40 across all pages/i }));
+
+        const bar = document.querySelector('[data-component="downloads-bulk-bar-history"]') as HTMLElement;
+        await user.click(within(bar).getByRole('button', { name: new RegExp(`^${config.action}$`, 'i') }));
+        await user.click(
+            within(await screen.findByRole('dialog')).getByRole('button', {
+                name: new RegExp(`^${config.action}$`, 'i'),
+            }),
+        );
+
+        await waitFor(() => expect(mockApiPost).toHaveBeenCalledTimes(1));
+        expect(mockApiPost).toHaveBeenCalledWith(config.route, {
+            filter: {
+                downloadClientId: undefined,
+                statuses: ['Downloaded', 'Importing', 'Imported', 'Failed', 'Cancelled'],
+                excludeIds: [],
+            },
+        });
+        await waitFor(() => expect(screen.getByText(config.successTitle)).toBeInTheDocument());
+        expect(apiDelete).not.toHaveBeenCalled();
+    });
+
+    it.each([
+        { action: 'Forget', emptyTitle: 'No downloads forgotten', successTitle: '40 downloads forgotten' },
+        { action: 'Remove', emptyTitle: 'No downloads removed', successTitle: '40 downloads removed' },
+    ])('does not report History all-pages $action as successful when no targets resolve', async (config) => {
+        const user = userEvent.setup();
+        vi.mocked(apiPost).mockResolvedValue({ count: 0, error: null });
+        render(<DownloadsPage />, { wrapper: createTestWrapper(createTestQueryClient()) });
+
+        await user.click(screen.getByRole('tab', { name: /history/i }));
+        await selectWholePage(user, 'The Bear');
+
+        const banner = document.querySelector('[data-component="select-all-banner"]') as HTMLElement;
+        await user.click(within(banner).getByRole('button', { name: /select all 40 across all pages/i }));
+
+        const bar = document.querySelector('[data-component="downloads-bulk-bar-history"]') as HTMLElement;
+        await user.click(within(bar).getByRole('button', { name: new RegExp(`^${config.action}$`, 'i') }));
+        await user.click(
+            within(await screen.findByRole('dialog')).getByRole('button', {
+                name: new RegExp(`^${config.action}$`, 'i'),
+            }),
+        );
+
+        await waitFor(() => expect(screen.getByText(config.emptyTitle)).toBeInTheDocument());
+        expect(screen.queryByText(config.successTitle)).not.toBeInTheDocument();
+    });
+
+    it.each([
+        { action: 'Start', button: /^start$/i, confirm: false },
+        { action: 'Pause', button: /^pause$/i, confirm: false },
+        { action: 'Stop', button: /^stop$/i, confirm: false },
+        { action: 'Forget', button: /^forget$/i, confirm: true },
+        { action: 'Remove', button: /^remove$/i, confirm: true },
+    ])('surfaces the backend error for all-pages $action', async (config) => {
+        const user = userEvent.setup();
+        vi.mocked(apiPost).mockResolvedValue({ count: 0, error: `${config.action} bulk failure` });
+        render(<DownloadsPage />, { wrapper: createTestWrapper(createTestQueryClient()) });
+
+        await selectWholePage(user);
+
+        const banner = document.querySelector('[data-component="select-all-banner"]') as HTMLElement;
+        await user.click(within(banner).getByRole('button', { name: /select all 40 across all pages/i }));
+
+        const bar = document.querySelector('[data-component="downloads-bulk-bar-queue"]') as HTMLElement;
+        await user.click(within(bar).getByRole('button', { name: config.button }));
+        if (config.confirm) {
+            await user.click(within(await screen.findByRole('dialog')).getByRole('button', { name: config.button }));
+        }
+
+        await waitFor(() => expect(screen.getByText(`${config.action} bulk failure`)).toBeInTheDocument());
     });
 
     it('keeps all-pages Start and Pause available when the current page does not support them', async () => {
@@ -2205,7 +2332,7 @@ describe('DownloadsPage select all across pages', () => {
     ])('does not report all-pages $action as successful when the backend affects no rows', async (config) => {
         const user = userEvent.setup();
         const mockApiPost = vi.mocked(apiPost);
-        mockApiPost.mockResolvedValue({ affected: 0 });
+        mockApiPost.mockResolvedValue({ count: 0, error: null });
         render(<DownloadsPage />, { wrapper: createTestWrapper(createTestQueryClient()) });
 
         await selectWholePage(user);
@@ -2224,7 +2351,7 @@ describe('DownloadsPage select all across pages', () => {
     it('excludes a hand-deselected row from the across-pages request', async () => {
         const user = userEvent.setup();
         const mockApiPost = vi.mocked(apiPost);
-        mockApiPost.mockResolvedValue(undefined);
+        mockApiPost.mockResolvedValue({ count: 39, error: null });
         render(<DownloadsPage />, { wrapper: createTestWrapper(createTestQueryClient()) });
 
         await selectWholePage(user);
@@ -2238,9 +2365,13 @@ describe('DownloadsPage select all across pages', () => {
         await user.click(within(bar).getByRole('button', { name: /^stop$/i }));
 
         await waitFor(() => expect(mockApiPost).toHaveBeenCalledTimes(1));
-        const url = mockApiPost.mock.calls[0][0] as string;
-        expect(url).toContain('/downloads/bulk/stop?');
-        expect(url).toContain('excludeIds=dl-1');
+        expect(mockApiPost).toHaveBeenCalledWith('/downloads/bulk/stop', {
+            filter: {
+                downloadClientId: undefined,
+                statuses: ['Grabbed', 'Queued', 'Downloading', 'Paused', 'Stalled'],
+                excludeIds: ['dl-1'],
+            },
+        });
     });
 });
 

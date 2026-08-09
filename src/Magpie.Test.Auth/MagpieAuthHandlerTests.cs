@@ -4,10 +4,12 @@ using System.Text.Encodings.Web;
 using System.Threading;
 using System.Threading.Tasks;
 
+using Magpie.Abstractions.Repositories;
 using Magpie.Auth;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Sdk.Auth;
+using Magpie.Sdk.Security;
 using Magpie.Sdk.Services;
 
 using Microsoft.AspNetCore.Authentication;
@@ -101,9 +103,34 @@ public class MagpieAuthHandlerTests
     }
 
     [Test]
-    public async Task AuthenticateAsync_ReturnsSuccess_WhenApiKeyValid()
+    public async Task AuthenticateAsync_ReturnsSuccessWithoutSessionLookup_WhenApiKeyValid()
     {
         // Arrange
+        var refreshTokenRepository = new Mock<IRefreshTokenRepository>();
+        var tokenService = new TokenService(
+            new TokenServiceOptions(),
+            refreshTokenRepository.Object,
+            Mock.Of<IKeyStore>(),
+            new KeyStoreHmacCryptoProviderFactory(),
+            TimeProvider.System);
+        var bearerProvider = new JwtBearerAuthenticationProvider(tokenService);
+        var optionsMonitor = new Mock<IOptionsMonitor<MagpieSchemeOptions>>();
+        optionsMonitor
+            .Setup(m => m.Get(MagpieAuthenticationHandler.SchemeName))
+            .Returns(new MagpieSchemeOptions());
+        _subject = new MagpieAuthenticationHandler(
+            optionsMonitor.Object,
+            _loggerFactory,
+            UrlEncoder.Default,
+            _apiKeyService.Object,
+            _userService.Object,
+            [bearerProvider]);
+        var scheme = new AuthenticationScheme(
+            MagpieAuthenticationHandler.SchemeName,
+            MagpieAuthenticationHandler.SchemeName,
+            typeof(MagpieAuthenticationHandler));
+        await _subject.InitializeAsync(scheme, _httpContext).ConfigureAwait(false);
+
         var userId = Guid.NewGuid();
         var apiKey = new ApiKey
         {
@@ -145,6 +172,12 @@ public class MagpieAuthHandlerTests
                 result.Principal!.FindFirst(ClaimTypes.NameIdentifier)?.Value,
                 Is.EqualTo(userId.ToString()));
         }
+
+        refreshTokenRepository.Verify(
+            repository => repository.GetByAccessTokenJtiAsync(
+                It.IsAny<string>(),
+                It.IsAny<CancellationToken>()),
+            Times.Never);
     }
 
     [Test]

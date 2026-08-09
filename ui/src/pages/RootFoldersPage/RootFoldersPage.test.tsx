@@ -493,6 +493,38 @@ describe('RootFoldersPage actions', () => {
         });
     });
 
+    it('keeps a dirty add form open after navigating and cancelling the file browser', async () => {
+        const user = userEvent.setup();
+        mockApiPost.mockResolvedValue(undefined);
+
+        render(<RootFoldersPage />, { wrapper: createTestWrapper() });
+
+        await user.click((await screen.findAllByRole('button', { name: /add folder/i }))[0]);
+        const nameInput = screen.getByRole('textbox', { name: /^name$/i });
+        await user.type(nameInput, 'New Movies');
+        await user.type(document.querySelector('[data-field="path"]') as HTMLElement, '/library');
+        await user.click(document.querySelector('[data-field="content-type"]') as HTMLElement);
+        await user.click(await screen.findByRole('option', { name: 'Movies' }));
+        await user.click(document.querySelector('[data-field="default-quality-profile"]') as HTMLElement);
+        await user.click(await screen.findByRole('option', { name: /Default/ }));
+        await user.click(screen.getByRole('button', { name: /browse filesystem/i }));
+
+        const browser = await screen.findByRole('dialog', { name: 'Select Folder' });
+        const manualPath = within(browser).getByPlaceholderText('Enter path manually...');
+        await user.clear(manualPath);
+        await user.type(manualPath, '/library/../app');
+        await user.click(within(browser).getByRole('button', { name: 'Go' }));
+        await user.click(within(browser).getByRole('button', { name: 'Cancel' }));
+
+        expect(screen.queryByRole('dialog', { name: 'Select Folder' })).not.toBeInTheDocument();
+        expect(screen.getByRole('dialog', { name: 'Add Root Folder' })).toBeInTheDocument();
+        expect(nameInput).toHaveValue('New Movies');
+        expect(mockApiPost).not.toHaveBeenCalledWith('/root-folders', expect.anything());
+
+        await user.click(screen.getByRole('button', { name: 'Cancel' }));
+        expect(document.querySelector('[data-component="unsaved-changes-dialog"]')).toBeInTheDocument();
+    });
+
     it('shows the simple required quality picker after selecting a single-root type', async () => {
         const user = userEvent.setup();
 

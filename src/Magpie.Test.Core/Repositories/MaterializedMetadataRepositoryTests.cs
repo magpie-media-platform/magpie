@@ -1317,6 +1317,44 @@ public class MaterializedMetadataRepositoryTests
     }
 
     [Test]
+    public async Task ListAllAsync_ReturnsImagesInOrdinalOrder_WhenInsertedInReverseOrder()
+    {
+        // Arrange
+        var container = new MetadataContainer { CreatedAt = DateTime.UtcNow };
+        var contribution = new MetadataContribution
+        {
+            ProviderType = "provider",
+            Ordinal = 0,
+            CreatedAt = DateTime.UtcNow
+        };
+        contribution.Images.Add(new()
+        {
+            Ordinal = 1,
+            Type = "backdrop",
+            Url = new("https://example.com/second.jpg")
+        });
+        contribution.Images.Add(new()
+        {
+            Ordinal = 0,
+            Type = "poster",
+            Url = new("https://example.com/first.jpg")
+        });
+
+        container.Contributions.Add(contribution);
+        _context.MetadataContainers.Add(container);
+
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        var result = (await _subject.ListAllAsync().ConfigureAwait(false)).First();
+
+        // Assert
+        Assert.That(
+            result.Images!.Select(image => image.Url.AbsoluteUri),
+            Is.EqualTo(["https://example.com/first.jpg", "https://example.com/second.jpg"]));
+    }
+
+    [Test]
     public async Task ListAllAsync_DeduplicatesImages_ByKind()
     {
         // Arrange

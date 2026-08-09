@@ -1,5 +1,6 @@
 using System;
 
+using Magpie.Sdk.Configuration;
 using Magpie.Sdk.Content;
 using Magpie.Sdk.Extensions;
 using Magpie.Sdk.Integrations;
@@ -15,7 +16,7 @@ namespace Magpie.Extensions.IntegrationTestShims;
 /// </summary>
 public sealed class IntegrationTestShimsExtension : IExtension
 {
-    private static readonly Guid ExtensionId = new("D6E20B46-39EF-4AFB-8B85-FABCE83F4C25");
+    internal static readonly Guid ExtensionId = new("D6E20B46-39EF-4AFB-8B85-FABCE83F4C25");
 
     /// <inheritdoc />
     public Guid Id => ExtensionId;
@@ -48,6 +49,12 @@ public sealed class IntegrationTestShimsExtension : IExtension
         services.AddSingleton<INotificationProvider, Notification.MockNotificationProvider>();
 
         services.AddSingleton<ISubjectMetadataProvider, SubjectMetadata.MockSubjectMetadataProvider>();
+
+        services.AddSingleton<Settings.MockSettingsGroup>();
+        services.AddSingleton<IExtensionSettingsSchemaProvider>(
+            provider => provider.GetRequiredService<Settings.MockSettingsGroup>());
+        services.AddSingleton<IExtensionConfigurationTester>(
+            provider => provider.GetRequiredService<Settings.MockSettingsGroup>());
 
         services.AddSingleton(
             _ => new HierarchyMetadata.MockHierarchyMetadataAdvancedSearcher());

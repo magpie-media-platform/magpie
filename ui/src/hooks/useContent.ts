@@ -5,6 +5,8 @@ import { type ApiTag, tagQueryKeys } from '@/hooks/useTags';
 import { createMetadataInspectorHooks, relatedContentSubjectRefs } from '@/hooks/metadataInspectorHooks';
 import { contentReleaseQueryKeys } from '@/hooks/useContentReleases';
 import { useInvalidateQueriesOnEvents } from '@/hooks/useInvalidateQueriesOnEvents';
+import { fetchRootFolders, rootFolderQueryKeys } from '@/hooks/useRootFolders';
+import { fetchQualityTierLists, qualityTierListQueryKeys } from '@/hooks/useQualityTierLists';
 import { apiGet, apiPost, apiPatch, apiDelete, buildUrl } from '@/lib/api';
 import { executeImmediateJobRequest, executeJobRequest, type JobActionDisposition } from '@/lib/jobActions';
 import { magpieEventNames } from '@/lib/magpieEventNames';
@@ -35,8 +37,6 @@ import {
     type SetQualityTierListVariables,
     type UpdateContentRequest,
 } from '@/types/contentMetadata';
-import type { ApiRootFolder } from '@/hooks/useRootFolders';
-import type { ApiQualityTierList } from '@/hooks/useQualityTierLists';
 
 export const contentQueryKeys = {
     all: ['content'] as const,
@@ -147,8 +147,22 @@ export function useAcquisitionStatus(id: string | undefined, options?: { enabled
     });
 }
 
-async function fetchEffectiveRootFolder(id: string): Promise<EffectiveRootFolder> {
-    const [item, rootFolders] = await Promise.all([fetchContentById(id), apiGet<ApiRootFolder[]>('/root-folders')]);
+async function fetchEffectiveRootFolder(
+    queryClient: ReturnType<typeof useQueryClient>,
+    id: string,
+): Promise<EffectiveRootFolder> {
+    const [item, rootFolders] = await Promise.all([
+        queryClient.fetchQuery({
+            queryKey: contentQueryKeys.detail(id),
+            queryFn: () => fetchContentById(id),
+            staleTime: 0,
+        }),
+        queryClient.fetchQuery({
+            queryKey: rootFolderQueryKeys.list(),
+            queryFn: fetchRootFolders,
+            staleTime: 0,
+        }),
+    ]);
     const rootFolderId = item.effectiveRootFolderId;
     const rootFolder = rootFolders.find((folder) => folder.id === rootFolderId);
 
@@ -174,7 +188,11 @@ async function fetchEffectiveRootFolder(id: string): Promise<EffectiveRootFolder
 
     let parentId = item.parentId;
     while (parentId) {
-        const parent = await fetchContentById(parentId);
+        const parent = await queryClient.fetchQuery({
+            queryKey: contentQueryKeys.detail(parentId),
+            queryFn: () => fetchContentById(parentId!),
+            staleTime: 0,
+        });
         if (parent.rootFolderId) {
             return {
                 rootFolderId,
@@ -210,7 +228,7 @@ export function useEffectiveRootFolder(id: string | undefined, options?: { enabl
     );
     return useQuery({
         queryKey: contentQueryKeys.effectiveRootFolder(id ?? ''),
-        queryFn: () => fetchEffectiveRootFolder(id!),
+        queryFn: ({ client }) => fetchEffectiveRootFolder(client, id!),
         enabled: (options?.enabled ?? true) && !!id,
         staleTime: POLLING_INTERVALS.slow,
     });
@@ -260,10 +278,21 @@ export function useApplyContentPath() {
     });
 }
 
-async function fetchEffectiveQualityTierList(id: string): Promise<EffectiveQualityTierList> {
+async function fetchEffectiveQualityTierList(
+    queryClient: ReturnType<typeof useQueryClient>,
+    id: string,
+): Promise<EffectiveQualityTierList> {
     const [item, tierLists] = await Promise.all([
-        fetchContentById(id),
-        apiGet<ApiQualityTierList[]>('/quality-tier-lists'),
+        queryClient.fetchQuery({
+            queryKey: contentQueryKeys.detail(id),
+            queryFn: () => fetchContentById(id),
+            staleTime: 0,
+        }),
+        queryClient.fetchQuery({
+            queryKey: qualityTierListQueryKeys.list(),
+            queryFn: () => fetchQualityTierLists(),
+            staleTime: 0,
+        }),
     ]);
     const tierListId = item.effectiveQualityTierListId;
     const tierList = tierLists.find((list) => list.id === tierListId);
@@ -290,7 +319,11 @@ async function fetchEffectiveQualityTierList(id: string): Promise<EffectiveQuali
 
     let parentId = item.parentId;
     while (parentId) {
-        const parent = await fetchContentById(parentId);
+        const parent = await queryClient.fetchQuery({
+            queryKey: contentQueryKeys.detail(parentId),
+            queryFn: () => fetchContentById(parentId!),
+            staleTime: 0,
+        });
         if (parent.qualityTierListId) {
             return {
                 qualityTierListId: tierListId,
@@ -326,7 +359,7 @@ export function useEffectiveQualityTierList(id: string | undefined, options?: { 
     );
     return useQuery({
         queryKey: contentQueryKeys.effectiveQualityTierList(id ?? ''),
-        queryFn: () => fetchEffectiveQualityTierList(id!),
+        queryFn: ({ client }) => fetchEffectiveQualityTierList(client, id!),
         enabled: (options?.enabled ?? true) && !!id,
         staleTime: POLLING_INTERVALS.slow,
     });

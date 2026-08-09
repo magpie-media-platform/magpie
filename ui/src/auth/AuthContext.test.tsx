@@ -163,6 +163,26 @@ describe('AuthProvider', () => {
         expect(vi.mocked(authApiModule.refreshAccessToken)).not.toHaveBeenCalled();
     });
 
+    it('fetches permissions exactly once when restoring a retained session', async () => {
+        setupStoredAdminSession();
+        vi.mocked(authApiModule.fetchEffectivePermissions).mockResolvedValue({
+            role: Role.Admin,
+            permissions: {},
+        });
+
+        const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+        render(
+            <QueryClientProvider client={queryClient}>
+                <ProductionAuthProvider>
+                    <AuthConsumer />
+                </ProductionAuthProvider>
+            </QueryClientProvider>,
+        );
+
+        await waitFor(() => expect(screen.getByTestId('authenticated')).toHaveTextContent('true'));
+        expect(vi.mocked(authApiModule.fetchEffectivePermissions)).toHaveBeenCalledOnce();
+    });
+
     it('does not restore a bearer session after another tab signs out during permission restoration', async () => {
         setupStoredAdminSession();
         let resolvePermissions: ((value: EffectivePermissions) => void) | undefined;

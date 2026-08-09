@@ -1,5 +1,6 @@
 import { type ColumnDef } from '@tanstack/react-table';
 import { CaretDownIcon, CheckIcon, PlusIcon } from '@phosphor-icons/react';
+import { Link } from 'react-router-dom';
 
 import { DisabledTooltip } from '@/auth/DisabledTooltip';
 import { Badge } from '@/components/ui/Badge';
@@ -29,6 +30,7 @@ export interface AddableCandidate {
     overview?: string | null;
     thumbnailUrl?: string | null;
     inLibrary: boolean;
+    existingContentHierarchyItemId?: string;
 }
 
 export interface RowActionContext {
@@ -152,7 +154,17 @@ export function TitleHeading({
     return (
         <h3 className="library-add-page__title">
             {candidate.inLibrary ? (
-                candidate.title
+                candidate.existingContentHierarchyItemId ? (
+                    <Link
+                        to={`/library/${candidate.existingContentHierarchyItemId}`}
+                        className="library-add-page__title-link"
+                        data-action="open-library-item"
+                    >
+                        {candidate.title}
+                    </Link>
+                ) : (
+                    candidate.title
+                )
             ) : (
                 <button
                     type="button"

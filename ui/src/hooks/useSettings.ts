@@ -211,7 +211,7 @@ export function useUpdateExtensionSettingsGroup(extensionId: string, name: strin
         mutationFn: (vars: UpdateSettingsVars) =>
             updateExtensionSettingsGroup(extensionId, name, buildSettingsPatch(vars)),
         onSuccess: () => {
-            void queryClient.invalidateQueries({ queryKey: settingsQueryKeys.extensionGroups(extensionId) });
+            void queryClient.invalidateQueries({ queryKey: settingsQueryKeys.all });
         },
     });
 

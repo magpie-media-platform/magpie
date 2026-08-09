@@ -1,6 +1,6 @@
 @layer components {
     .popover-content {
-        z-index: var(--z-dropdown);
+        z-index: var(--z-popover);
         min-width: 160px;
         background-color: var(--bg-secondary);
         border: 1px solid var(--border-default);

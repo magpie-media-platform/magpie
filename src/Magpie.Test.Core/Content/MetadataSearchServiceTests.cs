@@ -1266,6 +1266,7 @@ public sealed class MetadataSearchServiceTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(result.Matches, Has.Count.EqualTo(6));
+            Assert.That(result.Matches.Select(match => match.ExistingContentHierarchyItemId), Has.All.Null);
             Assert.That(result.PageItemCount, Is.EqualTo(6));
             Assert.That(result.PageInfo.RequestedPage, Is.EqualTo(1));
             Assert.That(result.PageInfo.HasMore, Is.True);
@@ -1276,7 +1277,9 @@ public sealed class MetadataSearchServiceTests
     public async Task SearchCandidatesAsync_ReturnsCandidateAsInLibrary_WhenMatchingItemIsOnSecondRepositoryPage()
     {
         // Arrange
+        var existingContentHierarchyItemId = Guid.Parse("3db97837-8a29-4b92-937b-13f948bfd62d");
         var searcher = new Mock<IContentHierarchyMetadataAdvancedSearcher>();
+
         searcher.SetupGet(provider => provider.ProviderType).Returns("provider-a");
         searcher.SetupGet(provider => provider.SupportedContentTypes).Returns(["type-a"]);
         searcher
@@ -1352,6 +1355,7 @@ public sealed class MetadataSearchServiceTests
                 [
                     new ContentHierarchyItem
                     {
+                        Id = existingContentHierarchyItemId,
                         ContentType = "type-a",
                         Level = "root",
                         Slug = "matching-source",
@@ -1408,6 +1412,7 @@ public sealed class MetadataSearchServiceTests
         {
             Assert.That(result.Matches, Has.Count.EqualTo(1));
             Assert.That(result.Matches[0].InLibrary, Is.True);
+            Assert.That(result.Matches[0].ExistingContentHierarchyItemId, Is.EqualTo(existingContentHierarchyItemId));
             Assert.That(result.ExistsInLibraryCount, Is.EqualTo(1));
             hierarchyItems.Verify(
                 repository => repository.QueryAsync(
@@ -1416,6 +1421,134 @@ public sealed class MetadataSearchServiceTests
                     null,
                     It.IsAny<CancellationToken>()),
                 Times.Once);
+        }
+    }
+
+    [Test]
+    public async Task SearchCandidatesAsync_ReturnsCandidateOutsideLibrary_WhenMatchingItemIsAChild()
+    {
+        // Arrange
+        var searcher = new Mock<IContentHierarchyMetadataAdvancedSearcher>();
+
+        searcher.SetupGet(provider => provider.ProviderType).Returns("provider-a");
+        searcher.SetupGet(provider => provider.SupportedContentTypes).Returns(["type-a"]);
+        searcher
+            .Setup(provider => provider.AdvancedSearchAsync(
+                "type-a",
+                It.IsAny<ContentHierarchyItemCriteria>(),
+                25,
+                string.Empty,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new MetadataSearchPage
+            {
+                Supported = true,
+                Matches =
+                [
+                    new MetadataSearchCandidate
+                    {
+                        ProviderType = "provider-a",
+                        ExternalIdSource = "source-a",
+                        ExternalId = "shared-id",
+                        ContentType = "type-a",
+                        Title = "Unowned title"
+                    }
+                ],
+                PageInfo = new ProviderSearchPageInfo { RequestedPage = 1, HasMore = false }
+            });
+        searcher
+            .Setup(provider => provider.HydrateAsync(
+                It.IsAny<MetadataSearchCandidate>(),
+                It.IsAny<string>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync((MetadataSearchCandidate candidate, string _, CancellationToken _) => candidate);
+
+        var hierarchyItems = new Mock<IContentHierarchyItemRepository>();
+
+        hierarchyItems
+            .Setup(repository => repository.QueryAsync(
+                It.IsAny<ContentHierarchyItemCriteria>(),
+                It.IsAny<PagingParameter>(),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<ContentHierarchyItem>
+            {
+                Items =
+                [
+                    new ContentHierarchyItem
+                    {
+                        Id = Guid.Parse("45b43b4b-5bb3-412e-935d-0766236b597c"),
+                        ParentId = Guid.Parse("e60a1596-1b25-4a3e-beb0-35a666a3261f"),
+                        ContentType = "type-a",
+                        Level = "child",
+                        Slug = "matching-child",
+                        Name = "Matching child",
+                        MetadataContainer = new MetadataContainer
+                        {
+                            Contributions =
+                            {
+                                new MetadataContribution
+                                {
+                                    ProviderType = "provider-a",
+                                    ExternalIds =
+                                    {
+                                        new ExternalId { Source = "source-a", Value = "shared-id" }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                ],
+                PageNumber = 1,
+                PageSize = 1,
+                TotalItems = 1
+            });
+        hierarchyItems
+            .Setup(repository => repository.QueryAsync(
+                It.Is<ContentHierarchyItemCriteria>(criteria =>
+                    criteria.RootLevelOnly == true &&
+                    criteria.Metadata.And.Single().ExternalIds.Some.Single().Single().Source.And.Single().Value ==
+                    "source-a" &&
+                    criteria.Metadata.And.Single().ExternalIds.Some.Single().Single().Value.And.Single().Value ==
+                    "shared-id"),
+                It.IsAny<PagingParameter>(),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<ContentHierarchyItem>
+            {
+                Items = [],
+                PageNumber = 1,
+                PageSize = 1,
+                TotalItems = 0
+            });
+        var registry = new ContentTypeRegistry(
+            [],
+            NullLoggerFactory.Instance.CreateLogger<ContentTypeRegistry>());
+
+        using var memoryCache = new MemoryCache(new MemoryCacheOptions());
+
+        var subject = new MetadataSearchService(
+            [],
+            [searcher.Object],
+            registry,
+            hierarchyItems.Object,
+            TimeProvider.System,
+            NullLoggerFactory.Instance.CreateLogger<MetadataSearchService>(),
+            memoryCache);
+
+        // Act
+        var result = await subject.SearchCandidatesAsync(
+            new ContentFilterCriteria(),
+            "type-a",
+            page: 1,
+            cancellationToken: default).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.Matches, Has.Count.EqualTo(1));
+            Assert.That(result.Matches[0].InLibrary, Is.False);
+            Assert.That(result.Matches[0].ExistingContentHierarchyItemId, Is.Null);
+            Assert.That(result.ExistsInLibraryCount, Is.Zero);
         }
     }
 

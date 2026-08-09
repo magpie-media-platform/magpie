@@ -110,6 +110,75 @@ internal sealed class ContentMetadataRefreshItemJob(
             .FirstOrDefault();
     }
 
+    private static ContentHierarchyItem? FindMatchingChild(
+        ChildHierarchyDefinition definition,
+        IReadOnlyList<ContentHierarchyItem> existingChildren)
+    {
+        if (!string.IsNullOrWhiteSpace(definition.AlignmentKey))
+        {
+            var alignmentMatch = existingChildren.FirstOrDefault(child => string.Equals(
+                child.AlignmentKey,
+                definition.AlignmentKey,
+                StringComparison.Ordinal));
+            if (alignmentMatch is not null)
+            {
+                return alignmentMatch;
+            }
+        }
+
+        foreach (var (source, value) in definition.ExternalIds)
+        {
+            if (string.IsNullOrWhiteSpace(source) || string.IsNullOrWhiteSpace(value))
+            {
+                continue;
+            }
+
+            var externalIdMatch = existingChildren.FirstOrDefault(child =>
+                child.MetadataContainer?.Contributions.Any(contribution => contribution.ExternalIds.Any(
+                    externalId => string.Equals(externalId.Source, source, StringComparison.Ordinal) &&
+                        string.Equals(externalId.Value, value, StringComparison.Ordinal))) == true);
+            if (externalIdMatch is not null)
+            {
+                return externalIdMatch;
+            }
+        }
+
+        return existingChildren.FirstOrDefault(child =>
+            string.Equals(child.Level, definition.Level, StringComparison.Ordinal) &&
+            string.Equals(child.Slug, definition.Slug, StringComparison.Ordinal));
+    }
+
+    private static void InitializeContentPath(
+        ContentHierarchyItem item,
+        IContentTypeRegistry registry,
+        int? year = null)
+    {
+        var level = registry.GetDefinitionFor(item.ContentType)?.LevelDefinitions
+            .FirstOrDefault(definition => definition.Slug == item.Level);
+        var origin = item.Settings.TryGetValue("content.path.origin", out var value) ? value : null;
+        if (level?.Subfolder is null ||
+            !(string.Equals(origin, "Generated", StringComparison.OrdinalIgnoreCase) ||
+                origin is null && item.Path is null))
+        {
+            return;
+        }
+
+        var source = string.IsNullOrWhiteSpace(item.Name) ? item.Slug : item.Name;
+        var characters = source.Trim().Select(character =>
+            character is '\\' or '/' or ':' or '*' or '?' or '"' or '<' or '>' or '|' || char.IsControl(character)
+                ? ' '
+                : character).ToArray();
+        var segment = string.Join(' ', new string(characters)
+            .Split(' ', StringSplitOptions.RemoveEmptyEntries)).TrimEnd('.');
+        if (segment.Length == 0)
+        {
+            segment = item.Slug;
+        }
+
+        item.Path = year is null ? segment : $"{segment} ({year.Value})";
+        item.Settings["content.path.origin"] = "Generated";
+    }
+
     private static async Task<ProviderFetchResult> InvokeProviderAsync(
         IContentHierarchyMetadataProvider provider,
         ContentHierarchyItem item,
@@ -249,6 +318,7 @@ internal sealed class ContentMetadataRefreshItemJob(
         var fetchByProvider = fetchResults.ToDictionary(r => r.Provider);
 
         var replacements = new List<ContributionReplacement>();
+        var childDefinitions = new List<ProviderChildDefinition>();
         var completedProviders = 0;
         foreach (var provider in providers)
         {
@@ -263,6 +333,13 @@ internal sealed class ContentMetadataRefreshItemJob(
                 logger.LogWarning(fetch.Exception, "Metadata provider {ProviderType} failed", provider.ProviderType);
                 completedProviders++;
                 continue;
+            }
+
+            if (fetch.Result?.Children is { Count: > 0 } children)
+            {
+                childDefinitions.AddRange(children.Select(child => new ProviderChildDefinition(
+                    provider.ProviderType,
+                    child)));
             }
 
             var contribution = fetch.Result?.Contribution;
@@ -330,9 +407,12 @@ internal sealed class ContentMetadataRefreshItemJob(
             .Select(c => c.PublishDate?.Year)
             .FirstOrDefault(year => year is not null);
 
+        var childDefinitionsAreComplete = childDefinitions.Count > 0 &&
+            !fetchResults.Any(result => result.Exception is not null);
         var stillPlaceholder = string.IsNullOrWhiteSpace(resolvedTitle) &&
             providers.Length > 0 &&
-            item.PendingMetadataRefresh;
+            item.PendingMetadataRefresh &&
+            !childDefinitionsAreComplete;
         if (stillPlaceholder)
         {
             var anyProviderFailedTransiently = fetchResults.Any(r => r.Exception is not null);
@@ -356,6 +436,7 @@ internal sealed class ContentMetadataRefreshItemJob(
         var addedRelationshipContainerIds = await ApplyRefreshWritesAsync(
             container.Id,
             replacements,
+            childDefinitions,
             item,
             resolvedTitle,
             resolvedYear,
@@ -402,6 +483,7 @@ internal sealed class ContentMetadataRefreshItemJob(
     private async Task<IReadOnlyList<Guid>> ApplyRefreshWritesAsync(
         Guid containerId,
         IReadOnlyList<ContributionReplacement> replacements,
+        IReadOnlyList<ProviderChildDefinition> childDefinitions,
         ContentHierarchyItem item,
         string? resolvedTitle,
         int? resolvedYear,
@@ -474,8 +556,25 @@ internal sealed class ContentMetadataRefreshItemJob(
                     }
 
                     await MarkRefreshedAsync(item, resolvedTitle, resolvedYear, userId, ct).ConfigureAwait(false);
-                    await EnqueueExistingChildRefreshesAsync(
-                        item,
+                    var directChildren = await ListDirectChildrenAsync(item.Id, ct).ConfigureAwait(false);
+                    var childIds = new HashSet<Guid>();
+                    if (childDefinitions.Count > 0)
+                    {
+                        await MaterializeDeclaredChildrenAsync(
+                            item,
+                            childDefinitions,
+                            directChildren,
+                            childIds,
+                            userId,
+                            ct).ConfigureAwait(false);
+                    }
+
+                    childIds.UnionWith(directChildren
+                        .Where(child => child.MetadataContainer?.Contributions.Any(
+                            contribution => contribution.ExternalIds.Count > 0) == true)
+                        .Select(child => child.Id));
+                    await EnqueueChildRefreshesAsync(
+                        childIds,
                         userId,
                         correlationId,
                         ct).ConfigureAwait(false);
@@ -493,6 +592,186 @@ internal sealed class ContentMetadataRefreshItemJob(
             logger.LogError(ex, "The refresh failed to write the metadata for item {ContentHierarchyItemId}", item.Id);
             throw;
         }
+    }
+
+    private async Task MaterializeDeclaredChildrenAsync(
+        ContentHierarchyItem parent,
+        IReadOnlyList<ProviderChildDefinition> providerDefinitions,
+        List<ContentHierarchyItem> existingChildren,
+        ISet<Guid> refreshIds,
+        Guid? userId,
+        CancellationToken cancellationToken)
+    {
+        var childLevels = contentTypeRegistry.GetChildLevels(parent.ContentType, parent.Level)
+            .Select(level => level.Slug)
+            .ToHashSet(StringComparer.Ordinal);
+        foreach (var providerDefinition in providerDefinitions)
+        {
+            var providerType = providerDefinition.ProviderType;
+            var definition = providerDefinition.Definition;
+            cancellationToken.ThrowIfCancellationRequested();
+            if (definition is null ||
+                string.IsNullOrWhiteSpace(definition.Level) ||
+                string.IsNullOrWhiteSpace(definition.Name) ||
+                string.IsNullOrWhiteSpace(definition.Slug))
+            {
+                logger.LogWarning(
+                    "The refresh skipped an invalid child definition from provider {ProviderType}",
+                    providerType);
+                continue;
+            }
+
+            if (!childLevels.Contains(definition.Level))
+            {
+                logger.LogWarning(
+                    "The refresh skipped child level {ChildLevel} from provider {ProviderType} because it is not " +
+                    "a valid child of {ParentLevel} for content type {ContentType}",
+                    definition.Level,
+                    providerType,
+                    parent.Level,
+                    parent.ContentType);
+                continue;
+            }
+
+            var child = FindMatchingChild(definition, existingChildren);
+            if (child is null)
+            {
+                var now = timeProvider.GetUtcNow().UtcDateTime;
+                var metadataContainerId = Guid.NewGuid();
+                child = new ContentHierarchyItem
+                {
+                    Id = Guid.NewGuid(),
+                    MetadataContainerId = metadataContainerId,
+                    MetadataContainer = new MetadataContainer { Id = metadataContainerId, CreatedAt = now },
+                    ParentId = parent.Id,
+                    ContentType = parent.ContentType,
+                    Level = definition.Level,
+                    Slug = definition.Slug,
+                    Name = definition.Name,
+                    Ordinal = definition.Ordinal,
+                    AlignmentKey = definition.AlignmentKey,
+                    PendingMetadataRefresh = true
+                };
+                InitializeContentPath(child, contentTypeRegistry);
+
+                var created = await contentHierarchyItemRepository
+                    .TryCreateAsync(child, userId, cancellationToken)
+                    .ConfigureAwait(false);
+                if (created)
+                {
+                    existingChildren.Add(child);
+                }
+                else
+                {
+                    existingChildren.Clear();
+                    existingChildren.AddRange(await ListDirectChildrenAsync(parent.Id, cancellationToken)
+                        .ConfigureAwait(false));
+                    child = FindMatchingChild(definition, existingChildren) ??
+                        throw new InvalidOperationException(
+                            $"The hierarchy child {definition.Level}/{definition.Slug} could not be resolved.");
+                }
+            }
+
+            await AddInitialChildContributionAsync(
+                child,
+                definition,
+                providerType,
+                userId,
+                cancellationToken).ConfigureAwait(false);
+            refreshIds.Add(child.Id);
+        }
+    }
+
+    private async Task AddInitialChildContributionAsync(
+        ContentHierarchyItem child,
+        ChildHierarchyDefinition definition,
+        string providerType,
+        Guid? userId,
+        CancellationToken cancellationToken)
+    {
+        var externalIds = definition.ExternalIds
+            .Where(entry => !string.IsNullOrWhiteSpace(entry.Key) && !string.IsNullOrWhiteSpace(entry.Value))
+            .ToArray();
+        var existingProviderContribution = child.MetadataContainer?.Contributions.FirstOrDefault(contribution =>
+            string.Equals(contribution.ProviderType, providerType, StringComparison.Ordinal));
+        if (existingProviderContribution is not null && externalIds.All(entry =>
+            existingProviderContribution.ExternalIds.Any(externalId =>
+                string.Equals(externalId.Source, entry.Key, StringComparison.Ordinal) &&
+                string.Equals(externalId.Value, entry.Value, StringComparison.Ordinal))))
+        {
+            return;
+        }
+
+        var contribution = definition.InitialContribution;
+        if (contribution is null && externalIds.Length == 0)
+        {
+            return;
+        }
+
+        contribution ??= new MetadataContribution { ProviderType = providerType };
+        if (string.IsNullOrWhiteSpace(contribution.ProviderType))
+        {
+            contribution.ProviderType = providerType;
+        }
+
+        contribution.MetadataContainerId = child.MetadataContainerId;
+        contribution.Ordinal = 0;
+        contribution.DateLastRefreshed = timeProvider.GetUtcNow().UtcDateTime;
+        foreach (var (source, value) in externalIds)
+        {
+            if (contribution.ExternalIds.Any(externalId =>
+                string.Equals(externalId.Source, source, StringComparison.Ordinal) &&
+                string.Equals(externalId.Value, value, StringComparison.Ordinal)))
+            {
+                continue;
+            }
+
+            contribution.ExternalIds.Add(new ExternalId
+            {
+                Source = source,
+                Value = value,
+                Ordinal = contribution.ExternalIds.Count
+            });
+        }
+
+        var addedContribution = await metadataContainerRepository
+            .AddContributionAsync(child.MetadataContainerId, contribution, userId, cancellationToken)
+            .ConfigureAwait(false);
+        child.MetadataContainer ??= new MetadataContainer { Id = child.MetadataContainerId };
+        child.MetadataContainer.Contributions.Add(addedContribution);
+    }
+
+    private async Task<List<ContentHierarchyItem>> ListDirectChildrenAsync(
+        Guid parentId,
+        CancellationToken cancellationToken)
+    {
+        const int pageSize = 500;
+        var children = new List<ContentHierarchyItem>();
+        var pageNumber = 1;
+        while (true)
+        {
+            var page = await contentHierarchyItemRepository.QueryAsync(
+                new ContentHierarchyItemCriteria
+                {
+                    ParentId = new CriteriaSet<PropertyCriterion<Guid>>
+                    {
+                        And = [new() { Operator = CriteriaValueOperator.Equals, Value = parentId }]
+                    }
+                },
+                new() { PageNumber = pageNumber, PageSize = pageSize },
+                sort: null,
+                cancellationToken).ConfigureAwait(false);
+            var pageItems = page.Items.ToList();
+            children.AddRange(pageItems);
+            if (pageItems.Count < pageSize)
+            {
+                break;
+            }
+
+            pageNumber++;
+        }
+
+        return children;
     }
 
     private async Task<IReadOnlyList<Guid>> UpsertSubjectRelationshipsAsync(
@@ -658,39 +937,12 @@ internal sealed class ContentMetadataRefreshItemJob(
         return null;
     }
 
-    private async Task EnqueueExistingChildRefreshesAsync(
-        ContentHierarchyItem item,
+    private async Task EnqueueChildRefreshesAsync(
+        IReadOnlyCollection<Guid> childIds,
         Guid? userId,
         Guid? correlationId,
         CancellationToken cancellationToken)
     {
-        const int pageSize = 500;
-        var childIds = new List<Guid>();
-        var pageNumber = 1;
-        while (true)
-        {
-            var page = await contentHierarchyItemRepository.QueryAsync(
-                new ContentHierarchyItemCriteria
-                {
-                    ParentId = new CriteriaSet<PropertyCriterion<Guid>>
-                    {
-                        And = [new() { Operator = CriteriaValueOperator.Equals, Value = item.Id }],
-                    },
-                    HasMetadataExternalIds = true,
-                },
-                new() { PageNumber = pageNumber, PageSize = pageSize },
-                sort: null,
-                cancellationToken).ConfigureAwait(false);
-            var pageItems = page.Items.ToList();
-            childIds.AddRange(pageItems.Select(child => child.Id));
-            if (pageItems.Count < pageSize)
-            {
-                break;
-            }
-
-            pageNumber++;
-        }
-
         foreach (var childId in childIds)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -711,7 +963,7 @@ internal sealed class ContentMetadataRefreshItemJob(
 
         if (childIds.Count > 0)
         {
-            logger.LogInformation("The refresh cascaded to {ChildCount} existing children", childIds.Count);
+            logger.LogInformation("The refresh enqueued {ChildCount} direct children", childIds.Count);
         }
     }
 
@@ -820,6 +1072,8 @@ internal sealed class ContentMetadataRefreshItemJob(
         IReadOnlyList<MetadataContribution> ExistingProviderContributions,
         MetadataContribution Contribution,
         IReadOnlyList<SubjectRelationshipDefinition> SubjectRelationships);
+
+    private sealed record ProviderChildDefinition(string ProviderType, ChildHierarchyDefinition Definition);
 
     private sealed record ProviderFetchResult(
         IContentHierarchyMetadataProvider Provider,
