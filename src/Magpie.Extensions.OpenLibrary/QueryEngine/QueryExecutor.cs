@@ -16,6 +16,7 @@ using Magpie.Extensions.OpenLibrary.Mapping;
 using Magpie.Models.Enums;
 using Magpie.Models.Filtering;
 using Magpie.Models.MetadataSearch;
+using Magpie.Sdk.Caching;
 
 using Microsoft.Extensions.Logging;
 
@@ -23,13 +24,33 @@ namespace Magpie.Extensions.OpenLibrary.QueryEngine;
 
 internal sealed class QueryExecutor(
     IOpenLibraryClient client,
-    IQueryCache cache,
+    ICacheFactory cacheFactory,
     ISettingsResolver settingsResolver,
     ILogger<QueryExecutor> logger) : IQueryExecutor
 {
     private const int ScanBatchSize = 100;
 
-    private static readonly JsonSerializerOptions TraceJsonOptions = new()
+    private const string ExecuteSpanName = "openlibrary.query.execute";
+    private const string RequestSpanName = "openlibrary.query.request";
+    private const string FetchSpanName = "openlibrary.query.node.fetch";
+    private const string FilterSpanName = "openlibrary.query.node.filter";
+
+    private const string TerminalSuccess = "success";
+    private const string TerminalEmpty = "empty";
+    private const string TerminalPartial = "partial";
+    private const string TerminalUnavailable = "unavailable";
+
+    private const string RoleSearch = "search";
+    private const string RoleAuthor = "author";
+    private const string RoleResolution = "resolution";
+    private const string RoleEdition = "edition";
+
+    private const string RegionPage = "page";
+    private const string RegionAuthor = "author";
+    private const string RegionResolution = "resolution";
+    private const string RegionEdition = "edition";
+
+    private static readonly JsonSerializerOptions PlanJsonOptions = new()
     {
         Converters = { new JsonStringEnumConverter() }
     };
@@ -65,11 +86,65 @@ internal sealed class QueryExecutor(
         "publisher",
     ];
 
-    private bool CanExecute(PlanNode node, NodeExecution branch)
-    {
-        branch.Reason ??= node.Reason;
-        return node.State == PlanNodeState.Ready;
-    }
+    private readonly ICache _advancedPageCache = cacheFactory.GetOrCreate(
+        "openlibrary-advanced-pages",
+        () => new CachePolicy
+        {
+            Freshness = TimeSpan.FromMinutes(2),
+            Retention = TimeSpan.FromMinutes(2),
+            MaximumEntries = 256,
+            ConcurrencyMode = CacheConcurrencyMode.Pessimistic
+        });
+
+    private readonly ICache _authorCache = cacheFactory.GetOrCreate(
+        "openlibrary-authors",
+        () => new CachePolicy
+        {
+            Freshness = TimeSpan.FromMinutes(30),
+            Retention = TimeSpan.FromMinutes(30),
+            MaximumEntries = 256,
+            ConcurrencyMode = CacheConcurrencyMode.Pessimistic
+        });
+
+    private readonly ICache _editionCache = cacheFactory.GetOrCreate(
+        "openlibrary-editions",
+        () => new CachePolicy
+        {
+            Freshness = TimeSpan.FromMinutes(30),
+            Retention = TimeSpan.FromMinutes(30),
+            MaximumEntries = 256,
+            ConcurrencyMode = CacheConcurrencyMode.Pessimistic
+        });
+
+    private readonly ICache _negativeCache = cacheFactory.GetOrCreate(
+        "openlibrary-negative-identities",
+        () => new CachePolicy
+        {
+            Freshness = TimeSpan.FromMinutes(2),
+            Retention = TimeSpan.FromMinutes(2),
+            MaximumEntries = 128,
+            ConcurrencyMode = CacheConcurrencyMode.Pessimistic
+        });
+
+    private readonly ICache _pageCache = cacheFactory.GetOrCreate(
+        "openlibrary-pages",
+        () => new CachePolicy
+        {
+            Freshness = TimeSpan.FromMinutes(5),
+            Retention = TimeSpan.FromMinutes(5),
+            MaximumEntries = 256,
+            ConcurrencyMode = CacheConcurrencyMode.Pessimistic
+        });
+
+    private readonly ICache _resolutionCache = cacheFactory.GetOrCreate(
+        "openlibrary-resolutions",
+        () => new CachePolicy
+        {
+            Freshness = TimeSpan.FromMinutes(20),
+            Retention = TimeSpan.FromMinutes(20),
+            MaximumEntries = 512,
+            ConcurrencyMode = CacheConcurrencyMode.Pessimistic
+        });
 
     private PlanNode? FindFetch(PlanNode node)
     {
@@ -79,6 +154,15 @@ internal sealed class QueryExecutor(
         }
 
         return node.Children.Select(FindFetch).FirstOrDefault(child => child is not null);
+    }
+
+    private async ValueTask<T> GetOrAddAsync<T>(
+        ICache cache,
+        string key,
+        Func<CancellationToken, ValueTask<T>> factory,
+        CancellationToken cancellationToken)
+    {
+        return await cache.GetOrAddAsync(key, factory, cancellationToken).ConfigureAwait(false);
     }
 
     private IReadOnlyList<FilterGroup> EffectiveFilterGroups(PlanNode node)
@@ -890,16 +974,15 @@ internal sealed class QueryExecutor(
 
     public async Task<QueryResult> ExecuteSearchAsync(QueryPlan plan, CancellationToken cancellationToken)
     {
-        var execution = new QueryExecution();
+        using var activity = Telemetry.Source.StartActivity(ExecuteSpanName);
+        var stopwatch = Stopwatch.StartNew();
+        var execution = new ExecutionState { Query = activity };
+        DescribePlan(activity, plan);
         if (plan.Root.State != PlanNodeState.Ready || plan.Advanced && plan.MaxResults <= 0)
         {
-            execution.AddBranch(plan.Root);
-            execution.Completed = true;
             execution.Exhausted = true;
-            execution.FinalOutcome = "empty";
-            var empty = Empty(plan);
-            TraceExecution(execution);
-            return empty;
+            Complete(activity, plan, execution, stopwatch, surviving: 0, hasMore: false, TerminalEmpty);
+            return Empty(plan);
         }
 
         var desired = plan.Advanced ? plan.MaxResults : QueryLimits.LogicalPageSize;
@@ -912,15 +995,12 @@ internal sealed class QueryExecutor(
             : checked((Math.Max(1, plan.Page) - 1L) * QueryLimits.LogicalPageSize);
         if (requestedOffset > int.MaxValue)
         {
-            var branch = execution.AddBranch(plan.Root);
-            branch.State = PlanNodeState.Unavailable;
-            branch.Reason = "The requested page offset exceeds the Open Library API integer range.";
-            branch.Exhausted = true;
-            execution.Completed = true;
             execution.Exhausted = true;
-            execution.FinalOutcome = "unavailable";
             execution.Warnings.Add("Open Library cannot represent the requested page offset. No search was run.");
-            TraceExecution(execution);
+            activity?.SetStatus(
+                ActivityStatusCode.Error,
+                "The requested page offset exceeds the Open Library API integer range.");
+            Complete(activity, plan, execution, stopwatch, surviving: 0, hasMore: false, TerminalUnavailable);
             return new QueryResult
             {
                 Hits = [],
@@ -966,8 +1046,6 @@ internal sealed class QueryExecutor(
                     break;
                 }
             }
-
-            execution.Completed = true;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -977,7 +1055,7 @@ internal sealed class QueryExecutor(
         {
             logger.LogWarning(ex, "Open Library search execution failed");
             execution.Failed = true;
-            execution.Failure = ex.GetType().Name;
+            activity?.SetStatus(ActivityStatusCode.Error, ex.GetType().Name);
         }
 
         var hasMore = hits.Count > desired ||
@@ -1000,12 +1078,16 @@ internal sealed class QueryExecutor(
         }
 
         warnings.AddRange(execution.Warnings);
-        execution.ReturnedRows = hits.Count;
-        execution.HasMore = hasMore;
-        execution.FinalOutcome = execution.Failed
-            ? "partial"
-            : hits.Count == 0 ? "empty" : "success";
-        TraceExecution(execution);
+        Complete(
+            activity,
+            plan,
+            execution,
+            stopwatch,
+            hits.Count,
+            hasMore,
+            execution.Failed
+                ? TerminalPartial
+                : hits.Count == 0 ? TerminalEmpty : TerminalSuccess);
         return new QueryResult
         {
             Hits = hits,
@@ -1017,10 +1099,16 @@ internal sealed class QueryExecutor(
 
     public async Task<WorkResolution> ResolveWorkAsync(QueryPlan plan, CancellationToken cancellationToken)
     {
+        using var activity = Telemetry.Source.StartActivity(ExecuteSpanName);
+        var stopwatch = Stopwatch.StartNew();
+        var execution = new ExecutionState { Query = activity };
+        DescribePlan(activity, plan);
         if (plan.Root.State != PlanNodeState.Ready ||
             plan.ResolutionSource is null ||
             plan.ResolutionValue is null)
         {
+            execution.Exhausted = true;
+            Complete(activity, plan, execution, stopwatch, surviving: 0, hasMore: false, TerminalEmpty);
             return new WorkResolution
             {
                 Kind = WorkResolutionKind.NotFound,
@@ -1030,34 +1118,23 @@ internal sealed class QueryExecutor(
 
         var fetch = FindFetch(plan.Root)
             ?? throw new InvalidOperationException("Open Library resolution requires a fetch node.");
-        var request = Build(
-            fetch,
-            string.Equals(plan.ResolutionSource, Constants.ProviderType, StringComparison.OrdinalIgnoreCase)
+        execution.FetchLimit = string.Equals(
+            plan.ResolutionSource,
+            Constants.ProviderType,
+            StringComparison.OrdinalIgnoreCase)
                 ? 2
-                : 5,
-            0);
-        var factoryRan = false;
-        var result = await cache.GetResolutionAsync(
-            request.CacheKey,
-            operationToken =>
-            {
-                factoryRan = true;
-                return ResolveUncachedAsync(plan, operationToken);
-            },
-            cancellationToken).ConfigureAwait(false);
-        if (!factoryRan)
-        {
-            var execution = new QueryExecution
-            {
-                Completed = true,
-                Exhausted = true,
-                ReturnedRows = result.Hit is null ? 0 : 1,
-                FinalOutcome = result.Kind.ToString().ToLowerInvariant()
-            };
-            execution.Requests.Add(DescribeRequest(request, "resolution"));
-            TraceExecution(execution);
-        }
-
+                : 5;
+        var request = Build(fetch, execution.FetchLimit, 0);
+        var result = await ResolveCachedAsync(plan, request, execution, cancellationToken).ConfigureAwait(false);
+        var surviving = result.Hit is null ? 0 : 1;
+        Complete(
+            activity,
+            plan,
+            execution,
+            stopwatch,
+            surviving,
+            hasMore: false,
+            surviving == 0 ? TerminalEmpty : TerminalSuccess);
         return result;
     }
 
@@ -1080,24 +1157,51 @@ internal sealed class QueryExecutor(
         }
 
         var context = await settingsResolver.GetRequestContextAsync(cancellationToken).ConfigureAwait(false);
-        var lookup = await cache.GetEditionAsync(
-            request.CacheKey,
-            async operationToken =>
+        using var activity = Telemetry.Source.StartActivity(RequestSpanName);
+        DescribeRequest(activity, request, RoleEdition);
+        var cacheHit = true;
+        try
+        {
+            var negativeKey = string.Concat("edition|", request.CacheKey);
+            var lookup = _negativeCache.TryGet<bool>(negativeKey, out _)
+                ? new EditionLookup { Found = false }
+                : await GetOrAddAsync(
+                    _editionCache,
+                    request.CacheKey,
+                    async operationToken =>
+                    {
+                        cacheHit = false;
+                        var edition = await client.GetJsonAsync<EditionDto>(
+                            request,
+                            context,
+                            operationToken).ConfigureAwait(false);
+                        return new EditionLookup { Found = edition is not null, Edition = edition };
+                    },
+                    cancellationToken).ConfigureAwait(false);
+            if (!lookup.Found)
             {
-                var edition = await client.GetJsonAsync<EditionDto>(
-                    request,
-                    context,
-                    operationToken).ConfigureAwait(false);
-                return new EditionLookup { Found = edition is not null, Edition = edition };
-            },
-            cancellationToken).ConfigureAwait(false);
-        return lookup.Edition;
+                _editionCache.Remove(request.CacheKey);
+                _negativeCache.Set(negativeKey, true);
+            }
+
+            activity?.SetTag("magpie.request.rows", lookup.Found ? 1 : 0);
+            return lookup.Edition;
+        }
+        catch (Exception ex)
+        {
+            activity?.SetStatus(ActivityStatusCode.Error, ex.GetType().Name);
+            throw;
+        }
+        finally
+        {
+            CompleteRequest(activity, RoleEdition, RegionEdition, cacheHit);
+        }
     }
 
     private async IAsyncEnumerable<WorkHit> ExecuteNodeAsync(
         PlanNode node,
         RequestContext context,
-        QueryExecution execution,
+        ExecutionState execution,
         long? demand,
         long? pageSizeHint,
         [EnumeratorCancellation] CancellationToken cancellationToken)
@@ -1123,17 +1227,19 @@ internal sealed class QueryExecutor(
     private async IAsyncEnumerable<WorkHit> ExecuteFetchAsync(
         PlanNode node,
         RequestContext context,
-        QueryExecution execution,
+        ExecutionState execution,
         long? demand,
         long? pageSizeHint,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
-        var branch = execution.AddBranch(node);
-        if (!CanExecute(node, branch))
+        if (node.State != PlanNodeState.Ready)
         {
+            SkipNode(execution, node);
             yield break;
         }
 
+        using var activity = Telemetry.Source.StartActivity(FetchSpanName);
+        activity?.SetTag("magpie.query.node.id", execution.NextNodeId());
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var survivorScan = node.PagingMode == FetchPagingMode.SurvivorScan;
         var fetchLimit = survivorScan
@@ -1144,33 +1250,127 @@ internal sealed class QueryExecutor(
         var offset = survivorScan ? 0 : execution.FetchOffset;
         var singleFetch = !survivorScan && execution.SingleFetch;
         var emitted = 0L;
-        while (true)
+        var rowsIn = 0L;
+        try
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            var request = Build(node, fetchLimit, offset);
-            var page = await LoadSourcePageAsync(
-                request,
+            while (true)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var request = Build(node, fetchLimit, offset);
+                var page = await LoadSourcePageAsync(
+                    request,
+                    context,
+                    execution,
+                    !survivorScan && execution.ExactClass,
+                    cancellationToken)
+                    .ConfigureAwait(false);
+                var requestLimit = RequestLimit(request);
+                rowsIn += page.SourceRowCount;
+                execution.RowsFetched += page.SourceRowCount;
+                var nextOffset = checked((long)offset + page.SourceRowCount);
+                var exhausted = page.SourceRowCount == 0 ||
+                    page.SourceRowCount < requestLimit ||
+                    page.NumFoundExact && nextOffset >= page.NumFound;
+                execution.UpstreamHasMore = !exhausted;
+                execution.Exhausted = exhausted;
+                foreach (var hit in page.Hits)
+                {
+                    if (!seen.Add(hit.WorkOlid))
+                    {
+                        continue;
+                    }
+
+                    emitted++;
+                    yield return hit;
+                    if (demand is { } maximum && emitted >= maximum)
+                    {
+                        yield break;
+                    }
+                }
+
+                if (exhausted || singleFetch)
+                {
+                    yield break;
+                }
+
+                if (nextOffset > int.MaxValue)
+                {
+                    execution.Failed = true;
+                    execution.Warnings.Add(
+                        "Open Library exhausted its source offset range before completing the search.");
+                    activity?.SetStatus(
+                        ActivityStatusCode.Error,
+                        "The next Open Library source offset exceeds the API integer range.");
+                    yield break;
+                }
+
+                offset = (int)nextOffset;
+            }
+        }
+        finally
+        {
+            activity?.SetTag("magpie.query.node.rows_in", rowsIn);
+            activity?.SetTag("magpie.query.node.rows_out", emitted);
+        }
+    }
+
+    private async IAsyncEnumerable<WorkHit> ExecuteFilterAsync(
+        PlanNode node,
+        RequestContext context,
+        ExecutionState execution,
+        long? demand,
+        long? pageSizeHint,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        if (node.State != PlanNodeState.Ready || node.Children.Count != 1)
+        {
+            SkipNode(execution, node);
+            yield break;
+        }
+
+        using var activity = Telemetry.Source.StartActivity(FilterSpanName);
+        activity?.SetTag("magpie.query.node.id", execution.NextNodeId());
+        var groups = EffectiveFilterGroups(node);
+        var rejections = new Dictionary<string, int>(StringComparer.Ordinal);
+        var emitted = 0L;
+        var rowsIn = 0L;
+        try
+        {
+            await foreach (var hit in ExecuteNodeAsync(
+                node.Children[0],
                 context,
                 execution,
-                !survivorScan && execution.ExactClass,
-                cancellationToken)
-                .ConfigureAwait(false);
-            var requestLimit = RequestLimit(request);
-            branch.RowsIn += page.SourceRowCount;
-            var nextOffset = checked((long)offset + page.SourceRowCount);
-            branch.Exhausted = page.SourceRowCount == 0 ||
-                page.SourceRowCount < requestLimit ||
-                page.NumFoundExact && nextOffset >= page.NumFound;
-            execution.UpstreamHasMore = !branch.Exhausted;
-            execution.Exhausted = branch.Exhausted;
-            foreach (var hit in page.Hits)
+                null,
+                pageSizeHint,
+                cancellationToken).ConfigureAwait(false))
             {
-                if (!seen.Add(hit.WorkOlid))
+                rowsIn++;
+                var violated = false;
+                for (var index = 0; index < groups.Count; index++)
+                {
+                    var outcome = Evaluate(hit, groups[index]);
+                    if (outcome == FilterOutcome.Violated)
+                    {
+                        Reject(rejections, string.Concat("group-", index.ToString(CultureInfo.InvariantCulture)));
+                        violated = true;
+                        break;
+                    }
+
+                    execution.HasUnverifiableCriteria |= outcome == FilterOutcome.Unverifiable;
+                }
+
+                if (violated ||
+                    !await SatisfiesResidualsAsync(
+                        hit,
+                        node.Residuals,
+                        context,
+                        execution,
+                        rejections,
+                        cancellationToken).ConfigureAwait(false))
                 {
                     continue;
                 }
 
-                branch.RowsOut++;
                 emitted++;
                 yield return hit;
                 if (demand is { } maximum && emitted >= maximum)
@@ -1178,100 +1378,99 @@ internal sealed class QueryExecutor(
                     yield break;
                 }
             }
-
-            if (branch.Exhausted || singleFetch)
-            {
-                yield break;
-            }
-
-            if (nextOffset > int.MaxValue)
-            {
-                branch.State = PlanNodeState.Unavailable;
-                branch.Reason = "The next Open Library source offset exceeds the API integer range.";
-                execution.Failed = true;
-                execution.Failure = "OffsetOutOfRange";
-                execution.Warnings.Add("Open Library exhausted its source offset range before completing the search.");
-                yield break;
-            }
-
-            offset = (int)nextOffset;
+        }
+        finally
+        {
+            activity?.SetTag("magpie.query.node.rows_in", rowsIn);
+            activity?.SetTag("magpie.query.node.rows_out", emitted);
+            DescribeRejections(activity, rejections);
         }
     }
 
-    private async IAsyncEnumerable<WorkHit> ExecuteFilterAsync(
-        PlanNode node,
-        RequestContext context,
-        QueryExecution execution,
-        long? demand,
-        long? pageSizeHint,
-        [EnumeratorCancellation] CancellationToken cancellationToken)
+    private void Reject(Dictionary<string, int> rejections, string criterion)
     {
-        var branch = execution.AddBranch(node);
-        if (!CanExecute(node, branch) || node.Children.Count != 1)
-        {
-            yield break;
-        }
-
-        var groups = EffectiveFilterGroups(node);
-        var emitted = 0L;
-        await foreach (var hit in ExecuteNodeAsync(
-            node.Children[0],
-            context,
-            execution,
-            null,
-            pageSizeHint,
-            cancellationToken).ConfigureAwait(false))
-        {
-            branch.RowsIn++;
-            var violated = false;
-            for (var index = 0; index < groups.Count; index++)
-            {
-                var outcome = Evaluate(hit, groups[index]);
-                if (outcome == FilterOutcome.Violated)
-                {
-                    execution.Reject(string.Concat("group-", index));
-                    violated = true;
-                    break;
-                }
-
-                execution.HasUnverifiableCriteria |= outcome == FilterOutcome.Unverifiable;
-            }
-
-            if (violated ||
-                !await SatisfiesResidualsAsync(
-                    hit,
-                    node.Residuals,
-                    context,
-                    execution,
-                    cancellationToken).ConfigureAwait(false))
-            {
-                continue;
-            }
-
-            branch.RowsOut++;
-            emitted++;
-            yield return hit;
-            if (demand is { } maximum && emitted >= maximum)
-            {
-                yield break;
-            }
-        }
-
-        branch.Exhausted = execution.Exhausted;
+        rejections.TryGetValue(criterion, out var count);
+        rejections[criterion] = count + 1;
     }
 
-    private async Task<WorkResolution> ResolveUncachedAsync(QueryPlan plan, CancellationToken cancellationToken)
+    private void SkipNode(ExecutionState execution, PlanNode node)
+    {
+        execution.Query?.AddEvent(new ActivityEvent(
+            "node.skipped",
+            tags: new ActivityTagsCollection
+            {
+                { "magpie.query.node.id", execution.NextNodeId() },
+                { "magpie.query.node.kind", node.Kind.ToString().ToLowerInvariant() },
+                { "magpie.query.node.state", node.State.ToString().ToLowerInvariant() },
+                { "magpie.query.node.reason", node.Reason }
+            }));
+    }
+
+    private void DescribeRejections(Activity? activity, Dictionary<string, int> rejections)
+    {
+        if (activity is null || rejections.Count == 0)
+        {
+            return;
+        }
+
+        var tags = new ActivityTagsCollection();
+        foreach (var rejection in rejections)
+        {
+            tags.Add(rejection.Key, rejection.Value);
+        }
+
+        activity.AddEvent(new ActivityEvent("rejections", tags: tags));
+    }
+
+    private async Task<WorkResolution> ResolveCachedAsync(
+        QueryPlan plan,
+        ApiRequest request,
+        ExecutionState execution,
+        CancellationToken cancellationToken)
+    {
+        using var activity = Telemetry.Source.StartActivity(RequestSpanName);
+        DescribeRequest(activity, request, RoleResolution);
+        var cacheHit = true;
+        try
+        {
+            var negativeKey = string.Concat("work|", request.CacheKey);
+            var result = _negativeCache.TryGet<bool>(negativeKey, out _)
+                ? new WorkResolution { Kind = WorkResolutionKind.NotFound }
+                : await GetOrAddAsync(
+                    _resolutionCache,
+                    request.CacheKey,
+                    operationToken =>
+                    {
+                        cacheHit = false;
+                        return new ValueTask<WorkResolution>(ResolveUncachedAsync(plan, execution, operationToken));
+                    },
+                    cancellationToken).ConfigureAwait(false);
+            if (result.Kind == WorkResolutionKind.NotFound)
+            {
+                _resolutionCache.Remove(request.CacheKey);
+                _negativeCache.Set(negativeKey, true);
+            }
+
+            activity?.SetTag("magpie.request.rows", result.Hit is null ? 0 : 1);
+            return result;
+        }
+        catch (Exception ex)
+        {
+            activity?.SetStatus(ActivityStatusCode.Error, ex.GetType().Name);
+            throw;
+        }
+        finally
+        {
+            CompleteRequest(activity, RoleResolution, RegionResolution, cacheHit);
+        }
+    }
+
+    private async Task<WorkResolution> ResolveUncachedAsync(
+        QueryPlan plan,
+        ExecutionState execution,
+        CancellationToken cancellationToken)
     {
         var context = await settingsResolver.GetRequestContextAsync(cancellationToken).ConfigureAwait(false);
-        var execution = new QueryExecution
-        {
-            FetchLimit = string.Equals(
-                plan.ResolutionSource,
-                Constants.ProviderType,
-                StringComparison.OrdinalIgnoreCase)
-                    ? 2
-                    : 5
-        };
         var hits = new List<WorkHit>();
         await foreach (var hit in ExecuteNodeAsync(
             plan.Root,
@@ -1297,12 +1496,8 @@ internal sealed class QueryExecutor(
             }
         }
 
-        execution.Completed = true;
-        execution.ReturnedRows = hits.Count;
         if (hits.Count == 0)
         {
-            execution.FinalOutcome = "not_found";
-            TraceExecution(execution);
             return new WorkResolution { Kind = WorkResolutionKind.NotFound };
         }
 
@@ -1310,8 +1505,6 @@ internal sealed class QueryExecutor(
             .Select(group => group.First())
             .ToArray();
         var ambiguous = distinct.Length > 1;
-        execution.FinalOutcome = ambiguous ? "ambiguous" : "resolved";
-        TraceExecution(execution);
         return new WorkResolution
         {
             Kind = ambiguous ? WorkResolutionKind.Ambiguous : WorkResolutionKind.Resolved,
@@ -1328,83 +1521,103 @@ internal sealed class QueryExecutor(
     private async Task<AuthorDto?> GetAuthorAsync(
         string authorOlid,
         RequestContext context,
-        QueryExecution? execution,
+        ExecutionState? execution,
         CancellationToken cancellationToken)
     {
         var request = BuildAuthor(authorOlid);
-        var logicalRequest = DescribeRequest(request, "author");
-        execution?.Requests.Add(logicalRequest);
-        var lookup = await cache.GetAuthorAsync(
-            request.CacheKey,
-            async operationToken =>
+        using var activity = Telemetry.Source.StartActivity(RequestSpanName);
+        DescribeRequest(activity, request, RoleAuthor);
+        if (execution is not null)
+        {
+            execution.RequestCount++;
+        }
+
+        var cacheHit = true;
+        try
+        {
+            var negativeKey = string.Concat("author|", request.CacheKey);
+            var lookup = _negativeCache.TryGet<bool>(negativeKey, out _)
+                ? new AuthorLookup { Found = false }
+                : await GetOrAddAsync(
+                    _authorCache,
+                    request.CacheKey,
+                    async operationToken =>
+                    {
+                        cacheHit = false;
+                        var author = await client.GetJsonAsync<AuthorDto>(
+                            request,
+                            context,
+                            operationToken).ConfigureAwait(false);
+                        return new AuthorLookup { Found = author is not null, Author = author };
+                    },
+                    cancellationToken).ConfigureAwait(false);
+            if (!lookup.Found)
             {
-                var stopwatch = Stopwatch.StartNew();
-                try
-                {
-                    var author = await client.GetJsonAsync<AuthorDto>(
-                        request,
-                        context,
-                        operationToken).ConfigureAwait(false);
-                    logicalRequest.Status = author is null ? "not_found" : "success";
-                    logicalRequest.RowsOut = author is null ? 0 : 1;
-                    logicalRequest.ElapsedMilliseconds = stopwatch.ElapsedMilliseconds;
-                    return new AuthorLookup { Found = author is not null, Author = author };
-                }
-                catch (Exception ex)
-                {
-                    logicalRequest.Status = ex.GetType().Name;
-                    logicalRequest.ElapsedMilliseconds = stopwatch.ElapsedMilliseconds;
-                    throw;
-                }
-            },
-            cancellationToken).ConfigureAwait(false);
-        return lookup.Author;
+                _authorCache.Remove(request.CacheKey);
+                _negativeCache.Set(negativeKey, true);
+            }
+
+            activity?.SetTag("magpie.request.rows", lookup.Found ? 1 : 0);
+            return lookup.Author;
+        }
+        catch (Exception ex)
+        {
+            activity?.SetStatus(ActivityStatusCode.Error, ex.GetType().Name);
+            throw;
+        }
+        finally
+        {
+            CompleteRequest(activity, RoleAuthor, RegionAuthor, cacheHit);
+        }
     }
 
-    private Task<SourcePage> LoadSourcePageAsync(
+    private async Task<SourcePage> LoadSourcePageAsync(
         ApiRequest request,
         RequestContext context,
-        QueryExecution execution,
+        ExecutionState execution,
         bool exactClass,
         CancellationToken cancellationToken)
     {
-        var logicalRequest = DescribeRequest(request, "search");
-        execution.Requests.Add(logicalRequest);
-        return cache.GetSourcePageAsync(
-            request.CacheKey,
-            exactClass,
-            async operationToken =>
-            {
-                var stopwatch = Stopwatch.StartNew();
-                try
+        using var activity = Telemetry.Source.StartActivity(RequestSpanName);
+        DescribeRequest(activity, request, RoleSearch);
+        execution.RequestCount++;
+        var cacheHit = true;
+        try
+        {
+            var page = await GetOrAddAsync(
+                exactClass ? _pageCache : _advancedPageCache,
+                request.CacheKey,
+                async operationToken =>
                 {
+                    cacheHit = false;
                     var response = await client.GetJsonAsync<SearchResponseDto>(
                         request,
                         context,
                         operationToken).ConfigureAwait(false)
                         ?? throw new InvalidOperationException("Open Library returned no search response.");
-                    var page = response.ToSourcePage();
-                    logicalRequest.Status = "success";
-                    logicalRequest.RowsIn = page.SourceRowCount;
-                    logicalRequest.RowsOut = page.Hits.Count;
-                    logicalRequest.ElapsedMilliseconds = stopwatch.ElapsedMilliseconds;
-                    return page;
-                }
-                catch (Exception ex)
-                {
-                    logicalRequest.Status = ex.GetType().Name;
-                    logicalRequest.ElapsedMilliseconds = stopwatch.ElapsedMilliseconds;
-                    throw;
-                }
-            },
-            cancellationToken);
+                    return response.ToSourcePage();
+                },
+                cancellationToken).ConfigureAwait(false);
+            activity?.SetTag("magpie.request.rows", page.SourceRowCount);
+            return page;
+        }
+        catch (Exception ex)
+        {
+            activity?.SetStatus(ActivityStatusCode.Error, ex.GetType().Name);
+            throw;
+        }
+        finally
+        {
+            CompleteRequest(activity, RoleSearch, RegionPage, cacheHit);
+        }
     }
 
     private async Task<bool> SatisfiesResidualsAsync(
         WorkHit hit,
         IReadOnlyList<AuthorDateResidual> residuals,
         RequestContext context,
-        QueryExecution execution,
+        ExecutionState execution,
+        Dictionary<string, int> rejections,
         CancellationToken cancellationToken)
     {
         if (residuals.Count == 0)
@@ -1461,7 +1674,7 @@ internal sealed class QueryExecutor(
             {
                 if (residual.Negate)
                 {
-                    execution.Reject(string.Concat("author-", residual.Field));
+                    Reject(rejections, string.Concat("author-", residual.Field.ToString()));
                     return false;
                 }
 
@@ -1476,7 +1689,7 @@ internal sealed class QueryExecutor(
 
             if (!residual.Negate)
             {
-                execution.Reject(string.Concat("author-", residual.Field));
+                Reject(rejections, string.Concat("author-", residual.Field.ToString()));
                 return false;
             }
         }
@@ -1484,62 +1697,144 @@ internal sealed class QueryExecutor(
         return true;
     }
 
-    private ExecutedRequest DescribeRequest(ApiRequest request, string role)
+    private void DescribeRequest(Activity? activity, ApiRequest request, string role)
     {
-        var offset = int.TryParse(Parameter(request, "offset"), out var parsedOffset) ? parsedOffset : 0;
-        var limit = int.TryParse(Parameter(request, "limit"), out var parsedLimit) ? parsedLimit : 0;
-        return new ExecutedRequest
+        activity?.SetTag("magpie.request.role", role);
+        activity?.SetTag("magpie.request.target", string.Concat(OpenLibraryClient.DefaultBaseUrl, request.CacheKey));
+    }
+
+    private void CompleteRequest(Activity? activity, string role, string region, bool cacheHit)
+    {
+        activity?.SetTag("magpie.cache.hit", cacheHit);
+        Telemetry.Requests.Add(1, new TagList
         {
-            Role = role,
-            Endpoint = request.Path,
-            Status = "cache_hit",
-            Query = Parameter(request, "q"),
-            Fields = Parameter(request, "fields"),
-            Offset = offset,
-            Limit = limit,
-            Page = limit > 0 ? offset / limit + 1 : 1
-        };
+            { "provider", Constants.ProviderType },
+            { "request_role", role },
+            { "cache_hit", cacheHit }
+        });
+        Telemetry.Cache.Add(1, new TagList
+        {
+            { "provider", Constants.ProviderType },
+            { "cache_region", region },
+            { "outcome", cacheHit ? "hit" : "miss" }
+        });
     }
 
-    private void TraceExecution(QueryExecution execution)
+    private void DescribePlan(Activity? activity, QueryPlan plan)
     {
-        execution.TotalRequestCount = execution.Requests.Count;
-        logger.LogTrace(
-            "Open Library query execution {Provider} query {QueryId} outcome {OutcomeJson}",
-            Constants.ProviderType,
-            Activity.Current?.TraceId.ToString() ?? "none",
-            JsonSerializer.Serialize(execution, TraceJsonOptions));
+        if (activity is null)
+        {
+            return;
+        }
+
+        activity.SetTag("magpie.query.fingerprint", Fingerprint(plan));
+        if (!activity.IsAllDataRequested)
+        {
+            return;
+        }
+
+        activity.AddEvent(new ActivityEvent(
+            "plan",
+            tags: new ActivityTagsCollection
+            {
+                { "magpie.query.plan_json", JsonSerializer.Serialize(plan, PlanJsonOptions) },
+                { "magpie.query.anchor_kind", plan.AnchorKind },
+                { "magpie.query.known_empty", plan.Root.State == PlanNodeState.Empty },
+                { "magpie.query.warnings", plan.Warnings.ToArray() }
+            }));
     }
 
-    private sealed class QueryExecution
+    private void Complete(
+        Activity? activity,
+        QueryPlan plan,
+        ExecutionState execution,
+        Stopwatch stopwatch,
+        int surviving,
+        bool hasMore,
+        string terminalReason)
     {
-        public List<NodeExecution> Branches { get; } = [];
+        activity?.SetTag("magpie.query.rows_fetched", execution.RowsFetched);
+        activity?.SetTag("magpie.query.rows_surviving", surviving);
+        activity?.SetTag("magpie.query.request_count", execution.RequestCount);
+        activity?.SetTag("magpie.query.has_more", hasMore);
+        activity?.SetTag("magpie.query.terminal_reason", terminalReason);
+        Telemetry.QueryDuration.Record(stopwatch.Elapsed.TotalMilliseconds, new TagList
+        {
+            { "provider", Constants.ProviderType },
+            { "content_type", plan.Hierarchy.ContentTypeSlug },
+            { "terminal_reason", terminalReason }
+        });
+        Telemetry.Results.Record(surviving, new TagList
+        {
+            { "provider", Constants.ProviderType },
+            { "content_type", plan.Hierarchy.ContentTypeSlug }
+        });
+    }
 
-        public List<ExecutedRequest> Requests { get; } = [];
+    private string Fingerprint(QueryPlan plan)
+    {
+        var builder = new StringBuilder();
+        builder.Append(plan.AnchorKind)
+            .Append('|')
+            .Append(plan.Advanced ? '1' : '0')
+            .Append('|')
+            .Append(plan.Page.ToString(CultureInfo.InvariantCulture))
+            .Append('|')
+            .Append(plan.MaxResults.ToString(CultureInfo.InvariantCulture));
+        AppendNode(plan.Root, builder);
+        var hash = 14695981039346656037UL;
+        foreach (var character in builder.ToString())
+        {
+            hash = (hash ^ character) * 1099511628211UL;
+        }
+
+        return hash.ToString("x16", CultureInfo.InvariantCulture);
+    }
+
+    private void AppendNode(PlanNode node, StringBuilder builder)
+    {
+        builder.Append('|').Append(node.Kind.ToString()).Append(':').Append(node.State.ToString());
+        var terms = node.SourceTerms.Concat(node.SourceGroups
+            .SelectMany(group => group.Alternatives)
+            .SelectMany(alternative => alternative.Terms));
+        foreach (var term in terms)
+        {
+            builder.Append(';')
+                .Append(term.Field)
+                .Append(term.Negate ? "!=" : "=")
+                .Append(string.Join(",", term.Values));
+        }
+
+        foreach (var filter in node.Filters)
+        {
+            builder.Append('#').Append(filter.Field.ToString()).Append(':').Append(filter.Operator.ToString());
+        }
+
+        foreach (var child in node.Children)
+        {
+            AppendNode(child, builder);
+        }
+    }
+
+    private sealed class ExecutionState
+    {
+        private int _nodes;
 
         public List<string> Warnings { get; } = [];
 
-        public Dictionary<string, int> PredicateRejections { get; } = new(StringComparer.Ordinal);
-
-        public bool Completed { get; set; }
+        public Activity? Query { get; init; }
 
         public bool Failed { get; set; }
 
-        public string? Failure { get; set; }
-
         public bool Exhausted { get; set; }
-
-        public bool HasMore { get; set; }
 
         public bool HasUnverifiableCriteria { get; set; }
 
         public bool HydrationFailed { get; set; }
 
-        public int ReturnedRows { get; set; }
+        public int RequestCount { get; set; }
 
-        public int TotalRequestCount { get; set; }
-
-        public string? FinalOutcome { get; set; }
+        public long RowsFetched { get; set; }
 
         public int FetchLimit { get; set; } = ScanBatchSize;
 
@@ -1551,62 +1846,9 @@ internal sealed class QueryExecutor(
 
         public bool UpstreamHasMore { get; set; }
 
-        public NodeExecution AddBranch(PlanNode node)
+        public int NextNodeId()
         {
-            var branch = new NodeExecution
-            {
-                Kind = node.Kind,
-                State = node.State,
-                Reason = node.Reason
-            };
-            Branches.Add(branch);
-            return branch;
+            return _nodes++;
         }
-
-        public void Reject(string predicate)
-        {
-            PredicateRejections.TryGetValue(predicate, out var count);
-            PredicateRejections[predicate] = count + 1;
-        }
-    }
-
-    private sealed class NodeExecution
-    {
-        public required PlanNodeKind Kind { get; init; }
-
-        public required PlanNodeState State { get; set; }
-
-        public string? Reason { get; set; }
-
-        public int RowsIn { get; set; }
-
-        public int RowsOut { get; set; }
-
-        public bool Exhausted { get; set; }
-    }
-
-    private sealed class ExecutedRequest
-    {
-        public required string Role { get; init; }
-
-        public required string Endpoint { get; init; }
-
-        public required string Status { get; set; }
-
-        public string? Query { get; init; }
-
-        public string? Fields { get; init; }
-
-        public int Offset { get; init; }
-
-        public int Limit { get; init; }
-
-        public int Page { get; init; }
-
-        public int RowsIn { get; set; }
-
-        public int RowsOut { get; set; }
-
-        public long ElapsedMilliseconds { get; set; }
     }
 }

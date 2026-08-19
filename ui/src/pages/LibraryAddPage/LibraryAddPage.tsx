@@ -477,8 +477,9 @@ export function LibraryAddPage() {
             setPage(1);
             setTab('live');
             setFilterQuery(preload.filterQuery);
+            void runCandidateSearch(preload.filterQuery, 1);
         }
-    }, [preload, savedContentFilters, savedFiltersLoading, runCandidateSearchForSavedFilter]);
+    }, [preload, savedContentFilters, savedFiltersLoading, runCandidateSearch, runCandidateSearchForSavedFilter]);
 
     useEffect(() => {
         if (preloadAppliedRef.current) {
@@ -736,7 +737,9 @@ export function LibraryAddPage() {
                     <FilterBar
                         value={filterQuery}
                         onChange={handleFilterQueryChange}
+                        onSubmit={handleApplyFilter}
                         context="content"
+                        loading={providerCandidateSearch.isPending}
                         showSave={hasFilterQuery}
                         onSave={handleOpenSaveFilter}
                         isSaving={createFilterMutation.isPending}

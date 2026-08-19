@@ -8,8 +8,6 @@ using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Models.Filtering;
 
-using Microsoft.Extensions.Logging.Abstractions;
-
 using NUnit.Framework;
 
 namespace Magpie.Test.Extensions.MusicBrainz;
@@ -21,7 +19,7 @@ public class MusicBrainzSearchPlannerTests
     public void Plan_UnfieldedLucene_WhenSearchIsOrdinary()
     {
         // Arrange
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -63,7 +61,7 @@ public class MusicBrainzSearchPlannerTests
                 ]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -107,7 +105,7 @@ public class MusicBrainzSearchPlannerTests
                 ]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -170,7 +168,7 @@ public class MusicBrainzSearchPlannerTests
                 ]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -206,7 +204,7 @@ public class MusicBrainzSearchPlannerTests
                 And = [new PropertyCriterion<string> { Values = ["live"] }]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -268,7 +266,7 @@ public class MusicBrainzSearchPlannerTests
                 ]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -323,7 +321,7 @@ public class MusicBrainzSearchPlannerTests
                 ]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var isrcPlan = planner.Plan(new QueryRequest
@@ -412,7 +410,7 @@ public class MusicBrainzSearchPlannerTests
                 ]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -454,7 +452,7 @@ public class MusicBrainzSearchPlannerTests
                 ]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -521,7 +519,7 @@ public class MusicBrainzSearchPlannerTests
                 ]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -571,7 +569,7 @@ public class MusicBrainzSearchPlannerTests
                 ]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -617,7 +615,7 @@ public class MusicBrainzSearchPlannerTests
                 ]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -666,7 +664,7 @@ public class MusicBrainzSearchPlannerTests
                 ]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -749,7 +747,7 @@ public class MusicBrainzSearchPlannerTests
                 ]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -819,7 +817,7 @@ public class MusicBrainzSearchPlannerTests
                 ]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -941,7 +939,7 @@ public class MusicBrainzSearchPlannerTests
                 ]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -979,7 +977,7 @@ public class MusicBrainzSearchPlannerTests
                 And = [new PropertyCriterion<TemporalValue> { Values = [year!], Negate = true }]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -1050,7 +1048,7 @@ public class MusicBrainzSearchPlannerTests
                 ]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -1101,7 +1099,7 @@ public class MusicBrainzSearchPlannerTests
                 And = [new PropertyCriterion<string> { Values = ["Original"] }]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -1191,7 +1189,7 @@ public class MusicBrainzSearchPlannerTests
                 ]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -1237,7 +1235,7 @@ public class MusicBrainzSearchPlannerTests
                 }]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -1276,7 +1274,7 @@ public class MusicBrainzSearchPlannerTests
                 }]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -1319,7 +1317,7 @@ public class MusicBrainzSearchPlannerTests
                 }]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -1362,7 +1360,7 @@ public class MusicBrainzSearchPlannerTests
                 }]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -1414,7 +1412,7 @@ public class MusicBrainzSearchPlannerTests
                 ]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -1493,7 +1491,7 @@ public class MusicBrainzSearchPlannerTests
                 ]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -1543,7 +1541,7 @@ public class MusicBrainzSearchPlannerTests
                 ]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -1589,7 +1587,7 @@ public class MusicBrainzSearchPlannerTests
                 }]]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -1639,7 +1637,7 @@ public class MusicBrainzSearchPlannerTests
                 ]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -1700,7 +1698,7 @@ public class MusicBrainzSearchPlannerTests
                 ]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -1745,7 +1743,7 @@ public class MusicBrainzSearchPlannerTests
                 And = [new PropertyCriterion<string> { Operator = valueOperator, Values = [value] }]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -1787,7 +1785,7 @@ public class MusicBrainzSearchPlannerTests
                 And = [new PropertyCriterion<string> { Operator = CriteriaValueOperator.IsNull }]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -1824,7 +1822,7 @@ public class MusicBrainzSearchPlannerTests
                 And = [new PropertyCriterion<string> { Values = ["eng"] }]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -1864,7 +1862,7 @@ public class MusicBrainzSearchPlannerTests
                 And = [new PropertyCriterion<string> { Operator = CriteriaValueOperator.NotEquals, Values = ["x"] }]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -1914,7 +1912,7 @@ public class MusicBrainzSearchPlannerTests
                 ]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -1986,7 +1984,7 @@ public class MusicBrainzSearchPlannerTests
         var target = criterionName is "publish-date" or "duration"
             ? QueryTarget.Artist
             : QueryTarget.Album;
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -2033,7 +2031,7 @@ public class MusicBrainzSearchPlannerTests
                 ]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -2082,7 +2080,7 @@ public class MusicBrainzSearchPlannerTests
                 ]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -2133,7 +2131,7 @@ public class MusicBrainzSearchPlannerTests
                 ]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -2182,7 +2180,7 @@ public class MusicBrainzSearchPlannerTests
                 ]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -2276,7 +2274,7 @@ public class MusicBrainzSearchPlannerTests
                 ]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var invalidFirst = planner.Plan(new QueryRequest
@@ -2379,7 +2377,7 @@ public class MusicBrainzSearchPlannerTests
                 ]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -2411,7 +2409,7 @@ public class MusicBrainzSearchPlannerTests
                 None = [new TagCriteria()]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -2458,7 +2456,7 @@ public class MusicBrainzSearchPlannerTests
                 ]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -2524,7 +2522,7 @@ public class MusicBrainzSearchPlannerTests
                 ]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -2576,7 +2574,7 @@ public class MusicBrainzSearchPlannerTests
                 ]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -2659,7 +2657,7 @@ public class MusicBrainzSearchPlannerTests
                 ]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var kindPlan = planner.Plan(new QueryRequest
@@ -2713,7 +2711,7 @@ public class MusicBrainzSearchPlannerTests
                 And = [new PropertyCriterion<TemporalValue> { Values = [deathDate!] }]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -2753,7 +2751,7 @@ public class MusicBrainzSearchPlannerTests
                 And = [new PropertyCriterion<TemporalValue> { Values = [publishDate!] }]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -2788,7 +2786,7 @@ public class MusicBrainzSearchPlannerTests
                 And = [new PropertyCriterion<string> { Values = ["ENG"] }]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -2831,7 +2829,7 @@ public class MusicBrainzSearchPlannerTests
                 And = [new PropertyCriterion<string> { Values = ["English"] }]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -2875,7 +2873,7 @@ public class MusicBrainzSearchPlannerTests
                 }]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -2908,7 +2906,7 @@ public class MusicBrainzSearchPlannerTests
                 And = [new PropertyCriterion<string> { Values = ["not-a-language"] }]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -2978,7 +2976,7 @@ public class MusicBrainzSearchPlannerTests
                 }]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -3029,7 +3027,7 @@ public class MusicBrainzSearchPlannerTests
                 And = [new PropertyCriterion<string> { Operator = operation }]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -3092,7 +3090,7 @@ public class MusicBrainzSearchPlannerTests
                 ]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -3162,7 +3160,7 @@ public class MusicBrainzSearchPlannerTests
             },
             _ => throw new InvalidOperationException("criterion")
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -3200,7 +3198,7 @@ public class MusicBrainzSearchPlannerTests
             },
             Awards = new CollectionCriteria<AwardCriteria> { Some = [[new AwardCriteria()]] }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -3248,7 +3246,7 @@ public class MusicBrainzSearchPlannerTests
                 }]]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -3304,7 +3302,7 @@ public class MusicBrainzSearchPlannerTests
                 ]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -3385,7 +3383,7 @@ public class MusicBrainzSearchPlannerTests
             },
             _ => throw new InvalidOperationException("criterion")
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -3427,7 +3425,7 @@ public class MusicBrainzSearchPlannerTests
             ContentRatings = new CollectionCriteria<ContentRatingCriteria> { Some = [[]] },
             Genres = new CollectionCriteria<GenreCriteria> { Some = [[]] }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -3471,7 +3469,7 @@ public class MusicBrainzSearchPlannerTests
                 ]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -3523,7 +3521,7 @@ public class MusicBrainzSearchPlannerTests
                 ]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -3586,7 +3584,7 @@ public class MusicBrainzSearchPlannerTests
                 ]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -3635,7 +3633,7 @@ public class MusicBrainzSearchPlannerTests
                 }]]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -3677,7 +3675,7 @@ public class MusicBrainzSearchPlannerTests
             },
             Images = new CollectionCriteria<ImageCriteria> { Some = [[new ImageCriteria()]] }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -3743,7 +3741,7 @@ public class MusicBrainzSearchPlannerTests
                 Some = [[image]]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -3812,7 +3810,7 @@ public class MusicBrainzSearchPlannerTests
             },
             Images = new CollectionCriteria<ImageCriteria> { Some = [[image]] }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -3870,7 +3868,7 @@ public class MusicBrainzSearchPlannerTests
                 ]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -3926,7 +3924,7 @@ public class MusicBrainzSearchPlannerTests
                 ]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -3954,7 +3952,7 @@ public class MusicBrainzSearchPlannerTests
         {
             Images = new CollectionCriteria<ImageCriteria> { Some = [[new ImageCriteria()]] }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -3994,7 +3992,7 @@ public class MusicBrainzSearchPlannerTests
                 ]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -4062,7 +4060,7 @@ public class MusicBrainzSearchPlannerTests
                 ]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var jazz = planner.Plan(new QueryRequest
@@ -4153,7 +4151,7 @@ public class MusicBrainzSearchPlannerTests
                 ]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -4285,7 +4283,7 @@ public class MusicBrainzSearchPlannerTests
                 ]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -4456,7 +4454,7 @@ public class MusicBrainzSearchPlannerTests
             }
         };
 
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var composedPlan = planner.Plan(new QueryRequest
@@ -4529,7 +4527,7 @@ public class MusicBrainzSearchPlannerTests
                 ]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -4569,7 +4567,7 @@ public class MusicBrainzSearchPlannerTests
                 And = [new PropertyCriterion<string> { Values = ["Kind of Blue"] }]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -4671,7 +4669,7 @@ public class MusicBrainzSearchPlannerTests
                 ]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -4771,7 +4769,7 @@ public class MusicBrainzSearchPlannerTests
                 ]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -4844,7 +4842,7 @@ public class MusicBrainzSearchPlannerTests
                 And = [new PropertyCriterion<string> { Values = ["unsupported relationship"] }]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -4909,7 +4907,7 @@ public class MusicBrainzSearchPlannerTests
                 ]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -4959,7 +4957,7 @@ public class MusicBrainzSearchPlannerTests
                 And = [new PropertyCriterion<string> { Values = ["Member"] }]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -5024,7 +5022,7 @@ public class MusicBrainzSearchPlannerTests
                 ]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -5085,7 +5083,7 @@ public class MusicBrainzSearchPlannerTests
                 ]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -5158,7 +5156,7 @@ public class MusicBrainzSearchPlannerTests
             },
             Relationships = new CollectionCriteria<RelationshipCriteria> { None = [relationship] }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -5205,7 +5203,7 @@ public class MusicBrainzSearchPlannerTests
                 }]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -5247,7 +5245,7 @@ public class MusicBrainzSearchPlannerTests
                 And = [new PropertyCriterion<string> { Operator = valueOperator, Negate = negate }]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -5317,7 +5315,7 @@ public class MusicBrainzSearchPlannerTests
             },
             Relationships = new CollectionCriteria<RelationshipCriteria> { Some = [[relationship]] }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -5374,7 +5372,7 @@ public class MusicBrainzSearchPlannerTests
                 ]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -5444,7 +5442,7 @@ public class MusicBrainzSearchPlannerTests
                 And = [new PropertyCriterion<string> { Values = ["Kind of Blue"] }]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -5491,7 +5489,7 @@ public class MusicBrainzSearchPlannerTests
                 }]]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -5540,7 +5538,7 @@ public class MusicBrainzSearchPlannerTests
                 }]]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -5601,7 +5599,7 @@ public class MusicBrainzSearchPlannerTests
                 }]]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -5661,7 +5659,7 @@ public class MusicBrainzSearchPlannerTests
                 }]]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -5713,7 +5711,7 @@ public class MusicBrainzSearchPlannerTests
                 }]]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -5778,7 +5776,7 @@ public class MusicBrainzSearchPlannerTests
                 }]]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -5835,7 +5833,7 @@ public class MusicBrainzSearchPlannerTests
                 ]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
@@ -5900,7 +5898,7 @@ public class MusicBrainzSearchPlannerTests
                 ]
             }
         };
-        var planner = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest

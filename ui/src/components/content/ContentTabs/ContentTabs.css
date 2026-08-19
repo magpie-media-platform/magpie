@@ -391,6 +391,16 @@
             width: 36px;
             height: 54px;
         }
+
+        .files-tab__panel-header {
+            align-items: flex-start;
+            flex-direction: column;
+        }
+
+        .files-tab__file-actions {
+            flex-wrap: wrap;
+            width: 100%;
+        }
     }
 
     .children-tab[data-layout='card'] {

@@ -3,10 +3,12 @@ using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 
+using Magpie.Models.Api;
 using Magpie.Models.Arguments;
 using Magpie.Models.Bulk;
 using Magpie.Models.Data;
 using Magpie.Models.Paging;
+using Magpie.Models.Storage;
 
 namespace Magpie.Sdk.Services;
 
@@ -86,6 +88,52 @@ public interface IContentService
     Task<bool> DeleteAsync(
         Guid contentHierarchyItemId,
         bool deleteFromLibrary,
+        Guid? actingUserId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Gets the root and initial path for the file browser of a content hierarchy item.
+    /// </summary>
+    /// <param name="contentHierarchyItemId">The id of the content hierarchy item</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    Task<ContentFileBrowserLocation?> GetFileBrowserLocationAsync(
+        Guid contentHierarchyItemId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Lists a directory in the configured root of a content hierarchy item.
+    /// </summary>
+    /// <param name="contentHierarchyItemId">The id of the content hierarchy item</param>
+    /// <param name="path">The directory to list</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    Task<IReadOnlyList<FileSystemEntry>?> BrowseFilesAsync(
+        Guid contentHierarchyItemId,
+        string path,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Attaches an existing host file to a content hierarchy item.
+    /// </summary>
+    /// <param name="contentHierarchyItemId">The id of the content hierarchy item</param>
+    /// <param name="filePath">The full path of the host file</param>
+    /// <param name="actingUserId">The user to record as the actor, or <see langword="null"/> for the system</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    Task<ContentFileAttachmentResult?> AttachFileAsync(
+        Guid contentHierarchyItemId,
+        string filePath,
+        Guid? actingUserId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Removes a file association and keeps the host file.
+    /// </summary>
+    /// <param name="contentHierarchyItemId">The id of the content hierarchy item</param>
+    /// <param name="mediaFileId">The id of the media file</param>
+    /// <param name="actingUserId">The user to record as the actor, or <see langword="null"/> for the system</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    Task<bool> UnlinkFileAsync(
+        Guid contentHierarchyItemId,
+        Guid mediaFileId,
         Guid? actingUserId,
         CancellationToken cancellationToken = default);
 

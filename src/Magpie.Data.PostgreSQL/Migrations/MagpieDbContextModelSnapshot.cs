@@ -1510,11 +1510,18 @@ namespace Magpie.Data.PostgreSQL.Migrations
                     b.Property<Guid?>("ModifiedByUserId")
                         .HasColumnType("uuid");
 
+                    b.Property<string>("PathKey")
+                        .IsRequired()
+                        .HasColumnType("text");
+
                     b.HasKey("Id");
 
                     b.HasIndex("ContentItemId");
 
                     b.HasIndex("FilePath")
+                        .IsUnique();
+
+                    b.HasIndex("PathKey")
                         .IsUnique();
 
                     b.ToTable("content_mediaFile", (string)null);
@@ -1949,13 +1956,13 @@ namespace Magpie.Data.PostgreSQL.Migrations
 
             modelBuilder.Entity("Magpie.Models.Data.RefreshToken", b =>
                 {
-                    b.Property<string>("AccessTokenJti")
-                        .HasMaxLength(36)
-                        .HasColumnType("character varying(36)");
-
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
+
+                    b.Property<string>("AccessTokenJti")
+                        .HasMaxLength(36)
+                        .HasColumnType("character varying(36)");
 
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp with time zone");

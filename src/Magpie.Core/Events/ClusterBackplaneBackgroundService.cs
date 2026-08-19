@@ -58,7 +58,9 @@ internal sealed class ClusterBackplaneBackgroundService(
 
     private async Task BroadcastLocalEventsAsync(CancellationToken cancellationToken)
     {
-        using var listener = eventBus.CreateListener();
+        using var listener = eventBus is EventBus bus
+            ? bus.CreateListener(eventName: null, localOnly: false, callSite: "backplane")
+            : eventBus.CreateListener();
         try
         {
             await foreach (var magpieEvent in listener.ReadAllAsync(cancellationToken).ConfigureAwait(false))

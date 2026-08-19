@@ -1,9 +1,11 @@
 import { useState, useMemo, useCallback } from 'react';
-import { DatabaseIcon, PlusIcon } from '@phosphor-icons/react';
+import { useNavigate } from 'react-router-dom';
+import { DatabaseIcon, FlaskIcon, MagnifyingGlassIcon, PlusIcon, TrashIcon, XIcon } from '@phosphor-icons/react';
 import { type ColumnDef, type SortingState } from '@tanstack/react-table';
 
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
+import { Checkbox } from '@/components/ui/Checkbox';
 import { ClearFiltersButton } from '@/components/ui/ClearFiltersButton';
 import { ColumnHeaderFilter, type FacetOption } from '@/components/ui/ColumnHeaderFilter';
 import { DataTable } from '@/components/ui/DataTable';
@@ -23,12 +25,15 @@ import {
     indexerStatusVariants,
     type ConfiguredConnectionRow,
 } from '@/hooks/useIndexers';
+import { useBulkSelection } from '@/hooks/useBulkSelection';
 import { useUrlTableState } from '@/hooks/useUrlTableState';
 import { getErrorMessage } from '@/lib/errors';
 import { formatRelativeTime } from '@/lib/formatTime';
 import { mapStatusParam } from '@/lib/urlParams';
 
 import { ConfigureInstanceDialog, type ConfigureConnectionTarget } from './ConfigureInstanceDialog';
+
+import '@/styles/bulk-actions-toolbar.css';
 
 interface ConfiguredManagementProps {
     onGoToCatalog: () => void;
@@ -52,6 +57,7 @@ export function ConfiguredManagement({ onGoToCatalog }: ConfiguredManagementProp
     const { rows, isLoading: isLoadingConnections } = useAllIndexerConnections(indexers);
     const { updateConnection, deleteConnection, testConnection } = useIndexerConnectionMutations();
     const { toast } = useToast();
+    const navigate = useNavigate();
 
     const { sorting, filters, page, setSorting, setFilters, setPage } = useUrlTableState({
         defaultSort: DEFAULT_SORTING,
@@ -71,6 +77,9 @@ export function ConfiguredManagement({ onGoToCatalog }: ConfiguredManagementProp
     const [editTarget, setEditTarget] = useState<ConfigureConnectionTarget | null>(null);
     const [deleting, setDeleting] = useState<ConfiguredConnectionRow | null>(null);
     const [isDeleting, setIsDeleting] = useState(false);
+    const [isBulkDeleting, setIsBulkDeleting] = useState(false);
+    const [isBulkDeleteOpen, setIsBulkDeleteOpen] = useState(false);
+    const [isBulkTesting, setIsBulkTesting] = useState(false);
     const [testingId, setTestingId] = useState<string | null>(null);
 
     const providerOptions = useMemo(() => [...new Set(rows.map((r) => r.indexer.providerType))].sort(), [rows]);
@@ -143,6 +152,70 @@ export function ConfiguredManagement({ onGoToCatalog }: ConfiguredManagementProp
         [updateConnection, toast],
     );
 
+    const filteredRowIds = useMemo(() => filteredRows.map((row) => row.connection.id), [filteredRows]);
+    const selection = useBulkSelection({ pageRowIds: filteredRowIds, totalCount: filteredRows.length });
+    const selectedRows = useMemo(
+        () => filteredRows.filter((row) => selection.isRowChecked(row.connection.id)),
+        [filteredRows, selection],
+    );
+
+    const handleSearchSelected = useCallback(
+        (ids: string[]) => {
+            void navigate(`/admin/indexers/search?connections=${ids.join(',')}`);
+        },
+        [navigate],
+    );
+
+    const handleBulkTest = useCallback(async () => {
+        setIsBulkTesting(true);
+        try {
+            for (const row of selectedRows) {
+                try {
+                    const result = await testConnection(row.indexer.id, row.connection.id);
+                    toast({
+                        title: row.connection.name,
+                        description: result.message,
+                        variant: result.success ? 'success' : 'error',
+                    });
+                } catch (error) {
+                    toast({
+                        title: row.connection.name,
+                        description: getErrorMessage(error, 'Failed to test connection'),
+                        variant: 'error',
+                    });
+                }
+            }
+        } finally {
+            setIsBulkTesting(false);
+        }
+    }, [selectedRows, testConnection, toast]);
+
+    const handleBulkDelete = useCallback(async () => {
+        setIsBulkDeleting(true);
+        try {
+            for (const row of selectedRows) {
+                try {
+                    await deleteConnection(row.indexer.id, row.connection.id);
+                    toast({
+                        title: row.connection.name,
+                        description: 'Magpie removed the instance.',
+                        variant: 'success',
+                    });
+                } catch (error) {
+                    toast({
+                        title: row.connection.name,
+                        description: getErrorMessage(error, 'Failed to delete instance'),
+                        variant: 'error',
+                    });
+                }
+            }
+            selection.clear();
+        } finally {
+            setIsBulkDeleting(false);
+            setIsBulkDeleteOpen(false);
+        }
+    }, [deleteConnection, selectedRows, selection, toast]);
+
     const handleConfirmDelete = useCallback(async () => {
         if (!deleting) {
             return;
@@ -169,6 +242,27 @@ export function ConfiguredManagement({ onGoToCatalog }: ConfiguredManagementProp
 
     const columns = useMemo<ColumnDef<ConfiguredConnectionRow>[]>(
         () => [
+            {
+                id: 'select',
+                enableSorting: false,
+                size: 44,
+                header: () => (
+                    <Checkbox
+                        checked={selection.headerChecked}
+                        onCheckedChange={(checked) => selection.toggleHeader(!!checked)}
+                        aria-label="Select all indexer instances"
+                        data-action="select-all"
+                    />
+                ),
+                cell: ({ row }) => (
+                    <Checkbox
+                        checked={selection.isRowChecked(row.original.connection.id)}
+                        onCheckedChange={(checked) => selection.toggleRow(row.original.connection.id, !!checked)}
+                        aria-label={`Select ${row.original.connection.name}`}
+                        data-action="select-row"
+                    />
+                ),
+            },
             {
                 id: 'name',
                 accessorFn: (row) => row.connection.name,
@@ -273,6 +367,7 @@ export function ConfiguredManagement({ onGoToCatalog }: ConfiguredManagementProp
                         id={row.original.connection.id}
                         enabled={row.original.connection.enabled}
                         isTesting={testingId === row.original.connection.id}
+                        onSearch={() => handleSearchSelected([row.original.connection.id])}
                         onTest={() => handleTest(row.original)}
                         onToggleEnabled={(value) => handleToggleEnabled(row.original, value)}
                         onEdit={() =>
@@ -295,7 +390,9 @@ export function ConfiguredManagement({ onGoToCatalog }: ConfiguredManagementProp
             enabled,
             setMulti,
             setFilters,
+            selection,
             testingId,
+            handleSearchSelected,
             handleTest,
             handleToggleEnabled,
         ],
@@ -336,6 +433,65 @@ export function ConfiguredManagement({ onGoToCatalog }: ConfiguredManagementProp
                     <PlusIcon weight="bold" aria-hidden="true" />
                     <span>Add Indexer</span>
                 </Button>
+            </div>
+
+            <div
+                className="bulk-actions-toolbar-presence"
+                data-component="bulk-actions-toolbar"
+                data-visible={selection.hasSelection ? 'true' : 'false'}
+                aria-hidden={!selection.hasSelection}
+                inert={!selection.hasSelection}
+            >
+                <div className="bulk-actions-toolbar-presence__inner">
+                    {selection.hasSelection && (
+                        <div className="bulk-actions-toolbar">
+                            <div className="bulk-actions-toolbar__info">
+                                <span className="bulk-actions-toolbar__count">{selection.selectedCount} selected</span>
+                                <button
+                                    type="button"
+                                    className="bulk-actions-toolbar__clear"
+                                    onClick={selection.clear}
+                                    aria-label="Clear selection"
+                                    data-action="clear-selection"
+                                >
+                                    <XIcon weight="bold" aria-hidden="true" />
+                                    Clear
+                                </button>
+                            </div>
+                            <div className="bulk-actions-toolbar__buttons">
+                                <Button
+                                    variant="primary"
+                                    size="sm"
+                                    onClick={() => handleSearchSelected(selectedRows.map((row) => row.connection.id))}
+                                    data-action="bulk-search"
+                                >
+                                    <MagnifyingGlassIcon weight="bold" aria-hidden="true" />
+                                    <span className="bulk-actions-toolbar__btn-label">Search</span>
+                                </Button>
+                                <Button
+                                    variant="secondary"
+                                    size="sm"
+                                    loading={isBulkTesting}
+                                    disabled={isBulkTesting}
+                                    onClick={handleBulkTest}
+                                    data-action="bulk-test"
+                                >
+                                    <FlaskIcon weight="bold" aria-hidden="true" />
+                                    <span className="bulk-actions-toolbar__btn-label">Test</span>
+                                </Button>
+                                <Button
+                                    variant="destructive"
+                                    size="sm"
+                                    onClick={() => setIsBulkDeleteOpen(true)}
+                                    data-action="bulk-delete"
+                                >
+                                    <TrashIcon weight="bold" aria-hidden="true" />
+                                    <span className="bulk-actions-toolbar__btn-label">Delete</span>
+                                </Button>
+                            </div>
+                        </div>
+                    )}
+                </div>
             </div>
 
             <div className="indexers-table" data-area="configured">
@@ -389,6 +545,15 @@ export function ConfiguredManagement({ onGoToCatalog }: ConfiguredManagementProp
                 itemName={deleting?.connection.name ?? ''}
                 itemType="Indexer Instance"
                 isDeleting={isDeleting}
+            />
+
+            <DeleteConfirmDialog
+                open={isBulkDeleteOpen}
+                onConfirm={handleBulkDelete}
+                onCancel={() => setIsBulkDeleteOpen(false)}
+                itemName={`${selection.selectedCount} selected`}
+                itemType="Indexer Instances"
+                isDeleting={isBulkDeleting}
             />
         </>
     );

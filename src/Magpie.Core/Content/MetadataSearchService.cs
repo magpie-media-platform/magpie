@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.Linq;
 using System.Text.Json;
@@ -7,16 +8,18 @@ using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions.Repositories;
+using Magpie.Core.Observability;
 using Magpie.Models;
 using Magpie.Models.Api;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Models.Filtering;
 using Magpie.Models.MetadataSearch;
+using Magpie.QueryLanguage;
+using Magpie.Sdk.Caching;
 using Magpie.Sdk.Content;
 using Magpie.Sdk.Services;
 
-using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
 
 namespace Magpie.Core.Content;
@@ -28,7 +31,7 @@ internal sealed class MetadataSearchService(
     IContentHierarchyItemRepository contentHierarchyItemRepository,
     TimeProvider timeProvider,
     ILogger<MetadataSearchService> logger,
-    IMemoryCache memoryCache) : IMetadataSearchService
+    ICacheFactory cacheFactory) : IMetadataSearchService
 {
     private const int TierExactTitle = 0;
     private const int TierTitlePrefix = 1;
@@ -46,6 +49,24 @@ internal sealed class MetadataSearchService(
     private const string NoProviderAvailableWarning =
         "No metadata provider is available to run this search. Enable a provider for this content and search again.";
 
+    private readonly ICache _hydrationCache = cacheFactory.GetOrCreate(
+        "metadata-hydration",
+        () => new CachePolicy
+        {
+            Freshness = Timeout.InfiniteTimeSpan,
+            Retention = Timeout.InfiniteTimeSpan,
+            MaximumEntries = 100_000,
+        });
+
+    private readonly ICache _searchCache = cacheFactory.GetOrCreate(
+        "metadata-search",
+        () => new CachePolicy
+        {
+            Freshness = Timeout.InfiniteTimeSpan,
+            Retention = Timeout.InfiniteTimeSpan,
+            MaximumEntries = 100_000,
+        });
+
     private enum MatchOutcome
     {
         Matched,
@@ -60,6 +81,32 @@ internal sealed class MetadataSearchService(
         string? contentType,
         int page,
         CancellationToken cancellationToken = default)
+    {
+        using var activity = ContentTelemetry.Source.StartActivity("magpie.metadata.search");
+        if (activity?.IsAllDataRequested == true)
+        {
+            activity.SetTag("magpie.query.mql", criteria.FormatContentFilter());
+        }
+
+        var started = Stopwatch.GetTimestamp();
+
+        try
+        {
+            return await SearchCandidatesCoreAsync(criteria, contentType, page, activity, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            ContentTelemetry.SearchDuration.Record(Stopwatch.GetElapsedTime(started).TotalMilliseconds);
+        }
+    }
+
+    private async Task<ProviderMetadataCandidateSearchResult> SearchCandidatesCoreAsync(
+        ContentFilterCriteria criteria,
+        string? contentType,
+        int page,
+        Activity? activity,
+        CancellationToken cancellationToken)
     {
         var resolvedContentType = !string.IsNullOrWhiteSpace(contentType)
             ? contentType.Trim()
@@ -89,11 +136,14 @@ internal sealed class MetadataSearchService(
                 contentTypes.Count);
         }
 
+        activity?.SetTag("magpie.search.content_types", string.Join(",", contentTypes));
+
         var warningsSeen = new HashSet<string>(StringComparer.Ordinal);
         var warnings = new List<string>();
         var prepared = PrepareSearch(criteria);
         const string defaultLanguagePreference = "";
         var requestedPage = Math.Max(1, page);
+        activity?.SetTag("magpie.search.requested_page", requestedPage);
         var maximumResults = requestedPage > int.MaxValue / ProviderSearchPageSize
             ? int.MaxValue
             : requestedPage * ProviderSearchPageSize;
@@ -166,12 +216,13 @@ internal sealed class MetadataSearchService(
             select new ProviderSearchInvocation(validQuery.ContentType, provider, validQuery.Query))
             .ToList();
         var providersQueried = invocations.Count;
+        activity?.SetTag("magpie.search.providers_queried", providersQueried);
         var searches = invocations.Select(invocation => SearchProviderAsync(
             logger,
             invocation,
             maximumResults,
             defaultLanguagePreference,
-            memoryCache,
+            _searchCache,
             cancellationToken));
         var providerResults = await Task.WhenAll(searches).ConfigureAwait(false);
 
@@ -274,6 +325,8 @@ internal sealed class MetadataSearchService(
             };
         }).ToArray();
         var ownedCount = matches.Count(match => match.InLibrary);
+        activity?.SetTag("magpie.search.merged_count", mergedCount);
+        activity?.SetTag("magpie.search.owned_count", ownedCount);
         logger.LogInformation(
             "Merged {Merged} results from {Providers} providers; {Owned} returned results are in the library",
             mergedCount,
@@ -501,33 +554,41 @@ internal sealed class MetadataSearchService(
         ProviderSearchInvocation invocation,
         int maximumResults,
         string defaultLanguagePreference,
-        IMemoryCache memoryCache,
+        ICache cache,
         CancellationToken cancellationToken)
     {
-        var cacheKey = (
-            Service: nameof(MetadataSearchService),
-            Kind: "search",
-            invocation.Provider.ProviderType,
+        var cacheKey = new
+        {
+            Service = nameof(MetadataSearchService),
+            Kind = "search",
+            ProviderType = invocation.Provider.ProviderType,
             invocation.ContentType,
-            Query: JsonSerializer.Serialize(invocation.Query),
-            MaximumResults: maximumResults,
-            Language: defaultLanguagePreference);
+            Query = JsonSerializer.Serialize(invocation.Query),
+            MaximumResults = maximumResults,
+            Language = defaultLanguagePreference
+        };
+
+        using var activity = ContentTelemetry.Source.StartActivity("magpie.metadata.provider_search");
+        activity?.SetTag("magpie.provider.type", invocation.Provider.ProviderType);
+        activity?.SetTag("magpie.content_type", invocation.ContentType);
 
         try
         {
-            var result = await memoryCache.GetOrCreateAsync(
-                cacheKey,
-                async entry =>
+            var result = await cache.GetOrAddAsync(
+                JsonSerializer.Serialize(cacheKey),
+                async token =>
                 {
-                    var searchResult = await invocation.Provider.AdvancedSearchAsync(
+                    return await invocation.Provider.AdvancedSearchAsync(
                         invocation.ContentType,
                         invocation.Query,
                         maximumResults,
                         defaultLanguagePreference,
-                        cancellationToken).ConfigureAwait(false);
-                    entry.Size = Math.Max(1, searchResult.Matches.Count);
-                    return searchResult;
-                }).ConfigureAwait(false);
+                        token).ConfigureAwait(false);
+                },
+                cancellationToken).ConfigureAwait(false);
+            activity?.SetTag("magpie.result.supported", result?.Supported);
+            activity?.SetTag("magpie.result.match_count", result?.Matches.Count);
+            activity?.SetTag("magpie.result.has_more", result?.PageInfo.HasMore);
 
             return new ProviderSearchExecution(invocation, result, null);
         }
@@ -537,6 +598,7 @@ internal sealed class MetadataSearchService(
         }
         catch (Exception ex)
         {
+            activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
             logger.LogWarning(
                 ex,
                 "Metadata provider {Provider} failed to search for {ContentType}. " +
@@ -588,6 +650,9 @@ internal sealed class MetadataSearchService(
         if (warning is not null && seen.Add(warning))
         {
             warnings.Add(warning);
+            Activity.Current?.AddEvent(new ActivityEvent(
+                "warning",
+                tags: new ActivityTagsCollection { ["message"] = warning }));
         }
     }
 
@@ -1462,23 +1527,30 @@ internal sealed class MetadataSearchService(
                     return;
                 }
 
-                var cacheKey = (
-                    Service: nameof(MetadataSearchService),
-                    Kind: "hydrate",
-                    provider.ProviderType,
+                var cacheKey = new
+                {
+                    Service = nameof(MetadataSearchService),
+                    Kind = "hydrate",
+                    ProviderType = provider.ProviderType,
                     candidate.ContentType,
-                    Source: candidate.ExternalIdSource,
+                    Source = candidate.ExternalIdSource,
                     candidate.ExternalId,
-                    Language: defaultLanguagePreference);
-                var hydratedCandidate = await memoryCache.GetOrCreateAsync(
-                    cacheKey,
-                    async entry =>
+                    Language = defaultLanguagePreference
+                };
+
+                using var activity = ContentTelemetry.Source.StartActivity("magpie.metadata.hydrate");
+                activity?.SetTag("magpie.provider.type", provider.ProviderType);
+                activity?.SetTag("magpie.content_type", candidate.ContentType);
+
+                var hydratedCandidate = await _hydrationCache.GetOrAddAsync(
+                    JsonSerializer.Serialize(cacheKey),
+                    async token =>
                     {
-                        entry.Size = 1;
                         return await provider
-                            .HydrateAsync(candidate, defaultLanguagePreference, cancellationToken)
+                            .HydrateAsync(candidate, defaultLanguagePreference, token)
                             .ConfigureAwait(false);
-                    }).ConfigureAwait(false);
+                    },
+                    cancellationToken).ConfigureAwait(false);
 
                 hydrated[index] = hydratedCandidate is null
                     ? candidate

@@ -14,6 +14,8 @@ internal sealed record QueryPlan
 
     public IReadOnlyList<string> CriterionDispositions { get; init; } = [];
 
+    public string AnchorKind { get; init; } = "none";
+
     public int Page { get; init; } = 1;
 
     public int MaxResults { get; init; } = 20;

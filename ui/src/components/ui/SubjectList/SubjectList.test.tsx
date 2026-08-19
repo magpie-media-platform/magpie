@@ -23,6 +23,7 @@ const mockItems: SubjectItem[] = [
         id: '3',
         title: 'Bryan Cranston',
         kind: 'person',
+        kindLabel: 'Cast Member',
     },
     {
         id: '4',
@@ -64,7 +65,7 @@ describe('SubjectList', () => {
 
         expect(screen.getByText('Show')).toBeInTheDocument();
         expect(screen.getByText('Movie')).toBeInTheDocument();
-        expect(screen.getByText('Person')).toBeInTheDocument();
+        expect(screen.getByText('Cast Member')).toBeInTheDocument();
         expect(screen.getByText('Album')).toBeInTheDocument();
     });
 

@@ -280,7 +280,7 @@ function extractCertification(container?: MetadataContainer | null): string | un
     return undefined;
 }
 
-function isInternalSource(source: string | null | undefined): boolean {
+export function isInternalSource(source: string | null | undefined): boolean {
     return source?.startsWith('internal.') ?? false;
 }
 

@@ -1,10 +1,12 @@
 using System;
+using System.Collections.Generic;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions.Jobs;
+using Magpie.Core.Observability;
 using Magpie.Models;
 using Magpie.Sdk.Services;
 
@@ -23,6 +25,11 @@ internal sealed class EventBus(
     public IEventListener CreateListener(string? eventName = null, bool localOnly = false)
     {
         return new EventListener(Events, eventName, localOnly ? hostEnvironment.NodeId : null);
+    }
+
+    internal IEventListener CreateListener(string? eventName, bool localOnly, string callSite)
+    {
+        return new EventListener(Events, eventName, localOnly ? hostEnvironment.NodeId : null, callSite);
     }
 
     public Task PublishAsync(MagpieEvent magpieEvent, CancellationToken cancellationToken = default)
@@ -52,12 +59,22 @@ internal sealed class EventBus(
         return Task.CompletedTask;
     }
 
+    private static string GetNamePrefix(string name)
+    {
+        var separator = name.IndexOf('.');
+        return separator < 0 ? name : name[..separator];
+    }
+
     private void Emit(MagpieEvent magpieEvent)
     {
         lock (_gate)
         {
             _events.OnNext(magpieEvent);
         }
+
+        EventsTelemetry.PublishedTotal.Add(
+            1,
+            new KeyValuePair<string, object?>("name_prefix", GetNamePrefix(magpieEvent.Name)));
     }
 
     public void Dispose()

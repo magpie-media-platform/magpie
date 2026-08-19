@@ -30,10 +30,9 @@ namespace Magpie.Core.Content;
 internal sealed class LibraryImportService(
     ILibraryImportCandidateRepository libraryImportCandidateRepository,
     IContentService contentService,
+    IContentFileService contentFileService,
     IContentTypeRegistry contentTypeRegistry,
     IContentHierarchyItemRepository contentHierarchyItemRepository,
-    IContentRepository contentRepository,
-    IMediaFileRepository mediaFileRepository,
     IRootFolderRepository rootFolderRepository,
     IFileSystem fileSystem,
     ITransactionManager transactionManager,
@@ -259,13 +258,6 @@ internal sealed class LibraryImportService(
             .DeleteAsync(candidate.Id, actingUserId, cancellationToken)
             .ConfigureAwait(false);
 
-        await contentService
-            .MaterializeFulfillmentStatusAsync(
-                result.HierarchyItemId,
-                actingUserId,
-                cancellationToken: cancellationToken)
-            .ConfigureAwait(false);
-
         await eventBus.PublishAsync(
             ContentEventBuilder.BuildContentImportedEvent(
                 new()
@@ -350,38 +342,9 @@ internal sealed class LibraryImportService(
         Guid? actingUserId,
         CancellationToken cancellationToken = default)
     {
-        var hierarchyItem = await contentHierarchyItemRepository
-            .GetByIdAsync(contentHierarchyItemId, cancellationToken)
+        return await contentFileService
+            .UpdateFulfillmentAsync(contentHierarchyItemId, actingUserId, cancellationToken)
             .ConfigureAwait(false);
-        if (hierarchyItem is null)
-        {
-            return false;
-        }
-
-        var changed = false;
-        await transactionManager.ExecuteWithTransactionAsync(
-            async ct =>
-            {
-                var contentItem = (await contentRepository.QueryAsync(
-                    new ContentItemQuery { ContentHierarchyItemId = contentHierarchyItemId },
-                    new() { PageNumber = 1, PageSize = 2 },
-                    null,
-                    ct).ConfigureAwait(false)).Items.SingleOrDefault();
-                if (contentItem is null)
-                {
-                    return;
-                }
-
-                changed = await UpdateFulfillmentFromFilesCoreAsync(
-                    hierarchyItem,
-                    contentItem,
-                    timeProvider.GetUtcNow().UtcDateTime,
-                    actingUserId,
-                    ct).ConfigureAwait(false);
-            },
-            cancellationToken).ConfigureAwait(false);
-
-        return changed;
     }
 
     private async Task<Guid?> ResolveFileLeafAsync(
@@ -416,149 +379,18 @@ internal sealed class LibraryImportService(
         Guid? actingUserId,
         CancellationToken cancellationToken = default)
     {
-        var target = await mediaFileRepository
-            .GetByIdAsync(mediaFileId, cancellationToken)
+        var operation = await contentFileService
+            .DeleteAsync(contentHierarchyItemId, mediaFileId, actingUserId, cancellationToken)
             .ConfigureAwait(false);
-        var targetContentItem = target is null
-            ? null
-            : await contentRepository.GetByIdAsync(target.ContentItemId, cancellationToken).ConfigureAwait(false);
-        if (target is null || targetContentItem?.ContentHierarchyItemId != contentHierarchyItemId)
-        {
-            return false;
-        }
-
-        if (fileSystem.FileExists(target.FilePath))
-        {
-            try
-            {
-                fileSystem.DeleteFile(target.FilePath);
-            }
-            catch (Exception ex)
-            {
-                logger.LogError(
-                    ex,
-                    "The content service failed to delete media file {MediaFileId} at {FilePath} from the disk. " +
-                    "The row is intact",
-                    mediaFileId,
-                    target.FilePath);
-                throw new MediaFileDeletionException(
-                    $"Failed to delete {target.FilePath} from disk; the file row was left in place.",
-                    ex);
-            }
-        }
-        else
-        {
-            logger.LogWarning(
-                "Media file {MediaFileId} was already missing on the disk at {FilePath}. " +
-                "The content service will delete the row",
-                mediaFileId,
-                target.FilePath);
-        }
-
-        var hierarchyItem = await contentHierarchyItemRepository
-            .GetByIdAsync(contentHierarchyItemId, cancellationToken)
-            .ConfigureAwait(false);
-        var fulfillmentChanged = false;
-
-        await transactionManager.ExecuteWithTransactionAsync(
-            async ct =>
-            {
-                var now = timeProvider.GetUtcNow().UtcDateTime;
-                var contentItem = (await contentRepository.QueryAsync(
-                    new ContentItemQuery { ContentHierarchyItemId = contentHierarchyItemId },
-                    new() { PageNumber = 1, PageSize = 2 },
-                    null,
-                    ct).ConfigureAwait(false)).Items.SingleOrDefault()
-                    ?? throw new InvalidOperationException($"Content item {target.ContentItemId} does not exist.");
-
-                await mediaFileRepository.DeleteAsync(mediaFileId, actingUserId, ct).ConfigureAwait(false);
-
-                fulfillmentChanged = await UpdateFulfillmentFromFilesCoreAsync(
-                    hierarchyItem,
-                    contentItem,
-                    now,
-                    actingUserId,
-                    ct).ConfigureAwait(false);
-            },
-            cancellationToken).ConfigureAwait(false);
-
-        if (fulfillmentChanged)
+        if (operation.FulfillmentChanged)
         {
             await contentService.MaterializeFulfillmentStatusAsync(
                 contentHierarchyItemId,
                 actingUserId,
-                cancellationToken: cancellationToken)
-                .ConfigureAwait(false);
+                cancellationToken: cancellationToken).ConfigureAwait(false);
         }
 
-        return true;
-    }
-
-    private async Task<bool> UpdateFulfillmentFromFilesCoreAsync(
-        ContentHierarchyItem? hierarchyItem,
-        ContentItem contentItem,
-        DateTime now,
-        Guid? actingUserId,
-        CancellationToken cancellationToken)
-    {
-        if (contentItem.Fulfillment == FulfillmentStatus.FulfilledExternally)
-        {
-            return false;
-        }
-
-        var acceptedFileTypes = hierarchyItem is null
-            ? []
-            : contentTypeRegistry.GetDefinitionFor(hierarchyItem.ContentType)?.LevelDefinitions
-                .FirstOrDefault(level => level.Slug == hierarchyItem.Level)?.AcceptedFileTypes ?? [];
-        const int pageSize = 500;
-        var hasPrimary = false;
-        var pageNumber = 1;
-        while (!hasPrimary)
-        {
-            var page = await mediaFileRepository.QueryAsync(
-                new() { ContentItemIds = [contentItem.Id] },
-                new() { PageNumber = pageNumber, PageSize = pageSize },
-                null,
-                cancellationToken).ConfigureAwait(false);
-            var pageItems = page.Items.ToList();
-            hasPrimary = acceptedFileTypes.Count == 0 && pageItems.Count > 0;
-            foreach (var file in pageItems)
-            {
-                if (await fileSystem
-                    .MatchesAnyFileTypeAsync(file.FilePath, acceptedFileTypes, cancellationToken)
-                    .ConfigureAwait(false))
-                {
-                    hasPrimary = true;
-                    break;
-                }
-            }
-
-            if (hasPrimary || pageItems.Count < pageSize)
-            {
-                break;
-            }
-
-            pageNumber++;
-        }
-
-        var reconciled = hasPrimary
-            ? contentItem.QualityStatus switch
-            {
-                QualityStatus.UpgradeWanted => FulfillmentStatus.Upgradable,
-                QualityStatus.Met => FulfillmentStatus.Fulfilled,
-                _ when contentItem.Fulfillment == FulfillmentStatus.Missing => FulfillmentStatus.Fulfilled,
-                _ => contentItem.Fulfillment
-            }
-            : FulfillmentStatus.Missing;
-        if (reconciled == contentItem.Fulfillment)
-        {
-            return false;
-        }
-
-        contentItem.Fulfillment = reconciled;
-        contentItem.ModifiedAt = now;
-        await contentRepository.UpdateAsync(contentItem, actingUserId, cancellationToken).ConfigureAwait(false);
-        return true;
+        return operation.Deleted;
     }
 
     private IReadOnlyList<string> ResolveTerminalLevelSlugs(ContentTypeDefinition definition)
@@ -691,10 +523,6 @@ internal sealed class LibraryImportService(
         }
 
         var containerHierarchyItemId = hydrated.Id;
-        var mimeType = await fileSystem.LookupMimeTypeAsync(candidate.FilePath, cancellationToken)
-            .ConfigureAwait(false);
-        var fileSize = ReadFileSize(candidate.FilePath);
-
         var hierarchyItemId = containerHierarchyItemId;
         var contentItemId = Guid.Empty;
         await transactionManager.ExecuteWithTransactionAsync(
@@ -747,40 +575,20 @@ internal sealed class LibraryImportService(
                     }
                 }
 
-                var contentItem = await contentService.GetOrCreateContentItemAsync(
-                    hierarchyItemId,
-                    now,
-                    actingUserId,
-                    cancellationToken: ct).ConfigureAwait(false);
-                contentItemId = contentItem.Id;
-
-                var alreadyLinked = (await mediaFileRepository
-                    .QueryAsync(
-                        new() { FilePaths = [candidate.FilePath] },
-                        new() { PageNumber = 1, PageSize = 1 },
-                        null,
-                        ct)
-                    .ConfigureAwait(false)).TotalItems > 0;
-                if (!alreadyLinked)
-                {
-                    await mediaFileRepository.CreateAsync(
-                        new MediaFile
-                        {
-                            ContentItemId = contentItem.Id,
-                            FileKind = fileSystem.ResolveFileKind(mimeType).ToString(),
-                            MimeType = mimeType,
-                            FilePath = candidate.FilePath,
-                            FileSize = fileSize,
-                            MediaInfo = null,
-                            CreatedAt = now,
-                            CreatedByUserId = actingUserId,
-                        },
-                        actingUserId,
-                        ct).ConfigureAwait(false);
-                }
-
-                await UpdateFulfillmentFromFilesAsync(hierarchyItemId, actingUserId, ct)
+                var attachment = await contentFileService
+                    .AttachImportedAsync(hierarchyItemId, candidate.FilePath, actingUserId, ct)
                     .ConfigureAwait(false);
+                contentItemId = attachment.Result?.MediaFile.ContentItemId
+                    ?? throw new KeyNotFoundException(
+                        $"Content hierarchy item {hierarchyItemId} no longer exists.");
+
+                if (attachment.FulfillmentChanged)
+                {
+                    await contentService.MaterializeFulfillmentStatusAsync(
+                        hierarchyItemId,
+                        actingUserId,
+                        cancellationToken: ct).ConfigureAwait(false);
+                }
 
                 await auditRecordRepository.CreateAsync(
                     new AuditRecord
@@ -867,22 +675,6 @@ internal sealed class LibraryImportService(
         }
 
         return new DiscoveredPath(owner.Id, owner.Path, owner.ModifiedAt, fileDirectory);
-    }
-
-    private long ReadFileSize(string filePath)
-    {
-        try
-        {
-            return fileSystem.GetFileSize(filePath);
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning(
-                ex,
-                "The import failed to read the file size of {FilePath} and will use size 0",
-                filePath);
-            return 0;
-        }
     }
 
     private async Task TryWriteAuditAsync(

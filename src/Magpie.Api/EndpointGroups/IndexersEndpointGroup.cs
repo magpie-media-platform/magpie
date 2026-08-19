@@ -107,13 +107,16 @@ internal sealed class IndexersEndpointGroup : IApiEndpointGroup
         CancellationToken cancellationToken)
     {
         var indexers = await indexerService.ListAsync(cancellationToken).ConfigureAwait(false);
+        var capabilities = (await indexerService.ListCapabilitiesAsync(cancellationToken).ConfigureAwait(false))
+            .ToDictionary(capability => capability.IndexerId);
 
         var responses = new List<IndexerResponse>(indexers.Count);
         foreach (var indexer in indexers)
         {
             var connections = await indexerService.ListConnectionsAsync(indexer.Id, cancellationToken)
                 .ConfigureAwait(false);
-            responses.Add(CreateResponse(indexer, connections.Count));
+            capabilities.TryGetValue(indexer.Id, out var indexerCapabilities);
+            responses.Add(CreateResponse(indexer, connections.Count, indexerCapabilities));
         }
 
         return Results.Ok(responses);
@@ -279,7 +282,10 @@ internal sealed class IndexersEndpointGroup : IApiEndpointGroup
         return Results.Ok(result);
     }
 
-    private static IndexerResponse CreateResponse(Indexer indexer, int connectionCount)
+    private static IndexerResponse CreateResponse(
+        Indexer indexer,
+        int connectionCount,
+        IndexerSearchCapabilities? capabilities = null)
     {
         return new()
         {
@@ -295,6 +301,8 @@ internal sealed class IndexersEndpointGroup : IApiEndpointGroup
             SupportedContentTypes = [.. indexer.SupportedContentTypes],
             DefinitionType = indexer.DefinitionType,
             ConnectionCount = connectionCount,
+            SearchFacets = capabilities?.SearchFacets ?? [],
+            SupportsKeywordSearch = capabilities?.SupportsKeywordSearch ?? false,
             CreatedAt = indexer.CreatedAt,
             CreatedByUserId = indexer.CreatedByUserId,
             ModifiedAt = indexer.ModifiedAt,

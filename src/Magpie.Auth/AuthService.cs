@@ -151,9 +151,11 @@ internal sealed class AuthService(
                                 lockedUntil),
                             cancellationToken)
                         .ConfigureAwait(false);
+                    Telemetry.Lockouts.Add(1);
                 }
             }
 
+            Telemetry.LoginAttempts.Add(1, new KeyValuePair<string, object?>("outcome", "failure"));
             return null;
         }
 
@@ -161,6 +163,8 @@ internal sealed class AuthService(
         var refreshToken = await tokenService
             .GenerateRefreshTokenAsync(user.Id, accessToken.Jti, cancellationToken)
             .ConfigureAwait(false);
+
+        Telemetry.LoginAttempts.Add(1, new KeyValuePair<string, object?>("outcome", "success"));
 
         return new AuthSession
         {
@@ -182,6 +186,7 @@ internal sealed class AuthService(
 
         if (userId is null)
         {
+            Telemetry.TokensRefreshed.Add(1, new KeyValuePair<string, object?>("outcome", "invalid_or_expired"));
             return null;
         }
 
@@ -189,6 +194,7 @@ internal sealed class AuthService(
             .ConfigureAwait(false);
         if (user is null || !user.Enabled)
         {
+            Telemetry.TokensRefreshed.Add(1, new KeyValuePair<string, object?>("outcome", "invalid_or_expired"));
             return null;
         }
 
@@ -196,6 +202,8 @@ internal sealed class AuthService(
         var rotatedToken = await tokenService
             .GenerateRefreshTokenAsync(user.Id, accessToken.Jti, cancellationToken)
             .ConfigureAwait(false);
+
+        Telemetry.TokensRefreshed.Add(1, new KeyValuePair<string, object?>("outcome", "success"));
 
         return new AuthSession
         {

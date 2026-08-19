@@ -34,6 +34,7 @@ const NotificationsPage = lazy(() => import('@/pages/NotificationsPage/Notificat
 const GeneralPage = lazy(() => import('@/pages/GeneralPage/GeneralPage'));
 const UsersPage = lazy(() => import('@/pages/UsersPage/UsersPage'));
 const IndexersPage = lazy(() => import('@/pages/IndexersPage/IndexersPage'));
+const IndexerSearchPage = lazy(() => import('@/pages/IndexerSearchPage/IndexerSearchPage'));
 const DownloadClientsPage = lazy(() => import('@/pages/DownloadClientsPage/DownloadClientsPage'));
 const RemotePathMappingsPage = lazy(() => import('@/pages/RemotePathMappingsPage/RemotePathMappingsPage'));
 const MediaServersPage = lazy(() => import('@/pages/MediaServersPage/MediaServersPage'));
@@ -102,6 +103,10 @@ export const routes: RouteObject[] = [
                     {
                         path: 'indexers',
                         element: <IndexersPage />,
+                    },
+                    {
+                        path: 'indexers/search',
+                        element: <IndexerSearchPage />,
                     },
                     {
                         path: 'download-clients',

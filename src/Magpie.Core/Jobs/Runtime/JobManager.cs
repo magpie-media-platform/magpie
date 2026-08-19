@@ -1,6 +1,9 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.Globalization;
 using System.Linq;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -109,22 +112,118 @@ internal sealed class JobManager(
         }
     }
 
-    private static void ValidateRequiredParameters(JobSpec spec, IReadOnlyDictionary<string, string>? parameters)
+    private static void ValidateParameters(
+        JobSpec spec,
+        IReadOnlyDictionary<string, string>? parameters,
+        bool requireRequired = true)
     {
         foreach (var parameter in spec.Parameters)
         {
-            if (!parameter.Required)
-            {
-                continue;
-            }
-
             if (parameters is null ||
                 !parameters.TryGetValue(parameter.Name, out var value) ||
                 string.IsNullOrWhiteSpace(value))
             {
-                throw new MagpieException($"Required parameter {parameter.Name} is missing.");
+                if (requireRequired && parameter.Required)
+                {
+                    throw new MagpieException($"Required parameter {parameter.Name} is missing.");
+                }
+
+                continue;
+            }
+
+            var valid = parameter.Type switch
+            {
+                DataType.String => true,
+                DataType.Number => double.TryParse(
+                    value,
+                    NumberStyles.Float,
+                    CultureInfo.InvariantCulture,
+                    out var number) && double.IsFinite(number),
+                DataType.Boolean => bool.TryParse(value, out _),
+                DataType.Date => DateTime.TryParse(
+                    value,
+                    CultureInfo.InvariantCulture,
+                    DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
+                    out _),
+                _ => true,
+            };
+            if (!valid)
+            {
+                var typeName = parameter.Type.ToString().ToLowerInvariant();
+                throw new MagpieException($"Parameter {parameter.Name} must be a valid {typeName}.");
             }
         }
+    }
+
+    private static void ValidateEventTriggerParameters(
+        JobSpec spec,
+        IReadOnlyDictionary<string, string> parameters)
+    {
+        var resolved = new Dictionary<string, string>(parameters.Count);
+        foreach (var (name, expression) in parameters)
+        {
+            var type = spec.Parameters.FirstOrDefault(parameter => parameter.Name == name)?.Type ?? DataType.String;
+            resolved[name] = TransformEventParameter(expression, EventBindingValidationSample(type));
+        }
+
+        ValidateParameters(spec, resolved, requireRequired: false);
+    }
+
+    private static string EventBindingValidationSample(DataType type) => type switch
+    {
+        DataType.Number => "0",
+        DataType.Boolean => "true",
+        DataType.Date => "2000-01-01",
+        _ => string.Empty,
+    };
+
+    private static string TransformEventParameter(string expression, string replacement)
+    {
+        var result = new StringBuilder(expression.Length);
+        for (var index = 0; index < expression.Length;)
+        {
+            if (expression.AsSpan(index).StartsWith("$${", StringComparison.Ordinal))
+            {
+                result.Append("${");
+                index += 3;
+                continue;
+            }
+
+            if (!expression.AsSpan(index).StartsWith("${", StringComparison.Ordinal))
+            {
+                result.Append(expression[index]);
+                index++;
+                continue;
+            }
+
+            const string prefix = "${event.";
+            if (!expression.AsSpan(index).StartsWith(prefix, StringComparison.Ordinal))
+            {
+                throw new MagpieException("Event binding is malformed.");
+            }
+
+            var keyStart = index + prefix.Length;
+            var end = keyStart;
+            while (end < expression.Length && expression[end] != '}')
+            {
+                if (expression[end] == '{')
+                {
+                    throw new MagpieException("Event binding is malformed.");
+                }
+
+                end++;
+            }
+
+            if (end == expression.Length || end == keyStart)
+            {
+                throw new MagpieException("Event binding is malformed.");
+            }
+
+            result.Append(replacement);
+            index = end + 1;
+        }
+
+        return result.ToString();
     }
 
     private static Role GetRequiredRole(JobScopeKind scope)
@@ -212,7 +311,7 @@ internal sealed class JobManager(
     {
         var spec = GetSpec(request.JobType);
         AuthorizeManualRun(spec, callerRole);
-        ValidateRequiredParameters(spec!, request.Parameters);
+        ValidateParameters(spec!, request.Parameters);
 
         var authorized = request with { UserId = callerUserId, Mode = JobExecutionMode.Queue };
         return await ExecuteAsync(authorized, cancellationToken).ConfigureAwait(false);
@@ -226,7 +325,7 @@ internal sealed class JobManager(
     {
         var spec = GetSpec(request.JobType);
         AuthorizeManualRun(spec, callerRole);
-        ValidateRequiredParameters(spec!, request.Parameters);
+        ValidateParameters(spec!, request.Parameters);
 
         if (!spec!.SupportsImmediate)
         {
@@ -281,6 +380,14 @@ internal sealed class JobManager(
             DedupKey = dedupKey,
             NotBeforeAt = request.NotBeforeAt,
         };
+
+        if (Activity.Current is { } currentActivity)
+        {
+            DistributedContextPropagator.Current.Inject(
+                currentActivity,
+                execution.TriggerContext,
+                static (carrier, key, value) => ((IDictionary<string, string>)carrier!)[key] = value);
+        }
 
         execution.LockPartition = ResolveLockPartition(
             spec?.ConcurrencyScope ?? ConcurrencyScope.PerType,
@@ -526,7 +633,9 @@ internal sealed class JobManager(
         Role ownerRole,
         CancellationToken cancellationToken)
     {
-        AuthorizeTriggerCreate(GetSpec(create.JobType), JobTriggerMode.Event, ownerRole);
+        var spec = GetSpec(create.JobType);
+        AuthorizeTriggerCreate(spec, JobTriggerMode.Event, ownerRole);
+        ValidateEventTriggerParameters(spec!, create.Parameters);
         return await eventTriggerRepository.CreateAsync(
             new EventTrigger
             {
@@ -558,8 +667,34 @@ internal sealed class JobManager(
             return false;
         }
 
-        AuthorizeTriggerMutation(GetSpec(trigger.JobType), trigger.Scope, trigger.CreatedByUserId, callerUserId,
-            callerIsAdmin);
+        var spec = GetSpec(trigger.JobType);
+
+        AuthorizeTriggerMutation(spec, trigger.Scope, trigger.CreatedByUserId, callerUserId, callerIsAdmin);
+
+        if (spec is not null)
+        {
+            var parameters = new Dictionary<string, string>(trigger.Parameters);
+            foreach (var key in patch.Parameters?.Remove ?? [])
+            {
+                parameters.Remove(key);
+            }
+
+            foreach (var (key, value) in patch.Parameters?.Add ?? [])
+            {
+                parameters[key] = value;
+            }
+
+            foreach (var (key, value) in patch.Parameters?.Update ?? [])
+            {
+                if (parameters.ContainsKey(key))
+                {
+                    parameters[key] = value;
+                }
+            }
+
+            ValidateEventTriggerParameters(spec, parameters);
+        }
+
         return await eventTriggerRepository.PatchAsync(
             patch with { Id = triggerId }, callerUserId, cancellationToken).ConfigureAwait(false);
     }

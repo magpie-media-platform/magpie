@@ -24,6 +24,7 @@ internal interface ICardigannSessionManager
         Uri baseUri,
         HttpMethod method,
         Uri requestUri,
+        string? formBody,
         string userAgent,
         bool captureCookies,
         CancellationToken cancellationToken);

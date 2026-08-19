@@ -19,6 +19,23 @@ internal sealed class MediaFileRepository(
     MagpieDbContext context,
     ILogger<MediaFileRepository> logger) : IMediaFileRepository
 {
+    public async Task<MediaFile?> GetByPathAsync(string filePath, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var pathKey = GetPathKey(filePath);
+            return await context.MediaFiles
+                .AsNoTracking()
+                .FirstOrDefaultAsync(mediaFile => mediaFile.PathKey == pathKey, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "The media file repository failed to read file path {FilePath}.", filePath);
+            throw;
+        }
+    }
+
     public async Task<IEnumerable<MediaFile>> ListAllAsync(CancellationToken cancellationToken = default)
     {
         try
@@ -115,6 +132,7 @@ internal sealed class MediaFileRepository(
     {
         try
         {
+            mediaFile.PathKey = GetPathKey(mediaFile.FilePath);
             mediaFile.CreatedByUserId = createdByUserId;
             context.MediaFiles.Add(mediaFile);
             await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
@@ -154,6 +172,7 @@ internal sealed class MediaFileRepository(
     {
         try
         {
+            var pathKey = GetPathKey(mediaFile.FilePath);
             var updated = await context.MediaFiles
                 .Where(item => item.Id == mediaFile.Id)
                 .ExecuteUpdateAsync(
@@ -162,6 +181,7 @@ internal sealed class MediaFileRepository(
                         .SetProperty(item => item.FileKind, mediaFile.FileKind)
                         .SetProperty(item => item.MimeType, mediaFile.MimeType)
                         .SetProperty(item => item.FilePath, mediaFile.FilePath)
+                        .SetProperty(item => item.PathKey, pathKey)
                         .SetProperty(item => item.FileSize, mediaFile.FileSize)
                         .SetProperty(item => item.MediaInfo, mediaFile.MediaInfo)
                         .SetProperty(item => item.ModifiedAt, mediaFile.ModifiedAt)
@@ -176,4 +196,7 @@ internal sealed class MediaFileRepository(
             throw;
         }
     }
+
+    private static string GetPathKey(string filePath) =>
+        OperatingSystem.IsWindows() ? filePath.ToUpperInvariant() : filePath;
 }

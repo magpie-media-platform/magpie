@@ -15,20 +15,12 @@ namespace Magpie.Extensions.Tmdb.QueryEngine;
 internal sealed class QueryEngine(
     ISettingsResolver settingsResolver,
     IQueryExecutor executor,
-    IQueryCache cache,
+    IQueryCoordinator cache,
     ITmdbClient client,
     IQueryPlanner planner,
     ILogger<QueryEngine> logger) : IQueryEngine
 {
     public async Task<QueryExecution> SearchAsync(QueryRequest request, CancellationToken cancellationToken)
-    {
-        return await SearchAsync(request, null, cancellationToken).ConfigureAwait(false);
-    }
-
-    public async Task<QueryExecution> SearchAsync(
-        QueryRequest request,
-        ExecutionTrace? executionTrace,
-        CancellationToken cancellationToken)
     {
         var plan = planner.Plan(request);
         var context = await settingsResolver.AcquireContextAsync(
@@ -51,29 +43,61 @@ internal sealed class QueryEngine(
         }
 
         var startedTimestamp = Stopwatch.GetTimestamp();
-        executionTrace ??= logger.IsEnabled(LogLevel.Trace) ? new ExecutionTrace() : null;
-        if (executionTrace is not null)
+        var activity = Telemetry.Source.StartActivity("tmdb.query.execute");
+        try
         {
-            context = context with { ExecutionTrace = executionTrace };
-        }
+            activity?.SetTag("magpie.query.fingerprint", plan.Fingerprint);
+            if (activity?.IsAllDataRequested == true)
+            {
+                activity.AddEvent(new ActivityEvent(
+                    "plan",
+                    tags: new ActivityTagsCollection
+                    {
+                        ["magpie.query.plan_json"] = plan.SerializePlan(),
+                        ["magpie.query.anchor_kind"] = plan.AnchorKindName(),
+                        ["magpie.query.known_empty"] = plan.IsKnownEmpty(),
+                        ["magpie.query.warnings"] = plan.Warnings.ToArray()
+                    }));
+            }
 
-        var result = await executor.ExecuteAsync(plan, context, cancellationToken).ConfigureAwait(false);
-        result.Diagnostics.Trace = context.ExecutionTrace;
-        result.Diagnostics.Plan = plan;
-        result.Diagnostics.StartedTimestamp = startedTimestamp;
-        return result with
+            var telemetry = new QueryTelemetry(activity);
+            context = context with { Telemetry = telemetry };
+            var result = await executor.ExecuteAsync(plan, context, cancellationToken).ConfigureAwait(false);
+            return result with
+            {
+                Hits = ResolveImagesAsync(
+                    GuardAsync(
+                        result.Hits,
+                        plan,
+                        request.Route,
+                        result.Warnings,
+                        result.Diagnostics,
+                        telemetry,
+                        startedTimestamp,
+                        result.SourceHasMore,
+                        cancellationToken),
+                    context,
+                    cancellationToken)
+            };
+        }
+        catch (Exception ex)
         {
-            Hits = ResolveImagesAsync(
-                GuardAsync(
-                    result.Hits,
-                    plan,
-                    result.Warnings,
-                    result.Diagnostics,
-                    result.SourceHasMore,
-                    cancellationToken),
-                context,
-                cancellationToken)
-        };
+            if (activity is not null)
+            {
+                activity.SetStatus(ActivityStatusCode.Error, ex.Message);
+                activity.Dispose();
+            }
+
+            var elapsed = (Stopwatch.GetTimestamp() - startedTimestamp) * 1000d / Stopwatch.Frequency;
+            Telemetry.Duration.Record(
+                elapsed,
+                Telemetry.ProviderTag,
+                new KeyValuePair<string, object?>("content_type", request.Route.ContentTypeName()),
+                new KeyValuePair<string, object?>(
+                    "terminal_reason",
+                    cancellationToken.IsCancellationRequested ? TerminalReason.Cancelled : TerminalReason.Error));
+            throw;
+        }
     }
 
     private async IAsyncEnumerable<SearchHit> ResolveImagesAsync(
@@ -108,8 +132,11 @@ internal sealed class QueryEngine(
     private async IAsyncEnumerable<SearchHit> GuardAsync(
         IAsyncEnumerable<SearchHit> hits,
         QueryPlan plan,
+        ContentRoute route,
         List<string> warnings,
         QueryExecutionDiagnostics diagnostics,
+        QueryTelemetry telemetry,
+        long startedTimestamp,
         bool sourceHasMore,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
@@ -156,21 +183,40 @@ internal sealed class QueryEngine(
         }
         finally
         {
-            if (diagnostics.Trace is { } trace && diagnostics.Plan is { } tracedPlan)
+            var hasMore = sourceHasMore ||
+                diagnostics.StreamFaulted ||
+                (plan.MaximumResults is { } maximumResults && surviving > maximumResults);
+            var terminalReason = diagnostics.StreamFaulted
+                ? TerminalReason.Error
+                : cancellationToken.IsCancellationRequested
+                    ? TerminalReason.Cancelled
+                    : plan.IsKnownEmpty()
+                        ? TerminalReason.KnownEmpty
+                        : hasMore
+                            ? TerminalReason.Unbounded
+                            : TerminalReason.Completed;
+            var elapsed = (Stopwatch.GetTimestamp() - startedTimestamp) * 1000d / Stopwatch.Frequency;
+            var contentType = new KeyValuePair<string, object?>("content_type", route.ContentTypeName());
+            Telemetry.Duration.Record(
+                elapsed,
+                Telemetry.ProviderTag,
+                contentType,
+                new KeyValuePair<string, object?>("terminal_reason", terminalReason));
+            Telemetry.Results.Record(surviving, Telemetry.ProviderTag, contentType);
+            if (telemetry.Activity is { } activity)
             {
-                var hasMore = sourceHasMore ||
-                    diagnostics.StreamFaulted ||
-                    (tracedPlan.MaximumResults is { } maximumResults && surviving > maximumResults);
-                trace.CompleteExecution(hasMore);
-                if (logger.IsEnabled(LogLevel.Trace))
+                activity.SetTag("magpie.query.rows_fetched", telemetry.RowsFetched);
+                activity.SetTag("magpie.query.rows_surviving", surviving);
+                activity.SetTag("magpie.query.request_count", telemetry.Requests);
+                activity.SetTag("magpie.query.pruned_nodes", telemetry.PrunedNodes);
+                activity.SetTag("magpie.query.has_more", hasMore);
+                activity.SetTag("magpie.query.terminal_reason", terminalReason);
+                if (diagnostics.StreamFaulted)
                 {
-                    var executionJson = trace.SerializeExecution(
-                        TimeSpan.FromSeconds(
-                            (Stopwatch.GetTimestamp() - diagnostics.StartedTimestamp) / (double)Stopwatch.Frequency),
-                        surviving,
-                        hasMore);
-                    logger.LogTrace("TMDb query execution {Execution}", executionJson);
+                    activity.SetStatus(ActivityStatusCode.Error);
                 }
+
+                activity.Dispose();
             }
         }
     }

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -13,6 +14,7 @@ using Magpie.Abstractions.Content;
 using Magpie.Abstractions.Releases;
 using Magpie.Abstractions.Repositories;
 using Magpie.Core.Events;
+using Magpie.Core.Observability;
 using Magpie.Models;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
@@ -220,6 +222,27 @@ internal sealed class DownloadImportItemJob(
             : ImportMode.Move;
     }
 
+    private static void RecordTransferOutcome(Activity? activity, int fileCount, string outcome)
+    {
+        activity?.SetTag("magpie.import.outcome", outcome);
+        var outcomeTag = new KeyValuePair<string, object?>("outcome", outcome);
+        DownloadTelemetry.ImportFiles.Record(fileCount, outcomeTag);
+    }
+
+    private static void SetFailureReason(Activity? activity, Activity? importActivity, DownloadFailureReason reason)
+    {
+        var name = reason.ToString();
+        activity?.SetTag("magpie.download.failure_reason", name);
+        activity?.SetStatus(ActivityStatusCode.Error, name);
+        importActivity?.SetTag("magpie.download.failure_reason", name);
+        importActivity?.SetStatus(ActivityStatusCode.Error, name);
+    }
+
+    private static string TransferModeName(ImportMode mode)
+    {
+        return mode == ImportMode.Copy ? "copy" : "move";
+    }
+
     private static string NormaliseBlockedExtension(string pattern)
     {
         if (string.IsNullOrWhiteSpace(pattern))
@@ -377,6 +400,10 @@ internal sealed class DownloadImportItemJob(
         var userId = context.ManualTriggerUserId;
         var correlationId = context.CorrelationId;
 
+        using var activity = DownloadTelemetry.Source.StartActivity("DownloadImport");
+        activity?.SetTag("magpie.download.id", downloadId.ToString());
+        activity?.SetTag("magpie.import.dry_run", dryRun);
+
         progressReporter?.Report(0, "The import will load the download.");
 
         var download = await downloadRepository.GetByIdAsync(downloadId, cancellationToken)
@@ -405,6 +432,7 @@ internal sealed class DownloadImportItemJob(
                 .ConfigureAwait(false);
         }
 
+        var dryRunTag = new KeyValuePair<string, object?>("dry_run", dryRun);
         try
         {
             await ImportCoreAsync(
@@ -414,8 +442,10 @@ internal sealed class DownloadImportItemJob(
                 dryRun,
                 collisionMode,
                 progressReporter,
+                activity,
                 cancellationToken)
                 .ConfigureAwait(false);
+            DownloadTelemetry.Imports.Add(1, new("outcome", "success"), dryRunTag);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -423,10 +453,14 @@ internal sealed class DownloadImportItemJob(
         }
         catch (DownloadFileSafetyException)
         {
+            DownloadTelemetry.Imports.Add(1, new("outcome", "failure"), dryRunTag);
             throw;
         }
         catch (Exception ex) when (!dryRun)
         {
+            activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+            activity?.SetTag("magpie.download.failure_reason", nameof(DownloadFailureReason.ImportFailed));
+            DownloadTelemetry.Imports.Add(1, new("outcome", "failure"), dryRunTag);
             await MarkImportFailedAsync(download, userId, correlationId, ex, cancellationToken)
                 .ConfigureAwait(false);
             throw;
@@ -440,6 +474,7 @@ internal sealed class DownloadImportItemJob(
         bool dryRun,
         ImportCollisionMode? collisionMode,
         IProgressReporter? progress,
+        Activity? importActivity,
         CancellationToken cancellationToken)
     {
         var downloadId = download.Id;
@@ -447,11 +482,19 @@ internal sealed class DownloadImportItemJob(
         cancellationToken.ThrowIfCancellationRequested();
         progress?.Report(null, "The import will load the content hierarchy.");
 
-        var (contentItem, ancestors, release) = await ResolveChainAsync(
-            download, userId, correlationId, cancellationToken)
-            .ConfigureAwait(false);
+        ContentItem contentItem;
+        IReadOnlyList<ContentHierarchyItem> ancestors;
+        Release release;
+        using (DownloadTelemetry.Source.StartActivity("ResolveChain"))
+        {
+            (contentItem, ancestors, release) = await ResolveChainAsync(
+                download, userId, correlationId, cancellationToken)
+                .ConfigureAwait(false);
+        }
 
         var transferMode = ResolveTransferMode(release.Protocol);
+        importActivity?.SetTag("magpie.download.protocol", release.Protocol);
+        importActivity?.SetTag("magpie.import.transfer_mode", TransferModeName(transferMode));
 
         var hierarchyItem = ancestors[0];
         var resolvedRootFolderId = hierarchyItem.EffectiveRootFolderId;
@@ -481,6 +524,7 @@ internal sealed class DownloadImportItemJob(
             userId,
             correlationId,
             progress,
+            importActivity,
             cancellationToken)
             .ConfigureAwait(false);
 
@@ -844,9 +888,12 @@ internal sealed class DownloadImportItemJob(
         Guid? userId,
         Guid? correlationId,
         IProgressReporter? progress,
+        Activity? importActivity,
         CancellationToken cancellationToken)
     {
         var downloadId = download.Id;
+
+        using var activity = DownloadTelemetry.Source.StartActivity("BuildImportOperation");
 
         if (string.IsNullOrWhiteSpace(download.OutputPath))
         {
@@ -912,6 +959,10 @@ internal sealed class DownloadImportItemJob(
                 .ConfigureAwait(false);
             if (blockedPattern is not null)
             {
+                var patternTag = new KeyValuePair<string, object?>("pattern", blockedPattern);
+                DownloadTelemetry.ImportBlockedFiles.Add(1, patternTag);
+                activity?.SetTag("magpie.import.blocked_count", 1);
+                SetFailureReason(activity, importActivity, DownloadFailureReason.BlockedFileType);
                 if (!dryRun)
                 {
                     await MarkDownloadFailedAsync(
@@ -968,8 +1019,12 @@ internal sealed class DownloadImportItemJob(
             }
         }
 
+        activity?.SetTag("magpie.import.primary_file_count", primaryCandidates.Count);
+        activity?.SetTag("magpie.import.sidecar_count", pairedSidecars.Count);
+
         if (primaryCandidates.Count == 0)
         {
+            SetFailureReason(activity, importActivity, DownloadFailureReason.NoUsableContent);
             if (!dryRun)
             {
                 await MarkDownloadFailedAsync(
@@ -1064,6 +1119,7 @@ internal sealed class DownloadImportItemJob(
                 "Download {DownloadId} has no operations after the collision filter. " +
                 "The job will mark it Failed/DownloadStuck",
                 downloadId);
+            SetFailureReason(activity, importActivity, DownloadFailureReason.DownloadStuck);
             await MarkDownloadFailedAsync(
                 download,
                 DownloadFailureReason.DownloadStuck,
@@ -1178,6 +1234,10 @@ internal sealed class DownloadImportItemJob(
         IProgressReporter? progress,
         CancellationToken cancellationToken)
     {
+        using var activity = DownloadTelemetry.Source.StartActivity("Transfer");
+        activity?.SetTag("magpie.import.file_count", plannedOps.Count);
+        activity?.SetTag("magpie.import.transfer_mode", TransferModeName(transferMode));
+
         var backups = StashReplaceTargets(replaceTargets, downloadId);
 
         var transferred = new List<TransferredOperation>(plannedOps.Count);
@@ -1193,6 +1253,12 @@ internal sealed class DownloadImportItemJob(
                     i,
                     plannedOps.Count,
                     $"The import will process {Path.GetFileName(op.Source)}.");
+                activity?.AddEvent(new ActivityEvent(
+                    "file.transfer",
+                    tags: new ActivityTagsCollection
+                    {
+                        ["magpie.import.file"] = Path.GetFileName(op.Source),
+                    }));
 
                 var destDir = Path.GetDirectoryName(op.Destination);
                 if (!string.IsNullOrEmpty(destDir))
@@ -1210,10 +1276,13 @@ internal sealed class DownloadImportItemJob(
         {
             RevertTransfers(transferred, downloadId);
             RestoreReplaceTargets(backups, downloadId);
+            RecordTransferOutcome(activity, transferred.Count, "reverted");
             throw;
         }
         catch (Exception ex)
         {
+            RecordTransferOutcome(activity, transferred.Count, "failed");
+            activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
             logger.LogError(
                 ex,
                 "The job failed to {TransferMode} {SourcePath} to {DestinationPath} for download {DownloadId}",
@@ -1232,6 +1301,7 @@ internal sealed class DownloadImportItemJob(
                 ex);
         }
 
+        RecordTransferOutcome(activity, transferred.Count, "success");
         return new TransferResult(transferred, backups);
     }
 
@@ -1624,9 +1694,16 @@ internal sealed class DownloadImportItemJob(
             [.. allFiles.Select(file => file.Operation.Destination)],
             cancellationToken).ConfigureAwait(false);
 
-        var transferVerb = allFiles.Count > 0 && allFiles[0].ExecutedMode == ImportMode.Copy
+        var executedMode = allFiles.Count > 0 ? allFiles[0].ExecutedMode : ImportMode.Move;
+        var transferVerb = allFiles.Count > 0 && executedMode == ImportMode.Copy
             ? "Copied"
             : "Moved";
+
+        using var activity = DownloadTelemetry.Source.StartActivity("PersistImport");
+        activity?.SetTag("magpie.import.leaf_group_count", groups.Count);
+
+        var transferModeTag = new KeyValuePair<string, object?>("transfer_mode", TransferModeName(executedMode));
+        DownloadTelemetry.ImportBytes.Record(probes.Values.Sum(probe => probe.FileSize), transferModeTag);
 
         await transactionManager.ExecuteWithTransactionAsync(
             async ct =>
@@ -1848,6 +1925,8 @@ internal sealed class DownloadImportItemJob(
                         },
                         ct).ConfigureAwait(false);
                 }
+
+                activity?.SetTag("magpie.import.replaced_count", replacedCount);
             },
             cancellationToken).ConfigureAwait(false);
     }
@@ -2015,6 +2094,9 @@ internal sealed class DownloadImportItemJob(
         IReadOnlyList<string> filePaths,
         CancellationToken cancellationToken)
     {
+        using var activity = DownloadTelemetry.Source.StartActivity("ProbeFiles");
+        activity?.SetTag("magpie.import.probed_file_count", filePaths.Count);
+
         var probes = new Dictionary<string, MediaFileProbe>();
         foreach (var filePath in filePaths)
         {

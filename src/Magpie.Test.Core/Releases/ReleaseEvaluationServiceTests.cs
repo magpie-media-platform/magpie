@@ -4,7 +4,6 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
-using Magpie.Abstractions.Releases;
 using Magpie.Abstractions.Repositories;
 using Magpie.Core.Releases;
 using Magpie.Models;
@@ -28,7 +27,8 @@ public sealed class ReleaseEvaluationServiceTests
 {
     private Mock<IContentFactProvider> _contentFactProvider = null!;
     private Mock<IContentHierarchyItemRepository> _contentHierarchyItems = null!;
-    private IReleaseEvaluationService _subject = null!;
+    private Mock<IReleaseMatchContentTypeDefinitionProvider> _releaseMatchProvider = null!;
+    private ReleaseEvaluationService _subject = null!;
     private HashSet<Guid> _matchingIds = null!;
     private ContentHierarchyItem _show = null!;
     private ContentHierarchyItem _season1 = null!;
@@ -196,8 +196,8 @@ public sealed class ReleaseEvaluationServiceTests
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(new PagedList<MaterializedMetadata>());
 
-        var releaseMatchProvider = new Mock<IReleaseMatchContentTypeDefinitionProvider>();
-        releaseMatchProvider
+        _releaseMatchProvider = new Mock<IReleaseMatchContentTypeDefinitionProvider>();
+        _releaseMatchProvider
             .Setup(value => value.IsMatch(
                 It.IsAny<ContentTarget>(),
                 It.IsAny<IReadOnlyList<IReadOnlyList<ContentFact>>>(),
@@ -212,7 +212,7 @@ public sealed class ReleaseEvaluationServiceTests
                     : ReleaseMatchResult.NoMatch);
 
         var contentTypeRegistry = new Mock<IContentTypeRegistry>();
-        contentTypeRegistry.Setup(value => value.FindProviderFor("tv")).Returns(releaseMatchProvider.Object);
+        contentTypeRegistry.Setup(value => value.FindProviderFor("tv")).Returns(_releaseMatchProvider.Object);
         contentTypeRegistry
             .Setup(value => value.GetChildLevels("tv", "show"))
             .Returns([new ContentHierarchyLevelDefinition
@@ -319,6 +319,47 @@ public sealed class ReleaseEvaluationServiceTests
         _contentHierarchyItems.Verify(
             value => value.GetLineageAsync(_season1.Id, It.IsAny<CancellationToken>()),
             Times.Never);
+    }
+
+    [Test]
+    public async Task ResolveScopeAsync_UsesPrecomputedAnchorAssessment_AndStillAssessesChildren()
+    {
+        // Arrange
+        var release = new Release { Protocol = "torrent", Title = "Show.Complete.Series" };
+        _matchingIds.UnionWith(
+        [
+            _show.Id,
+            _season1.Id,
+            _season2.Id,
+            _season3.Id,
+            _episode1.Id,
+            _episode2.Id,
+            _episode3.Id,
+            _episode4.Id,
+            _episode5.Id,
+            _episode6.Id,
+        ]);
+        var context = await _subject.CreateEvaluationContextAsync(_show.Id).ConfigureAwait(false);
+        var assessment = _subject.AssessMatch(release, [], context);
+
+        // Act
+        var result = await _subject.ResolveScopeAsync(release, [], context, assessment).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.ScopeNodeIds, Does.Contain(_show.Id));
+            _releaseMatchProvider.Verify(provider => provider.IsMatch(
+                It.Is<ContentTarget>(target => target.Item.Id == _show.Id),
+                It.IsAny<IReadOnlyList<IReadOnlyList<ContentFact>>>(),
+                It.IsAny<Release>(),
+                It.IsAny<IReadOnlyList<ContentFact>>()), Times.Once);
+            _releaseMatchProvider.Verify(provider => provider.IsMatch(
+                It.Is<ContentTarget>(target => target.Item.Id == _season1.Id),
+                It.IsAny<IReadOnlyList<IReadOnlyList<ContentFact>>>(),
+                It.IsAny<Release>(),
+                It.IsAny<IReadOnlyList<ContentFact>>()), Times.Once);
+        }
     }
 
     [Test]

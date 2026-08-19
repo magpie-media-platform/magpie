@@ -79,18 +79,28 @@ describe('ExecutionRow', () => {
         expect(logs).not.toBeVisible();
     });
 
-    it('shows progress bar for running executions', () => {
+    it.each([
+        [42.4, 42],
+        [-1, 0],
+        [101, 99],
+        [99.6, 99],
+        [Number.NaN, 0],
+    ])('shows whole, clamped progress for %s', (progress, displayProgress) => {
         renderWithClient(
             <ExecutionRow
                 execution={makeExecution({
                     status: 'Running',
-                    progress: 45,
+                    progress,
                     completedAt: null,
                 })}
             />,
         );
         const progressBar = screen.getByTestId('execution-row__progress-bar');
-        expect(progressBar).toHaveAttribute('aria-valuenow', '45');
+        expect(progressBar).toHaveAttribute('aria-valuenow', `${displayProgress}`);
+        expect(screen.getByText(`${displayProgress}%`)).toBeInTheDocument();
+        expect(screen.getByTestId('execution-row__progress-fill').style.width).toBe(
+            displayProgress > 0 ? `${displayProgress}%` : '',
+        );
     });
 
     it('does not show progress bar for completed executions', () => {

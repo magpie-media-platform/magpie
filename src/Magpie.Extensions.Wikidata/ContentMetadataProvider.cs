@@ -17,7 +17,7 @@ namespace Magpie.Extensions.Wikidata;
 internal sealed class ContentMetadataProvider(
     ISettingsResolver settingsResolver,
     IEntityResolver entityResolver,
-    IQueryCache cache,
+    IQueryCoordinator cache,
     IQueryExecutor queryExecutor,
     TimeProvider timeProvider,
     ILogger<ContentMetadataProvider> logger) : IContentHierarchyMetadataRelationshipProvider

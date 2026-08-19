@@ -257,6 +257,11 @@ public static class DefaultJobTriggerCatalog
                     Scope = JobScope.Content,
                     Name = "Content metadata refresh on creation",
                     EventFilter = SingleEventFilter(MagpieEvents.Names.ContentHierarchyItemCreated),
+                    Parameters = new Dictionary<string, string>
+                    {
+                        [MagpieJobs.Parameters.ContentHierarchyItemId] =
+                            $"${{event.{MagpieEvents.Keys.ContentHierarchyItemId}}}"
+                    },
                     Enabled = true,
                     CreatedAt = now,
                 },

@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -146,25 +147,29 @@ internal sealed class CardigannSessionManager(
             document.QuerySelector("input[type=password]") is not null;
     }
 
-    public Task<HttpResponseMessage> SendAsync(
+    public async Task<HttpResponseMessage> SendAsync(
         string sessionKey,
         Uri baseUri,
         HttpMethod method,
         Uri requestUri,
+        string? formBody,
         string userAgent,
         bool captureCookies,
         CancellationToken cancellationToken)
     {
-        return SendCoreAsync(
+        using var content = formBody is null
+            ? null
+            : new StringContent(formBody, Encoding.UTF8, "application/x-www-form-urlencoded");
+        return await SendCoreAsync(
             sessionKey,
             baseUri,
             method,
             requestUri,
             userAgent,
             headers: null,
-            content: null,
+            content,
             captureCookies,
-            cancellationToken);
+            cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<CardigannLoginOutcome> EnsureLoggedInAsync(

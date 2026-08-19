@@ -8,8 +8,6 @@ using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Models.Filtering;
 
-using Microsoft.Extensions.Logging.Abstractions;
-
 using NUnit.Framework;
 
 namespace Magpie.Test.Extensions.OpenLibrary;
@@ -319,7 +317,7 @@ public sealed class QueryPlannerTests
         string expectedDisposition)
     {
         // Arrange
-        var subject = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var subject = new QueryPlanner();
 
         // Act
         var plan = subject.Plan(new QueryRequest
@@ -346,7 +344,7 @@ public sealed class QueryPlannerTests
     public void Plan_FetchNode_WhenOrdinarySearchIsRequested()
     {
         // Arrange
-        var subject = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var subject = new QueryPlanner();
 
         // Act
         var plan = subject.Plan(new QueryRequest
@@ -380,7 +378,7 @@ public sealed class QueryPlannerTests
     public void Plan_EmptyNode_WhenFlatHierarchyDoesNotMatch(string contentType, string level)
     {
         // Arrange
-        var subject = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var subject = new QueryPlanner();
 
         // Act
         var plan = subject.Plan(new QueryRequest
@@ -437,7 +435,7 @@ public sealed class QueryPlannerTests
         string expected)
     {
         // Arrange
-        var subject = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var subject = new QueryPlanner();
 
         // Act
         var plan = subject.Plan(new QueryRequest
@@ -470,7 +468,7 @@ public sealed class QueryPlannerTests
     public void Plan_EmptyNode_WhenLevelAndCriteriaContradictEachOther()
     {
         // Arrange
-        var subject = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var subject = new QueryPlanner();
 
         // Act
         var plan = subject.Plan(new QueryRequest
@@ -508,7 +506,7 @@ public sealed class QueryPlannerTests
     public void Plan_EmptyNode_WhenMaximumResultsIsNotPositive(int maximumResults)
     {
         // Arrange
-        var subject = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var subject = new QueryPlanner();
 
         // Act
         var plan = subject.Plan(new QueryRequest
@@ -541,7 +539,7 @@ public sealed class QueryPlannerTests
     public void Plan_FilterOverFetch_WhenFullCriteriaComposeNameLanguageAndDate()
     {
         // Arrange
-        var subject = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var subject = new QueryPlanner();
         var query = new ContentHierarchyItemCriteria
         {
             ContentType = new CriteriaSet<PropertyCriterion<string>>
@@ -625,7 +623,7 @@ public sealed class QueryPlannerTests
     public void Plan_OneFetch_WhenAuthorNameAndSubjectAreRequested()
     {
         // Arrange
-        var subject = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var subject = new QueryPlanner();
         var query = new ContentHierarchyItemCriteria
         {
             Metadata = new CriteriaSet<MetadataCriteria>
@@ -712,7 +710,7 @@ public sealed class QueryPlannerTests
     public void Plan_AuthorAndPersonFacetAlternatives_WhenRelationshipTypeIsPerson()
     {
         // Arrange
-        var subject = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var subject = new QueryPlanner();
         var query = new ContentHierarchyItemCriteria
         {
             Metadata = new CriteriaSet<MetadataCriteria>
@@ -785,7 +783,7 @@ public sealed class QueryPlannerTests
     public void Plan_AlignedFacetFilter_WhenRelationshipHasSeveralSubjectPredicates(string kind, string expectedField)
     {
         // Arrange
-        var subject = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var subject = new QueryPlanner();
         var query = new ContentHierarchyItemCriteria
         {
             Metadata = new CriteriaSet<MetadataCriteria>
@@ -853,7 +851,7 @@ public sealed class QueryPlannerTests
     public void Plan_AuthorKeyFetch_WhenNativeAuthorIdentityIsRequested()
     {
         // Arrange
-        var subject = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var subject = new QueryPlanner();
         var query = new ContentHierarchyItemCriteria
         {
             Metadata = new CriteriaSet<MetadataCriteria>
@@ -931,7 +929,7 @@ public sealed class QueryPlannerTests
     public void Plan_IdentifierOrGroup_WhenSeveralIdentifierTypesAreAlternatives()
     {
         // Arrange
-        var subject = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var subject = new QueryPlanner();
         var query = new ContentHierarchyItemCriteria
         {
             Metadata = new CriteriaSet<MetadataCriteria>
@@ -1007,7 +1005,7 @@ public sealed class QueryPlannerTests
     public void Plan_WildcardFetchAndExactFilter_WhenTitleIsBounded(CriteriaValueOperator operation, string expected)
     {
         // Arrange
-        var subject = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var subject = new QueryPlanner();
         var query = new ContentHierarchyItemCriteria
         {
             Metadata = new CriteriaSet<MetadataCriteria>
@@ -1050,7 +1048,7 @@ public sealed class QueryPlannerTests
     public void Plan_RequiredFields_WhenOriginalTitleAndPagesNeedVerification()
     {
         // Arrange
-        var subject = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var subject = new QueryPlanner();
         var query = new ContentHierarchyItemCriteria
         {
             Metadata = new CriteriaSet<MetadataCriteria>
@@ -1105,7 +1103,7 @@ public sealed class QueryPlannerTests
     public void Plan_AllIdentifierValues_WhenGroupContainsMoreThanTen()
     {
         // Arrange
-        var subject = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var subject = new QueryPlanner();
         var query = new ContentHierarchyItemCriteria
         {
             Metadata = new CriteriaSet<MetadataCriteria>
@@ -1185,7 +1183,7 @@ public sealed class QueryPlannerTests
     public void Plan_EmptyNode_WhenOnlyNegativeCriterionExists()
     {
         // Arrange
-        var subject = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var subject = new QueryPlanner();
         var query = new ContentHierarchyItemCriteria
         {
             Metadata = new CriteriaSet<MetadataCriteria>
@@ -1236,7 +1234,7 @@ public sealed class QueryPlannerTests
     public void Plan_PredicatesAndDisposition_WhenMetadataTitleCriterionIsRequested()
     {
         // Arrange
-        var subject = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        var subject = new QueryPlanner();
 
         // Act
         var plan = subject.Plan(new QueryRequest

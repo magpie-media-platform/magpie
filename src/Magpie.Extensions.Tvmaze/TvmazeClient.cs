@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.Linq;
 using System.Net;
@@ -10,7 +11,6 @@ using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Extensions.Tvmaze.Mapping;
-using Magpie.Extensions.Tvmaze.Pipeline;
 using Magpie.Sdk.Services;
 
 using Microsoft.Extensions.Logging;
@@ -29,7 +29,6 @@ internal sealed class TvmazeClient(
     public const string DefaultBaseUrl = "https://api.tvmaze.com/";
 
     private readonly HttpClient _http = httpClientFactory.CreateClient(HttpClientName);
-    private readonly AsyncLocal<Action<WireAttemptOutcome>?> _wireAttemptRecorder = new();
 
     private bool _disposed;
 
@@ -58,13 +57,6 @@ internal sealed class TvmazeClient(
         }
 
         return new Uri(builder.ToString(), UriKind.Absolute);
-    }
-
-    IDisposable IClient.BeginExecutionTrace(Action<WireAttemptOutcome> recorder)
-    {
-        var previous = _wireAttemptRecorder.Value;
-        _wireAttemptRecorder.Value = recorder;
-        return new TraceScope(() => _wireAttemptRecorder.Value = previous);
     }
 
     public Task<ProviderSettings> ReadSettingsAsync(CancellationToken cancellationToken)
@@ -293,32 +285,17 @@ internal sealed class TvmazeClient(
         request.Headers.TryAddWithoutValidation("User-Agent", userAgent);
         request.Headers.TryAddWithoutValidation("Accept", "application/json");
 
-        HttpResponseMessage response;
+        using var activity = Telemetry.Source.StartActivity("tvmaze.query.request", ActivityKind.Client);
+        activity?.SetTag("magpie.request.target", uri.ToString());
         try
         {
-            response = await _http.SendAsync(request, cancellationToken).ConfigureAwait(false);
+            return await _http.SendAsync(request, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception exception)
         {
-            _wireAttemptRecorder.Value?.Invoke(new WireAttemptOutcome
-            {
-                Method = HttpMethod.Get.Method,
-                Url = uri.ToString(),
-                Attempt = 1,
-                Failure = exception.GetType().Name
-            });
+            activity?.SetStatus(ActivityStatusCode.Error, exception.Message);
             throw;
         }
-
-        _wireAttemptRecorder.Value?.Invoke(new WireAttemptOutcome
-        {
-            Method = HttpMethod.Get.Method,
-            Url = uri.ToString(),
-            Attempt = 1,
-            StatusCode = (int)response.StatusCode,
-            Redirect = response.StatusCode == HttpStatusCode.MovedPermanently
-        });
-        return response;
     }
 
     public void Dispose()
@@ -330,10 +307,5 @@ internal sealed class TvmazeClient(
 
         _disposed = true;
         _http.Dispose();
-    }
-
-    private sealed class TraceScope(Action dispose) : IDisposable
-    {
-        public void Dispose() => dispose();
     }
 }

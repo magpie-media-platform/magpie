@@ -37,7 +37,7 @@ public class MusicBrainzContentMetadataProviderRelationshipTests
         var settingsResolver = new Mock<ISettingsResolver>();
         settingsResolver.Setup(resolver => resolver.ResolveAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(new Settings());
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetEntityAsync(
                 It.IsAny<EntityCacheKey>(),
                 It.IsAny<Func<CancellationToken, Task<FetchResult<EntityResponseDto>>>>(),

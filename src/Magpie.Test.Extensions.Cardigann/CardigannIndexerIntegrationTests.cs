@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
@@ -64,6 +65,7 @@ public sealed class CardigannIndexerIntegrationTests
                 It.IsAny<Uri>(),
                 It.IsAny<HttpMethod>(),
                 It.IsAny<Uri>(),
+                It.IsAny<string?>(),
                 It.IsAny<string>(),
                 It.IsAny<bool>(),
                 It.IsAny<CancellationToken>()))
@@ -95,6 +97,7 @@ public sealed class CardigannIndexerIntegrationTests
                 FailureKind = ConfigurationFailureKind.Auth,
             });
         var integration = new CardigannIndexerIntegration(
+            Guid.Empty,
             _definition,
             _parser.Object,
             _sessions.Object,
@@ -119,6 +122,7 @@ public sealed class CardigannIndexerIntegrationTests
             Test = new LoginTest { Path = "/", Selector = "a.logout" },
         };
         var integration = new CardigannIndexerIntegration(
+            Guid.Empty,
             _definition,
             _parser.Object,
             _sessions.Object,
@@ -168,6 +172,7 @@ public sealed class CardigannIndexerIntegrationTests
                 It.IsAny<Uri>(),
                 It.IsAny<HttpMethod>(),
                 It.IsAny<Uri>(),
+                It.IsAny<string?>(),
                 It.IsAny<string>(),
                 It.IsAny<bool>(),
                 It.IsAny<CancellationToken>()))
@@ -180,6 +185,7 @@ public sealed class CardigannIndexerIntegrationTests
                 Content = new StringContent("<html></html>"),
             });
         var integration = new CardigannIndexerIntegration(
+            Guid.Empty,
             _definition,
             _parser.Object,
             _sessions.Object,
@@ -201,11 +207,45 @@ public sealed class CardigannIndexerIntegrationTests
                     It.IsAny<Uri>(),
                     It.IsAny<HttpMethod>(),
                     It.IsAny<Uri>(),
+                    It.IsAny<string?>(),
                     It.IsAny<string>(),
                     It.IsAny<bool>(),
                     It.IsAny<CancellationToken>()),
                 Times.Exactly(2));
         }
+    }
+
+    [Test]
+    public async Task SearchAsync_ReturnsMaximumResults_WhenParserReturnsMore()
+    {
+        // Arrange
+        _parser
+            .Setup(p => p.Parse(
+                It.IsAny<string>(),
+                It.IsAny<CardigannDefinition>(),
+                It.IsAny<Uri>(),
+                It.IsAny<IReadOnlyDictionary<string, object?>>()))
+            .Returns(
+            [
+                new Release { Protocol = "torrent", Title = "One" },
+                new Release { Protocol = "torrent", Title = "Two" },
+                new Release { Protocol = "torrent", Title = "Three" },
+            ]);
+        var integration = new CardigannIndexerIntegration(
+            Guid.Empty,
+            _definition,
+            _parser.Object,
+            _sessions.Object,
+            NullLogger<CardigannIndexerIntegration>.Instance);
+
+        // Act
+        var releases = await integration.SearchAsync(
+            new ReleaseSearchRequest { Title = "cool", MaximumResults = 2 },
+            new Dictionary<string, string>(),
+            default).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(releases.Select(release => release.Title), Is.EqualTo(["One", "Two"]));
     }
 
     [Test]
@@ -232,6 +272,7 @@ public sealed class CardigannIndexerIntegrationTests
             .Setup(p => p.ExtractDownloadTarget(It.IsAny<string>(), It.IsAny<DownloadBlock>()))
             .Returns(Magnet);
         var integration = new CardigannIndexerIntegration(
+            Guid.Empty,
             _definition,
             _parser.Object,
             _sessions.Object,
@@ -275,6 +316,7 @@ public sealed class CardigannIndexerIntegrationTests
             .Setup(p => p.ExtractDownloadTarget(It.IsAny<string>(), It.IsAny<DownloadBlock>()))
             .Returns((string?)null);
         var integration = new CardigannIndexerIntegration(
+            Guid.Empty,
             _definition,
             _parser.Object,
             _sessions.Object,
@@ -295,6 +337,7 @@ public sealed class CardigannIndexerIntegrationTests
         // Arrange
         _definition.Search.Inputs["q"] = "{{ .Keywords }}";
         var integration = new CardigannIndexerIntegration(
+            Guid.Empty,
             _definition,
             _parser.Object,
             _sessions.Object,
@@ -314,10 +357,58 @@ public sealed class CardigannIndexerIntegrationTests
                 new Uri("https://tracker.test/"),
                 HttpMethod.Get,
                 new Uri("https://tracker.test/search?q=cool%20movie"),
+                null,
                 It.IsAny<string>(),
                 It.IsAny<bool>(),
                 It.IsAny<CancellationToken>()),
             Times.Once);
+    }
+
+    [Test]
+    public async Task SearchAsync_PostsInputsAndRecordsSanitizedRequest_WhenSearchMethodIsPost()
+    {
+        // Arrange
+        _definition.Search.Paths[0].Method = "post";
+        _definition.Settings.Add(new CardigannSettingDefinition { Name = "passkey", Type = "password" });
+        _definition.Search.Inputs["q"] = "{{ .Keywords }}";
+        _definition.Search.Inputs["passkey"] = "{{ .Config.passkey }}";
+        var integration = new CardigannIndexerIntegration(
+            Guid.Empty,
+            _definition,
+            _parser.Object,
+            _sessions.Object,
+            NullLogger<CardigannIndexerIntegration>.Instance);
+        using var activity = new Activity("magpie.release-query.request").Start();
+
+        // Act
+        await integration.SearchAsync(
+            new ReleaseSearchRequest { Title = "cool movie" },
+            new Dictionary<string, string> { ["passkey"] = "secret-value" },
+            default)
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(activity.GetTagItem("magpie.request.method"), Is.EqualTo("POST"));
+            Assert.That(
+                activity.GetTagItem("magpie.request.target"),
+                Is.EqualTo("/search"));
+            Assert.That(
+                activity.GetTagItem("magpie.request.body"),
+                Is.EqualTo("q=cool%20movie&passkey=%5BREDACTED%5D"));
+            _sessions.Verify(
+                sessions => sessions.SendAsync(
+                    "priv@https://tracker.test",
+                    new Uri("https://tracker.test/"),
+                    HttpMethod.Post,
+                    new Uri("https://tracker.test/search"),
+                    "q=cool%20movie&passkey=secret-value",
+                    It.IsAny<string>(),
+                    It.IsAny<bool>(),
+                    It.IsAny<CancellationToken>()),
+                Times.Once);
+        }
     }
 
     [Test]
@@ -327,6 +418,7 @@ public sealed class CardigannIndexerIntegrationTests
         _definition.Login = new LoginBlock { Method = "cookie", Test = new LoginTest { Path = "/" } };
         _definition.Settings.Add(new CardigannSettingDefinition { Name = "cookie", Type = "cookie" });
         var integration = new CardigannIndexerIntegration(
+            Guid.Empty,
             _definition,
             _parser.Object,
             _sessions.Object,
@@ -357,6 +449,7 @@ public sealed class CardigannIndexerIntegrationTests
         // Arrange
         _definition.Login = new LoginBlock { Test = new LoginTest { Path = "/", Selector = "a.logout" } };
         var integration = new CardigannIndexerIntegration(
+            Guid.Empty,
             _definition,
             _parser.Object,
             _sessions.Object,
@@ -396,6 +489,7 @@ public sealed class CardigannIndexerIntegrationTests
                 FailureKind = ConfigurationFailureKind.Auth,
             });
         var integration = new CardigannIndexerIntegration(
+            Guid.Empty,
             _definition,
             _parser.Object,
             _sessions.Object,
@@ -424,6 +518,7 @@ public sealed class CardigannIndexerIntegrationTests
             Test = new LoginTest { Path = "/", Selector = "a.logout" },
         };
         var integration = new CardigannIndexerIntegration(
+            Guid.Empty,
             _definition,
             _parser.Object,
             _sessions.Object,
@@ -447,6 +542,7 @@ public sealed class CardigannIndexerIntegrationTests
     {
         // Arrange
         var integration = new CardigannIndexerIntegration(
+            Guid.Empty,
             _definition,
             _parser.Object,
             _sessions.Object,
@@ -471,6 +567,7 @@ public sealed class CardigannIndexerIntegrationTests
         _definition.Caps.Modes["search"] = ["q"];
         _definition.Caps.Modes["tv-search"] = ["q", "season", "ep"];
         var integration = new CardigannIndexerIntegration(
+            Guid.Empty,
             _definition,
             _parser.Object,
             _sessions.Object,
@@ -495,6 +592,7 @@ public sealed class CardigannIndexerIntegrationTests
         // Arrange
         _definition.Caps.Modes["movie-search"] = ["imdbid"];
         var integration = new CardigannIndexerIntegration(
+            Guid.Empty,
             _definition,
             _parser.Object,
             _sessions.Object,

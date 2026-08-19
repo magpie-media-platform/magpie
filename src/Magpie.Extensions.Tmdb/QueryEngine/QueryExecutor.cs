@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.Linq;
 using System.Runtime.CompilerServices;
@@ -16,7 +17,7 @@ namespace Magpie.Extensions.Tmdb.QueryEngine;
 
 internal sealed class QueryExecutor(
     ITmdbClient client,
-    IQueryCache cache,
+    IQueryCoordinator cache,
     ILogger<QueryExecutor> logger) : IQueryExecutor
 {
     private const int MaximumConcurrency = 4;
@@ -367,22 +368,26 @@ internal sealed class QueryExecutor(
         return sources;
     }
 
-    private void MarkSkipped(PlanNode node, ExecutionTrace? trace, string reason)
+    private void MarkSkipped(PlanNode node, QueryTelemetry? telemetry, string reason)
     {
-        if (trace?.TryMarkNodeSkipped(node.Id, reason) != true)
+        if (telemetry?.TryVisitNode(node.Id) != true)
         {
             return;
         }
 
+        telemetry.RecordPrunedNode();
+        telemetry.Activity?.AddEvent(new ActivityEvent(
+            "node.skipped",
+            tags: new ActivityTagsCollection
+            {
+                ["magpie.query.node.id"] = node.Id,
+                ["magpie.query.node.kind"] = node.NodeKind(),
+                ["magpie.query.node.reason"] = reason
+            }));
         foreach (var child in node.Children())
         {
-            MarkSkipped(child, trace, reason);
+            MarkSkipped(child, telemetry, reason);
         }
-    }
-
-    private Action<string>? RejectionSink(ExecutionTrace? trace, int nodeId)
-    {
-        return trace is null ? null : predicate => trace.Reject(nodeId, predicate);
     }
 
     private SearchHit AttachAppliedSubjects(SearchHit hit, DiscoverRequest? appliedCriteria)
@@ -566,7 +571,7 @@ internal sealed class QueryExecutor(
         }
 
         Add(query, "page", Math.Clamp(page, 1, QueryLimits.MaximumPage).ToString(CultureInfo.InvariantCulture));
-        return Create("search", path, query, ResponseProfile.Query);
+        return Create(RequestRole.Search, path, query, ResponseProfile.Query);
     }
 
     private IReadOnlyList<string> SearchTerms(FetchPlanNode fetch)
@@ -614,7 +619,7 @@ internal sealed class QueryExecutor(
         AddCertification(fetch, query, appliedElementFilters);
         return new DiscoverRequest
         {
-            Request = Create("discover", path, query, ResponseProfile.Query),
+            Request = Create(RequestRole.Discover, path, query, ResponseProfile.Query),
             AppliedTextFilters = appliedTextFilters,
             AppliedPublishDateFilters = appliedPublishDateFilters,
             AppliedDurationFilters = appliedDurationFilters,
@@ -638,7 +643,7 @@ internal sealed class QueryExecutor(
         }
 
         return Create(
-            company ? "company-search" : "person-search",
+            company ? RequestRole.CompanySearch : RequestRole.PersonSearch,
             company ? "3/search/company" : "3/search/person",
             query,
             ResponseProfile.Query);
@@ -647,7 +652,7 @@ internal sealed class QueryExecutor(
     private Request BuildFind(string externalId, string externalSource, string language)
     {
         return Create(
-            "find",
+            RequestRole.Find,
             "3/find/" + Uri.EscapeDataString(externalId),
             [("external_source", externalSource), ("language", language)],
             ResponseProfile.Query);
@@ -656,7 +661,7 @@ internal sealed class QueryExecutor(
     private Request BuildPersonCredits(ContentRoute route, int personId, string language)
     {
         return Create(
-            route == ContentRoute.Movie ? "movie-credits" : "tv-credits",
+            route == ContentRoute.Movie ? RequestRole.MovieCredits : RequestRole.TvCredits,
             string.Format(
                 CultureInfo.InvariantCulture,
                 route == ContentRoute.Movie ? "3/person/{0}/movie_credits" : "3/person/{0}/tv_credits",
@@ -714,7 +719,7 @@ internal sealed class QueryExecutor(
         }
 
         return Create(
-            route == ContentRoute.Movie ? "movie-detail" : "tv-detail",
+            route == ContentRoute.Movie ? RequestRole.MovieDetail : RequestRole.TvDetail,
             string.Format(CultureInfo.InvariantCulture, route == ContentRoute.Movie ? "3/movie/{0}" : "3/tv/{0}", id),
             query,
             ResponseProfile.Detail);
@@ -723,7 +728,7 @@ internal sealed class QueryExecutor(
     private Request BuildGenreList(ContentRoute route, string language)
     {
         return Create(
-            route == ContentRoute.Movie ? "movie-genres" : "tv-genres",
+            route == ContentRoute.Movie ? RequestRole.MovieGenres : RequestRole.TvGenres,
             route == ContentRoute.Movie ? "3/genre/movie/list" : "3/genre/tv/list",
             [("language", language)],
             ResponseProfile.Query);
@@ -1313,13 +1318,13 @@ internal sealed class QueryExecutor(
 
                 if (!PreconditionSatisfied(fetch.Precondition, state))
                 {
-                    MarkSkipped(fetch, context.ExecutionTrace, "precondition unsatisfied");
+                    MarkSkipped(fetch, context.Telemetry, "precondition unsatisfied");
                     return LogicalResult([], warnings, plan.RequestedPage);
                 }
 
                 if (state.ProvablyEmpty)
                 {
-                    context.ExecutionTrace?.MarkNode(fetch.Id, "ran", "resolved anchor is empty");
+                    MarkSkipped(fetch, context.Telemetry, "resolved anchor is empty");
                     return LogicalResult([], warnings, plan.RequestedPage);
                 }
 
@@ -1351,6 +1356,12 @@ internal sealed class QueryExecutor(
                     plan.RequestedPage);
             case IntersectPlanNode intersect:
                 {
+                    context.Telemetry?.TryVisitNode(intersect.Id);
+                    using var intersectActivity = Telemetry.Source.StartChild(
+                        "tmdb.query.node.intersect",
+                        context.Telemetry?.Activity);
+                    intersectActivity?.SetTag("magpie.query.node.id", intersect.Id);
+                    intersectActivity?.SetTag("magpie.query.branch_count", intersect.Children.Count);
                     var childResults = new List<IReadOnlyList<SearchHit>>(intersect.Children.Count);
                     foreach (var childNode in intersect.Children)
                     {
@@ -1370,7 +1381,7 @@ internal sealed class QueryExecutor(
                         : childResults.Skip(1).Aggregate(
                             childResults[0].ToList(),
                             (current, next) => IntersectHits(current, next));
-                    context.ExecutionTrace?.MarkNode(intersect.Id, "ran", rowsOut: hits.Count);
+                    intersectActivity?.SetTag("magpie.query.rows_out", hits.Count);
                     return LogicalResult(hits, warnings, plan.RequestedPage);
                 }
             case CoalescePlanNode coalesce:
@@ -1387,16 +1398,21 @@ internal sealed class QueryExecutor(
                             cancellationToken).ConfigureAwait(false);
                         if (!PreconditionSatisfied(childNode.Precondition, state))
                         {
-                            MarkSkipped(childNode, context.ExecutionTrace, "precondition unsatisfied");
+                            MarkSkipped(childNode, context.Telemetry, "precondition unsatisfied");
                             continue;
                         }
 
                         foreach (var skipped in coalesce.Children.Skip(index + 1))
                         {
-                            MarkSkipped(skipped, context.ExecutionTrace, "coalesce already satisfied");
+                            MarkSkipped(skipped, context.Telemetry, "coalesce already satisfied");
                         }
 
-                        context.ExecutionTrace?.MarkNode(coalesce.Id, "ran");
+                        context.Telemetry?.TryVisitNode(coalesce.Id);
+                        using var coalesceActivity = Telemetry.Source.StartChild(
+                            "tmdb.query.node.coalesce",
+                            context.Telemetry?.Activity);
+                        coalesceActivity?.SetTag("magpie.query.node.id", coalesce.Id);
+                        coalesceActivity?.SetTag("magpie.query.branch_count", coalesce.Children.Count);
                         return await ExecuteNodeAsync(
                             childNode,
                             plan,
@@ -1463,10 +1479,11 @@ internal sealed class QueryExecutor(
         };
         return execution with
         {
-            Hits = TraceNodeHitsAsync(
-                fetch.Id,
+            Hits = FetchNodeHitsAsync(
+                fetch,
                 NormalizeFetchHitsAsync(execution.Hits, fetchSubjects, originalSubjects, cancellationToken),
-                context.ExecutionTrace,
+                execution.SourceHasMore,
+                context.Telemetry,
                 cancellationToken)
         };
     }
@@ -1534,24 +1551,30 @@ internal sealed class QueryExecutor(
         }
     }
 
-    private async IAsyncEnumerable<SearchHit> TraceNodeHitsAsync(
-        int nodeId,
+    private async IAsyncEnumerable<SearchHit> FetchNodeHitsAsync(
+        FetchPlanNode fetch,
         IAsyncEnumerable<SearchHit> hits,
-        ExecutionTrace? trace,
+        bool hasMore,
+        QueryTelemetry? telemetry,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
+        telemetry?.TryVisitNode(fetch.Id);
+        using var activity = Telemetry.Source.StartChild("tmdb.query.node.fetch", telemetry?.Activity);
+        activity?.SetTag("magpie.query.node.id", fetch.Id);
+        activity?.SetTag("magpie.query.anchor_kind", fetch.AnchorKind.AnchorKindName());
+        activity?.SetTag("magpie.query.has_more", hasMore);
         var count = 0;
         try
         {
             await foreach (var hit in hits.WithCancellation(cancellationToken).ConfigureAwait(false))
             {
                 count++;
-                yield return hit with { SourcePlanNodeId = nodeId };
+                yield return hit with { SourcePlanNodeId = fetch.Id };
             }
         }
         finally
         {
-            trace?.MarkNode(nodeId, "ran", rowsOut: count);
+            activity?.SetTag("magpie.query.rows_fetched", count);
         }
     }
 
@@ -1562,6 +1585,13 @@ internal sealed class QueryExecutor(
         ExecutionState state,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
+        context.Telemetry?.TryVisitNode(filter.Id);
+        using var activity = Telemetry.Source.StartChild("tmdb.query.node.filter", context.Telemetry?.Activity);
+        activity?.SetTag("magpie.query.node.id", filter.Id);
+        var rejections = new Dictionary<string, int>(StringComparer.Ordinal);
+        var rejected = activity is null
+            ? null
+            : new Action<string>(predicate => rejections[predicate] = rejections.GetValueOrDefault(predicate) + 1);
         var rowsIn = 0;
         var rowsOut = 0;
         var desiredRows = DesiredRows(filter);
@@ -1579,7 +1609,7 @@ internal sealed class QueryExecutor(
                     deferDetailFilters: needsDetails,
                     appliedCriteria: sourceHit.AppliedCriteria,
                     imageBaseUrl: state.ImageBase,
-                    rejected: RejectionSink(context.ExecutionTrace, filter.Id)))
+                    rejected: rejected))
                 {
                     continue;
                 }
@@ -1600,7 +1630,7 @@ internal sealed class QueryExecutor(
                             state.SubjectSet.Groups,
                             appliedCriteria: hit.AppliedCriteria,
                             imageBaseUrl: state.ImageBase,
-                            rejected: RejectionSink(context.ExecutionTrace, filter.Id)))
+                            rejected: rejected))
                     {
                         continue;
                     }
@@ -1621,7 +1651,21 @@ internal sealed class QueryExecutor(
         }
         finally
         {
-            context.ExecutionTrace?.MarkNode(filter.Id, "ran", rowsIn: rowsIn, rowsOut: rowsOut);
+            if (activity is not null)
+            {
+                activity.SetTag("magpie.query.filter.rows_in", rowsIn);
+                activity.SetTag("magpie.query.filter.rows_out", rowsOut);
+                if (rejections.Count > 0)
+                {
+                    var tags = new ActivityTagsCollection();
+                    foreach (var rejection in rejections)
+                    {
+                        tags["magpie.query.filter.rejected." + rejection.Key] = rejection.Value;
+                    }
+
+                    activity.AddEvent(new ActivityEvent("filter.rejections", tags: tags));
+                }
+            }
         }
     }
 
@@ -1633,6 +1677,10 @@ internal sealed class QueryExecutor(
         List<string> warnings,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
+        context.Telemetry?.TryVisitNode(union.Id);
+        using var activity = Telemetry.Source.StartChild("tmdb.query.node.union", context.Telemetry?.Activity);
+        activity?.SetTag("magpie.query.node.id", union.Id);
+        activity?.SetTag("magpie.query.branch_count", union.Children.Count);
         var emitted = new HashSet<(ContentRoute Route, int Id)>();
         var visitedChildren = 0;
         try
@@ -1665,10 +1713,10 @@ internal sealed class QueryExecutor(
                     : "union enumeration ended before this child was visited";
             foreach (var unvisitedChild in union.Children.Skip(visitedChildren))
             {
-                MarkSkipped(unvisitedChild, context.ExecutionTrace, reason);
+                MarkSkipped(unvisitedChild, context.Telemetry, reason);
             }
 
-            context.ExecutionTrace?.MarkNode(union.Id, "ran", rowsOut: emitted.Count);
+            activity?.SetTag("magpie.query.rows_out", emitted.Count);
         }
     }
 
@@ -1720,6 +1768,9 @@ internal sealed class QueryExecutor(
             return;
         }
 
+        context.Telemetry?.TryVisitNode(resolve.Id);
+        using var activity = Telemetry.Source.StartChild("tmdb.query.node.resolve", context.Telemetry?.Activity);
+        activity?.SetTag("magpie.query.node.id", resolve.Id);
         var resolveContext = context with { PlanNodeId = resolve.Id };
         var subjectSet = resolve.SubjectBindings.Count == 0
             ? EmptySubjectSet()
@@ -1728,7 +1779,7 @@ internal sealed class QueryExecutor(
         state.SubjectSet = subjectSet;
         if (resolve.GenreFilters.Count > 0)
         {
-            state.GenreIds = await ResolveGenresAsync(resolve, resolveContext, warnings, cancellationToken)
+            state.GenreIds = await ResolveGenresAsync(resolve, resolveContext, cancellationToken)
                 .ConfigureAwait(false);
         }
 
@@ -1742,17 +1793,18 @@ internal sealed class QueryExecutor(
         }
 
         state.ProvablyEmpty = PositiveGenreCannotMatch(resolve, state.GenreIds) ||
-            subjectSet.Groups.Any(group =>
-                !group.Excluded &&
-                group.Subjects.Count == 0 &&
-                !resolve.SubjectBindings.Single(binding =>
-                    binding.Key.Equals(group.BindingKey, StringComparison.Ordinal)).Filter.RequiresLocalVerification &&
-                !subjectSet.HadRemoteFailure);
+            subjectSet.RequiredGroupUnresolved;
         state.ResolvedNodeIds.Add(resolve.Id);
-        context.ExecutionTrace?.MarkNode(
-            resolve.Id,
-            subjectSet.HadRemoteFailure ? "failed" : "ran",
-            rowsOut: subjectSet.Groups.Sum(group => group.Subjects.Count) + state.GenreIds.Count);
+        if (activity is not null)
+        {
+            activity.SetTag(
+                "magpie.query.rows_out",
+                subjectSet.Groups.Sum(group => group.Subjects.Count) + state.GenreIds.Count);
+            if (subjectSet.HadRemoteFailure)
+            {
+                activity.SetStatus(ActivityStatusCode.Error);
+            }
+        }
     }
 
     private bool PreconditionSatisfied(PlanPrecondition precondition, ExecutionState state)
@@ -1908,7 +1960,7 @@ internal sealed class QueryExecutor(
                 appendCredits: HasPersonSubjects(fetch.SubjectBindings, []),
                 cancellationToken)
                 .ConfigureAwait(false);
-            if (fetchedGroup.ResolvedAlternatives < positive.Alternatives.Count)
+            if (fetchedGroup.MissingSupportedAlternatives > 0)
             {
                 warnings.Add("One or more exact TMDb content identifiers were not found on the requested route.");
             }
@@ -1942,16 +1994,19 @@ internal sealed class QueryExecutor(
                 concurrency.Release();
             }
         }).ToList();
-        var resolved = (await Task.WhenAll(tasks).ConfigureAwait(false))
-            .Where(hit => hit is not null)
-            .Select(hit => hit!)
+        var lookups = await Task.WhenAll(tasks).ConfigureAwait(false);
+        var resolved = lookups
+            .Where(lookup => lookup.Hit is not null)
+            .Select(lookup => lookup.Hit!)
             .ToList();
         var hits = resolved
             .GroupBy(hit => hit.Id)
             .Select(group => group.First())
             .OrderBy(hit => hit.SourceOrder)
             .ToList();
-        return new ContentIdGroupResult(hits, resolved.Count);
+        return new ContentIdGroupResult(
+            hits,
+            lookups.Count(lookup => lookup.Supported && lookup.Hit is null));
     }
 
     private async IAsyncEnumerable<SearchHit> ScanAsync(
@@ -2156,6 +2211,7 @@ internal sealed class QueryExecutor(
         var key = request.CacheKey;
         return await cache.GetCreditsAsync(
             key,
+            route == ContentRoute.Movie ? RequestRole.MovieCredits : RequestRole.TvCredits,
             (Executor: this, Context: context, Request: request, Route: route),
             static async (state, token) => state.Route == ContentRoute.Movie
                 ? new CreditResponse
@@ -2183,7 +2239,6 @@ internal sealed class QueryExecutor(
             return hit;
         }
 
-        context.ExecutionTrace?.AddDetailFanOut(1);
         var request = BuildDetail(
             filter.Route,
             hit.Id,
@@ -2207,7 +2262,7 @@ internal sealed class QueryExecutor(
         return tv is null ? null : MergeHit(hit, tv.FromTvDetail());
     }
 
-    private async Task<SearchHit?> FetchContentIdAsync(
+    private async Task<(bool Supported, SearchHit? Hit)> FetchContentIdAsync(
         FetchPlanNode fetch,
         RequestContext context,
         ContentId contentId,
@@ -2219,7 +2274,7 @@ internal sealed class QueryExecutor(
         {
             if (!int.TryParse(contentId.Value, NumberStyles.None, CultureInfo.InvariantCulture, out var id) || id <= 0)
             {
-                return null;
+                return (false, null);
             }
 
             var appendExternalIds = HasExternalIdExclusions(fetch.ContentIdFilters) ||
@@ -2238,18 +2293,18 @@ internal sealed class QueryExecutor(
             {
                 var detail = await FetchAsync<MovieDetailDto>(context, request, cancellationToken)
                     .ConfigureAwait(false);
-                return detail is null
+                return (true, detail is null
                     ? null
-                    : detail.FromMovieDetail() with { SourceOrder = sourceOrder };
+                    : detail.FromMovieDetail() with { SourceOrder = sourceOrder });
             }
 
             var tv = await FetchAsync<TvDetailDto>(context, request, cancellationToken).ConfigureAwait(false);
-            return tv is null ? null : tv.FromTvDetail() with { SourceOrder = sourceOrder };
+            return (true, tv is null ? null : tv.FromTvDetail() with { SourceOrder = sourceOrder });
         }
 
         if (!TryMapExternalContentIdSource(contentId.Source, out var externalSource, out var resultSource))
         {
-            return null;
+            return (false, null);
         }
 
         var find = BuildFind(contentId.Value, externalSource, context.Language);
@@ -2261,20 +2316,19 @@ internal sealed class QueryExecutor(
                 .FirstOrDefault();
         if (hit is null)
         {
-            return null;
+            return (true, null);
         }
 
         var externalIds = new Dictionary<string, string>(hit.ExternalIds, StringComparer.OrdinalIgnoreCase)
         {
             [resultSource] = contentId.Value
         };
-        return hit with { ExternalIds = externalIds };
+        return (true, hit with { ExternalIds = externalIds });
     }
 
     private async Task<IReadOnlyDictionary<string, int>> ResolveGenresAsync(
         ResolvePlanNode resolve,
         RequestContext context,
-        List<string> warnings,
         CancellationToken cancellationToken)
     {
         if (resolve.GenreFilters.Count == 0)
@@ -2283,21 +2337,7 @@ internal sealed class QueryExecutor(
         }
 
         var request = BuildGenreList(resolve.Route, context.Language);
-        var values = await cache.GetGenreMapAsync(context, request, client, cancellationToken).ConfigureAwait(false);
-        foreach (var filter in resolve.GenreFilters)
-        {
-            var unresolved = filter.Alternatives.Count(alternative =>
-                alternative.ResolveGenreAlternative(values).Count == 0);
-            if (unresolved > 0)
-            {
-                warnings.Add(string.Format(
-                    CultureInfo.InvariantCulture,
-                    "TMDb could not resolve {0} genre alternative(s).",
-                    unresolved));
-            }
-        }
-
-        return values;
+        return await cache.GetGenreMapAsync(context, request, client, cancellationToken).ConfigureAwait(false);
     }
 
     private bool SourcePageLimitReached(QueryScanState state, List<string> warnings)
@@ -2434,12 +2474,31 @@ internal sealed class QueryExecutor(
                 }
             })).ToList();
             var outcomes = await Task.WhenAll(tasks).ConfigureAwait(false);
+            var unsupportedRoles = outcomes
+                .GroupBy(outcome => (outcome.AlternativeIndex, outcome.ClauseIndex, outcome.Role))
+                .Where(clause => clause.All(outcome => outcome.Results.Count > 0 &&
+                    outcome.Results.All(result => result.Kind == SubjectResolutionKind.Unsupported)))
+                .Select(clause => (clause.Key.AlternativeIndex, clause.Key.Role))
+                .ToHashSet();
+            var evaluableOutcomes = outcomes
+                .Where(outcome => !unsupportedRoles.Contains((outcome.AlternativeIndex, outcome.Role)) &&
+                    outcome.Results.Any(result => result.Kind != SubjectResolutionKind.Unsupported))
+                .ToList();
+            var evaluableAlternatives = filter.Alternatives.Select((alternative, alternativeIndex) => alternative with
+            {
+                Roles = [.. alternative.Roles.Where(role => !unsupportedRoles.Contains((alternativeIndex, role)))]
+            }).Where(alternative => alternative.Roles.Count > 0).ToList();
             var resolved = new List<ResolvedSubject>();
             for (var alternativeIndex = 0; alternativeIndex < filter.Alternatives.Count; alternativeIndex++)
             {
                 var alternative = filter.Alternatives[alternativeIndex];
                 foreach (var role in alternative.Roles)
                 {
+                    if (unsupportedRoles.Contains((alternativeIndex, role)))
+                    {
+                        continue;
+                    }
+
                     var clauseResults = Enumerable.Range(0, alternative.IdentityClauses.Count)
                         .Select(clauseIndex => outcomes.Where(outcome =>
                             outcome.AlternativeIndex == alternativeIndex &&
@@ -2480,28 +2539,33 @@ internal sealed class QueryExecutor(
             resolved = [.. resolved.GroupBy(subject => (subject.Id, subject.Role)).Select(group => group.First())];
 
             var incomplete = filter.RequiresLocalVerification ||
-                outcomes.Any(outcome =>
+                evaluableOutcomes.Any(outcome =>
                     outcome.Results.Count == 0 ||
                     outcome.Results.Any(result => result.Kind != SubjectResolutionKind.Resolved ||
+                        result.Incomplete ||
                         result.ViaCompanySearch));
-            var incompleteRoles = outcomes.Where(outcome => outcome.Results.Count == 0 ||
-                outcome.Results.Any(result => result.Kind != SubjectResolutionKind.Resolved || result.ViaCompanySearch))
+            var incompleteRoles = evaluableOutcomes.Where(outcome => outcome.Results.Count == 0 ||
+                outcome.Results.Any(result => result.Kind != SubjectResolutionKind.Resolved ||
+                    result.Incomplete || result.ViaCompanySearch))
                 .Select(outcome => outcome.Role)
                 .ToHashSet();
             if (filter.RequiresLocalVerification)
             {
-                incompleteRoles.UnionWith(filter.Alternatives.SelectMany(alternative => alternative.Roles));
+                incompleteRoles.UnionWith(evaluableAlternatives.SelectMany(alternative => alternative.Roles));
             }
 
-            hadRemoteFailure |= outcomes.Any(outcome => outcome.Results.Any(result =>
+            var remoteFailure = outcomes.Any(outcome => outcome.Results.Any(result =>
                 result.Kind == SubjectResolutionKind.Failed));
+            hadRemoteFailure |= remoteFailure;
             foreach (var result in outcomes.SelectMany(outcome => outcome.Results)
-                .Where(result => result.Warning is not null))
+                .Where(result => result.Kind != SubjectResolutionKind.Unsupported && result.Warning is not null))
             {
                 warnings.Add(result.Warning!);
             }
 
-            if (resolved.Count == 0 && !filter.Excluded)
+            if (filter.Excluded && unsupportedRoles.Count > 0 ||
+                !filter.Excluded && evaluableAlternatives.Count == 0 ||
+                resolved.Count == 0 && !filter.Excluded && !filter.RequiresLocalVerification && !remoteFailure)
             {
                 requiredUnresolved = true;
             }
@@ -2511,7 +2575,7 @@ internal sealed class QueryExecutor(
                 BindingKey = binding.Key,
                 Excluded = filter.Excluded,
                 Subjects = resolved,
-                Alternatives = filter.Alternatives,
+                Alternatives = evaluableAlternatives,
                 Incomplete = incomplete,
                 IncompleteRoles = incompleteRoles
             });
@@ -2544,13 +2608,7 @@ internal sealed class QueryExecutor(
             {
                 return [new SubjectResolution
                 {
-                    Kind = SubjectResolutionKind.NotFound,
-                    Warning = string.Format(
-                        CultureInfo.InvariantCulture,
-                        "TMDb cannot resolve {0} identity source {1} for a {2} relationship.",
-                        identity.ExternalId,
-                        identity.ExternalIdSource,
-                        role)
+                    Kind = SubjectResolutionKind.Unsupported
                 }];
             }
 
@@ -2601,7 +2659,7 @@ internal sealed class QueryExecutor(
 
     private sealed record PageResult(IReadOnlyList<SearchHit> Hits, int TotalPages, int TotalResults);
 
-    private sealed record ContentIdGroupResult(List<SearchHit> Hits, int ResolvedAlternatives);
+    private sealed record ContentIdGroupResult(List<SearchHit> Hits, int MissingSupportedAlternatives);
 
     private sealed class ExecutionState
     {

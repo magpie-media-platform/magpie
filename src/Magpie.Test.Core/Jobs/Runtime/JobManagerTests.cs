@@ -40,6 +40,16 @@ public class JobManagerTests
     private FakeTimeProvider _timeProvider = null!;
     private IJobManager _subject = null!;
 
+    public static IEnumerable<TestCaseData> ParameterValidationCases
+    {
+        get
+        {
+            yield return new TestCaseData(DataType.Number, "0x10", "Parameter value must be a valid number.");
+            yield return new TestCaseData(DataType.Boolean, "1", "Parameter value must be a valid boolean.");
+            yield return new TestCaseData(DataType.Date, "2000", "Parameter value must be a valid date.");
+        }
+    }
+
     [SetUp]
     public void SetUp()
     {
@@ -965,6 +975,212 @@ public class JobManagerTests
 
         // Assert
         Assert.That(result, Has.Property(nameof(result.Name)).EqualTo("TestEventTrigger"));
+    }
+
+    [Test]
+    public void CreateEventTriggerAsync_Throws_WhenEventBindingIsMalformed()
+    {
+        // Arrange
+        var create = new EventTriggerCreate
+        {
+            JobType = "TestJob",
+            Scope = JobScope.Administrative,
+            Name = "TestEventTrigger",
+            EventFilter = new EventFilter(),
+            Parameters = new Dictionary<string, string> { ["itemId"] = "${event.content.itemId" },
+        };
+        var subject = new JobManager(
+            _runtime.Object,
+            Mock.Of<IJobRegistry>(registry => registry.ListJobSpecs() == new[]
+            {
+                new JobSpec
+                {
+                    JobType = "TestJob",
+                    DisplayName = "TestJob",
+                    Category = "Test",
+                    Scope = JobScope.Administrative,
+                    SupportedTriggerModes = new[] { JobTriggerMode.Event },
+                    Parameters = new[] { new JobParameter("itemId", null, DataType.Number, true, null) },
+                }
+            }),
+            _executionRepository.Object,
+            _scheduleTriggerRepository.Object,
+            _eventTriggerRepository.Object,
+            Mock.Of<IJobConcurrencyScheduler>(),
+            Mock.Of<IJobExecutionScopeFactory>(),
+            TimeProvider.System,
+            NullLoggerFactory.Instance.CreateLogger<JobManager>());
+
+        // Act
+        var exception = Assert.ThrowsAsync<MagpieException>(async () =>
+            await subject.CreateEventTriggerAsync(create, Guid.NewGuid(), Role.Admin, default).ConfigureAwait(false));
+
+        // Assert
+        Assert.That(exception!.Message, Is.EqualTo("Event binding is malformed."));
+        _eventTriggerRepository.Verify(
+            repository => repository.CreateAsync(
+                It.IsAny<EventTrigger>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [TestCaseSource(nameof(ParameterValidationCases))]
+    public void CreateEventTriggerAsync_Throws_WhenEventParameterTypeIsInvalid(
+        DataType type,
+        string value,
+        string expected)
+    {
+        // Arrange
+        var create = new EventTriggerCreate
+        {
+            JobType = "TestJob",
+            Scope = JobScope.Administrative,
+            Name = "TestEventTrigger",
+            EventFilter = new EventFilter(),
+            Parameters = new Dictionary<string, string> { ["value"] = value },
+        };
+        var subject = new JobManager(
+            _runtime.Object,
+            Mock.Of<IJobRegistry>(registry => registry.ListJobSpecs() == new[]
+            {
+                new JobSpec
+                {
+                    JobType = "TestJob",
+                    DisplayName = "TestJob",
+                    Category = "Test",
+                    Scope = JobScope.Administrative,
+                    SupportedTriggerModes = new[] { JobTriggerMode.Event },
+                    Parameters = new[] { new JobParameter("value", null, type, true, null) },
+                }
+            }),
+            _executionRepository.Object,
+            _scheduleTriggerRepository.Object,
+            _eventTriggerRepository.Object,
+            Mock.Of<IJobConcurrencyScheduler>(),
+            Mock.Of<IJobExecutionScopeFactory>(),
+            TimeProvider.System,
+            NullLoggerFactory.Instance.CreateLogger<JobManager>());
+
+        // Act
+        var exception = Assert.ThrowsAsync<MagpieException>(async () =>
+            await subject.CreateEventTriggerAsync(create, Guid.NewGuid(), Role.Admin, default).ConfigureAwait(false));
+
+        // Assert
+        Assert.That(exception!.Message, Is.EqualTo(expected));
+        _eventTriggerRepository.Verify(
+            repository => repository.CreateAsync(
+                It.IsAny<EventTrigger>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Test]
+    public void EnqueueAsync_Throws_WhenRequiredParameterIsMissing()
+    {
+        // Arrange
+        var subject = new JobManager(
+            _runtime.Object,
+            Mock.Of<IJobRegistry>(registry => registry.ListJobSpecs() == new[]
+            {
+                new JobSpec
+                {
+                    JobType = "TestJob",
+                    DisplayName = "TestJob",
+                    Category = "Test",
+                    Scope = JobScope.Administrative,
+                    OnDemand = true,
+                    SupportedTriggerModes = new[] { JobTriggerMode.Manual },
+                    Parameters = new[] { new JobParameter("value", null, DataType.String, true, null) },
+                }
+            }),
+            _executionRepository.Object,
+            _scheduleTriggerRepository.Object,
+            _eventTriggerRepository.Object,
+            Mock.Of<IJobConcurrencyScheduler>(),
+            Mock.Of<IJobExecutionScopeFactory>(),
+            TimeProvider.System,
+            NullLoggerFactory.Instance.CreateLogger<JobManager>());
+
+        // Act
+        var exception = Assert.ThrowsAsync<MagpieException>(async () =>
+            await subject.EnqueueAsync(
+                new JobEnqueueRequest { JobType = "TestJob", Parameters = new Dictionary<string, string>() },
+                Guid.NewGuid(),
+                Role.Admin,
+                default).ConfigureAwait(false));
+
+        // Assert
+        Assert.That(exception!.Message, Is.EqualTo("Required parameter value is missing."));
+        _executionRepository.Verify(
+            repository => repository.CreateAsync(
+                It.IsAny<JobExecution>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<bool>(),
+                It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Test]
+    public void PatchEventTriggerAsync_Throws_WhenEventParameterIsInvalid()
+    {
+        // Arrange
+        var triggerId = Guid.NewGuid();
+        var userId = Guid.NewGuid();
+        _eventTriggerRepository
+            .Setup(repository => repository.GetByIdAsync(triggerId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new EventTrigger
+            {
+                Id = triggerId,
+                JobType = "TestJob",
+                Scope = JobScope.Administrative,
+                Name = "Test event trigger",
+                EventFilter = new EventFilter(),
+                Parameters = new Dictionary<string, string> { ["itemId"] = "1" },
+            });
+        var patch = new EventTriggerPatch
+        {
+            Parameters = new()
+            {
+                Update = new Dictionary<string, string> { ["itemId"] = "not-a-number" },
+            },
+        };
+        var subject = new JobManager(
+            _runtime.Object,
+            Mock.Of<IJobRegistry>(registry => registry.ListJobSpecs() == new[]
+            {
+                new JobSpec
+                {
+                    JobType = "TestJob",
+                    DisplayName = "Test job",
+                    Category = "Test",
+                    Scope = JobScope.Administrative,
+                    SupportedTriggerModes = new[] { JobTriggerMode.Event },
+                    Parameters = new[] { new JobParameter("itemId", null, DataType.Number, true, null) },
+                }
+            }),
+            _executionRepository.Object,
+            _scheduleTriggerRepository.Object,
+            _eventTriggerRepository.Object,
+            Mock.Of<IJobConcurrencyScheduler>(),
+            Mock.Of<IJobExecutionScopeFactory>(),
+            TimeProvider.System,
+            NullLoggerFactory.Instance.CreateLogger<JobManager>());
+
+        // Act
+        var exception = Assert.ThrowsAsync<MagpieException>(async () =>
+            await subject.PatchEventTriggerAsync(triggerId, patch, userId, callerIsAdmin: true, default)
+                .ConfigureAwait(false));
+
+        // Assert
+        Assert.That(exception!.Message, Is.EqualTo("Parameter itemId must be a valid number."));
+        _eventTriggerRepository.Verify(
+            repository => repository.PatchAsync(
+                It.IsAny<EventTriggerPatch>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()),
+            Times.Never);
     }
 
     [Test]

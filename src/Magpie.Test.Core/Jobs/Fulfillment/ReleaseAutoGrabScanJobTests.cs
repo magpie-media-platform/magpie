@@ -618,6 +618,69 @@ public sealed class ReleaseAutoGrabScanJobTests
     }
 
     [Test]
+    public async Task ExecuteAsync_EnqueuesCandidate_WhenRetryCooldownIsZero()
+    {
+        // Arrange
+        var contentItemId = Guid.NewGuid();
+        _hierarchyRepository
+            .Setup(r => r.QueryAsync(
+                It.Is<ContentHierarchyItemCriteria>(c => c.Fulfillment != null &&
+                    c.Fulfillment.And.Any(p => p.Value == FulfillmentStatus.Missing)),
+                It.IsAny<PagingParameter>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<ContentHierarchyItem>
+            {
+                Items =
+                [
+                    new ContentHierarchyItem
+                    {
+                        Id = Guid.NewGuid(),
+                        ContentType = "movie",
+                        Level = "movie",
+                        Slug = "x",
+                        Name = "X",
+                        EffectiveMonitoring = true,
+                        ContentItem = new ContentItem
+                        {
+                            Id = contentItemId,
+                            Fulfillment = FulfillmentStatus.Missing,
+                            DateLastSearched = DateTime.UtcNow.AddDays(-1)
+                        }
+                    }
+                ]
+            });
+        _jobExecutionRepository
+            .Setup(r => r.GetLastAttemptTimesByLockPartitionAsync(
+                ReleaseAutoGrabItemJob.Spec.JobType,
+                It.IsAny<IReadOnlyCollection<string>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Dictionary<string, DateTime>(StringComparer.Ordinal)
+            {
+                [$"type:{ReleaseAutoGrabItemJob.Spec.JobType}|" +
+                    $"{MagpieJobs.Parameters.ContentItemId}={contentItemId}"] =
+                    DateTime.UtcNow.AddMinutes(-1)
+            });
+        var context = _jobContext with
+        {
+            Parameters = new Dictionary<string, string>(StringComparer.Ordinal) { ["retryCooldownHours"] = "0" }
+        };
+
+        // Act
+        await _subject.ExecuteAsync(context).ConfigureAwait(false);
+
+        // Assert
+        _jobManager.Verify(
+            m => m.ExecuteAsync(
+                It.Is<JobEnqueueRequest>(r =>
+                    r.JobType == "ReleaseAutoGrabItem" &&
+                    r.Parameters != null &&
+                    r.Parameters["contentItemId"] == contentItemId.ToString()),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Test]
     public void ExecuteAsync_PropagatesCancellation_WhenOperationIsCanceled()
     {
         // Arrange

@@ -1,20 +1,11 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 
-import { Button } from '@/components/ui/Button';
-import {
-    Dialog,
-    DialogBody,
-    DialogContent,
-    DialogDescription,
-    DialogFooter,
-    DialogHeader,
-    DialogTitle,
-} from '@/components/ui/Dialog';
+import { useAuth } from '@/auth';
+import { FileBrowser } from '@/components/configuration/FileBrowser';
 import { InlineEditRow } from '@/components/ui/InlineEditRow';
-import { PathInput } from '@/components/ui/PathInput';
+import { Select, SelectContent, SelectItem, SelectTrigger } from '@/components/ui/Select';
 import { useToast } from '@/components/ui/Toast';
-import { useApplyContentPath } from '@/hooks/useContent';
-import './PathControl.css';
+import { useApplyContentPath, useEffectiveRootFolder } from '@/hooks/useContent';
 
 interface PathControlProps {
     contentHierarchyItemId: string;
@@ -22,80 +13,109 @@ interface PathControlProps {
     canEdit?: boolean;
 }
 
+const CURRENT_VALUE = '__current__';
+const INHERIT_VALUE = '__inherit__';
+const SELECT_VALUE = '__select__';
+
 function PathEditor({
     contentHierarchyItemId,
     rawPath,
+    initialPath,
     onClose,
 }: {
     contentHierarchyItemId: string;
     rawPath?: string | null;
+    initialPath?: string | null;
     onClose: () => void;
 }) {
+    const { hasPermission } = useAuth();
     const { toast } = useToast();
     const applyMutation = useApplyContentPath();
-    const [value, setValue] = useState(rawPath ?? '');
-    const [error, setError] = useState<string | null>(null);
+    const pickedRef = useRef(false);
+    const [browserOpen, setBrowserOpen] = useState(false);
 
     const apply = async (path: string | null) => {
-        if (path !== null && !path.trim()) {
-            setError('Enter a path or use the inherited-path action.');
+        if (applyMutation.isPending) {
+            return;
+        }
+        if (path === rawPath) {
+            onClose();
             return;
         }
 
-        setError(null);
         try {
-            await applyMutation.mutateAsync({
-                contentHierarchyItemId,
-                path: path === null ? null : path.trim(),
+            await applyMutation.mutateAsync({ contentHierarchyItemId, path });
+            toast({
+                title: 'Path updated',
+                description: path === null ? 'The path now uses Inherit.' : 'The selected folder is active.',
+                variant: 'success',
             });
-            toast({ title: 'Path updated', description: 'The new path is active.', variant: 'success' });
             onClose();
-        } catch (cause) {
-            setError(cause instanceof Error ? cause.message : 'Failed to update the path.');
+        } catch (error) {
+            const message = error instanceof Error ? error.message : 'The update failed.';
+            toast({ title: 'Update failed', description: message, variant: 'error' });
         }
     };
 
     return (
         <>
-            <span className="path-control__editing">Editing path...</span>
-            <Dialog open onOpenChange={(open) => (!open ? onClose() : undefined)}>
-                <DialogContent className="path-control__dialog" data-testid="path-control__dialog">
-                    <DialogHeader>
-                        <DialogTitle>Edit path</DialogTitle>
-                        <DialogDescription>Enter a relative or absolute folder path.</DialogDescription>
-                    </DialogHeader>
-                    <DialogBody className="path-control__body">
-                        <PathInput
-                            aria-label="Content path"
-                            mode="folder"
-                            value={value}
-                            onChange={(next) => {
-                                setValue(next);
-                                setError(null);
-                            }}
-                            error={!!error}
-                            errorMessage={error ?? undefined}
-                            disabled={applyMutation.isPending}
-                        />
-                    </DialogBody>
-                    <DialogFooter>
-                        <Button variant="ghost" onClick={onClose} disabled={applyMutation.isPending}>
-                            Cancel
-                        </Button>
-                        <Button variant="secondary" onClick={() => void apply(null)} disabled={applyMutation.isPending}>
-                            Use inherited path
-                        </Button>
-                        <Button variant="primary" onClick={() => void apply(value)} loading={applyMutation.isPending}>
-                            Save path
-                        </Button>
-                    </DialogFooter>
-                </DialogContent>
-            </Dialog>
+            <Select
+                defaultOpen
+                value={rawPath ? CURRENT_VALUE : INHERIT_VALUE}
+                onValueChange={(value) => {
+                    pickedRef.current = true;
+                    if (value === INHERIT_VALUE) {
+                        void apply(null);
+                    } else if (value === SELECT_VALUE) {
+                        setBrowserOpen(true);
+                    } else {
+                        onClose();
+                    }
+                }}
+                onOpenChange={(open) => {
+                    if (!open) {
+                        queueMicrotask(() => {
+                            if (pickedRef.current) {
+                                pickedRef.current = false;
+                            } else if (!browserOpen) {
+                                onClose();
+                            }
+                        });
+                    }
+                }}
+                disabled={applyMutation.isPending}
+            >
+                <SelectTrigger size="sm" aria-label="Path" data-testid="path-control__select">
+                    {rawPath ?? 'Inherit'}
+                </SelectTrigger>
+                <SelectContent>
+                    <SelectItem value={INHERIT_VALUE}>Inherit</SelectItem>
+                    {rawPath && <SelectItem value={CURRENT_VALUE}>{rawPath}</SelectItem>}
+                    <SelectItem value={SELECT_VALUE} disabled={!hasPermission('files.browse')}>
+                        Select folder
+                    </SelectItem>
+                </SelectContent>
+            </Select>
+            <FileBrowser
+                open={browserOpen}
+                onOpenChange={(open) => {
+                    setBrowserOpen(open);
+                    if (!open) {
+                        onClose();
+                    }
+                }}
+                onSelect={(path) => void apply(path)}
+                mode="folder"
+                initialPath={rawPath ?? initialPath ?? undefined}
+            />
         </>
     );
 }
 
 export function PathControl({ contentHierarchyItemId, rawPath, canEdit = true }: PathControlProps) {
+    const { data: effectiveRootFolder, isLoading } = useEffectiveRootFolder(contentHierarchyItemId);
+    const value = rawPath ?? (isLoading ? 'Resolving path...' : (effectiveRootFolder?.rootFolderPath ?? 'No path'));
+
     return (
         <InlineEditRow
             label="Path"
@@ -103,15 +123,15 @@ export function PathControl({ contentHierarchyItemId, rawPath, canEdit = true }:
             canEdit={canEdit}
             editAriaLabel="Edit content path"
             triggerTestId="path-control__trigger"
-            readValue={
-                <span className="path-control__value">
-                    <strong>{rawPath ? 'Owned path' : 'Inherited path'}</strong>
-                    <span>{rawPath ?? 'No explicit location'}</span>
-                </span>
-            }
+            readValue={<span data-testid="path-control__value">{value}</span>}
         >
             {({ close }) => (
-                <PathEditor contentHierarchyItemId={contentHierarchyItemId} rawPath={rawPath} onClose={close} />
+                <PathEditor
+                    contentHierarchyItemId={contentHierarchyItemId}
+                    rawPath={rawPath}
+                    initialPath={effectiveRootFolder?.rootFolderPath}
+                    onClose={close}
+                />
             )}
         </InlineEditRow>
     );

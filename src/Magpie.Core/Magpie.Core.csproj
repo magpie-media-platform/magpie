@@ -8,6 +8,10 @@
   <ItemGroup>
     <InternalsVisibleTo Include="DynamicProxyGenAssembly2" />
     <InternalsVisibleTo Include="Magpie.Test.Core" />
+    <InternalsVisibleTo Include="Magpie.Test.Extensions.OpenLibrary" />
+    <InternalsVisibleTo Include="Magpie.Test.Extensions.Jellyfin" />
+    <InternalsVisibleTo Include="Magpie.Test.Extensions.Tmdb" />
+    <InternalsVisibleTo Include="Magpie.Test.Extensions.MusicBrainz" />
   </ItemGroup>
 
   <ItemGroup>

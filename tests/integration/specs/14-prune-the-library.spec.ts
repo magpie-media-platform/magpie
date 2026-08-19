@@ -164,33 +164,42 @@ test.describe.serial('Journey 14: make room', () => {
             await loginUi(page);
         });
 
-        await test.step('record that unlinking is unavailable and leave the file on disk', async () => {
+        await test.step('unlink a file from its item and leave it on disk', async () => {
             await page.goto(`/library/${movie.id}?tab=files`);
-            await expect(
-                page.locator(`[data-action="delete-file"][data-file-id="${movieSubtitle.id}"]`),
-            ).toBeVisible();
-            await expect(page.locator(`[data-action="unlink-file"][data-file-id="${movieSubtitle.id}"]`)).toHaveCount(0);
-            expect((await stat(movieSubtitleHostPath)).size).toBeGreaterThan(0);
-            expect((await api.get<ContentItem>(`/api/content/${movie.id}`)).contentItem?.mediaFiles).toContainEqual(
-                expect.objectContaining({ id: movieSubtitle.id, filePath: movieSubtitleAppPath }),
+            await page.locator(`[data-action="unlink-file"][data-file-id="${movieSubtitle.id}"]`).click();
+            const dialog = page.locator('[data-component="delete-confirm-dialog"]');
+            await expect(dialog).toContainText('The host file stays on disk.');
+            const unlinked = page.waitForResponse(
+                (response) =>
+                    response.request().method() === 'POST' &&
+                    response.url().endsWith(`/api/content/${movie.id}/files/${movieSubtitle.id}/unlink`),
             );
+            await dialog.locator('[data-action="confirm-delete"]').click();
+            expect((await unlinked).status()).toBe(204);
+            expect((await stat(movieSubtitleHostPath)).size).toBeGreaterThan(0);
+            expect(
+                (await api.get<ContentItem>(`/api/content/${movie.id}`)).contentItem?.mediaFiles.some(
+                    (file) => file.id === movieSubtitle.id,
+                ),
+            ).toBe(false);
         });
 
-        await test.step('delete a file from its item and prove it is gone from disk', async () => {
-            await page.locator(`[data-action="delete-file"][data-file-id="${movieSubtitle.id}"]`).click();
+        await test.step('delete another file from its item and prove it is gone from disk', async () => {
+            await page.goto(`/library/${series.id}/${season.id}/${episode.id}?tab=files`);
+            await page.locator(`[data-action="delete-file"][data-file-id="${episodeFile.id}"]`).click();
             const dialog = page.locator('[data-component="delete-confirm-dialog"]');
             await expect(dialog).toContainText('This removes the file from disk and the library.');
             const deleted = page.waitForResponse(
                 (response) =>
                     response.request().method() === 'DELETE' &&
-                    response.url().endsWith(`/api/content/${movie.id}/files/${movieSubtitle.id}`),
+                    response.url().endsWith(`/api/content/${episode.id}/files/${episodeFile.id}`),
             );
             await dialog.locator('[data-action="confirm-delete"]').click();
             expect((await deleted).status()).toBe(204);
-            await expect(stat(movieSubtitleHostPath)).rejects.toMatchObject({ code: 'ENOENT' });
-            const current = await api.get<ContentItem>(`/api/content/${movie.id}`);
-            expect(current.contentItem).toMatchObject({ fulfillment: 'Upgradable' });
-            expect(current.contentItem?.mediaFiles.some((file) => file.id === movieSubtitle.id)).toBe(false);
+            await expect(stat(episodeHostPath)).rejects.toMatchObject({ code: 'ENOENT' });
+            const current = await api.get<ContentItem>(`/api/content/${episode.id}`);
+            expect(current.contentItem).toMatchObject({ fulfillment: 'Missing' });
+            expect(current.contentItem?.mediaFiles.some((file) => file.id === episodeFile.id)).toBe(false);
         });
 
         await test.step('remove one item and keep its files', async () => {
@@ -212,7 +221,7 @@ test.describe.serial('Journey 14: make room', () => {
             expect((await stat(bookHostPath)).size).toBeGreaterThan(0);
         });
 
-        await test.step('remove another item and take its files with it', async () => {
+        await test.step('remove another item after its file was deleted', async () => {
             await page.goto(`/library/${series.id}/${season.id}/${episode.id}`);
             await page.locator('[data-action="remove-from-library"]').first().click();
             const dialog = page.locator('[data-component="delete-confirm-dialog"]');

@@ -2,16 +2,19 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 
+using Magpie.Abstractions;
 using Magpie.Abstractions.Jobs;
 using Magpie.Abstractions.Repositories;
 using Magpie.Core.Jobs;
 using Magpie.Core.Jobs.Fulfillment;
 using Magpie.Core.Jobs.Metadata;
+using Magpie.Core.Observability;
 using Magpie.Models;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
@@ -87,6 +90,12 @@ internal sealed class EventDispatchBackgroundService(
     private static bool IsDispatchable(MagpieEvent magpieEvent)
     {
         return !NonDispatchableEventNames.Contains(magpieEvent.Name);
+    }
+
+    private static string GetNamePrefix(string name)
+    {
+        var separator = name.IndexOf('.');
+        return separator < 0 ? name : name[..separator];
     }
 
     private static bool MatchesString(string? actual, PropertyCriterion<string> criterion)
@@ -217,6 +226,11 @@ internal sealed class EventDispatchBackgroundService(
             return true;
         }
 
+        if (rawContentHierarchyItemId.Contains("${", StringComparison.Ordinal))
+        {
+            return true;
+        }
+
         return Guid.TryParse(rawContentHierarchyItemId, out var target) && target == contentHierarchyItemId;
     }
 
@@ -255,7 +269,9 @@ internal sealed class EventDispatchBackgroundService(
 
         try
         {
-            using var listener = eventBus.CreateListener(localOnly: true);
+            using var listener = eventBus is EventBus bus
+                ? bus.CreateListener(eventName: null, localOnly: true, callSite: "dispatch")
+                : eventBus.CreateListener(localOnly: true);
             _listenerReady.TrySetResult();
             await foreach (var magpieEvent in listener.ReadAllAsync(stoppingToken).ConfigureAwait(false))
             {
@@ -280,6 +296,7 @@ internal sealed class EventDispatchBackgroundService(
                     var contentRepository = scope.ServiceProvider.GetRequiredService<IContentRepository>();
                     var contentHierarchyItemRepository =
                         scope.ServiceProvider.GetRequiredService<IContentHierarchyItemRepository>();
+                    var jobExecutionRepository = scope.ServiceProvider.GetRequiredService<IJobExecutionRepository>();
                     IJobExecutionScope? parentScope = null;
                     try
                     {
@@ -299,6 +316,8 @@ internal sealed class EventDispatchBackgroundService(
                             downloadScopeRepository,
                             contentRepository,
                             contentHierarchyItemRepository,
+                            jobExecutionRepository,
+                            jobScopeFactory,
                             stoppingToken).ConfigureAwait(false);
                     }
                     finally
@@ -343,8 +362,14 @@ internal sealed class EventDispatchBackgroundService(
         IDownloadScopeRepository downloadScopeRepository,
         IContentRepository contentRepository,
         IContentHierarchyItemRepository contentHierarchyItemRepository,
+        IJobExecutionRepository jobExecutionRepository,
+        IJobExecutionScopeFactory jobExecutionScopeFactory,
         CancellationToken cancellationToken)
     {
+        EventsTelemetry.DispatchLatency.Record(
+            Math.Max(0, (_time.GetUtcNow().UtcDateTime - magpieEvent.PublishedAt).TotalMilliseconds),
+            new KeyValuePair<string, object?>("name_prefix", GetNamePrefix(magpieEvent.Name)));
+
         const int pageSize = 500;
         var triggers = new List<EventTrigger>();
         var pageNumber = 1;
@@ -406,12 +431,39 @@ internal sealed class EventDispatchBackgroundService(
             systemUserId,
             cancellationToken)
             .ConfigureAwait(false);
+        var triggerFailures = new List<(EventTrigger Trigger, string Reason)>();
         requests.AddRange(CollectEventTriggerRequests(
             magpieEvent,
             triggers,
             systemUserId,
-            authoritativeMetadataRefreshTarget));
+            authoritativeMetadataRefreshTarget,
+            jobManager.GetSpecs(),
+            triggerFailures));
         requests.AddRange(CollectNotificationRequests(magpieEvent, rules));
+
+        foreach (var (trigger, reason) in triggerFailures)
+        {
+            try
+            {
+                await RecordEventTriggerFailureAsync(
+                    trigger,
+                    magpieEvent,
+                    systemUserId,
+                    reason,
+                    cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(
+                    ex,
+                    "The event dispatch service failed to record the failure of event trigger {TriggerId}",
+                    trigger.Id);
+            }
+        }
 
         if (requests.Count == 0)
         {
@@ -437,6 +489,51 @@ internal sealed class EventDispatchBackgroundService(
                     magpieEvent.Name,
                     magpieEvent.Id);
             }
+        }
+
+        async Task RecordEventTriggerFailureAsync(
+            EventTrigger trigger,
+            MagpieEvent failedEvent,
+            Guid? userId,
+            string reason,
+            CancellationToken token)
+        {
+            var executionId = Guid.NewGuid();
+            var failedAt = _time.GetUtcNow().UtcDateTime;
+            var failed = new JobExecution
+            {
+                Id = executionId,
+                ExtensionId = trigger.ExtensionId,
+                EventTriggerId = trigger.Id,
+                JobType = trigger.JobType,
+                Scope = trigger.Scope,
+                Parameters = new Dictionary<string, string>(trigger.Parameters),
+                TriggerContext = failedEvent.ToTriggerContext(),
+                ExecutionMode = JobExecutionMode.Queue,
+                Status = JobExecutionStatus.Failed,
+                StatusMessage = reason,
+                CompletedAt = failedAt,
+                CorrelationId = Guid.NewGuid(),
+                ParentExecutionId = jobExecutionScopeFactory.CurrentExecutionId,
+                DedupKey = failedEvent.Id == Guid.Empty
+                    ? null
+                    : $"event-trigger:{trigger.Id:N}:{failedEvent.Id:N}",
+            };
+
+            var created = await jobExecutionRepository.CreateAsync(failed, userId, token).ConfigureAwait(false);
+            if (created.Id != executionId)
+            {
+                logger.LogDebug(
+                    "The event dispatch service skipped duplicate failure for event trigger {TriggerId} and event {EventId}",
+                    trigger.Id,
+                    failedEvent.Id);
+                return;
+            }
+
+            JobsTelemetry.FailuresTotal.Add(
+                1,
+                new KeyValuePair<string, object?>("job.type", trigger.JobType),
+                new KeyValuePair<string, object?>("reason_kind", "event_binding"));
         }
     }
 
@@ -574,13 +671,13 @@ internal sealed class EventDispatchBackgroundService(
             out var raw) is true)
         {
             if (int.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var configured) &&
-                configured > 0)
+                configured >= 0)
             {
                 return TimeSpan.FromHours(configured);
             }
 
             logger.LogWarning(
-                "Retry cooldown {Raw} for the auto-grab scan is not a positive integer. " +
+                "Retry cooldown {Raw} for the auto-grab scan is not a non-negative integer. " +
                 "The event dispatch service will use the default value {Default}",
                 raw,
                 MagpieJobs.ParameterValues.DefaultRetryCooldownHours);
@@ -668,7 +765,9 @@ internal sealed class EventDispatchBackgroundService(
         MagpieEvent magpieEvent,
         IEnumerable<EventTrigger> triggers,
         Guid? systemUserId,
-        Guid? authoritativeMetadataRefreshTarget)
+        Guid? authoritativeMetadataRefreshTarget,
+        IReadOnlyList<JobSpec> specs,
+        ICollection<(EventTrigger Trigger, string Reason)> failures)
     {
         var requests = new List<JobEnqueueRequest>();
         foreach (var trigger in triggers)
@@ -685,7 +784,15 @@ internal sealed class EventDispatchBackgroundService(
                     continue;
                 }
 
-                var parameters = new Dictionary<string, string>(trigger.Parameters);
+                var parameters = ResolveEventParameters(trigger.Parameters, magpieEvent.Context);
+
+                // Use a linear lookup because duplicate plugin job types are possible.
+                var spec = specs.FirstOrDefault(candidate => candidate.JobType == trigger.JobType);
+                if (spec is not null)
+                {
+                    ValidateResolvedParameterTypes(spec, parameters);
+                }
+
                 var dedupKey = magpieEvent.Id == Guid.Empty
                     ? null
                     : $"event-trigger:{trigger.Id:N}:{magpieEvent.Id:N}";
@@ -710,6 +817,16 @@ internal sealed class EventDispatchBackgroundService(
                     NotBeforeAt = notBeforeAt,
                 });
             }
+            catch (MagpieException ex)
+            {
+                failures.Add((trigger, ex.Message));
+                logger.LogError(
+                    ex,
+                    "Event trigger {TriggerId} failed for event {EventName} ({EventId})",
+                    trigger.Id,
+                    magpieEvent.Name,
+                    magpieEvent.Id);
+            }
             catch (Exception ex)
             {
                 logger.LogError(
@@ -722,6 +839,116 @@ internal sealed class EventDispatchBackgroundService(
         }
 
         return requests;
+    }
+
+    internal static string ResolveEventParameter(
+        string expression,
+        IReadOnlyDictionary<string, string> eventContext)
+    {
+        return TransformEventParameter(
+            expression,
+            key => eventContext.TryGetValue(key, out var value)
+                ? value
+                : throw new MagpieException($"Event context key {key} is missing."));
+    }
+
+    internal static Dictionary<string, string> ResolveEventParameters(
+        Dictionary<string, string> parameters,
+        IReadOnlyDictionary<string, string> eventContext)
+    {
+        var result = new Dictionary<string, string>(parameters.Count, parameters.Comparer);
+        foreach (var (name, value) in parameters)
+        {
+            result[name] = ResolveEventParameter(value, eventContext);
+        }
+
+        return result;
+    }
+
+    internal static void ValidateResolvedParameterTypes(
+        JobSpec spec,
+        IReadOnlyDictionary<string, string> parameters)
+    {
+        foreach (var parameter in spec.Parameters)
+        {
+            if (!parameters.TryGetValue(parameter.Name, out var value) || string.IsNullOrWhiteSpace(value))
+            {
+                continue;
+            }
+
+            var valid = parameter.Type switch
+            {
+                DataType.String => true,
+                DataType.Number => double.TryParse(
+                    value,
+                    NumberStyles.Float,
+                    CultureInfo.InvariantCulture,
+                    out var number) && double.IsFinite(number),
+                DataType.Boolean => bool.TryParse(value, out _),
+                DataType.Date => DateTime.TryParse(
+                    value,
+                    CultureInfo.InvariantCulture,
+                    DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
+                    out _),
+                _ => true,
+            };
+            if (!valid)
+            {
+                var typeName = parameter.Type.ToString().ToLowerInvariant();
+                throw new MagpieException($"Parameter {parameter.Name} must be a valid {typeName}.");
+            }
+        }
+    }
+
+    private static string TransformEventParameter(
+        string expression,
+        Func<string, string> resolve)
+    {
+        var result = new StringBuilder(expression.Length);
+        for (var index = 0; index < expression.Length;)
+        {
+            if (expression.AsSpan(index).StartsWith("$${", StringComparison.Ordinal))
+            {
+                result.Append("${");
+                index += 3;
+                continue;
+            }
+
+            if (expression.AsSpan(index).StartsWith("${", StringComparison.Ordinal))
+            {
+                const string prefix = "${event.";
+                if (!expression.AsSpan(index).StartsWith(prefix, StringComparison.Ordinal))
+                {
+                    throw new MagpieException("Event binding is malformed.");
+                }
+
+                var keyStart = index + prefix.Length;
+                var end = keyStart;
+                while (end < expression.Length && expression[end] != '}')
+                {
+                    if (expression[end] == '{')
+                    {
+                        throw new MagpieException("Event binding is malformed.");
+                    }
+
+                    end++;
+                }
+
+                if (end == expression.Length || end == keyStart)
+                {
+                    throw new MagpieException("Event binding is malformed.");
+                }
+
+                result.Append(resolve(expression[keyStart..end]));
+                index = end + 1;
+                continue;
+            }
+
+            result.Append(expression[index]);
+            index++;
+        }
+
+        return result.ToString();
     }
 
     private List<JobEnqueueRequest> CollectNotificationRequests(

@@ -3,8 +3,6 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.Linq;
-using System.Text.Json;
-using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 
 using Magpie.Models.Data;
@@ -12,19 +10,22 @@ using Magpie.Models.Enums;
 using Magpie.Models.Filtering;
 using Magpie.Sdk.Content;
 
-using Microsoft.Extensions.Logging;
-
 namespace Magpie.Extensions.OpenLibrary.QueryEngine;
 
-internal sealed class QueryPlanner(ILogger<QueryPlanner> logger) : IQueryPlanner
+internal sealed class QueryPlanner : IQueryPlanner
 {
     private const string SubtitleKind = "subtitle";
     private const string AlternativeTitleKind = "alternative_title";
 
-    private static readonly JsonSerializerOptions TraceJsonOptions = new()
-    {
-        Converters = { new JsonStringEnumConverter() }
-    };
+    private const string AnchorNone = "none";
+    private const string AnchorTitle = "title";
+    private const string AnchorCriteria = "criteria";
+    private const string AnchorWorkKey = "work_key";
+    private const string AnchorIsbn = "isbn";
+
+    private const string RefusalKnownEmpty = "known_empty";
+    private const string RefusalUnbounded = "unbounded";
+    private const string RefusalIdentityEmpty = "identity_empty";
 
     private static readonly IReadOnlyList<string> DetailProjectionFields =
         ["alternative_title", "number_of_pages_median", "subtitle"];
@@ -91,11 +92,42 @@ internal sealed class QueryPlanner(ILogger<QueryPlanner> logger) : IQueryPlanner
             QueryIntent.OrdinarySearch => PlanOrdinary(request),
             QueryIntent.AdvancedSearch => PlanAdvanced(request),
             QueryIntent.WorkResolution => PlanResolution(request),
-            _ => Empty(request)
+            _ => Empty(request, RefusalKnownEmpty)
         };
-        plan = plan with { CandidateLanguagePreferences = CandidateLanguagePreferences(request) };
-        TracePlan(plan);
+        var anchorKind = AnchorKind(request, plan);
+        plan = plan with
+        {
+            CandidateLanguagePreferences = CandidateLanguagePreferences(request),
+            AnchorKind = anchorKind
+        };
+        Telemetry.Plans.Add(1, new TagList
+        {
+            { "provider", Constants.ProviderType },
+            { "content_type", request.Hierarchy.ContentTypeSlug },
+            { "anchor_kind", anchorKind }
+        });
         return plan;
+    }
+
+    private string AnchorKind(QueryRequest request, QueryPlan plan)
+    {
+        if (plan.Root.State != PlanNodeState.Ready)
+        {
+            return AnchorNone;
+        }
+
+        return request.Intent switch
+        {
+            QueryIntent.OrdinarySearch => AnchorTitle,
+            QueryIntent.AdvancedSearch => AnchorCriteria,
+            QueryIntent.WorkResolution => string.Equals(
+                plan.ResolutionSource,
+                Constants.IsbnSource,
+                StringComparison.OrdinalIgnoreCase)
+                    ? AnchorIsbn
+                    : AnchorWorkKey,
+            _ => AnchorNone
+        };
     }
 
     private IReadOnlyList<string> CandidateLanguagePreferences(QueryRequest request)
@@ -132,7 +164,7 @@ internal sealed class QueryPlanner(ILogger<QueryPlanner> logger) : IQueryPlanner
     {
         var value = CleanText(request.Value);
         return value is null
-            ? Empty(request)
+            ? Empty(request, RefusalIdentityEmpty)
             : new QueryPlan
             {
                 Root = new PlanNode
@@ -157,6 +189,7 @@ internal sealed class QueryPlanner(ILogger<QueryPlanner> logger) : IQueryPlanner
             return workOlid is null
                 ? Empty(
                     request,
+                    RefusalIdentityEmpty,
                     Invalid("Open Library requires a valid Open Library identifier for a work.", "Identifier").Warning)
                 : new QueryPlan
                 {
@@ -179,7 +212,7 @@ internal sealed class QueryPlanner(ILogger<QueryPlanner> logger) : IQueryPlanner
         {
             var isbn = request.Value.NormalizeIsbn();
             return isbn is null
-                ? Empty(request, Invalid("Open Library requires a valid ISBN.", "ISBN").Warning)
+                ? Empty(request, RefusalIdentityEmpty, Invalid("Open Library requires a valid ISBN.", "ISBN").Warning)
                 : new QueryPlan
                 {
                     Root = new PlanNode
@@ -199,6 +232,7 @@ internal sealed class QueryPlanner(ILogger<QueryPlanner> logger) : IQueryPlanner
 
         return Empty(
             request,
+            RefusalIdentityEmpty,
             Invalid("Open Library does not recognize the requested identifier source.", "Identifier").Warning);
     }
 
@@ -1178,8 +1212,14 @@ internal sealed class QueryPlanner(ILogger<QueryPlanner> logger) : IQueryPlanner
         };
     }
 
-    private QueryPlan Empty(QueryRequest request, string? warning = null)
+    private QueryPlan Empty(QueryRequest request, string reason, string? warning = null)
     {
+        Telemetry.PlansRefused.Add(1, new TagList
+        {
+            { "provider", Constants.ProviderType },
+            { "content_type", request.Hierarchy.ContentTypeSlug },
+            { "reason", reason }
+        });
         return new QueryPlan
         {
             Root = new PlanNode
@@ -2283,6 +2323,7 @@ internal sealed class QueryPlanner(ILogger<QueryPlanner> logger) : IQueryPlanner
         {
             return Empty(
                 request,
+                RefusalUnbounded,
                 TooBroad("Open Library requires a positive maximum result count."));
         }
 
@@ -2295,6 +2336,7 @@ internal sealed class QueryPlanner(ILogger<QueryPlanner> logger) : IQueryPlanner
             {
                 return Empty(
                     request,
+                    RefusalKnownEmpty,
                     "Open Library does not support the requested content hierarchy criteria.") with
                 {
                     CriterionDispositions = dispositions
@@ -2312,7 +2354,7 @@ internal sealed class QueryPlanner(ILogger<QueryPlanner> logger) : IQueryPlanner
 
         if (planned.Any(entry => entry.MatchesNothing))
         {
-            return Empty(request);
+            return Empty(request, RefusalKnownEmpty);
         }
 
         var hasAuthoritativeIdentitySeed = planned.Any(entry =>
@@ -2361,7 +2403,11 @@ internal sealed class QueryPlanner(ILogger<QueryPlanner> logger) : IQueryPlanner
             .ToArray();
         if (terms.Length == 0)
         {
-            return Empty(request) with { Warnings = warnings, CriterionDispositions = dispositions };
+            return Empty(request, RefusalUnbounded) with
+            {
+                Warnings = warnings,
+                CriterionDispositions = dispositions
+            };
         }
 
         var requiredFields = RequiredFields(filters);
@@ -2399,15 +2445,6 @@ internal sealed class QueryPlanner(ILogger<QueryPlanner> logger) : IQueryPlanner
             MaxResults = request.MaxResults,
             Advanced = true
         };
-    }
-
-    private void TracePlan(QueryPlan plan)
-    {
-        logger.LogTrace(
-            "Open Library query plan {Provider} query {QueryId} plan {PlanJson}",
-            Constants.ProviderType,
-            Activity.Current?.TraceId.ToString() ?? "none",
-            JsonSerializer.Serialize(plan, TraceJsonOptions));
     }
 
     private List<PlannedCriterion> PlanCriteria(MetadataCriteria criteria)

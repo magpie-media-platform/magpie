@@ -1,21 +1,21 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.Diagnostics.Metrics;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions.Jobs;
 using Magpie.Core.Config;
+using Magpie.Core.Observability;
 using Magpie.Models;
 
 using Microsoft.Extensions.Logging;
 
 namespace Magpie.Core.Jobs.Runtime.Scheduling;
 
-internal sealed class MlfqJobConcurrencyScheduler(
-    JobRuntimeOptions options,
-    TimeProvider time,
-    ILogger<MlfqJobConcurrencyScheduler> logger) : IJobConcurrencyScheduler
+internal sealed class MlfqJobConcurrencyScheduler : IJobConcurrencyScheduler
 {
     private const int LevelCount = 4;
 
@@ -30,9 +30,29 @@ internal sealed class MlfqJobConcurrencyScheduler(
     private readonly Dictionary<Guid, TrackedJob> _jobs = [];
     private readonly List<string> _typeOrder = [];
     private readonly int[] _occupancy = new int[LevelCount];
-    private readonly Config _config = Create(options, logger);
+    private readonly TimeProvider _time;
+    private readonly Config _config;
 
     private int _cursor;
+
+    public MlfqJobConcurrencyScheduler(
+        JobRuntimeOptions options,
+        TimeProvider time,
+        ILogger<MlfqJobConcurrencyScheduler> logger)
+    {
+        _time = time;
+        _config = Create(options, logger);
+
+        _ = JobsTelemetry.Meter.CreateObservableGauge(
+            "magpie.jobs.mlfq_level_occupancy",
+            ObserveLevelOccupancy);
+        _ = JobsTelemetry.Meter.CreateObservableGauge(
+            "magpie.jobs.mlfq_level_capacity",
+            ObserveLevelCapacity);
+        _ = JobsTelemetry.Meter.CreateObservableGauge(
+            "magpie.jobs.fast_lane_in_use",
+            ObserveFastLaneInUse);
+    }
 
     private enum ReservationState
     {
@@ -164,7 +184,7 @@ internal sealed class MlfqJobConcurrencyScheduler(
                 return;
             }
 
-            var now = time.GetUtcNow().UtcDateTime;
+            var now = _time.GetUtcNow().UtcDateTime;
             _jobs[candidate.Id] = new TrackedJob(candidate.JobType, Level: 0, AdmittedAt: now, LevelEnteredAt: now);
             _occupancy[0]++;
 
@@ -190,7 +210,7 @@ internal sealed class MlfqJobConcurrencyScheduler(
 
     public IReadOnlyList<Guid> Rebalance()
     {
-        var now = time.GetUtcNow().UtcDateTime;
+        var now = _time.GetUtcNow().UtcDateTime;
         lock (_lock)
         {
             List<Guid>? demoted = null;
@@ -223,6 +243,11 @@ internal sealed class MlfqJobConcurrencyScheduler(
                 _occupancy[level]--;
                 _occupancy[target]++;
                 _jobs[id] = job with { Level = target, LevelEnteredAt = now };
+                JobsTelemetry.MlfqDemotionsTotal.Add(
+                    1,
+                    new KeyValuePair<string, object?>("job.type", job.JobType),
+                    new KeyValuePair<string, object?>("from_level", level),
+                    new KeyValuePair<string, object?>("to_level", target));
                 (demoted ??= []).Add(id);
             }
 
@@ -243,7 +268,9 @@ internal sealed class MlfqJobConcurrencyScheduler(
             return reservation;
         }
 
+        var waitStartedTimestamp = Stopwatch.GetTimestamp();
         await _config.FastLaneSemaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
+        JobsTelemetry.FastLaneWaitTime.Record(Stopwatch.GetElapsedTime(waitStartedTimestamp).TotalMilliseconds);
         return new Reservation(_config.FastLaneSemaphore);
     }
 
@@ -295,6 +322,39 @@ internal sealed class MlfqJobConcurrencyScheduler(
         {
             _occupancy[level]--;
         }
+    }
+
+    private IEnumerable<Measurement<int>> ObserveLevelOccupancy()
+    {
+        var snapshot = new int[LevelCount];
+        lock (_lock)
+        {
+            _occupancy.CopyTo(snapshot, 0);
+        }
+
+        var measurements = new Measurement<int>[LevelCount];
+        for (var level = 0; level < LevelCount; level++)
+        {
+            measurements[level] = new(snapshot[level], new KeyValuePair<string, object?>("level", level));
+        }
+
+        return measurements;
+    }
+
+    private IEnumerable<Measurement<int>> ObserveLevelCapacity()
+    {
+        var measurements = new Measurement<int>[LevelCount];
+        for (var level = 0; level < LevelCount; level++)
+        {
+            measurements[level] = new(_config.Widths[level], new KeyValuePair<string, object?>("level", level));
+        }
+
+        return measurements;
+    }
+
+    private int ObserveFastLaneInUse()
+    {
+        return _config.FastLane - _config.FastLaneSemaphore.CurrentCount;
     }
 
     private readonly record struct Config(

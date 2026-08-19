@@ -25,7 +25,9 @@ internal sealed class ExtensionActivationBackgroundService(
     {
         try
         {
-            using var listener = eventBus.CreateListener("extension.activation.changed");
+            using var listener = eventBus is EventBus bus
+                ? bus.CreateListener("extension.activation.changed", localOnly: false, callSite: "extension-activation")
+                : eventBus.CreateListener("extension.activation.changed");
             await foreach (var magpieEvent in listener.ReadAllAsync(stoppingToken).ConfigureAwait(false))
             {
                 if (!TryGetExtensionActivationGeneration(magpieEvent, out var generation))

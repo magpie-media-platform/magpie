@@ -1,4 +1,11 @@
-import { CircleNotchIcon, FlaskIcon, PencilSimpleIcon, PowerIcon, TrashIcon } from '@phosphor-icons/react';
+import {
+    CircleNotchIcon,
+    FlaskIcon,
+    MagnifyingGlassIcon,
+    PencilSimpleIcon,
+    PowerIcon,
+    TrashIcon,
+} from '@phosphor-icons/react';
 
 import { Switch } from '@/components/ui/Switch';
 import { Tooltip } from '@/components/ui/Tooltip';
@@ -13,6 +20,8 @@ interface IntegrationRowActionsProps {
     enabled: boolean;
 
     isTesting: boolean;
+
+    onSearch?: () => void;
 
     onTest: () => void;
 
@@ -29,6 +38,7 @@ export function IntegrationRowActions({
     id,
     enabled,
     isTesting,
+    onSearch,
     onTest,
     onToggleEnabled,
     onEdit,
@@ -38,6 +48,21 @@ export function IntegrationRowActions({
 
     return (
         <div className={`${prefix}__item-actions card-actions`}>
+            {onSearch && (
+                <Tooltip content="Search">
+                    <button
+                        type="button"
+                        className={btnClass}
+                        data-testid={`${prefix}__action-btn--search`}
+                        onClick={onSearch}
+                        aria-label={`Search ${name}`}
+                        data-action="search"
+                        data-target={id}
+                    >
+                        <MagnifyingGlassIcon weight="bold" />
+                    </button>
+                </Tooltip>
+            )}
             <Tooltip content="Test">
                 <button
                     type="button"

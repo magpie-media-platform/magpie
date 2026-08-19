@@ -68,6 +68,18 @@ const mockUserJobs: ApiJobExecution[] = [
         createdByUserId: '1',
         statusMessage: 'Manual run',
     },
+    {
+        id: 'exec-4',
+        parentExecutionId: 'exec-1',
+        jobType: 'ContentMetadataRefreshItem',
+        scope: 'User' as JobScopeValue,
+        status: 'Completed' as JobExecutionStatusValue,
+        progress: 100,
+        createdAt: '2024-01-15T10:31:00Z',
+        startedAt: '2024-01-15T10:31:00Z',
+        completedAt: '2024-01-15T10:32:00Z',
+        statusMessage: 'Child execution',
+    },
 ];
 
 const mockScheduleTriggers: ApiScheduleTrigger[] = [
@@ -301,8 +313,11 @@ function eventTriggersReturn(triggers: ApiEventTrigger[]) {
 
 const EXECUTIONS_PAGE_SIZE = 50;
 
-function pageUserJobs(params: { jobType?: string; pageNumber?: number; pageSize?: number } = {}) {
+function pageUserJobs(params: { jobType?: string; rootsOnly?: boolean; pageNumber?: number; pageSize?: number } = {}) {
     let filtered = [...mockUserJobs];
+    if (params.rootsOnly) {
+        filtered = filtered.filter((job) => !job.parentExecutionId);
+    }
     if (params.jobType) {
         filtered = filtered.filter((job) => job.jobType === params.jobType);
     }
@@ -328,8 +343,9 @@ beforeEach(() => {
         error: null,
         refetch: vi.fn(),
     });
-    mockUseJobs.mockImplementation((params?: { jobType?: string; pageNumber?: number; pageSize?: number }) =>
-        pageUserJobs(params),
+    mockUseJobs.mockImplementation(
+        (params?: { jobType?: string; rootsOnly?: boolean; pageNumber?: number; pageSize?: number }) =>
+            pageUserJobs(params),
     );
 
     mockUseJobSpecs.mockImplementation((mode?: string) => ({
@@ -411,7 +427,7 @@ describe('MyJobsPage Executions tab', () => {
         );
 
         expect(mockUseJobs).toHaveBeenCalledWith(
-            expect.objectContaining({ mine: true, pageNumber: 1, pageSize: EXECUTIONS_PAGE_SIZE }),
+            expect.objectContaining({ mine: true, rootsOnly: true, pageNumber: 1, pageSize: EXECUTIONS_PAGE_SIZE }),
         );
     });
 
@@ -427,6 +443,34 @@ describe('MyJobsPage Executions tab', () => {
 
         expect(items.length).toBe(3);
         expect(screen.getByText('Manual run')).toBeInTheDocument();
+    });
+
+    it('shows top level executions only by default', () => {
+        render(
+            <TestWrapper>
+                <MyJobsPage />
+            </TestWrapper>,
+        );
+
+        expect(screen.getByRole('switch', { name: /show top level only/i })).toHaveAttribute('data-state', 'checked');
+        expect(screen.queryByText('Child execution')).not.toBeInTheDocument();
+    });
+
+    it('requests and renders child executions when the roots-only toggle is off', async () => {
+        const user = userEvent.setup();
+
+        render(
+            <TestWrapper>
+                <MyJobsPage />
+            </TestWrapper>,
+        );
+
+        await user.click(screen.getByRole('switch', { name: /show top level only/i }));
+
+        await waitFor(() => {
+            expect(mockUseJobs).toHaveBeenCalledWith(expect.objectContaining({ mine: true, rootsOnly: false }));
+        });
+        expect(screen.getByText('Child execution')).toBeInTheDocument();
     });
 
     it('expands and scrolls the execution linked by the job query parameter', () => {

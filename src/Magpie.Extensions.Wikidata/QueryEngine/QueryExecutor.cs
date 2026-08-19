@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Net.Http;
 using System.Text.Json;
@@ -17,7 +18,7 @@ namespace Magpie.Extensions.Wikidata.QueryEngine;
 
 internal sealed class QueryExecutor(
     IWikidataClient client,
-    IQueryCache cache,
+    IQueryCoordinator cache,
     ILogger<QueryExecutor> logger) : IQueryExecutor
 {
     private const int CandidateLimit = SparqlQueryBuilder.CandidateWindow;
@@ -173,124 +174,7 @@ internal sealed class QueryExecutor(
         return duplicates;
     }
 
-    private void RecordCandidateDeduplication(
-        QueryExecution execution,
-        ICollection<SearchHit> destination,
-        ISet<string> qids,
-        IReadOnlyList<SearchHit> hits)
-    {
-        var before = destination.Count;
-        var duplicates = AddDistinct(destination, qids, hits);
-        using var invocation = execution.Start(QueryDiagnostics.CandidateDeduplication, "local");
-        invocation.RecordRows(hits.Count, destination.Count - before);
-        invocation.RecordDuplicatesDropped(duplicates);
-    }
-
     private bool HasCandidateProjection(SearchHit hit) => hit.CandidateProjectionApplied;
-
-    private void SkipCandidatePipeline(
-        QueryPlan plan,
-        QueryExecution execution,
-        string reason)
-    {
-        if (plan.ProjectCandidateDetails)
-        {
-            execution.Skip(
-                QueryDiagnostics.CandidateProjection,
-                "WDQS",
-                reason,
-                avoidedLogicalInvocations: 1);
-        }
-
-        if (plan.ResidualFilters.Count > 0)
-        {
-            execution.Skip(QueryDiagnostics.ResidualHitEvaluation, "local", reason);
-        }
-
-        if (plan.ResidualFilters.Any(value => value.Hydration.HasFlag(ResidualHydration.Entity)))
-        {
-            execution.Skip(
-                QueryDiagnostics.ResidualEntityHydration,
-                "Wikidata Action API",
-                reason,
-                avoidedLogicalInvocations: 1);
-        }
-
-        if (plan.ResidualFilters.Any(value => value.Hydration.HasFlag(ResidualHydration.Support)))
-        {
-            execution.Skip(
-                QueryDiagnostics.ResidualSupportHydration,
-                "Wikidata Action API",
-                reason,
-                avoidedLogicalInvocations: 1);
-        }
-    }
-
-    private void PruneAfterTerminalFailure(
-        QueryPlan plan,
-        QueryExecution execution,
-        string reason)
-    {
-        var relationshipSeedPlanned = plan.RelationshipSeedFilterIndex() >= 0;
-        if (relationshipSeedPlanned && !execution.HasRun(QueryDiagnostics.RelationshipSeedWindows))
-        {
-            execution.Skip(
-                QueryDiagnostics.RelationshipSeedWindows,
-                "WDQS",
-                reason,
-                avoidedLogicalInvocations: 1);
-        }
-
-        if (!execution.HasRun(QueryDiagnostics.WdqsWindows))
-        {
-            execution.Skip(
-                QueryDiagnostics.WdqsWindows,
-                "WDQS",
-                reason,
-                avoidedLogicalInvocations: 1);
-        }
-
-        if (!execution.HasRun(QueryDiagnostics.CandidateDeduplication))
-        {
-            execution.Skip(QueryDiagnostics.CandidateDeduplication, "local", reason);
-        }
-
-        if (plan.ProjectCandidateDetails &&
-            !execution.HasRun(QueryDiagnostics.CandidateProjection))
-        {
-            execution.Skip(
-                QueryDiagnostics.CandidateProjection,
-                "WDQS",
-                reason,
-                avoidedLogicalInvocations: 1);
-        }
-
-        if (plan.ResidualFilters.Count > 0 &&
-            !execution.HasRun(QueryDiagnostics.ResidualHitEvaluation))
-        {
-            execution.Skip(QueryDiagnostics.ResidualHitEvaluation, "local", reason);
-        }
-
-        if (plan.ResidualFilters.Any(value => value.Hydration.HasFlag(ResidualHydration.Entity)) &&
-            !execution.HasRun(QueryDiagnostics.ResidualEntityHydration))
-        {
-            execution.Skip(
-                QueryDiagnostics.ResidualEntityHydration,
-                "Wikidata Action API",
-                reason,
-                avoidedLogicalInvocations: 1);
-        }
-
-        if (plan.ResidualFilters.Any(value => value.Hydration.HasFlag(ResidualHydration.Support)) &&
-            !execution.HasRun(QueryDiagnostics.ResidualSupportHydration))
-        {
-            execution.Skip(
-                QueryDiagnostics.ResidualSupportHydration,
-                "Wikidata Action API",
-                reason,
-                avoidedLogicalInvocations: 1);
-        }
-    }
 
     private CriteriaMatchResult EvaluateProductionStatus(
         ResidualFilter filter,
@@ -386,8 +270,21 @@ internal sealed class QueryExecutor(
 
     private ResidualEvaluationResult Result(
         IReadOnlyList<SearchHit> hits,
-        IReadOnlyDictionary<string, HashSet<string>> unverifiableByQid)
+        IReadOnlyDictionary<string, HashSet<string>> unverifiableByQid,
+        IReadOnlyDictionary<string, int> rejections)
     {
+        var activity = Activity.Current;
+        if (activity?.IsAllDataRequested == true && rejections.Count > 0)
+        {
+            var tags = new ActivityTagsCollection();
+            foreach (var rejection in rejections)
+            {
+                tags["magpie.query.rejected." + rejection.Key] = rejection.Value;
+            }
+
+            activity.AddEvent(new ActivityEvent("residuals", tags: tags));
+        }
+
         var unverifiableSources = hits.SelectMany(hit => unverifiableByQid.TryGetValue(hit.Qid, out var sources)
             ? sources
             : [])
@@ -517,19 +414,23 @@ internal sealed class QueryExecutor(
         CancellationToken cancellationToken)
     {
         plan = plan.PrepareDiagnostics();
-        var traceEnabled = logger.IsEnabled(LogLevel.Trace);
-        var execution = new QueryExecution(plan.Fingerprint);
-        if (traceEnabled)
+        using var activity = Telemetry.Source.StartActivity("wikidata.query.execute");
+        var startedTimestamp = Stopwatch.GetTimestamp();
+        var totals = new QueryTotals();
+        activity?.SetTag("magpie.query.fingerprint", plan.Fingerprint);
+        if (activity?.IsAllDataRequested == true)
         {
-            var planJson = plan.SerializePlan();
-            logger.LogTrace(
-                "Wikidata PLAN for {Provider} fingerprint {Fingerprint}: {PlanJson}",
-                Constants.ProviderType,
-                execution.Fingerprint,
-                planJson);
+            activity.AddEvent(new ActivityEvent(
+                "plan",
+                tags: new ActivityTagsCollection
+                {
+                    ["magpie.query.plan_json"] = plan.SerializePlan(),
+                    ["magpie.query.anchor_kind"] = plan.Strategy.ToString(),
+                    ["magpie.query.known_empty"] = plan.Strategy == QueryStrategy.Empty,
+                    ["magpie.query.warnings"] = plan.Warnings.ToArray()
+                }));
         }
 
-        var pageOffset = (plan.Page - 1) * plan.MaximumResults;
         if (plan.Strategy == QueryStrategy.Unsupported)
         {
             var unsupported = new QueryResult
@@ -538,61 +439,59 @@ internal sealed class QueryExecutor(
                 PageInfo = ProviderSearchPageInfo.Unsupported,
                 CriterionDispositions = plan.CriterionDispositions
             };
-            return FinalizeExecution(
-                unsupported,
-                execution,
-                pageOffset,
-                verifiedSurvivorRows: 0,
-                "The requested entity kind is unsupported.",
-                traceEnabled);
+            Complete(
+                activity,
+                plan,
+                totals,
+                startedTimestamp,
+                TerminalReason.Unbounded,
+                survivingRows: 0,
+                unsupported);
+            return unsupported;
         }
 
         if (plan.Strategy == QueryStrategy.Empty)
         {
             var empty = Empty(plan, plan.Warnings);
-            var unsatisfiableCriteria = plan.CriterionDispositions
-                .Where(value => value.Disposition == CriterionDispositionKind.ProvablyUnsatisfiable)
-                .Select(value => value.Source + ": " + value.Reason)
-                .ToArray();
-            var reason = unsatisfiableCriteria.Length > 0
-                ? "The translation contains provably unsatisfiable criteria."
-                : "The translation produced no bounded WDQS query.";
-            return FinalizeExecution(
-                empty,
-                execution,
-                pageOffset,
-                verifiedSurvivorRows: 0,
-                reason,
-                traceEnabled);
+            Complete(
+                activity,
+                plan,
+                totals,
+                startedTimestamp,
+                plan.CriterionDispositions.Any(value =>
+                    value.Disposition == CriterionDispositionKind.ProvablyUnsatisfiable)
+                        ? TerminalReason.KnownEmpty
+                        : TerminalReason.Unbounded,
+                survivingRows: 0,
+                empty);
+            return empty;
         }
 
         try
         {
             var resolvedPlan = plan;
-            resolvedPlan = await ResolveTitleCandidatesAsync(resolvedPlan, context, execution, cancellationToken)
+            resolvedPlan = await ResolveTitleCandidatesAsync(resolvedPlan, context, totals, cancellationToken)
                 .ConfigureAwait(false);
-            resolvedPlan = await ResolveEntityNamesAsync(resolvedPlan, context, execution, cancellationToken)
+            resolvedPlan = await ResolveEntityNamesAsync(resolvedPlan, context, totals, cancellationToken)
                 .ConfigureAwait(false);
             plan = resolvedPlan;
             if (plan.Strategy == QueryStrategy.Empty)
             {
-                const string reason = "Entity resolution proved every positive selector unsatisfiable.";
-                execution.Skip(
-                    QueryDiagnostics.WdqsWindows,
-                    "WDQS",
-                    "Precondition unsatisfied: entity resolution returned no ids.",
-                    avoidedLogicalInvocations: 1);
-                SkipCandidatePipeline(
+                var identityEmpty = Empty(plan, plan.Warnings);
+                Telemetry.PlansRefused.Add(
+                    1,
+                    new KeyValuePair<string, object?>("provider", Telemetry.Provider),
+                    new KeyValuePair<string, object?>("content_type", plan.EntityKind.ToString()),
+                    new KeyValuePair<string, object?>("reason", TerminalReason.IdentityEmpty));
+                Complete(
+                    activity,
                     plan,
-                    execution,
-                    "Precondition unsatisfied: entity resolution returned no ids.");
-                return FinalizeExecution(
-                    Empty(plan, plan.Warnings),
-                    execution,
-                    pageOffset,
-                    verifiedSurvivorRows: 0,
-                    reason,
-                    traceEnabled);
+                    totals,
+                    startedTimestamp,
+                    TerminalReason.IdentityEmpty,
+                    survivingRows: 0,
+                    identityEmpty);
+                return identityEmpty;
             }
 
             var logicalOffset = checked((plan.Page - 1) * plan.MaximumResults);
@@ -602,7 +501,6 @@ internal sealed class QueryExecutor(
             var collected = new List<SearchHit>();
             var collectedQids = new HashSet<string>(StringComparer.Ordinal);
             var executionWarnings = new List<string>();
-            var sourceExhausted = false;
             var relationshipIndex = plan.RelationshipSeedFilterIndex();
             if (relationshipIndex >= 0)
             {
@@ -613,60 +511,36 @@ internal sealed class QueryExecutor(
                         plan.EntityKind,
                         plan.Filters[relationshipIndex],
                         seedOffset);
-                    var seedResponse = await ExecuteRequestAsync(
+                    var seedRows = await ExecuteRequestAsync(
                         seedRequest,
                         context,
-                        execution,
-                        QueryDiagnostics.RelationshipSeedWindows,
-                        traceEnabled,
+                        totals,
+                        RequestRole.RelationshipSeedWindows,
                         cancellationToken).ConfigureAwait(false);
-                    using var seedInvocation = seedResponse.Invocation;
-                    var rawSeedQids = (from row in seedResponse.Rows
-                                       let qid = ExtractQid(Read(row, "item"))
-                                       where qid is not null
-                                       select qid!).ToArray();
-                    var seedQids = rawSeedQids.Distinct(StringComparer.Ordinal).ToArray();
-                    seedResponse.Invocation.RecordRows(seedResponse.Rows.Count, rawSeedQids.Length);
-                    seedResponse.Invocation.RecordRejection(
-                        "invalidQid",
-                        seedResponse.Rows.Count - rawSeedQids.Length);
-                    seedResponse.Invocation.RecordIdsProduced(seedQids.Length);
-                    seedResponse.Invocation.RecordDuplicatesDropped(rawSeedQids.Length - seedQids.Length);
+                    var seedQids = (from row in seedRows
+                                    let qid = ExtractQid(Read(row, "item"))
+                                    where qid is not null
+                                    select qid!)
+                        .Distinct(StringComparer.Ordinal)
+                        .ToArray();
                     var seedHasMore = seedQids.Length > SparqlQueryBuilder.CandidateWindow;
-                    seedResponse.Invocation.RecordLookaheadRows(
-                        Math.Max(0, seedQids.Length - SparqlQueryBuilder.CandidateWindow));
                     var windowQids = seedQids.Take(SparqlQueryBuilder.CandidateWindow).ToArray();
                     if (windowQids.Length == 0)
                     {
-                        seedResponse.Invocation.RecordReason("The relationship seed source was exhausted.");
-                        execution.Skip(
-                            QueryDiagnostics.WdqsWindows,
-                            "WDQS",
-                            "Precondition unsatisfied: the relationship seed window was empty.",
-                            avoidedLogicalInvocations: 1);
-                        SkipCandidatePipeline(
-                            plan,
-                            execution,
-                            "Precondition unsatisfied: the relationship seed window was empty.");
-                        sourceExhausted = true;
                         break;
                     }
-
-                    seedInvocation.Dispose();
 
                     var seededPlan = BindRelationshipSeed(plan, relationshipIndex, windowQids);
                     var window = await SearchCandidateWindowAsync(
                         seededPlan,
                         context,
                         0,
-                        execution,
-                        traceEnabled,
+                        totals,
                         cancellationToken).ConfigureAwait(false);
-                    RecordCandidateDeduplication(execution, collected, collectedQids, window.Hits);
+                    AddDistinct(collected, collectedQids, window.Hits);
                     executionWarnings.AddRange(window.Warnings);
                     if (!seedHasMore)
                     {
-                        sourceExhausted = true;
                         break;
                     }
 
@@ -682,14 +556,12 @@ internal sealed class QueryExecutor(
                         plan,
                         context,
                         candidateOffset,
-                        execution,
-                        traceEnabled,
+                        totals,
                         cancellationToken).ConfigureAwait(false);
-                    RecordCandidateDeduplication(execution, collected, collectedQids, window.Hits);
+                    AddDistinct(collected, collectedQids, window.Hits);
                     executionWarnings.AddRange(window.Warnings);
                     if (!plan.UsesLocalPaging || !window.HasMore)
                     {
-                        sourceExhausted = true;
                         break;
                     }
 
@@ -716,85 +588,83 @@ internal sealed class QueryExecutor(
                 ],
                 CriterionDispositions = plan.CriterionDispositions
             };
-            return FinalizeExecution(
-                result,
-                execution,
-                logicalOffset,
+            Complete(
+                activity,
+                plan,
+                totals,
+                startedTimestamp,
+                TerminalReason.Completed,
                 collected.Count,
-                hasMore
-                    ? "The survivor boundary included a lookahead row."
-                    : sourceExhausted
-                        ? "The upstream source was exhausted."
-                        : "The caller result boundary was reached.",
-                traceEnabled,
-                offsetRowsDropped: plan.UsesLocalPaging ? Math.Min(logicalOffset, collected.Count) : 0);
+                result);
+            return result;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            PruneAfterTerminalFailure(plan, execution, "The caller cancelled Wikidata execution.");
-            _ = FinalizeExecution(
-                result: null,
-                execution: execution,
-                offset: 0,
-                verifiedSurvivorRows: 0,
-                reason: "The caller cancelled Wikidata execution.",
-                traceEnabled: traceEnabled,
-                finalPagingRan: false);
+            Complete(
+                activity,
+                plan,
+                totals,
+                startedTimestamp,
+                TerminalReason.Cancelled,
+                survivingRows: 0,
+                result: null);
             throw;
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            PruneAfterTerminalFailure(plan, execution, "The Wikidata execution timeout was reached.");
-            return FinalizeExecution(
-                Failure(plan, "Wikidata search timed out; no Wikidata results were returned."),
-                execution,
-                pageOffset,
-                verifiedSurvivorRows: 0,
-                "The Wikidata execution timeout was reached.",
-                traceEnabled,
-                boundHit: true,
-                finalPagingRan: false);
+            var timedOut = Failure(plan, "Wikidata search timed out; no Wikidata results were returned.");
+            Complete(
+                activity,
+                plan,
+                totals,
+                startedTimestamp,
+                TerminalReason.Timeout,
+                survivingRows: 0,
+                timedOut);
+            return timedOut;
         }
         catch (HttpRequestException exception) when (IsRateLimited(exception))
         {
             logger.LogWarning("Wikidata rate limited the search for entity kind {EntityKind}", plan.EntityKind);
-            PruneAfterTerminalFailure(plan, execution, "Wikidata execution was rate limited.");
-            return FinalizeExecution(
-                Failure(plan, "Wikidata search was rate limited; no Wikidata results were returned."),
-                execution,
-                pageOffset,
-                verifiedSurvivorRows: 0,
-                "Wikidata execution was rate limited.",
-                traceEnabled,
-                finalPagingRan: false);
+            Telemetry.Throttled.Add(
+                1,
+                new KeyValuePair<string, object?>("provider", Telemetry.Provider),
+                new KeyValuePair<string, object?>("kind", TerminalReason.RateLimited));
+            var throttled = Failure(plan, "Wikidata search was rate limited; no Wikidata results were returned.");
+            Complete(
+                activity,
+                plan,
+                totals,
+                startedTimestamp,
+                TerminalReason.RateLimited,
+                survivingRows: 0,
+                throttled);
+            return throttled;
         }
         catch (Exception exception) when (exception is HttpRequestException or JsonException)
         {
             logger.LogWarning(exception, "Wikidata search failed for entity kind {EntityKind}", plan.EntityKind);
-            PruneAfterTerminalFailure(plan, execution, "Wikidata execution failed.");
-            return FinalizeExecution(
-                Failure(plan, "Wikidata search failed; no Wikidata results were returned."),
-                execution,
-                pageOffset,
-                verifiedSurvivorRows: 0,
-                "Wikidata execution failed.",
-                traceEnabled,
-                finalPagingRan: false);
+            var failed = Failure(plan, "Wikidata search failed; no Wikidata results were returned.");
+            Complete(
+                activity,
+                plan,
+                totals,
+                startedTimestamp,
+                TerminalReason.Error,
+                survivingRows: 0,
+                failed);
+            return failed;
         }
         catch (Exception)
         {
-            PruneAfterTerminalFailure(
+            Complete(
+                activity,
                 plan,
-                execution,
-                "Wikidata execution terminated with an unexpected failure.");
-            _ = FinalizeExecution(
-                result: null,
-                execution: execution,
-                offset: 0,
-                verifiedSurvivorRows: 0,
-                reason: "Wikidata execution terminated with an unexpected failure.",
-                traceEnabled: traceEnabled,
-                finalPagingRan: false);
+                totals,
+                startedTimestamp,
+                TerminalReason.Error,
+                survivingRows: 0,
+                result: null);
             throw;
         }
     }
@@ -803,59 +673,36 @@ internal sealed class QueryExecutor(
         QueryPlan plan,
         RequestContext context,
         int candidateOffset,
-        QueryExecution execution,
-        bool traceEnabled,
+        QueryTotals totals,
         CancellationToken cancellationToken)
     {
-        var response = await ExecuteRequestAsync(
+        var rows = await ExecuteRequestAsync(
             SparqlQueryBuilder.BuildSearch(plan, context.Language, candidateOffset),
             context,
-            execution,
-            QueryDiagnostics.WdqsWindows,
-            traceEnabled,
+            totals,
+            RequestRole.WdqsWindows,
             cancellationToken).ConfigureAwait(false);
-        using var invocation = response.Invocation;
-        execution.AddFetchedRows(response.Rows.Count);
+        totals.RowsFetched += rows.Count;
         var sentinelsRemoved = plan.Strategy == QueryStrategy.TitleSearch
-            ? response.Rows.Count(IsTitleWindowSentinel)
+            ? rows.Count(IsTitleWindowSentinel)
             : 0;
         var lookaheadRows = plan.Strategy == QueryStrategy.TitleSearch
             ? sentinelsRemoved
             : plan.UsesLocalPaging
-                ? Math.Max(0, response.Rows.Count - SparqlQueryBuilder.CandidateWindow)
-                : Math.Max(0, response.Rows.Count - plan.MaximumResults);
+                ? Math.Max(0, rows.Count - SparqlQueryBuilder.CandidateWindow)
+                : Math.Max(0, rows.Count - plan.MaximumResults);
         var sourceHasMore = lookaheadRows > 0;
         var visibleRows = plan.Strategy switch
         {
-            QueryStrategy.TitleSearch => response.Rows.Where(row => !IsTitleWindowSentinel(row)),
-            _ when plan.UsesLocalPaging => response.Rows.Take(SparqlQueryBuilder.CandidateWindow),
-            _ => response.Rows
+            QueryStrategy.TitleSearch => rows.Where(row => !IsTitleWindowSentinel(row)),
+            _ when plan.UsesLocalPaging => rows.Take(SparqlQueryBuilder.CandidateWindow),
+            _ => rows
         };
         var hits = (from row in visibleRows
                     let hit = row.ToSearchHit()
                     where hit is not null
                     select hit!).ToArray();
         var filtered = FilterCandidates(plan, hits);
-        var visibleRowCount = plan.Strategy == QueryStrategy.TitleSearch
-            ? response.Rows.Count - sentinelsRemoved
-            : plan.UsesLocalPaging
-                ? Math.Min(response.Rows.Count, SparqlQueryBuilder.CandidateWindow)
-                : response.Rows.Count;
-        invocation.RecordSentinelsDropped(sentinelsRemoved);
-        invocation.RecordLookaheadRows(lookaheadRows);
-        invocation.RecordRows(visibleRowCount, filtered.Count);
-        invocation.RecordRejection("candidateProjection", visibleRowCount - hits.Length);
-        invocation.RecordRejection("candidateFilter", hits.Length - filtered.Count);
-        invocation.RecordReason(
-            sourceHasMore
-                ? "The source returned a lookahead row."
-                : "The source window did not include a lookahead row.");
-        invocation.Dispose();
-        if (filtered.Count == 0)
-        {
-            SkipCandidatePipeline(plan, execution, "Input empty after candidate mapping and filtering.");
-        }
-
         var verified = new List<SearchHit>();
         var warnings = new List<string>();
         for (var offset = 0; offset < filtered.Count; offset += SparqlQueryBuilder.CandidateWindow)
@@ -865,13 +712,16 @@ internal sealed class QueryExecutor(
                 plan,
                 batch,
                 context,
-                execution,
-                traceEnabled,
+                totals,
                 cancellationToken)
                 .ConfigureAwait(false);
             warnings.AddRange(projection.Warnings);
             if (plan.ResidualFilters.Count == 0 || projection.Hits.Count == 0)
             {
+                SkipStage(
+                    totals,
+                    RequestRole.ResidualEntityHydration,
+                    plan.ResidualFilters.Count == 0 ? "no_residual_filters" : "no_candidates");
                 verified.AddRange(projection.Hits);
                 continue;
             }
@@ -881,7 +731,7 @@ internal sealed class QueryExecutor(
                 projection.Hits,
                 context,
                 cancellationToken,
-                execution).ConfigureAwait(false);
+                totals).ConfigureAwait(false);
             verified.AddRange(evaluation.Hits);
             warnings.AddRange(evaluation.Warnings);
         }
@@ -889,51 +739,143 @@ internal sealed class QueryExecutor(
         return new CandidateWindowResult(verified, warnings, sourceHasMore);
     }
 
-    private async Task<SearchResponse> ExecuteRequestAsync(
+    private async Task<IReadOnlyList<Dictionary<string, SparqlBindingDto>>> ExecuteRequestAsync(
         SparqlRequest request,
         RequestContext context,
-        QueryExecution execution,
-        string stage,
-        bool traceEnabled,
+        QueryTotals totals,
+        string role,
         CancellationToken cancellationToken)
     {
-        var invocation = execution.Start(stage, "WDQS");
-        invocation.RecordWindow();
+        using var activity = StartRequest(role, request.QueryText);
+        var provenance = SearchCacheProvenance.Remote;
         SearchCacheResult cached;
         try
         {
             cached = await cache.GetSearchAsync(
                 request.CanonicalCacheKey,
-                async token =>
-                {
-                    try
-                    {
-                        return await client.ExecuteSparqlAsync(request, context, token).ConfigureAwait(false);
-                    }
-                    finally
-                    {
-                        invocation.RecordSparqlRequest(request.QueryText, traceEnabled);
-                    }
-                },
+                token => client.ExecuteSparqlAsync(request, context, token),
                 cancellationToken,
-                invocation.RecordCacheProvenance).ConfigureAwait(false);
+                value => provenance = value).ConfigureAwait(false);
         }
         catch (Exception exception) when (exception is HttpRequestException or JsonException
             or OperationCanceledException)
         {
-            invocation.RecordReason("The request did not complete successfully: " + exception.GetType().Name);
-            invocation.Dispose();
+            activity?.SetStatus(ActivityStatusCode.Error, exception.GetType().Name);
+            EndRequest(activity, totals, role, QueryCoordinatorRegion.Searches, cacheHit: false, rows: 0);
             throw;
         }
 
-        invocation.RecordRowsProduced(cached.Rows.Count);
-        return new SearchResponse(cached.Rows, invocation);
+        EndRequest(
+            activity,
+            totals,
+            role,
+            QueryCoordinatorRegion.Searches,
+            provenance != SearchCacheProvenance.Remote,
+            cached.Rows.Count);
+        return cached.Rows;
+    }
+
+    private Activity? StartRequest(string role, string target)
+    {
+        var activity = Telemetry.Source.StartActivity("wikidata.query.request", ActivityKind.Client);
+        if (activity is null)
+        {
+            return null;
+        }
+
+        activity.SetTag("magpie.request.role", role);
+        if (activity.IsAllDataRequested)
+        {
+            activity.SetTag("magpie.request.target", target);
+        }
+
+        return activity;
+    }
+
+    private void EndRequest(
+        Activity? activity,
+        QueryTotals totals,
+        string role,
+        string region,
+        bool cacheHit,
+        int rows)
+    {
+        if (!cacheHit)
+        {
+            totals.Requests++;
+        }
+
+        activity?.SetTag("magpie.cache.hit", cacheHit);
+        activity?.SetTag("magpie.request.rows", rows);
+        Telemetry.Requests.Add(
+            1,
+            new KeyValuePair<string, object?>("provider", Telemetry.Provider),
+            new KeyValuePair<string, object?>("request_role", role),
+            new KeyValuePair<string, object?>("cache_hit", cacheHit));
+        Telemetry.Cache.Add(
+            1,
+            new KeyValuePair<string, object?>("provider", Telemetry.Provider),
+            new KeyValuePair<string, object?>("cache_region", region),
+            new KeyValuePair<string, object?>("outcome", cacheHit ? "hit" : "miss"));
+        activity?.Dispose();
+    }
+
+    private void SkipStage(QueryTotals totals, string role, string reason)
+    {
+        totals.PrunedStages++;
+        var activity = Activity.Current;
+        if (activity?.IsAllDataRequested != true)
+        {
+            return;
+        }
+
+        activity.AddEvent(new ActivityEvent(
+            "stage_skipped",
+            tags: new ActivityTagsCollection
+            {
+                ["magpie.request.role"] = role,
+                ["magpie.query.skip_reason"] = reason
+            }));
+    }
+
+    private void Complete(
+        Activity? activity,
+        QueryPlan plan,
+        QueryTotals totals,
+        long startedTimestamp,
+        string terminalReason,
+        int survivingRows,
+        QueryResult? result)
+    {
+        activity?.SetTag("magpie.query.rows_fetched", totals.RowsFetched);
+        activity?.SetTag("magpie.query.rows_surviving", survivingRows);
+        activity?.SetTag("magpie.query.request_count", totals.Requests);
+        activity?.SetTag("magpie.query.pruned_stages", totals.PrunedStages);
+        activity?.SetTag("magpie.query.has_more", result?.PageInfo.HasMore ?? false);
+        activity?.SetTag("magpie.query.terminal_reason", terminalReason);
+        if (terminalReason is TerminalReason.RateLimited
+            or TerminalReason.Timeout
+            or TerminalReason.Cancelled
+            or TerminalReason.Error)
+        {
+            activity?.SetStatus(ActivityStatusCode.Error, terminalReason);
+        }
+
+        Telemetry.Duration.Record(
+            (Stopwatch.GetTimestamp() - startedTimestamp) * 1000d / Stopwatch.Frequency,
+            new KeyValuePair<string, object?>("provider", Telemetry.Provider),
+            new KeyValuePair<string, object?>("content_type", plan.EntityKind.ToString()),
+            new KeyValuePair<string, object?>("terminal_reason", terminalReason));
+        Telemetry.Results.Record(
+            result?.Hits.Count ?? 0,
+            new KeyValuePair<string, object?>("provider", Telemetry.Provider),
+            new KeyValuePair<string, object?>("content_type", plan.EntityKind.ToString()));
     }
 
     private async Task<QueryPlan> ResolveTitleCandidatesAsync(
         QueryPlan plan,
         RequestContext context,
-        QueryExecution execution,
+        QueryTotals totals,
         CancellationToken cancellationToken)
     {
         if (plan.Strategy != QueryStrategy.TitleSearch || plan.OrdinaryTerm is not null)
@@ -954,46 +896,37 @@ internal sealed class QueryExecutor(
         var candidates = new List<string>();
         foreach (var term in terms)
         {
-            using var invocation = execution.Start(
-                QueryDiagnostics.TitleResolution,
-                "Wikidata Action API");
+            using var activity = StartRequest(RequestRole.TitleResolution, term);
+            var provenance = SearchCacheProvenance.Remote;
             try
             {
                 var key = language.Trim().ToLowerInvariant() + "|title|" + term.Trim().ToLowerInvariant();
                 var resolved = await cache.GetEntitySearchAsync(
                     key,
-                    async token =>
-                    {
-                        try
-                        {
-                            return await client.SearchEntitiesAsync(term, context, token).ConfigureAwait(false);
-                        }
-                        finally
-                        {
-                            invocation.RecordHttpRequest();
-                        }
-                    },
+                    token => client.SearchEntitiesAsync(term, context, token),
                     cancellationToken,
-                    invocation).ConfigureAwait(false);
+                    value => provenance = value).ConfigureAwait(false);
                 candidates.AddRange(resolved);
-                invocation.RecordRows(1, resolved.Count > 0 ? 1 : 0);
-                invocation.RecordIdsProduced(resolved.Count);
+                EndRequest(
+                    activity,
+                    totals,
+                    RequestRole.TitleResolution,
+                    QueryCoordinatorRegion.EntitySearches,
+                    provenance != SearchCacheProvenance.Remote,
+                    resolved.Count);
             }
-            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            catch (Exception exception) when (exception is JsonException or HttpRequestException ||
+                (exception is OperationCanceledException && !cancellationToken.IsCancellationRequested))
             {
-                invocation.RecordReason("A title candidate lookup timed out and contributed no candidates.");
-                logger.LogDebug("Wikidata title candidate lookup timed out for {Term}", term);
-            }
-            catch (HttpRequestException exception)
-            {
-                invocation.RecordReason("A title candidate lookup failed and contributed no candidates.");
+                activity?.SetStatus(ActivityStatusCode.Error, exception.GetType().Name);
+                EndRequest(
+                    activity,
+                    totals,
+                    RequestRole.TitleResolution,
+                    QueryCoordinatorRegion.EntitySearches,
+                    cacheHit: false,
+                    rows: 0);
                 logger.LogDebug(exception, "Wikidata title candidate lookup failed for {Term}", term);
-            }
-            catch (JsonException exception)
-            {
-                invocation.RecordReason(
-                    "A title candidate lookup returned invalid data and contributed no candidates.");
-                logger.LogDebug(exception, "Wikidata title candidate lookup returned invalid data for {Term}", term);
             }
         }
 
@@ -1006,7 +939,7 @@ internal sealed class QueryExecutor(
     private async Task<QueryPlan> ResolveEntityNamesAsync(
         QueryPlan plan,
         RequestContext context,
-        QueryExecution execution,
+        QueryTotals totals,
         CancellationToken cancellationToken)
     {
         var names = (from filter in plan.Filters
@@ -1027,27 +960,38 @@ internal sealed class QueryExecutor(
         foreach (var name in names)
         {
             var key = language.Trim().ToLowerInvariant() + "|" + name.Trim().ToLowerInvariant();
-            using var invocation = execution.Start(
-                QueryDiagnostics.EntityResolution,
-                "Wikidata Action API");
-            var resolved = await cache.GetEntitySearchAsync(
-                key,
-                async token =>
-                {
-                    try
-                    {
-                        return await client.SearchEntitiesAsync(name, context, token).ConfigureAwait(false);
-                    }
-                    finally
-                    {
-                        invocation.RecordHttpRequest();
-                    }
-                },
-                cancellationToken,
-                invocation).ConfigureAwait(false);
+            using var activity = StartRequest(RequestRole.EntityResolution, name);
+            var provenance = SearchCacheProvenance.Remote;
+            IReadOnlyList<string> resolved;
+            try
+            {
+                resolved = await cache.GetEntitySearchAsync(
+                    key,
+                    token => client.SearchEntitiesAsync(name, context, token),
+                    cancellationToken,
+                    value => provenance = value).ConfigureAwait(false);
+            }
+            catch (Exception exception)
+            {
+                activity?.SetStatus(ActivityStatusCode.Error, exception.GetType().Name);
+                EndRequest(
+                    activity,
+                    totals,
+                    RequestRole.EntityResolution,
+                    QueryCoordinatorRegion.EntitySearches,
+                    cacheHit: false,
+                    rows: 0);
+                throw;
+            }
+
             resolutions[name] = resolved;
-            invocation.RecordRows(1, resolved.Count > 0 ? 1 : 0);
-            invocation.RecordIdsProduced(resolved.Count);
+            EndRequest(
+                activity,
+                totals,
+                RequestRole.EntityResolution,
+                QueryCoordinatorRegion.EntitySearches,
+                provenance != SearchCacheProvenance.Remote,
+                resolved.Count);
         }
 
         var resolvedFilters = new List<QueryFilter>();
@@ -1066,10 +1010,6 @@ internal sealed class QueryExecutor(
                     continue;
                 }
 
-                execution.RecordReason(
-                    QueryDiagnostics.EntityResolution,
-                    "Wikidata Action API",
-                    "A positive named selector resolved to no ids, proving the result empty.");
                 return plan with
                 {
                     Strategy = QueryStrategy.Empty,
@@ -1089,8 +1029,7 @@ internal sealed class QueryExecutor(
             QueryPlan plan,
             IReadOnlyList<SearchHit> hits,
             RequestContext context,
-            QueryExecution execution,
-            bool traceEnabled,
+            QueryTotals totals,
             CancellationToken cancellationToken)
     {
         var alreadyProjected = hits.Count > 0 && hits.All(HasCandidateProjection);
@@ -1098,17 +1037,12 @@ internal sealed class QueryExecutor(
             !plan.ProjectCandidateDetails ||
             alreadyProjected)
         {
-            if (plan.ProjectCandidateDetails)
-            {
-                execution.Skip(
-                    QueryDiagnostics.CandidateProjection,
-                    "WDQS",
-                    hits.Count == 0
-                        ? "Input empty after candidate mapping and filtering."
-                        : "Every candidate already carried the projected fields.",
-                    avoidedLogicalInvocations: 1);
-            }
-
+            SkipStage(
+                totals,
+                RequestRole.CandidateProjection,
+                hits.Count == 0
+                    ? "no_candidates"
+                    : !plan.ProjectCandidateDetails ? "not_requested" : "already_projected");
             return (hits, []);
         }
 
@@ -1116,15 +1050,14 @@ internal sealed class QueryExecutor(
             plan.EntityKind,
             [.. hits.Select(hit => hit.Qid)],
             context.Language);
-        SearchResponse response;
+        IReadOnlyList<Dictionary<string, SparqlBindingDto>> rows;
         try
         {
-            response = await ExecuteRequestAsync(
+            rows = await ExecuteRequestAsync(
                 request,
                 context,
-                execution,
-                QueryDiagnostics.CandidateProjection,
-                traceEnabled,
+                totals,
+                RequestRole.CandidateProjection,
                 cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
@@ -1156,85 +1089,17 @@ internal sealed class QueryExecutor(
                 ]);
         }
 
-        using var invocation = response.Invocation;
-        var rows = response.Rows;
-
         var projections = (from row in rows
                            let qid = ExtractQid(Read(row, "item"))
                            where qid is not null
                            group row by qid! into matches
                            select matches)
             .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
-        invocation.RecordRows(hits.Count, hits.Count);
-        if (projections.Count < hits.Count)
-        {
-            invocation.RecordReason("Some candidates had no matching projection row and were retained unchanged.");
-        }
-
         return (
             [.. hits.Select(hit => projections.TryGetValue(hit.Qid, out var row)
                 ? hit.ApplyProjection(row)
                 : hit)],
             []);
-    }
-
-    private QueryResult FinalizeExecution(
-        QueryResult? result,
-        QueryExecution execution,
-        int offset,
-        int verifiedSurvivorRows,
-        string reason,
-        bool traceEnabled,
-        int offsetRowsDropped = 0,
-        bool boundHit = false,
-        bool finalPagingRan = true)
-    {
-        if (finalPagingRan)
-        {
-            using var invocation = execution.Start(QueryDiagnostics.FinalPaging, "local");
-            invocation.RecordRows(verifiedSurvivorRows, result?.Hits.Count ?? 0);
-            invocation.RecordOffsetRowsDropped(offsetRowsDropped);
-            invocation.RecordReason(
-                "Requested offset " +
-                offset.ToString(System.Globalization.CultureInfo.InvariantCulture) +
-                ". " +
-                reason);
-        }
-        else
-        {
-            execution.Skip(QueryDiagnostics.FinalPaging, "local", reason);
-        }
-
-        execution.Freeze(
-            result?.Hits.Count ?? 0,
-            result?.PageInfo.HasMore ?? false,
-            boundHit,
-            reason,
-            result?.Warnings.Count ?? 0);
-        var sparqlTraceRecords = execution.DrainSparqlTraceRecords();
-        if (traceEnabled)
-        {
-            foreach (var record in sparqlTraceRecords)
-            {
-                logger.LogTrace(
-                    "Wikidata SPARQL for fingerprint {Fingerprint} stage {Stage} invocation " +
-                    "{Invocation} provenance {Provenance}:\n{QueryText}",
-                    execution.Fingerprint,
-                    record.Stage,
-                    record.Invocation,
-                    SearchCacheProvenance.Remote,
-                    record.QueryText);
-            }
-
-            var executionJson = execution.SerializeExecution();
-            logger.LogTrace(
-                "Wikidata EXEC for {Provider} fingerprint {Fingerprint}: {ExecutionJson}",
-                Constants.ProviderType,
-                execution.Fingerprint,
-                executionJson);
-        }
-
-        return result is null ? null! : result with { Execution = execution };
     }
 
     public async Task<HierarchyResult> GetHierarchyAsync(
@@ -1315,18 +1180,18 @@ internal sealed class QueryExecutor(
         IEnumerable<string> qids,
         RequestContext context,
         CancellationToken cancellationToken,
-        QueryExecution.StageInvocation? invocation = null)
+        Action<SearchCacheProvenance>? provenanceObserver = null)
     {
-        return HydrateAsync(qids, CandidateLimit, context, cancellationToken, invocation);
+        return HydrateAsync(qids, CandidateLimit, context, cancellationToken, provenanceObserver);
     }
 
     private Task<ResidualHydrationBatch> HydrateSupportAsync(
         IEnumerable<string> qids,
         RequestContext context,
         CancellationToken cancellationToken,
-        QueryExecution.StageInvocation? invocation = null)
+        Action<SearchCacheProvenance>? provenanceObserver = null)
     {
-        return HydrateAsync(qids, null, context, cancellationToken, invocation);
+        return HydrateAsync(qids, null, context, cancellationToken, provenanceObserver);
     }
 
     private async Task<ResidualHydrationBatch> HydrateAsync(
@@ -1334,7 +1199,7 @@ internal sealed class QueryExecutor(
         int? limit,
         RequestContext context,
         CancellationToken cancellationToken,
-        QueryExecution.StageInvocation? invocation)
+        Action<SearchCacheProvenance>? provenanceObserver)
     {
         var distinct = qids.Where(qid => !string.IsNullOrWhiteSpace(qid))
             .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -1352,7 +1217,8 @@ internal sealed class QueryExecutor(
 
         try
         {
-            var entities = await cache.GetEntitiesAsync(requested, context, cancellationToken, invocation)
+            var entities = await cache
+                .GetEntitiesAsync(requested, context, cancellationToken, provenanceObserver)
                 .ConfigureAwait(false);
             return new ResidualHydrationBatch
             {
@@ -1383,34 +1249,15 @@ internal sealed class QueryExecutor(
         IReadOnlyList<SearchHit> hits,
         RequestContext context,
         CancellationToken cancellationToken,
-        QueryExecution? execution = null)
+        QueryTotals totals)
     {
         var unverifiableByQid = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
-        using var hitInvocation = execution?.Start(QueryDiagnostics.ResidualHitEvaluation, "local");
-        var survivors = ApplyHitResiduals(plan.ResidualFilters, hits, unverifiableByQid, hitInvocation);
-        hitInvocation?.RecordRows(hits.Count, survivors.Count);
-        hitInvocation?.Dispose();
+        var rejections = new Dictionary<string, int>(StringComparer.Ordinal);
+        var survivors = ApplyHitResiduals(plan.ResidualFilters, hits, unverifiableByQid, rejections);
         if (survivors.Count == 0)
         {
-            if (plan.ResidualFilters.Any(value => value.Hydration.HasFlag(ResidualHydration.Entity)))
-            {
-                execution?.Skip(
-                    QueryDiagnostics.ResidualEntityHydration,
-                    "Wikidata Action API",
-                    "Input empty after hit residual evaluation.",
-                    avoidedLogicalInvocations: 1);
-            }
-
-            if (plan.ResidualFilters.Any(value => value.Hydration.HasFlag(ResidualHydration.Support)))
-            {
-                execution?.Skip(
-                    QueryDiagnostics.ResidualSupportHydration,
-                    "Wikidata Action API",
-                    "Input empty after hit residual evaluation.",
-                    avoidedLogicalInvocations: 1);
-            }
-
-            return Result(survivors, unverifiableByQid);
+            SkipStage(totals, RequestRole.ResidualEntityHydration, "no_survivors");
+            return Result(survivors, unverifiableByQid, rejections);
         }
 
         var entityResiduals = plan.ResidualFilters
@@ -1420,19 +1267,33 @@ internal sealed class QueryExecutor(
             filter.Hydration.HasFlag(ResidualHydration.Support));
         if (entityResiduals.Length == 0)
         {
-            return Result(survivors, unverifiableByQid);
+            SkipStage(totals, RequestRole.ResidualEntityHydration, "no_entity_residuals");
+            return Result(survivors, unverifiableByQid, rejections);
         }
 
         var entityContext = EntityHydrationContext(entityResiduals, context);
-        using var entityInvocation = execution?.Start(
-            QueryDiagnostics.ResidualEntityHydration,
-            "Wikidata Action API");
+        var entityQids = survivors.Select(hit => hit.Qid).ToArray();
+        var entityRemote = false;
+        using var entityActivity = StartRequest(
+            RequestRole.ResidualEntityHydration,
+            string.Join("|", entityQids));
         var entityBatch = await HydrateCandidatesAsync(
-            survivors.Select(hit => hit.Qid),
+            entityQids,
             entityContext,
             cancellationToken,
-            entityInvocation).ConfigureAwait(false);
-        entityInvocation?.RecordIdsProduced(entityBatch.Entities.Count);
+            value => entityRemote |= value == SearchCacheProvenance.Remote).ConfigureAwait(false);
+        if (entityBatch.Failed)
+        {
+            entityActivity?.SetStatus(ActivityStatusCode.Error, "hydration_failed");
+        }
+
+        EndRequest(
+            entityActivity,
+            totals,
+            RequestRole.ResidualEntityHydration,
+            QueryCoordinatorRegion.Entities,
+            !entityRemote,
+            entityBatch.Entities.Count);
         if (entityBatch.Failed)
         {
             foreach (var hit in survivors)
@@ -1443,17 +1304,7 @@ internal sealed class QueryExecutor(
                 }
             }
 
-            entityInvocation?.RecordRows(survivors.Count, survivors.Count);
-            entityInvocation?.RecordReason("Hydration failed; candidates were retained as unverifiable.");
-            if (hasSupportResiduals)
-            {
-                execution?.Skip(
-                    QueryDiagnostics.ResidualSupportHydration,
-                    "Wikidata Action API",
-                    "Candidate entity hydration failed.");
-            }
-
-            return Result(survivors, unverifiableByQid);
+            return Result(survivors, unverifiableByQid, rejections);
         }
 
         var states = ApplyEntityResiduals(
@@ -1463,37 +1314,23 @@ internal sealed class QueryExecutor(
             entityBatch.Entities,
             context.Language,
             unverifiableByQid,
-            entityInvocation);
-        entityInvocation?.RecordRows(survivors.Count, states.Count);
-        entityInvocation?.Dispose();
+            rejections);
         if (states.Count == 0)
         {
-            if (hasSupportResiduals)
-            {
-                execution?.Skip(
-                    QueryDiagnostics.ResidualSupportHydration,
-                    "Wikidata Action API",
-                    "Input empty after candidate entity residual evaluation.",
-                    avoidedLogicalInvocations: 1);
-            }
-
-            return Result([], unverifiableByQid);
+            return Result([], unverifiableByQid, rejections);
         }
 
         if (!hasSupportResiduals)
         {
-            return Result([.. states.Select(state => state.Hit)], unverifiableByQid);
+            SkipStage(totals, RequestRole.ResidualSupportHydration, "no_support_residuals");
+            return Result([.. states.Select(state => state.Hit)], unverifiableByQid, rejections);
         }
 
         var supportStates = states.Where(state => state.Pending.Count > 0).ToArray();
         if (supportStates.Length == 0)
         {
-            execution?.Skip(
-                QueryDiagnostics.ResidualSupportHydration,
-                "Wikidata Action API",
-                "All residual predicates were settled from candidate entities.",
-                avoidedLogicalInvocations: 1);
-            return Result([.. states.Select(state => state.Hit)], unverifiableByQid);
+            SkipStage(totals, RequestRole.ResidualSupportHydration, "nothing_pending");
+            return Result([.. states.Select(state => state.Hit)], unverifiableByQid, rejections);
         }
 
         var supportQids = supportStates
@@ -1502,14 +1339,9 @@ internal sealed class QueryExecutor(
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
         ResidualHydrationBatch supportBatch;
-        QueryExecution.StageInvocation? supportInvocation = null;
         if (supportQids.Length == 0)
         {
-            execution?.Skip(
-                QueryDiagnostics.ResidualSupportHydration,
-                "Wikidata Action API",
-                "No support entity ids were required after candidate entity evaluation.",
-                avoidedLogicalInvocations: 1);
+            SkipStage(totals, RequestRole.ResidualSupportHydration, "no_support_qids");
             supportBatch = new ResidualHydrationBatch
             {
                 Entities = EmptyEntities,
@@ -1518,19 +1350,27 @@ internal sealed class QueryExecutor(
         }
         else
         {
-            supportInvocation = execution?.Start(
-                QueryDiagnostics.ResidualSupportHydration,
-                "Wikidata Action API");
+            var supportRemote = false;
+            using var supportActivity = StartRequest(
+                RequestRole.ResidualSupportHydration,
+                string.Join("|", supportQids));
             supportBatch = await HydrateSupportAsync(
                 supportQids,
                 context,
                 cancellationToken,
-                supportInvocation).ConfigureAwait(false);
-            supportInvocation?.RecordIdsProduced(supportBatch.Entities.Count);
+                value => supportRemote |= value == SearchCacheProvenance.Remote).ConfigureAwait(false);
             if (supportBatch.Failed)
             {
-                supportInvocation?.RecordReason("Hydration failed; candidates were retained as unverifiable.");
+                supportActivity?.SetStatus(ActivityStatusCode.Error, "hydration_failed");
             }
+
+            EndRequest(
+                supportActivity,
+                totals,
+                RequestRole.ResidualSupportHydration,
+                QueryCoordinatorRegion.Entities,
+                !supportRemote,
+                supportBatch.Entities.Count);
         }
 
         if (supportBatch.Failed)
@@ -1543,9 +1383,7 @@ internal sealed class QueryExecutor(
                 }
             }
 
-            supportInvocation?.RecordRows(states.Count, states.Count);
-            supportInvocation?.Dispose();
-            return Result([.. states.Select(state => state.Hit)], unverifiableByQid);
+            return Result([.. states.Select(state => state.Hit)], unverifiableByQid, rejections);
         }
 
         var finalStates = ApplySupportResiduals(
@@ -1554,17 +1392,15 @@ internal sealed class QueryExecutor(
             supportBatch.Entities,
             context.Language,
             unverifiableByQid,
-            supportInvocation);
-        supportInvocation?.RecordRows(states.Count, finalStates.Count);
-        supportInvocation?.Dispose();
-        return Result([.. finalStates.Select(state => state.Hit)], unverifiableByQid);
+            rejections);
+        return Result([.. finalStates.Select(state => state.Hit)], unverifiableByQid, rejections);
     }
 
     private IReadOnlyList<SearchHit> ApplyHitResiduals(
         IReadOnlyList<ResidualFilter> filters,
         IReadOnlyList<SearchHit> hits,
         IDictionary<string, HashSet<string>> unverifiableByQid,
-        QueryExecution.StageInvocation? invocation)
+        IDictionary<string, int> rejections)
     {
         var survivors = hits.ToList();
         foreach (var filter in filters.Where(filter => filter.Hydration == ResidualHydration.None))
@@ -1586,7 +1422,9 @@ internal sealed class QueryExecutor(
             }
 
             survivors = next;
-            invocation?.RecordRejection(filter.Source, before - survivors.Count);
+            rejections[filter.Source] =
+                (rejections.TryGetValue(filter.Source, out var rejected) ? rejected : 0) +
+                before - survivors.Count;
             if (survivors.Count == 0)
             {
                 break;
@@ -1603,7 +1441,7 @@ internal sealed class QueryExecutor(
         IReadOnlyDictionary<string, EntityDto> entities,
         string language,
         IDictionary<string, HashSet<string>> unverifiableByQid,
-        QueryExecution.StageInvocation? invocation)
+        IDictionary<string, int> rejections)
     {
         var states = hits.Select(hit => entities.TryGetValue(hit.Qid, out var entity) && !entity.Missing
             ? new CandidateState(hit, entity, [])
@@ -1650,7 +1488,9 @@ internal sealed class QueryExecutor(
             }
 
             states = next;
-            invocation?.RecordRejection(filter.Source, before - states.Count);
+            rejections[filter.Source] =
+                (rejections.TryGetValue(filter.Source, out var rejected) ? rejected : 0) +
+                before - states.Count;
             if (states.Count == 0)
             {
                 break;
@@ -1666,7 +1506,7 @@ internal sealed class QueryExecutor(
         IReadOnlyDictionary<string, EntityDto> support,
         string language,
         IDictionary<string, HashSet<string>> unverifiableByQid,
-        QueryExecution.StageInvocation? invocation)
+        IDictionary<string, int> rejections)
     {
         var result = states.ToList();
         var filters = plan.ResidualFilters
@@ -1709,7 +1549,9 @@ internal sealed class QueryExecutor(
             }
 
             result = next;
-            invocation?.RecordRejection(filter.Source, before - result.Count);
+            rejections[filter.Source] =
+                (rejections.TryGetValue(filter.Source, out var rejected) ? rejected : 0) +
+                before - result.Count;
             if (result.Count == 0)
             {
                 break;
@@ -2749,14 +2591,19 @@ internal sealed class QueryExecutor(
         return result;
     }
 
+    private sealed class QueryTotals
+    {
+        public int RowsFetched { get; set; }
+
+        public int Requests { get; set; }
+
+        public int PrunedStages { get; set; }
+    }
+
     private sealed record CandidateWindowResult(
         IReadOnlyList<SearchHit> Hits,
         IReadOnlyList<string> Warnings,
         bool HasMore);
-
-    private sealed record SearchResponse(
-        IReadOnlyList<Dictionary<string, SparqlBindingDto>> Rows,
-        QueryExecution.StageInvocation Invocation);
 
     private sealed record CandidateState(
         SearchHit Hit,

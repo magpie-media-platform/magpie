@@ -71,6 +71,16 @@ public sealed record IndexerResponse
     public int ConnectionCount { get; init; }
 
     /// <summary>
+    /// The parameter sets that the indexer accepts together, one set for each query mode.
+    /// </summary>
+    public IReadOnlyList<IReadOnlyList<string>> SearchFacets { get; init; } = [];
+
+    /// <summary>
+    /// True when the indexer accepts raw text.
+    /// </summary>
+    public bool SupportsKeywordSearch { get; init; }
+
+    /// <summary>
     /// The UTC time when the record was created.
     /// </summary>
     public DateTime CreatedAt { get; init; }

@@ -17,6 +17,8 @@ import type { BulkSelection } from '@/hooks/useBulkSelection';
 import { isValidationError, getErrorMessage } from '@/lib/errors';
 import type { ContentListItem } from '@/types';
 
+import { LibraryGalleryTile } from './LibraryGalleryTile';
+import { LibraryGalleryToolbar } from './LibraryGalleryToolbar';
 import { LibraryMobileCard } from './LibraryMobileCard';
 import { PAGE_SIZE } from './useLibraryPage';
 
@@ -55,6 +57,7 @@ interface LibraryContentSectionProps {
     canEditContent: boolean;
     addContentTo: string;
     onClearSearchAndFilters: () => void;
+    view: 'list' | 'gallery';
 }
 
 export function LibraryContentSection({
@@ -86,6 +89,7 @@ export function LibraryContentSection({
     canEditContent,
     addContentTo,
     onClearSearchAndFilters,
+    view,
 }: LibraryContentSectionProps) {
     const emptyState = hasActiveSearchOrFilter ? (
         <EmptyState
@@ -152,6 +156,55 @@ export function LibraryContentSection({
                         size="sm"
                     />
                 )
+            ) : view === 'gallery' ? (
+                <div className="library-page__gallery" data-testid="library-page__gallery">
+                    <LibraryGalleryToolbar
+                        sorting={sorting}
+                        sortOptions={LIBRARY_SORT_OPTIONS}
+                        onSortingChange={onSortingChange}
+                        selectedCount={selection.selectedCount}
+                        selection={
+                            hasBulkActions
+                                ? {
+                                      active: selectionMode,
+                                      onToggle: selectionMode ? onExitSelectionMode : onEnterSelectionMode,
+                                  }
+                                : undefined
+                        }
+                    />
+                    {contentItems.length === 0 ? (
+                        emptyState
+                    ) : (
+                        <ul className="library-page__gallery-grid" role="list" aria-label="Content gallery">
+                            {contentItems.map((item) => (
+                                <li key={item.id} className="library-page__gallery-cell">
+                                    <LibraryGalleryTile
+                                        item={item}
+                                        selectionMode={hasBulkActions && selectionMode}
+                                        selected={hasBulkActions ? selection.isRowChecked(item.id) : undefined}
+                                        onToggle={
+                                            hasBulkActions
+                                                ? () => selection.toggleRow(item.id, !selection.isRowChecked(item.id))
+                                                : undefined
+                                        }
+                                        onLongPress={hasBulkActions ? () => onBeginCardSelection(item.id) : undefined}
+                                    />
+                                </li>
+                            ))}
+                        </ul>
+                    )}
+                    {pageCount > 1 && (
+                        <Pager
+                            className="library-page__gallery-pager"
+                            page={currentPage}
+                            pageCount={pageCount}
+                            onFirst={() => goToPage(1)}
+                            onPrevious={() => goToPage(currentPage - 1)}
+                            onNext={() => goToPage(currentPage + 1)}
+                            onLast={() => goToPage(pageCount)}
+                        />
+                    )}
+                </div>
             ) : (
                 <>
                     <div className="library-page__table" data-empty={contentItems.length === 0 ? 'true' : undefined}>

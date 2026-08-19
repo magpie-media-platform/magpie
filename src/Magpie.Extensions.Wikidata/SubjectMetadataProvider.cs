@@ -13,7 +13,7 @@ namespace Magpie.Extensions.Wikidata;
 internal sealed class SubjectMetadataProvider(
     ISettingsResolver settingsResolver,
     IEntityResolver entityResolver,
-    IQueryCache cache,
+    IQueryCoordinator cache,
     TimeProvider timeProvider) : ISubjectMetadataProvider
 {
     public IEnumerable<string> SupportedSubjectKinds => ["person", "studio"];

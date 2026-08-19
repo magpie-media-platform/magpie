@@ -193,6 +193,13 @@ public interface IFileSystem
     bool IsPathWithin(string root, string path);
 
     /// <summary>
+    /// Gets whether a path below a root contains a symbolic link or reparse point.
+    /// </summary>
+    /// <param name="root">The root path to exclude from the check</param>
+    /// <param name="path">The path to check</param>
+    bool PathContainsLink(string root, string path);
+
+    /// <summary>
     /// Determines whether a remote path starts with a complete path prefix.
     /// </summary>
     /// <param name="path">The path to test</param>

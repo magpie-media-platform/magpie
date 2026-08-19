@@ -18,13 +18,17 @@ import {
     FilmSlateIcon,
     ImagesIcon,
     PuzzlePieceIcon,
+    LinkBreakIcon,
+    WarningCircleIcon,
 } from '@phosphor-icons/react';
 
 import { useAuth } from '@/auth';
+import { Alert } from '@/components/ui/Alert';
 import { Badge } from '@/components/ui/Badge';
 import { Breadcrumb, type BreadcrumbItem } from '@/components/ui/Breadcrumb';
 import { CdnPhosphorIcon } from '@/components/ui/CdnPhosphorIcon';
 import { DeleteConfirmDialog } from '@/components/ui/DeleteConfirmDialog';
+import { FileBrowser } from '@/components/configuration/FileBrowser';
 import { ReleaseDetailsDialog } from '@/components/releases/ReleaseDetailsDialog';
 import { ErrorBoundary } from '@/components/ui/ErrorBoundary';
 import { ImagesGallery } from '@/components/ui/ImagesGallery';
@@ -69,6 +73,7 @@ import {
     useRefreshContent,
     useSearchContentReleases,
     useRescanContentMediaInfo,
+    useMetadataInspector,
     contentQueryKeys,
 } from '@/hooks/useContent';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
@@ -76,13 +81,26 @@ import { useGrabRelease } from '@/hooks/useReleases';
 import { useReleaseGrabGuard } from '@/hooks/useReleaseGrabGuard';
 import { useContentReleases } from '@/hooks/useContentReleases';
 import { useDeleteContentFile } from '@/hooks/useDeleteContentFile';
+import {
+    useAttachContentFile,
+    useContentFileBrowserLocation,
+    useUnlinkContentFile,
+} from '@/hooks/useContentFileMutations';
 import { useRemoveContent } from '@/hooks/useRemoveContent';
 import { useLatestDownloadForRelease } from '@/hooks/useDownloads';
-import { useLibraryTypes, useTypeIconName, getRootLevels } from '@/hooks/useLibraryTypes';
-import { isApiError } from '@/lib/api';
-import { isNoDownloadClientError, isNotFoundError } from '@/lib/errors';
+import { getRootLevels, getStandardMetadataField, useLibraryTypes, useTypeIconName } from '@/hooks/useLibraryTypes';
+import { buildUrl, isApiError } from '@/lib/api';
+import { getErrorMessage, isNoDownloadClientError, isNotFoundError } from '@/lib/errors';
 import { formatShortDate } from '@/lib/dateFormatting';
 import { humanizeSlug, resolveContentTypeLabel } from '@/lib/contentTypeDisplay';
+import { isInternalSource } from '@/lib/metadata';
+import {
+    buildAlternateTextRows,
+    buildAwardGroups,
+    buildMaterializedDetailRows,
+    nonEmptyMetadataText,
+    sortByOrdinal,
+} from '@/lib/materializedMetadataDisplay';
 import type { ContentListItem } from '@/types';
 
 import { RelatedSubjectsTab } from './RelatedSubjectsTab';
@@ -103,7 +121,6 @@ import '../DetailPageStates.css';
 const RELATED_TAB = 'related';
 const CHILDREN_TAB = 'children';
 const CHILDREN_FETCH_LIMIT = 1000;
-
 interface TabDef {
     value: string;
     label: string;
@@ -152,6 +169,7 @@ export function ContentDetailPage() {
         { enabled: !!activeContentId },
     );
     const { content: contentQuery, parent: parentQuery } = useContentHierarchy(activeContentId, parentId, rootId);
+    const metadataQuery = useMetadataInspector(activeContentId);
 
     const {
         data: contentData,
@@ -162,16 +180,19 @@ export function ContentDetailPage() {
     const { data: parentData } = parentQuery;
 
     const { contentTypes, isLoading: isLibraryTypesLoading, error: libraryTypesError } = useLibraryTypes();
+    const typeDef = contentTypes.find((type) => type.slug === contentData?.contentType);
+    const levelDef = typeDef?.levels.find((level) => level.slug === contentData?.level);
+    const metadata = metadataQuery.data?.materialized;
 
     const showChildrenTab = useMemo(() => {
         if (!contentData?.level || !contentData.contentType) {
             return false;
         }
-        const typeDef = contentTypes.find((t) => t.slug === contentData.contentType);
         return typeDef?.levels.some((l) => l.parentSlug === contentData.level) ?? false;
-    }, [contentData?.level, contentData?.contentType, contentTypes]);
+    }, [contentData?.level, contentData?.contentType, typeDef]);
 
-    const defaultTab = showChildrenTab ? CHILDREN_TAB : RELATED_TAB;
+    const hasRelationships = (metadata?.relationships?.length ?? 0) > 0;
+    const defaultTab = showChildrenTab ? CHILDREN_TAB : hasRelationships ? RELATED_TAB : 'details';
 
     const { activeTab, setActiveTab, navigate, childrenBasePath } = useContentDetailParams(defaultTab);
     const [searchParams] = useSearchParams();
@@ -204,6 +225,11 @@ export function ContentDetailPage() {
     const [pendingGrab, setPendingGrab] = useState<ReleaseRow | null>(null);
     const deleteFileMutation = useDeleteContentFile();
     const [filePendingDelete, setFilePendingDelete] = useState<MediaFile | null>(null);
+    const attachFileMutation = useAttachContentFile();
+    const unlinkFileMutation = useUnlinkContentFile();
+    const fileBrowserLocationQuery = useContentFileBrowserLocation(activeContentId);
+    const [importDialogOpen, setImportDialogOpen] = useState(false);
+    const [filePendingUnlink, setFilePendingUnlink] = useState<MediaFile | null>(null);
     const removeContentMutation = useRemoveContent();
     const [removeDialogOpen, setRemoveDialogOpen] = useState(false);
     const [removeDeleteFiles, setRemoveDeleteFiles] = useState(false);
@@ -240,10 +266,15 @@ export function ContentDetailPage() {
         if (!contentData) {
             return null;
         }
+        const year = metadata?.publishDate ? new Date(metadata.publishDate).getUTCFullYear() : undefined;
+        const posterUrl = sortByOrdinal(metadata?.images).flatMap((image) => {
+            const url = nonEmptyMetadataText(image.url);
+            return url ? [{ url, isPrimary: image.isPrimary }] : [];
+        });
         return {
             id: contentData.id,
-            title: contentData.title,
-            posterUrl: contentData.posterUrl,
+            title: nonEmptyMetadataText(metadata?.title) ?? contentData.title,
+            posterUrl: posterUrl.find((image) => image.isPrimary)?.url ?? posterUrl[0]?.url ?? contentData.posterUrl,
             level: contentData.level,
             levelLabel: contentData.levelLabel,
             contentType: contentData.contentType,
@@ -251,11 +282,11 @@ export function ContentDetailPage() {
             effectiveMonitoring: contentData.effectiveMonitoring,
             fulfillment: contentData.fulfillment,
             acquisitionStatus: contentData.acquisitionStatus,
-            year: contentData.year,
-            publishDate: contentData.publishDate,
-            overview: contentData.overview,
+            year: year !== undefined && !Number.isNaN(year) ? year : undefined,
+            publishDate: nonEmptyMetadataText(metadata?.publishDate),
+            overview: nonEmptyMetadataText(metadata?.overview),
         };
-    }, [contentData]);
+    }, [contentData, metadata]);
 
     const breadcrumbs = useMemo((): BreadcrumbItem[] => {
         const items: BreadcrumbItem[] = [{ id: 'library', label: 'Library', to: '/library' }];
@@ -330,19 +361,50 @@ export function ContentDetailPage() {
     }, [contentId, childId, grandchildId, parentData]);
 
     const previews: PreviewClip[] = useMemo(() => {
-        return (contentData?.previews ?? []).map((p) => ({
-            url: p.url,
-            kind: p.kind,
-            title: p.title,
-            mimeType: p.mimeType,
-            embedKind: p.embedKind,
-            language: p.language,
-        }));
-    }, [contentData?.previews]);
+        if (!getStandardMetadataField(levelDef, 'Previews')) {
+            return [];
+        }
+        return sortByOrdinal(metadata?.previews).flatMap((preview) => {
+            const url = nonEmptyMetadataText(preview.url);
+            const kind = nonEmptyMetadataText(preview.kind);
+            return url && kind
+                ? [
+                      {
+                          url,
+                          kind,
+                          title: nonEmptyMetadataText(preview.title),
+                          mimeType: nonEmptyMetadataText(preview.mimeType),
+                          embedKind: nonEmptyMetadataText(preview.embedKind),
+                          language: nonEmptyMetadataText(preview.language),
+                      },
+                  ]
+                : [];
+        });
+    }, [levelDef, metadata?.previews]);
 
     const hasPreviews = previews.length > 0;
 
-    const imageCount = contentData?.images?.length || 0;
+    const images = useMemo(
+        () =>
+            sortByOrdinal(metadata?.images).flatMap((image) => {
+                const url = nonEmptyMetadataText(image.url);
+                const type = nonEmptyMetadataText(image.type);
+                return url && type
+                    ? [
+                          {
+                              id: image.id,
+                              url,
+                              type,
+                              isPrimary: image.isPrimary,
+                              width: image.width ?? undefined,
+                              height: image.height ?? undefined,
+                          },
+                      ]
+                    : [];
+            }),
+        [metadata?.images],
+    );
+    const imageCount = images.length;
 
     const heroPreview = useMemo<PreviewClip | undefined>(() => {
         if (previews.length === 0) {
@@ -351,22 +413,85 @@ export function ContentDetailPage() {
         return previews[0];
     }, [previews]);
 
-    const genres = contentData?.genres ?? [];
+    const genres = useMemo(
+        () =>
+            getStandardMetadataField(levelDef, 'Genres')
+                ? sortByOrdinal(metadata?.genres).flatMap((genre) => nonEmptyMetadataText(genre.name) ?? [])
+                : [],
+        [levelDef, metadata?.genres],
+    );
 
+    const awards = useMemo(() => buildAwardGroups(metadata), [metadata]);
+    const contentRatings = useMemo(
+        () =>
+            getStandardMetadataField(levelDef, 'ContentRatings')
+                ? sortByOrdinal(metadata?.contentRatings).flatMap((rating) => {
+                      const value = nonEmptyMetadataText(rating.rating);
+                      return value
+                          ? [
+                                {
+                                    id: rating.id,
+                                    body: nonEmptyMetadataText(rating.body) ?? 'Rating',
+                                    rating: value,
+                                },
+                            ]
+                          : [];
+                  })
+                : [],
+        [levelDef, metadata?.contentRatings],
+    );
+
+    const externalIds = useMemo(
+        () =>
+            sortByOrdinal(metadata?.externalIds).flatMap((externalId) => {
+                const value = nonEmptyMetadataText(externalId.value);
+                const source = nonEmptyMetadataText(externalId.source) ?? 'unknown';
+                return value && !isInternalSource(source)
+                    ? [
+                          {
+                              source,
+                              value,
+                              url: contentData?.externalIds?.find(
+                                  (candidate) => candidate.source === source && candidate.value === value,
+                              )?.url,
+                          },
+                      ]
+                    : [];
+            }),
+        [contentData?.externalIds, metadata?.externalIds],
+    );
+    const references = useMemo(
+        () =>
+            sortByOrdinal(metadata?.references).flatMap((reference) => {
+                const url = nonEmptyMetadataText(reference.url);
+                return url
+                    ? [
+                          {
+                              url,
+                              displayName: nonEmptyMetadataText(reference.displayName) ?? url,
+                              source: reference.source,
+                              kind: reference.kind,
+                          },
+                      ]
+                    : [];
+            }),
+        [metadata?.references],
+    );
+
+    const metadataRows = useMemo(
+        () => buildMaterializedDetailRows(metadata, levelDef?.standardMetadataFields, levelDef?.customMetadataFields),
+        [levelDef, metadata],
+    );
     const contentFacts: ContentFacts = useMemo(() => {
-        const typeDef = contentTypes.find((t) => t.slug === contentData?.contentType);
-        const levelDef = typeDef?.levels.find((l) => l.slug === contentData?.level);
         return {
-            factFields: levelDef?.standardFactFields ?? [],
-            factValues: contentData?.factValues,
-            externalIds: (contentData?.externalIds ?? []).map((extId) => ({
-                source: extId.source,
-                id: extId.value,
-                url: extId.url,
+            detailRows: metadataRows,
+            alternateTexts: buildAlternateTextRows(metadata),
+            externalIds: externalIds.map((externalId) => ({
+                source: externalId.source,
+                id: externalId.value,
             })),
-            customValues: contentData?.customValues,
         };
-    }, [contentData, contentTypes]);
+    }, [externalIds, metadata, metadataRows]);
 
     const childrenData: ChildItem[] = useMemo(() => {
         if (!childrenResult?.items) {
@@ -478,16 +603,22 @@ export function ContentDetailPage() {
                 count: childrenResult?.totalItems,
             });
         }
-        defs.push(
-            { value: 'related', label: 'Related', icon: <UsersThreeIcon weight="bold" aria-hidden="true" /> },
-            { value: 'details', label: 'Details', icon: <InfoIcon weight="bold" aria-hidden="true" /> },
-            {
+        if (hasRelationships) {
+            defs.push({
+                value: 'related',
+                label: 'Related',
+                icon: <UsersThreeIcon weight="bold" aria-hidden="true" />,
+            });
+        }
+        defs.push({ value: 'details', label: 'Details', icon: <InfoIcon weight="bold" aria-hidden="true" /> });
+        if (hasPreviews) {
+            defs.push({
                 value: 'previews',
                 label: 'Previews',
                 icon: <FilmSlateIcon weight="bold" aria-hidden="true" />,
-                count: hasPreviews ? previews.length : undefined,
-            },
-        );
+                count: previews.length,
+            });
+        }
         if (imageCount > 0) {
             defs.push({
                 value: 'images',
@@ -522,6 +653,7 @@ export function ContentDetailPage() {
         return defs;
     }, [
         showChildrenTab,
+        hasRelationships,
         childrenTabLabel,
         childrenResult?.totalItems,
         hasPreviews,
@@ -539,6 +671,8 @@ export function ContentDetailPage() {
             !contentData ||
             contentError ||
             isContentLoading ||
+            metadataQuery.error ||
+            metadataQuery.isLoading ||
             isLibraryTypesLoading ||
             libraryTypesError ||
             !areExtensionTabsReady ||
@@ -557,6 +691,8 @@ export function ContentDetailPage() {
         isContentLoading,
         isLibraryTypesLoading,
         libraryTypesError,
+        metadataQuery.error,
+        metadataQuery.isLoading,
         rawTab,
         setActiveTab,
     ]);
@@ -703,6 +839,81 @@ export function ContentDetailPage() {
         setFilePendingDelete(file);
     }, []);
 
+    const handleOpenImportFile = useCallback(() => {
+        if (attachFileMutation.isPending) {
+            return;
+        }
+
+        void fileBrowserLocationQuery.refetch().then((result) => {
+            if (result.isError || !result.data) {
+                toast({
+                    title: 'File browser unavailable',
+                    description: getErrorMessage(result.error),
+                    variant: 'error',
+                });
+                return;
+            }
+
+            setImportDialogOpen(true);
+        });
+    }, [attachFileMutation.isPending, fileBrowserLocationQuery, toast]);
+
+    const handleImportFile = useCallback(
+        (filePath: string) => {
+            if (!activeContentId || attachFileMutation.isPending) {
+                return;
+            }
+
+            setImportDialogOpen(false);
+            attachFileMutation.mutate(
+                { contentHierarchyItemId: activeContentId, filePath },
+                {
+                    onSuccess: (result) => {
+                        toast({
+                            title: 'File imported',
+                            description: result.isPrimary
+                                ? 'The file is attached as primary content.'
+                                : 'The file is attached as a sidecar.',
+                            variant: 'success',
+                        });
+                    },
+                    onError: (error) => {
+                        toast({ title: 'Import failed', description: getErrorMessage(error), variant: 'error' });
+                    },
+                },
+            );
+        },
+        [activeContentId, attachFileMutation, toast],
+    );
+
+    const handleRequestUnlinkFile = useCallback((file: MediaFile) => {
+        setFilePendingUnlink(file);
+    }, []);
+
+    const handleConfirmUnlinkFile = useCallback(() => {
+        if (!activeContentId || !filePendingUnlink || unlinkFileMutation.isPending) {
+            return;
+        }
+
+        const file = filePendingUnlink;
+        unlinkFileMutation.mutate(
+            { contentHierarchyItemId: activeContentId, mediaFileId: file.id },
+            {
+                onSuccess: () => {
+                    toast({
+                        title: 'File unlinked',
+                        description: `Removed the Magpie association for "${file.fileName}". The host file remains.`,
+                        variant: 'success',
+                    });
+                    setFilePendingUnlink(null);
+                },
+                onError: (error) => {
+                    toast({ title: 'Unlink failed', description: getErrorMessage(error), variant: 'error' });
+                },
+            },
+        );
+    }, [activeContentId, filePendingUnlink, unlinkFileMutation, toast]);
+
     const handleConfirmDeleteFile = useCallback(() => {
         if (!activeContentId || !filePendingDelete) {
             return;
@@ -837,9 +1048,10 @@ export function ContentDetailPage() {
     const isRescanningMediaInfo = rescanMediaInfoMutation.isPending;
     const isSearching = searchMutation.isPending;
     const isDeletingFile = deleteFileMutation.isPending;
+    const isUnlinkingFile = unlinkFileMutation.isPending;
     const isRemoving = removeContentMutation.isPending;
 
-    if (isContentLoading) {
+    if (isContentLoading || metadataQuery.isLoading) {
         return (
             <div className="content-detail-page" data-page="content-detail">
                 <div className="content-detail-page__loading" data-testid="content-detail-page__loading">
@@ -962,11 +1174,28 @@ export function ContentDetailPage() {
         <div className="content-detail-page" data-page="content-detail">
             <Breadcrumb items={breadcrumbs} className="content-detail-page__breadcrumb" />
 
+            {metadataQuery.error && (
+                <Alert
+                    variant="error"
+                    icon={<WarningCircleIcon weight="duotone" aria-hidden="true" />}
+                    title="Failed to Load Content Metadata"
+                    data-testid="content-metadata-error"
+                >
+                    <p>{getErrorMessage(metadataQuery.error)}</p>
+                    <Button variant="secondary" size="sm" onClick={() => metadataQuery.refetch()}>
+                        <ArrowClockwiseIcon weight="bold" aria-hidden="true" />
+                        Retry
+                    </Button>
+                </Alert>
+            )}
+
             <ContentDetailsHeaderSlot {...detailSlotProps}>
                 <ContentDetailsHeader
                     content={content}
                     parent={parentRef}
                     heroPreview={heroPreview}
+                    contentRatings={contentRatings}
+                    awards={awards}
                     actions={headerActions}
                     hideMobileActions
                 />
@@ -1006,16 +1235,14 @@ export function ContentDetailPage() {
                         canEdit={canEditContent}
                     />
                     <TagsChipStrip contentId={activeContentId} canEdit={canEditContent} />
-                    <DetailInfoRow
-                        label="Publish Date"
-                        value={formatShortDate(contentData.publishDate, '--')}
-                        data-testid="content-publish-date-row"
-                    />
-                    <ContentViewOnLinks
-                        contentId={activeContentId}
-                        externalIds={contentData.externalIds}
-                        references={contentData.references}
-                    />
+                    {content.publishDate && (
+                        <DetailInfoRow
+                            label="Publish Date"
+                            value={formatShortDate(content.publishDate)}
+                            data-testid="content-publish-date-row"
+                        />
+                    )}
+                    <ContentViewOnLinks contentId={activeContentId} externalIds={externalIds} references={references} />
                     {genres.length > 0 && (
                         <DetailInfoRow
                             label="Genres"
@@ -1064,22 +1291,26 @@ export function ContentDetailPage() {
                     </ContentDetailsOverviewSlot>
                 </TabsContent>
 
-                <TabsContent value="related">
-                    <ErrorBoundary>
-                        <RelatedSubjectsTab contentId={activeContentId} />
-                    </ErrorBoundary>
-                </TabsContent>
+                {hasRelationships && (
+                    <TabsContent value="related">
+                        <ErrorBoundary>
+                            <RelatedSubjectsTab contentId={activeContentId} />
+                        </ErrorBoundary>
+                    </TabsContent>
+                )}
 
-                <TabsContent value="previews">
-                    <ErrorBoundary>
-                        <PreviewsTab previews={previews} posterUrl={contentData?.posterUrl} />
-                    </ErrorBoundary>
-                </TabsContent>
+                {hasPreviews && (
+                    <TabsContent value="previews">
+                        <ErrorBoundary>
+                            <PreviewsTab previews={previews} posterUrl={content.posterUrl} />
+                        </ErrorBoundary>
+                    </TabsContent>
+                )}
 
                 {imageCount > 0 && (
                     <TabsContent value="images">
                         <ErrorBoundary>
-                            <ImagesGallery images={contentData?.images ?? []} altPrefix={content.title} />
+                            <ImagesGallery images={images} altPrefix={content.title} />
                         </ErrorBoundary>
                     </TabsContent>
                 )}
@@ -1120,6 +1351,10 @@ export function ContentDetailPage() {
                             <FilesTab
                                 files={filesData}
                                 emptyMessage="No files attached to this content"
+                                onImportFile={canManageContent ? handleOpenImportFile : undefined}
+                                importing={attachFileMutation.isPending}
+                                onUnlinkFile={canManageContent ? handleRequestUnlinkFile : undefined}
+                                unlinkingFileId={isUnlinkingFile ? (filePendingUnlink?.id ?? null) : null}
                                 onDeleteFile={canManageContent ? handleRequestDeleteFile : undefined}
                                 deletingFileId={isDeletingFile ? (filePendingDelete?.id ?? null) : null}
                             />
@@ -1161,6 +1396,30 @@ export function ContentDetailPage() {
             />
 
             <DeleteConfirmDialog
+                open={filePendingUnlink !== null}
+                title="Unlink file"
+                itemType="file"
+                itemName={filePendingUnlink?.fileName ?? ''}
+                description={
+                    <>
+                        Unlink &quot;{filePendingUnlink?.fileName}&quot; from Magpie? This removes only the association.
+                        The host file stays on disk.
+                    </>
+                }
+                confirmVariant="warning"
+                confirmLabel="Unlink"
+                confirmBusyLabel="Unlinking..."
+                confirmIcon={<LinkBreakIcon weight="bold" aria-hidden="true" />}
+                isDeleting={isUnlinkingFile}
+                onConfirm={handleConfirmUnlinkFile}
+                onCancel={() => {
+                    if (!isUnlinkingFile) {
+                        setFilePendingUnlink(null);
+                    }
+                }}
+            />
+
+            <DeleteConfirmDialog
                 open={filePendingDelete !== null}
                 itemType="file"
                 itemName={filePendingDelete?.fileName ?? ''}
@@ -1178,6 +1437,20 @@ export function ContentDetailPage() {
                     }
                 }}
             />
+
+            {fileBrowserLocationQuery.data && (
+                <FileBrowser
+                    open={importDialogOpen}
+                    onOpenChange={setImportDialogOpen}
+                    onSelect={handleImportFile}
+                    mode="file"
+                    initialPath={fileBrowserLocationQuery.data.initialPath}
+                    rootPath={fileBrowserLocationQuery.data.rootPath}
+                    endpoint={buildUrl('/system/files', { scope: activeContentId })}
+                    title="Import file"
+                    description="Select an existing host file to attach to this content."
+                />
+            )}
 
             <DeleteConfirmDialog
                 open={removeDialogOpen}

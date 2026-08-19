@@ -271,4 +271,22 @@
             -webkit-line-clamp: 4;
         }
     }
+
+    .content-details-header__rating {
+        display: inline-flex;
+        align-items: baseline;
+        gap: 5px;
+        padding: 2px 7px;
+        font-family: var(--font-mono);
+        font-size: var(--text-xs);
+        color: var(--text-primary);
+        border: 1px solid var(--border-subtle);
+        border-radius: var(--radius-sm);
+    }
+
+    .content-details-header__rating-body {
+        text-transform: uppercase;
+        letter-spacing: var(--tracking-wide);
+        color: var(--text-muted);
+    }
 }

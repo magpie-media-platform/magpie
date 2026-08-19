@@ -7,6 +7,8 @@ import { Badge } from '@/components/ui/Badge';
 import { CdnPhosphorIcon } from '@/components/ui/CdnPhosphorIcon';
 import { Button } from '@/components/ui/Button';
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent } from '@/components/ui/DropdownMenu';
+import { AwardsPanel } from '@/components/ui/AwardsPanel';
+import type { AwardGroup } from '@/lib/materializedMetadataDisplay';
 import { PreviewPlayer, type PreviewClip } from '@/components/ui/PreviewPlayer';
 import { useLibraryTypes, useTypeIconName } from '@/hooks/useLibraryTypes';
 import { isUnrecognizedContentLevel, resolveContentTypeLabel } from '@/lib/contentTypeDisplay';
@@ -59,13 +61,30 @@ export interface ContentDetailsHeaderProps extends Omit<ComponentPropsWithoutRef
 
     heroPreview?: PreviewClip;
 
+    contentRatings?: { id: string; body: string; rating: string }[];
+
+    awards?: AwardGroup[];
+
     actions?: React.ReactNode;
 
     hideMobileActions?: boolean;
 }
 
 export const ContentDetailsHeader = forwardRef<HTMLElement, ContentDetailsHeaderProps>(
-    ({ content, parent, heroPreview, actions, hideMobileActions = false, className, ...props }, ref) => {
+    (
+        {
+            content,
+            parent,
+            heroPreview,
+            contentRatings,
+            awards,
+            actions,
+            hideMobileActions = false,
+            className,
+            ...props
+        },
+        ref,
+    ) => {
         const classes = ['content-details-header', className].filter(Boolean).join(' ');
         const isMonitored = content.effectiveMonitoring;
         const { contentTypes } = useLibraryTypes();
@@ -159,9 +178,18 @@ export const ContentDetailsHeader = forwardRef<HTMLElement, ContentDetailsHeader
                         )}
 
                         {content.acquisitionStatus && <AcquisitionBadge status={content.acquisitionStatus} />}
+
+                        {contentRatings?.map((rating) => (
+                            <span key={rating.id} className="content-details-header__rating">
+                                <span className="content-details-header__rating-body">{rating.body}</span>
+                                {rating.rating}
+                            </span>
+                        ))}
                     </div>
 
                     {content.overview && <p className="content-details-header__overview">{content.overview}</p>}
+
+                    <AwardsPanel groups={awards ?? []} data-component="content-awards-panel" />
 
                     {actions && <div className="content-details-header__actions">{actions}</div>}
 

@@ -74,6 +74,18 @@ export function getFulfillmentBadge(status: FulfillmentStatus): FulfillmentBadge
     return FULFILLMENT_BADGE_MAP[status] ?? FULFILLMENT_BADGE_MAP.missing;
 }
 
+const FULFILLMENT_DOT_COLOR: Record<FulfillmentStatus, string> = {
+    missing: 'var(--fulfillment-missing)',
+    upgradable: 'var(--fulfillment-upgradable)',
+    fulfilled: 'var(--fulfillment-fulfilled)',
+    fulfilledExternally: 'var(--fulfillment-external)',
+    partial: 'var(--fulfillment-partial)',
+};
+
+export function getFulfillmentDotColor(status: FulfillmentStatus): string {
+    return FULFILLMENT_DOT_COLOR[status] ?? 'var(--status-unknown)';
+}
+
 interface ApiMediaInfoTrack {
     type: string;
     name: string;

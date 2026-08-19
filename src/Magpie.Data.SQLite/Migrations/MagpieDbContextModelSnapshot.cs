@@ -1503,11 +1503,18 @@ namespace Magpie.Data.SQLite.Migrations
                     b.Property<Guid?>("ModifiedByUserId")
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("PathKey")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
                     b.HasKey("Id");
 
                     b.HasIndex("ContentItemId");
 
                     b.HasIndex("FilePath")
+                        .IsUnique();
+
+                    b.HasIndex("PathKey")
                         .IsUnique();
 
                     b.ToTable("content_mediaFile", (string)null);
@@ -1942,12 +1949,12 @@ namespace Magpie.Data.SQLite.Migrations
 
             modelBuilder.Entity("Magpie.Models.Data.RefreshToken", b =>
                 {
-                    b.Property<string>("AccessTokenJti")
-                        .HasMaxLength(36)
-                        .HasColumnType("TEXT");
-
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("AccessTokenJti")
+                        .HasMaxLength(36)
                         .HasColumnType("TEXT");
 
                     b.Property<DateTime>("CreatedAt")

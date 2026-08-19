@@ -1,6 +1,7 @@
 import { forwardRef, type ComponentPropsWithoutRef } from 'react';
 
-import { DetailsPanel } from '@/components/ui/DetailsPanel';
+import { DetailsPanel, type DetailRow } from '@/components/ui/DetailsPanel';
+import type { AlternateTextRow } from '@/lib/materializedMetadataDisplay';
 import { ExternalIdDetails, type ExternalId } from '@/components/ui/ExternalIds';
 import { humanizeCustomKey } from '@/lib/contentTypeDisplay';
 import { formatDurationFromMinutes } from '@/lib/formatTime';
@@ -19,6 +20,10 @@ interface ContentFactField {
 }
 
 export interface ContentFacts {
+    detailRows?: DetailRow[];
+
+    alternateTexts?: AlternateTextRow[];
+
     factFields?: ContentFactField[];
 
     factValues?: Record<string, string | number | null | undefined>;
@@ -64,8 +69,17 @@ export const ContentFactsPanel = forwardRef<HTMLDivElement, ContentFactsPanelPro
             .filter((row) => row.key && row.value && !detailKeys.has(row.key.toLocaleLowerCase()))
             .sort((a, b) => a.label.localeCompare(b.label, 'en', { sensitivity: 'base' }));
         const seenKeys = new Set<string>();
-        const mergedRows = [...detailRows, ...customRows].filter((row) => {
-            const key = row.key.toLocaleLowerCase();
+        const mergedRows = [...(facts.detailRows ?? []), ...detailRows, ...customRows].filter((row) => {
+            const key = (
+                row.key === undefined || row.key === null
+                    ? typeof row.label === 'string'
+                        ? row.label
+                        : ''
+                    : `${row.key}`
+            ).toLocaleLowerCase();
+            if (!key) {
+                return true;
+            }
             if (seenKeys.has(key)) {
                 return false;
             }
@@ -74,14 +88,33 @@ export const ContentFactsPanel = forwardRef<HTMLDivElement, ContentFactsPanelPro
         });
         const externalIds = facts.externalIds;
         const hasExternalIds = !!externalIds?.length;
+        const alternateTexts = facts.alternateTexts ?? [];
 
-        if (mergedRows.length === 0 && !hasExternalIds) {
+        if (mergedRows.length === 0 && alternateTexts.length === 0 && !hasExternalIds) {
             return null;
         }
 
         return (
             <div ref={ref} className={classes} data-component="content-facts" {...props}>
-                <DetailsPanel title="Details" rows={mergedRows} />
+                <DetailsPanel rows={mergedRows} variant="facts" aria-label="Details" />
+                {alternateTexts.length > 0 && (
+                    <DetailsPanel
+                        title="Alternate texts"
+                        data-component="alternate-texts"
+                        rows={alternateTexts.map((alternate) => ({
+                            key: alternate.id,
+                            label: (
+                                <>
+                                    {alternate.kind}
+                                    {alternate.language && (
+                                        <span className="details-panel__code">{alternate.language}</span>
+                                    )}
+                                </>
+                            ),
+                            value: alternate.text,
+                        }))}
+                    />
+                )}
                 {hasExternalIds && <ExternalIdDetails ids={externalIds!} />}
             </div>
         );

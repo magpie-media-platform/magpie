@@ -10,6 +10,7 @@ using Magpie.Extensions.Tmdb.QueryEngine;
 using Magpie.Models;
 using Magpie.Models.Data;
 using Magpie.Models.MetadataSearch;
+using Magpie.Sdk.Caching;
 using Magpie.Sdk.Content;
 
 using Microsoft.Extensions.Logging;
@@ -20,14 +21,24 @@ internal sealed class ContentMetadataSearcher(
     IQueryEngine queryEngine,
     ISettingsResolver settingsResolver,
     ITmdbClient client,
-    IHydrationCache hydrationCache,
-    IQueryCache queryCache,
+    ICacheFactory cacheFactory,
+    IQueryCoordinator queryCache,
     ILogger<ContentMetadataSearcher> logger)
     : IContentHierarchyMetadataAdvancedSearcher
 {
     private static readonly string UnsupportedTvLevelWarning =
         "TMDb advanced search cannot search individual TV seasons or episodes; those matching levels were " +
             "omitted.";
+
+    private readonly ICache _hydrationCache = cacheFactory.GetOrCreate(
+        "tmdb-hydration",
+        () => new CachePolicy
+        {
+            Freshness = TimeSpan.FromMinutes(15),
+            Retention = TimeSpan.FromMinutes(15),
+            MaximumEntries = 256,
+            ConcurrencyMode = CacheConcurrencyMode.Pessimistic
+        });
 
     public string ProviderType => Tmdb.Constants.ProviderType;
 
@@ -73,23 +84,6 @@ internal sealed class ContentMetadataSearcher(
         string defaultLanguagePreference,
         CancellationToken cancellationToken = default)
     {
-        return await AdvancedSearchAsync(
-            contentType,
-            query,
-            maxResults,
-            defaultLanguagePreference,
-            null,
-            cancellationToken).ConfigureAwait(false);
-    }
-
-    internal async Task<MetadataSearchPage> AdvancedSearchAsync(
-        string contentType,
-        ContentHierarchyItemCriteria query,
-        int maxResults,
-        string defaultLanguagePreference,
-        ExecutionTrace? executionTrace,
-        CancellationToken cancellationToken)
-    {
         if (!new[] { "movie", "tv" }.Contains(contentType, StringComparer.OrdinalIgnoreCase))
         {
             logger.LogDebug(
@@ -99,20 +93,20 @@ internal sealed class ContentMetadataSearcher(
         }
 
         var route = contentType.ResolveAdvancedSearchRoute(query, out var unsupportedTvLevelsSelected);
+        if (route is null)
+        {
+            return EmptySearchPage();
+        }
+
         string[] scopeWarnings = unsupportedTvLevelsSelected
             ? [UnsupportedTvLevelWarning]
             : [];
-        if (route is null)
-        {
-            return EmptySearchPage(scopeWarnings);
-        }
 
         var result = await SearchMaximumAsync(
             route.Value,
             query.MergeMetadata(),
             Math.Max(1, maxResults),
             defaultLanguagePreference,
-            executionTrace,
             cancellationToken).ConfigureAwait(false);
         return new MetadataSearchPage
         {
@@ -153,33 +147,27 @@ internal sealed class ContentMetadataSearcher(
             return null;
         }
 
-        var key = HydrationCache.HydrationKey.Create(
-            candidate.ProviderType,
-            candidate.ContentType,
-            id,
-            context.Language);
+        var key = string.Join(
+            '|',
+            candidate.ProviderType.Trim().ToLowerInvariant(),
+            candidate.ContentType.Trim().ToLowerInvariant(),
+            id.ToString(CultureInfo.InvariantCulture),
+            context.Language.Trim().ToLowerInvariant());
         var tmdbRequest = BuildHydrationRequest(route.Value, id, context.Language);
-        var hydrated = await hydrationCache.GetOrCreateAsync(
+        var hydrated = await _hydrationCache.GetOrAddAsync(
             key,
-            (
-                Route: route.Value,
-                Context: context,
-                Request: tmdbRequest,
-                Client: client,
-                QueryCache: queryCache,
-                Logger: logger),
-            static async (state, token) =>
+            async token =>
             {
                 var hit = default(SearchHit);
-                if (state.Route == ContentRoute.Movie)
+                if (route.Value == ContentRoute.Movie)
                 {
-                    var detail = await state.Client.GetAsync<MovieDetailDto>(state.Context, state.Request, token)
+                    var detail = await client.GetAsync<MovieDetailDto>(context, tmdbRequest, token)
                         .ConfigureAwait(false);
                     hit = detail?.FromMovieDetail();
                 }
                 else
                 {
-                    var detail = await state.Client.GetAsync<TvDetailDto>(state.Context, state.Request, token)
+                    var detail = await client.GetAsync<TvDetailDto>(context, tmdbRequest, token)
                         .ConfigureAwait(false);
                     hit = detail?.FromTvDetail();
                 }
@@ -191,10 +179,10 @@ internal sealed class ContentMetadataSearcher(
 
                 if (hit.PosterPath is not null)
                 {
-                    var imageBase = await state.QueryCache.GetImageBaseUrlAsync(
-                        state.Context,
-                        state.Client,
-                        state.Logger,
+                    var imageBase = await queryCache.GetImageBaseUrlAsync(
+                        context,
+                        client,
+                        logger,
                         token).ConfigureAwait(false);
                     hit = hit with { ImageUrl = hit.PosterPath.ResolveImageUrl(imageBase, "w92") };
                 }
@@ -273,7 +261,7 @@ internal sealed class ContentMetadataSearcher(
             id);
         return new Request
         {
-            Endpoint = "hydration-detail",
+            Endpoint = RequestRole.HydrationDetail,
             Path = path,
             QueryParameters = query,
             CacheKey = path + "?" + string.Join("&", query.Select(pair => pair.Key + "=" + pair.Value)),
@@ -281,14 +269,13 @@ internal sealed class ContentMetadataSearcher(
         };
     }
 
-    private static MetadataSearchPage EmptySearchPage(
-        IReadOnlyList<string> warnings)
+    private static MetadataSearchPage EmptySearchPage()
     {
         return new()
         {
             Supported = true,
             Matches = [],
-            Warnings = warnings,
+            Warnings = [],
             PageInfo = new ProviderSearchPageInfo { RequestedPage = 1, HasMore = false }
         };
     }
@@ -343,7 +330,6 @@ internal sealed class ContentMetadataSearcher(
         MetadataCriteria criteria,
         int maximumResults,
         string defaultLanguagePreference,
-        ExecutionTrace? executionTrace,
         CancellationToken cancellationToken)
     {
         var hits = new List<SearchHit>();
@@ -363,7 +349,6 @@ internal sealed class ContentMetadataSearcher(
                     MaximumResults = maximumResults,
                     DefaultLanguagePreference = defaultLanguagePreference
                 },
-                executionTrace,
                 cancellationToken).ConfigureAwait(false);
             supported &= execution.Supported;
 

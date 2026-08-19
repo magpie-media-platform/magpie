@@ -6,6 +6,7 @@ using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -14,15 +15,12 @@ using Magpie.Models.Enums;
 using Magpie.Models.Filtering;
 using Magpie.Models.MetadataSearch;
 
-using Microsoft.Extensions.Logging;
-
 namespace Magpie.Extensions.MusicBrainz.QueryEngine;
 
 internal sealed class QueryExecutor(
     IMusicBrainzClient client,
-    IQueryCache cache,
-    ICoverArtArchiveClient coverClient,
-    ILogger<QueryExecutor> logger) : IQueryExecutor
+    IQueryCoordinator cache,
+    ICoverArtArchiveClient coverClient) : IQueryExecutor
 {
     private const int BrowsePageSize = 100;
     private const int CoverThumbnailSize = 500;
@@ -31,49 +29,57 @@ internal sealed class QueryExecutor(
 
     private const int ScanBatchSize = 100;
 
+    private const string TallyProperty = "magpie.query.tally";
+
     private static readonly string ScanTruncationWarning =
         "musicbrainz results may be incomplete because the upstream result set was truncated.";
 
     private static readonly string OversizedQueryWarning =
         "musicbrainz rejected a query larger than 8 KiB before transport.";
 
-    private readonly AsyncLocal<ExecutionTrace?> _currentTrace = new();
-    private readonly AsyncLocal<int?> _currentNodeId = new();
-    private readonly AsyncLocal<int?> _currentStageNodeId = new();
+    private static readonly Regex SecretQueryValue = new(
+        "([?&](?:api_?key|access_?token|token|secret|password|signature)=)[^&]*",
+        RegexOptions.IgnoreCase);
 
     public async Task<QueryResult> ExecuteAsync(QueryPlan plan, CancellationToken cancellationToken)
     {
-        var previousTrace = _currentTrace.Value;
-        var previousNodeId = _currentNodeId.Value;
-        var previousStageNodeId = _currentStageNodeId.Value;
-        _currentTrace.Value = logger.IsEnabled(LogLevel.Trace) ? new ExecutionTrace() : null;
-        _currentNodeId.Value = null;
-        _currentStageNodeId.Value = null;
+        using var activity = Telemetry.Source.StartActivity("musicbrainz.query.execute");
+        var tally = new ExecutionTally();
+        activity?.SetCustomProperty(TallyProperty, tally);
+        activity?.SetTag("magpie.query.fingerprint", plan.Fingerprint);
+        if (activity?.IsAllDataRequested == true)
+        {
+            activity.AddEvent(new ActivityEvent(
+                "plan",
+                tags: new ActivityTagsCollection
+                {
+                    ["magpie.query.plan_json"] = plan.SerializePlan(),
+                    ["magpie.query.anchor_kind"] = PlanAnchorKind(plan),
+                    ["magpie.query.known_empty"] =
+                        plan.TraceProvenance.Includes(QueryTraceProvenance.Disposition.PlannedEmpty),
+                    ["magpie.query.warnings"] = plan.Warnings.ToArray()
+                }));
+        }
+
         var stopwatch = Stopwatch.StartNew();
-        try
+        var result = await ExecuteCoreAsync(plan, cancellationToken).ConfigureAwait(false);
+        var terminalReason = TerminalReason(plan, result);
+        Telemetry.QueryDuration.Record(
+            stopwatch.Elapsed.TotalMilliseconds,
+            Telemetry.Provider,
+            Telemetry.ContentType,
+            new KeyValuePair<string, object?>("terminal_reason", terminalReason));
+        Telemetry.Results.Record(result.Hits.Count, Telemetry.Provider, Telemetry.ContentType);
+        if (activity is not null)
         {
-            if (PlannedEmpty(plan))
-            {
-                TraceStageSkipped(
-                    "seed",
-                    plan.TraceProvenance.Includes(QueryTraceProvenance.Disposition.Refused)
-                        ? "a required criterion is unsupported"
-                        : plan.TraceProvenance.Includes(QueryTraceProvenance.Disposition.PlannedEmpty)
-                            ? "criteria planned an empty result"
-                            : "criteria do not provide a positive bounded seed");
-            }
-
-            var result = await ExecuteCoreAsync(plan, cancellationToken).ConfigureAwait(false);
-            TraceResult(plan, result, stopwatch.Elapsed);
-
-            return result;
+            activity.SetTag("magpie.query.rows_fetched", tally.RowsFetched);
+            activity.SetTag("magpie.query.rows_surviving", result.Hits.Count);
+            activity.SetTag("magpie.query.request_count", tally.RequestCount);
+            activity.SetTag("magpie.query.has_more", result.PageInfo.HasMore);
+            activity.SetTag("magpie.query.terminal_reason", terminalReason);
         }
-        finally
-        {
-            _currentTrace.Value = previousTrace;
-            _currentNodeId.Value = previousNodeId;
-            _currentStageNodeId.Value = previousStageNodeId;
-        }
+
+        return result;
     }
 
     public async Task<FetchResult<IReadOnlyList<LabelReference>>> GetRepresentativeReleaseLabelsAsync(
@@ -1206,45 +1212,31 @@ internal sealed class QueryExecutor(
             return memoized;
         }
 
-        var stopwatch = Stopwatch.StartNew();
-        var previousNodeId = _currentNodeId.Value;
-        var previousStageNodeId = _currentStageNodeId.Value;
-        _currentNodeId.Value = node.Id;
-        _currentStageNodeId.Value = node is FilterPlanNode ? node.Id : null;
-        QueryResult result;
-        try
+        using var activity = StartNode(node);
+        var result = node switch
         {
-            result = node switch
-            {
-                FetchPlanNode fetch => await ExecuteFetchNodeAsync(
-                    plan,
-                    fetch,
-                    outcomes,
-                    filter: null,
-                    maximumRows: null,
-                    cancellationToken).ConfigureAwait(false),
-                FilterPlanNode filter => await ExecuteFilterNodeAsync(plan, filter, outcomes, cancellationToken)
-                    .ConfigureAwait(false),
-                UnionPlanNode union => await ExecuteUnionNodeAsync(plan, union, outcomes, cancellationToken)
-                    .ConfigureAwait(false),
-                IntersectPlanNode intersect => await ExecuteIntersectNodeAsync(
-                    plan,
-                    intersect,
-                    outcomes,
-                    cancellationToken).ConfigureAwait(false),
-                ResolvePlanNode resolve => await ExecuteResolveNodeAsync(plan, resolve, cancellationToken)
-                    .ConfigureAwait(false),
-                _ => throw new ArgumentOutOfRangeException(nameof(node))
-            };
-        }
-        finally
-        {
-            _currentNodeId.Value = previousNodeId;
-            _currentStageNodeId.Value = previousStageNodeId;
-        }
-
+            FetchPlanNode fetch => await ExecuteFetchNodeAsync(
+                plan,
+                fetch,
+                outcomes,
+                filter: null,
+                maximumRows: null,
+                cancellationToken).ConfigureAwait(false),
+            FilterPlanNode filter => await ExecuteFilterNodeAsync(plan, filter, outcomes, cancellationToken)
+                .ConfigureAwait(false),
+            UnionPlanNode union => await ExecuteUnionNodeAsync(plan, union, outcomes, cancellationToken)
+                .ConfigureAwait(false),
+            IntersectPlanNode intersect => await ExecuteIntersectNodeAsync(
+                plan,
+                intersect,
+                outcomes,
+                cancellationToken).ConfigureAwait(false),
+            ResolvePlanNode resolve => await ExecuteResolveNodeAsync(plan, resolve, cancellationToken)
+                .ConfigureAwait(false),
+            _ => throw new ArgumentOutOfRangeException(nameof(node))
+        };
         outcomes[node.Id] = result;
-        _currentTrace.Value?.RecordNode(node, result, stopwatch.ElapsedMilliseconds);
+        activity?.SetTag("magpie.query.rows_out", result.Hits.Count);
         return result;
     }
 
@@ -1328,27 +1320,16 @@ internal sealed class QueryExecutor(
             return memoized;
         }
 
-        var stopwatch = Stopwatch.StartNew();
-        var previousNodeId = _currentNodeId.Value;
-        _currentNodeId.Value = fetch.Id;
-        QueryResult result;
-        try
-        {
-            result = await ExecuteFetchNodeAsync(
-                plan,
-                fetch,
-                outcomes,
-                filter,
-                maximumRows,
-                cancellationToken).ConfigureAwait(false);
-        }
-        finally
-        {
-            _currentNodeId.Value = previousNodeId;
-        }
-
+        using var activity = StartNode(fetch);
+        var result = await ExecuteFetchNodeAsync(
+            plan,
+            fetch,
+            outcomes,
+            filter,
+            maximumRows,
+            cancellationToken).ConfigureAwait(false);
         outcomes[fetch.Id] = result;
-        _currentTrace.Value?.RecordNode(fetch, result, stopwatch.ElapsedMilliseconds);
+        activity?.SetTag("magpie.query.rows_out", result.Hits.Count);
         return result;
     }
 
@@ -1388,7 +1369,7 @@ internal sealed class QueryExecutor(
                 .ConfigureAwait(false);
             if (anchor.Hits.Count == 0)
             {
-                _currentTrace.Value?.RecordNodeSkipped(search, "required anchor returned no ids");
+                RecordNodeSkipped(search, "required anchor returned no ids");
                 return EmptyWithWarnings(plan, anchor.Warnings.Concat(warnings));
             }
         }
@@ -1404,22 +1385,11 @@ internal sealed class QueryExecutor(
             ExcludedArtistMbids = [.. excludedMbids.OrderBy(mbid => mbid, StringComparer.Ordinal)],
             Warnings = [.. warnings.Concat(anchor?.Warnings ?? []).Distinct()]
         };
-        var stopwatch = Stopwatch.StartNew();
-        var previousNodeId = _currentNodeId.Value;
-        _currentNodeId.Value = search.Id;
-        QueryResult searched;
-        try
-        {
-            searched = await ExecuteVerifiedAsync(plan, search, filter, cancellationToken, query)
-                .ConfigureAwait(false);
-        }
-        finally
-        {
-            _currentNodeId.Value = previousNodeId;
-        }
-
+        using var activity = StartNode(search);
+        var searched = await ExecuteVerifiedAsync(plan, search, filter, cancellationToken, query)
+            .ConfigureAwait(false);
         outcomes[search.Id] = searched;
-        _currentTrace.Value?.RecordNode(search, searched, stopwatch.ElapsedMilliseconds);
+        activity?.SetTag("magpie.query.rows_out", searched.Hits.Count);
         return searched;
     }
 
@@ -1458,7 +1428,7 @@ internal sealed class QueryExecutor(
                 outcomes.TryGetValue(requiredNodeId, out required)) &&
             required.Hits.Count == 0)
         {
-            _currentTrace.Value?.RecordNodeSkipped(fetch, "required dependency returned no ids");
+            RecordNodeSkipped(fetch, "required dependency returned no ids");
             return EmptyWithWarnings(plan, required.Warnings);
         }
 
@@ -1466,7 +1436,7 @@ internal sealed class QueryExecutor(
         var localFilters = filter is null ? [] : ApplyResolvedRelationships(filter.Filters, fetch.Resolvers, resolved);
         if (fetchFilters is null || localFilters is null)
         {
-            _currentTrace.Value?.RecordNodeSkipped(fetch, "required resolver returned no ids");
+            RecordNodeSkipped(fetch, "required resolver returned no ids");
             return EmptyWithWarnings(plan, resolved.Values.SelectMany(outcome => outcome.Warnings));
         }
 
@@ -1718,7 +1688,7 @@ internal sealed class QueryExecutor(
 
             foreach (var skipped in intersect.Children.Skip(index + 1).SelectMany(child => child.Flatten()))
             {
-                _currentTrace.Value?.RecordNodeSkipped(skipped, "intersection already empty");
+                RecordNodeSkipped(skipped, "intersection already empty");
             }
 
             break;
@@ -1779,13 +1749,11 @@ internal sealed class QueryExecutor(
         var built = Build(fetch, plan.Fingerprint, plan.MaxResults, offset);
         if (built.TooLarge)
         {
-            TraceStageSkipped("seed", "request target exceeds the maximum size");
             return Oversized(plan);
         }
 
         if (built.Request is null)
         {
-            TraceStageSkipped("seed", "request builder produced no request");
             return Empty(plan);
         }
 
@@ -1827,17 +1795,11 @@ internal sealed class QueryExecutor(
                 : Build(fetch, plan.Fingerprint, ScanBatchSize, offset: 0);
         if (preflight.TooLarge)
         {
-            TraceStageSkipped(
-                artistCompositionQuery is null ? "seed" : "composed",
-                "request target exceeds the maximum size");
             return Oversized(plan);
         }
 
         if (preflight.Request is null)
         {
-            TraceStageSkipped(
-                artistCompositionQuery is null ? "seed" : "composed",
-                "request builder produced no request");
             return Empty(plan);
         }
 
@@ -1923,7 +1885,6 @@ internal sealed class QueryExecutor(
             }
 
             var snapshot = scan.Read();
-            TraceScanSnapshot(artistCompositionQuery is null ? "seed" : "composed", scan);
             diagnostics.Truncated = snapshot.Truncated;
             diagnostics.Warnings = snapshot.Warnings;
             while (yielded < snapshot.HitCount)
@@ -1950,9 +1911,6 @@ internal sealed class QueryExecutor(
         var snapshot = scan.Read();
         if (snapshot.Exhausted)
         {
-            TraceStageSkipped(
-                artistCompositionQuery is null ? "seed" : "composed",
-                "verified scan is already exhausted");
             return ScanResult(scan);
         }
 
@@ -1964,13 +1922,11 @@ internal sealed class QueryExecutor(
                 pending,
                 cancellationToken).ConfigureAwait(false);
             scan.CompletePending(evaluated.Accepted, evaluated.Candidate, evaluated.Warnings);
-            TraceDeferredDelta(pending.PrimaryMbid, evaluated.Accepted, scan);
             return ScanResult(scan);
         }
 
         if (snapshot.SourceExhausted)
         {
-            TraceStageSkipped(artistCompositionQuery is null ? "seed" : "composed", "source scan is exhausted");
             return ScanResult(scan);
         }
 
@@ -1998,7 +1954,6 @@ internal sealed class QueryExecutor(
         CancellationToken cancellationToken)
     {
         var role = artistCompositionQuery is null ? "seed" : "composed";
-        var examinedBefore = nextOffset;
         var built = artistCompositionQuery is null
             ? Build(fetch, plan.Fingerprint, ScanBatchSize, nextOffset)
             : BuildArtistComposition(
@@ -2010,9 +1965,6 @@ internal sealed class QueryExecutor(
                 nextOffset);
         if (built.TooLarge || built.Request is null)
         {
-            TraceStageSkipped(
-                role,
-                built.TooLarge ? "request target exceeds the maximum size" : "request builder produced no request");
             return new FetchResult<VerifiedScan> { Outcome = FetchOutcome.InvalidRequest };
         }
 
@@ -2031,8 +1983,7 @@ internal sealed class QueryExecutor(
         nextOffset += rawHitCount;
         var sourceExhausted = rawHitCount == 0 || rawHitCount < ScanBatchSize || nextOffset >= page.Count;
         var filtered = FilterCandidates(filter?.Filters ?? [], providerHits, role);
-        AppendCandidates(scan, filter?.Residuals ?? [], filtered, nextOffset, sourceExhausted, truncated: false, role);
-        TraceScanProgress(role, examinedBefore, rawHitCount, providerHits.Length, filtered.Count, scan);
+        AppendCandidates(scan, filter?.Residuals ?? [], filtered, nextOffset, sourceExhausted, truncated: false);
         return ScanResult(scan);
     }
 
@@ -2044,13 +1995,9 @@ internal sealed class QueryExecutor(
         int nextOffset,
         CancellationToken cancellationToken)
     {
-        var examinedBefore = nextOffset;
         var built = BuildReleaseIndexSeed(fetch, plan.Fingerprint, ScanBatchSize, nextOffset);
         if (built.TooLarge || built.Request is null)
         {
-            TraceStageSkipped(
-                "seed",
-                built.TooLarge ? "request target exceeds the maximum size" : "request builder produced no request");
             return new FetchResult<VerifiedScan> { Outcome = FetchOutcome.InvalidRequest };
         }
 
@@ -2120,25 +2067,19 @@ internal sealed class QueryExecutor(
             nextOffset >= page.Count;
         if (order.Count == 0)
         {
-            TraceStageSkipped("composed", "seed request returned no release groups");
             AppendCandidates(
                 scan,
                 filter?.Residuals ?? [],
                 [],
                 nextOffset,
                 sourceExhausted,
-                truncated: false,
-                "composed");
-            TraceScanProgress("seed", examinedBefore, page.Releases.Count, order.Count, 0, scan);
+                truncated: false);
             return ScanResult(scan);
         }
 
         var composed = BuildComposed(fetch, plan.Fingerprint, order);
         if (composed.TooLarge || composed.Request is null)
         {
-            TraceStageSkipped(
-                "composed",
-                composed.TooLarge ? "request target exceeds the maximum size" : "request builder produced no request");
             return new FetchResult<VerifiedScan> { Outcome = FetchOutcome.InvalidRequest };
         }
 
@@ -2179,9 +2120,7 @@ internal sealed class QueryExecutor(
             filtered,
             nextOffset,
             sourceExhausted,
-            truncated: false,
-            "composed");
-        TraceScanProgress("seed", examinedBefore, page.Releases.Count, order.Count, filtered.Count, scan);
+            truncated: false);
         return ScanResult(scan);
     }
 
@@ -2191,8 +2130,7 @@ internal sealed class QueryExecutor(
         IReadOnlyList<SearchHit> candidates,
         int nextOffset,
         bool sourceExhausted,
-        bool truncated,
-        string role)
+        bool truncated)
     {
         var survivors = new List<SearchHit>();
         var warnings = new HashSet<string>();
@@ -2212,18 +2150,8 @@ internal sealed class QueryExecutor(
 
         scan.AddWarnings(warnings);
         var deferred = residuals.Any(residual => residual.Need != ResidualNeed.Hit);
-        TraceResidualDelta(role, candidates.Count, survivors.Count, deferred);
         if (deferred)
         {
-            if (survivors.Count == 0)
-            {
-                TraceStageSkipped(
-                    "hydration",
-                    candidates.Count == 0
-                        ? "no candidates survived provider mapping and local filters"
-                        : "hit residuals removed all candidates");
-            }
-
             scan.Enqueue(survivors, nextOffset, sourceExhausted, truncated);
         }
         else
@@ -2247,18 +2175,17 @@ internal sealed class QueryExecutor(
             Capabilities = fetch.LookupCapabilities
         };
         var target = key.RequestTarget;
+        using var activity = StartRequest("seed", target);
+        var loaded = false;
         var fetched = await cache.GetEntityAsync(
             key,
-            async token =>
+            token =>
             {
-                TraceBuilt(target, plan.Fingerprint, "seed");
-                var stopwatch = Stopwatch.StartNew();
-                var result = await client.GetEntityAsync(key, plan.Settings, token).ConfigureAwait(false);
-                TraceExecuted(target, result.StatusCode, result.Outcome, stopwatch.ElapsedMilliseconds, "seed");
-                TraceRemoteResults(target, result.Value is null ? 0 : 1, offset: 0, role: "seed");
-                return result;
+                loaded = true;
+                return client.GetEntityAsync(key, plan.Settings, token);
             },
             cancellationToken).ConfigureAwait(false);
+        EndRequest(activity, "seed", !loaded, fetched.Value is null ? 0 : 1, fetched.Outcome);
         if (fetched.Outcome == FetchOutcome.NotFound)
         {
             return DirectResult(plan, []);
@@ -2297,22 +2224,22 @@ internal sealed class QueryExecutor(
             "isrc/",
             Uri.EscapeDataString(directValue),
             "?fmt=json&inc=artist-credits%2Bisrcs%2Bgenres");
+        using var activity = StartRequest("seed", target);
+        var loaded = false;
         var fetched = await cache.GetIsrcAsync(
             directValue,
-            async token =>
+            token =>
             {
-                TraceBuilt(target, plan.Fingerprint, "seed");
-                var stopwatch = Stopwatch.StartNew();
-                var result = await client.GetIsrcAsync(directValue, plan.Settings, token).ConfigureAwait(false);
-                TraceExecuted(target, result.StatusCode, result.Outcome, stopwatch.ElapsedMilliseconds, "seed");
-                TraceRemoteResults(
-                    target,
-                    result.Value is null ? 0 : RawHitCount(fetch.Target, result.Value),
-                    0,
-                    "seed");
-                return result;
+                loaded = true;
+                return client.GetIsrcAsync(directValue, plan.Settings, token);
             },
             cancellationToken).ConfigureAwait(false);
+        EndRequest(
+            activity,
+            "seed",
+            !loaded,
+            fetched.Value is null ? 0 : RawHitCount(fetch.Target, fetched.Value),
+            fetched.Outcome);
         if (fetched.Outcome == FetchOutcome.NotFound)
         {
             return DirectResult(plan, []);
@@ -2348,7 +2275,6 @@ internal sealed class QueryExecutor(
     {
         if (composition.Resolution == ArtistCompositionResolution.KnownMbid)
         {
-            TraceStageSkipped("artist-composition-resolution", "plan carries the related MBID");
             return new ResolvedArtistComposition
             {
                 Outcome = FetchOutcome.Success,
@@ -2419,18 +2345,17 @@ internal sealed class QueryExecutor(
                 : LookupCapability.None
         };
         var target = key.RequestTarget;
+        using var activity = StartRequest("resolve", target);
+        var loaded = false;
         var fetched = await cache.GetEntityAsync(
             key,
-            async token =>
+            token =>
             {
-                TraceBuilt(target, plan.Fingerprint, "resolve");
-                var stopwatch = Stopwatch.StartNew();
-                var result = await client.GetEntityAsync(key, plan.Settings, token).ConfigureAwait(false);
-                TraceExecuted(target, result.StatusCode, result.Outcome, stopwatch.ElapsedMilliseconds, "resolve");
-                TraceRemoteResults(target, result.Value is null ? 0 : 1, offset: 0, role: "resolve");
-                return result;
+                loaded = true;
+                return client.GetEntityAsync(key, plan.Settings, token);
             },
             cancellationToken).ConfigureAwait(false);
+        EndRequest(activity, "resolve", !loaded, fetched.Value is null ? 0 : 1, fetched.Outcome);
         if (fetched.Outcome == FetchOutcome.NotFound)
         {
             return new ResolvedArtistComposition { Outcome = FetchOutcome.Success };
@@ -2487,25 +2412,17 @@ internal sealed class QueryExecutor(
                 return new FetchResult<ArtistResolutionResponse> { Outcome = FetchOutcome.InvalidRequest };
             }
 
+            using var activity = StartRequest("resolve", request.RelativeTarget);
+            var loaded = false;
             var fetched = await cache.GetArtistResolutionAsync(
                 cacheKey with { Offset = offset },
-                async token =>
+                token =>
                 {
-                    TraceBuilt(request.RelativeTarget, request.Fingerprint, "resolve");
-                    var stopwatch = Stopwatch.StartNew();
-                    var result = await client
-                        .ResolveArtistCompositionAsync(request, plan.Settings, token)
-                        .ConfigureAwait(false);
-                    TraceExecuted(
-                        request.RelativeTarget,
-                        result.StatusCode,
-                        result.Outcome,
-                        stopwatch.ElapsedMilliseconds,
-                        "resolve");
-                    TraceRemoteResults(request.RelativeTarget, result.Value?.ReturnedCount ?? 0, offset, "resolve");
-                    return result;
+                    loaded = true;
+                    return client.ResolveArtistCompositionAsync(request, plan.Settings, token);
                 },
                 cancellationToken).ConfigureAwait(false);
+            EndRequest(activity, "resolve", !loaded, fetched.Value?.ReturnedCount ?? 0, fetched.Outcome);
             if (fetched is not { Outcome: FetchOutcome.Success, Value: { } response })
             {
                 return fetched;
@@ -2559,18 +2476,17 @@ internal sealed class QueryExecutor(
                 Offset = offset
             };
             var target = key.RequestTarget!;
+            using var activity = StartRequest("browse", target);
+            var loaded = false;
             var fetched = await cache.GetArtistBrowsePageAsync(
                 key,
-                async token =>
+                token =>
                 {
-                    TraceBuilt(target, plan.Fingerprint, "browse");
-                    var stopwatch = Stopwatch.StartNew();
-                    var result = await client.BrowseArtistsAsync(key, plan.Settings, token).ConfigureAwait(false);
-                    TraceExecuted(target, result.StatusCode, result.Outcome, stopwatch.ElapsedMilliseconds, "browse");
-                    TraceRemoteResults(target, result.Value?.Artists?.Count ?? 0, key.Offset, "browse");
-                    return result;
+                    loaded = true;
+                    return client.BrowseArtistsAsync(key, plan.Settings, token);
                 },
                 cancellationToken).ConfigureAwait(false);
+            EndRequest(activity, "browse", !loaded, fetched.Value?.Artists?.Count ?? 0, fetched.Outcome);
             if (fetched is not { Outcome: FetchOutcome.Success, Value: { } response })
             {
                 return new ExpandedArtistComposition { Outcome = fetched.Outcome };
@@ -2604,18 +2520,22 @@ internal sealed class QueryExecutor(
             Capabilities = LookupCapability.ArtistRelations
         };
         var target = key.RequestTarget;
+        using var activity = StartRequest("hydration", target);
+        var loaded = false;
         var fetched = await cache.GetEntityAsync(
             key,
-            async token =>
+            token =>
             {
-                TraceBuilt(target, plan.Fingerprint, "hydration");
-                var stopwatch = Stopwatch.StartNew();
-                var result = await client.GetEntityAsync(key, plan.Settings, token).ConfigureAwait(false);
-                TraceExecuted(target, result.StatusCode, result.Outcome, stopwatch.ElapsedMilliseconds, "hydration");
-                TraceRemoteResults(target, result.Value?.Artist?.Relations?.Count ?? 0, offset: 0, role: "hydration");
-                return result;
+                loaded = true;
+                return client.GetEntityAsync(key, plan.Settings, token);
             },
             cancellationToken).ConfigureAwait(false);
+        EndRequest(
+            activity,
+            "hydration",
+            !loaded,
+            fetched.Value?.Artist?.Relations?.Count ?? 0,
+            fetched.Outcome);
         if (fetched is not { Outcome: FetchOutcome.Success, Value.Artist: { } band } ||
             !Guid.TryParse(band.Id, out var parsedBandMbid) ||
             !string.Equals(
@@ -2664,13 +2584,11 @@ internal sealed class QueryExecutor(
             offset);
         if (built.TooLarge)
         {
-            TraceStageSkipped("composed", "request target exceeds the maximum size");
             return Oversized(plan);
         }
 
         if (built.Request is null)
         {
-            TraceStageSkipped("composed", "request builder produced no request");
             return EmptyWithWarnings(plan, query.Warnings);
         }
 
@@ -2707,10 +2625,6 @@ internal sealed class QueryExecutor(
         var evaluationWarnings = new HashSet<string>();
         var examined = 0;
         var survivors = 0;
-        if (candidates.Count == 0 && residuals.Count > 0)
-        {
-            TraceStageSkipped("hydration", "local filters removed all expanded candidates");
-        }
 
         foreach (var candidate in candidates)
         {
@@ -2748,7 +2662,6 @@ internal sealed class QueryExecutor(
             hits.RemoveAt(plan.MaxResults);
         }
 
-        TraceCandidateEvaluation("browse", candidates.Count, examined, survivors, hits.Count);
         return new QueryResult
         {
             Supported = true,
@@ -2761,7 +2674,7 @@ internal sealed class QueryExecutor(
         };
     }
 
-    private Task<FetchResult<SearchPage>> SearchPageAsync(
+    private async Task<FetchResult<SearchPage>> SearchPageAsync(
         Request request,
         Settings settings,
         string role,
@@ -2774,27 +2687,23 @@ internal sealed class QueryExecutor(
             Limit = request.Limit,
             Offset = request.Offset
         };
-        return cache.GetSearchPageAsync(
+        using var activity = StartRequest(role, request.RelativeTarget);
+        var loaded = false;
+        var fetched = await cache.GetSearchPageAsync(
             key,
-            async token =>
+            token =>
             {
-                TraceBuilt(request.RelativeTarget, request.Fingerprint, role);
-                var stopwatch = Stopwatch.StartNew();
-                var result = await client.SearchAsync(request, settings, token).ConfigureAwait(false);
-                TraceExecuted(
-                    request.RelativeTarget,
-                    result.StatusCode,
-                    result.Outcome,
-                    stopwatch.ElapsedMilliseconds,
-                    role);
-                TraceRemoteResults(
-                    request.RelativeTarget,
-                    result.Value is null ? 0 : RawHitCount(request.Target, result.Value),
-                    request.Offset,
-                    role);
-                return result;
+                loaded = true;
+                return client.SearchAsync(request, settings, token);
             },
-            cancellationToken);
+            cancellationToken).ConfigureAwait(false);
+        EndRequest(
+            activity,
+            role,
+            !loaded,
+            fetched.Value is null ? 0 : RawHitCount(request.Target, fetched.Value),
+            fetched.Outcome);
+        return fetched;
     }
 
     private async Task<ResidualEvaluationResult> EvaluateCandidateAsync(
@@ -2825,155 +2734,111 @@ internal sealed class QueryExecutor(
     {
         var input = ApplyResolvedArtistTypes(filters, candidates);
         var output = Filter(filters, input);
-        foreach (var filter in filters.Where(filter => filter.VerifyLocally))
+        var activity = Activity.Current;
+        if (activity?.IsAllDataRequested == true)
         {
-            var rejected = input.Count(candidate => !Matches(filter, candidate));
-            _currentTrace.Value?.RecordStage(
-                _currentStageNodeId.Value ?? _currentNodeId.Value,
-                role + "/predicate/" + filter.Kind,
-                "evaluated",
-                null,
-                input.Length,
-                input.Length - rejected);
+            var tags = new ActivityTagsCollection
+            {
+                ["magpie.query.filter_role"] = role,
+                ["magpie.query.rows_in"] = input.Length,
+                ["magpie.query.rows_out"] = output.Count
+            };
+            foreach (var filter in filters.Where(filter => filter.VerifyLocally))
+            {
+                tags["magpie.query.rejections." + filter.Kind] =
+                    input.Count(candidate => !Matches(filter, candidate));
+            }
+
+            activity.AddEvent(new ActivityEvent("filter", tags: tags));
         }
 
-        _currentTrace.Value?.RecordStage(
-            _currentStageNodeId.Value ?? _currentNodeId.Value,
-            role + "/local-filter",
-            "executed",
-            null,
-            input.Length,
-            output.Count);
         return output;
     }
 
-    private void TraceResidualDelta(string role, int inputCount, int outputCount, bool deferred)
+    private string PlanAnchorKind(QueryPlan plan)
     {
-        _currentTrace.Value?.RecordStage(
-            _currentStageNodeId.Value ?? _currentNodeId.Value,
-            role + "/hit-residuals",
-            deferred ? "deferred" : "executed",
-            null,
-            inputCount,
-            outputCount);
+        var fetch = plan.Root?.Flatten().OfType<FetchPlanNode>().FirstOrDefault();
+        return fetch?.AnchorKind.ToString() ?? "none";
     }
 
-    private void TraceScanProgress(
-        string role,
-        int examinedBefore,
-        int batchCount,
-        int mappedCount,
-        int localCount,
-        VerifiedScan scan)
+    private Activity? ExecuteActivity()
     {
-        if (_currentTrace.Value is null)
+        for (var activity = Activity.Current; activity is not null; activity = activity.Parent)
+        {
+            if (activity.GetCustomProperty(TallyProperty) is ExecutionTally)
+            {
+                return activity;
+            }
+        }
+
+        return null;
+    }
+
+    private Activity? StartNode(PlanNode node)
+    {
+        var activity = Telemetry.Source.StartActivity("musicbrainz.query.node." + node.NodeKind());
+        activity?.SetTag("magpie.query.node.id", node.Id);
+        return activity;
+    }
+
+    private void RecordNodeSkipped(PlanNode node, string reason)
+    {
+        var activity = ExecuteActivity();
+        if (activity?.IsAllDataRequested != true)
         {
             return;
         }
 
-        var snapshot = scan.Read();
-        _currentTrace.Value.RecordStage(
-            _currentStageNodeId.Value ?? _currentNodeId.Value,
-            role + "/scan",
-            snapshot.SourceExhausted ? "source-exhausted" : "continued",
-            snapshot.Truncated ? "upstream-truncated" : null,
-            examinedBefore + batchCount,
-            snapshot.HitCount + snapshot.PendingCount,
-            snapshot.NextOffset / Math.Max(1, ScanBatchSize));
+        activity.AddEvent(new ActivityEvent(
+            "node.skipped",
+            tags: new ActivityTagsCollection
+            {
+                ["magpie.query.node.id"] = node.Id,
+                ["magpie.query.node.kind"] = node.NodeKind(),
+                ["magpie.query.node.skip_reason"] = reason
+            }));
     }
 
-    private void TraceScanSnapshot(string role, VerifiedScan scan)
+    private Activity? StartRequest(string role, string target)
     {
-        if (_currentTrace.Value is null)
+        var activity = Telemetry.Source.StartActivity("musicbrainz.query.request", ActivityKind.Client);
+        if (activity is not null)
         {
-            return;
+            activity.SetTag("magpie.request.role", role);
+            activity.SetTag("magpie.request.target", ScrubSecrets(target));
         }
 
-        var snapshot = scan.Read();
-        _currentTrace.Value.RecordStage(
-            _currentStageNodeId.Value ?? _currentNodeId.Value,
-            role + "/scan-snapshot",
-            snapshot.Exhausted ? "exhausted" : "open",
-            snapshot.Truncated ? "upstream-truncated" : null,
-            snapshot.NextOffset,
-            snapshot.HitCount,
-            snapshot.NextOffset / Math.Max(1, ScanBatchSize));
+        return activity;
     }
 
-    private void TraceDeferredDelta(string candidate, bool accepted, VerifiedScan scan)
+    private void EndRequest(Activity? activity, string role, bool cacheHit, int rows, FetchOutcome outcome)
     {
-        if (_currentTrace.Value is null)
+        if (ExecuteActivity()?.GetCustomProperty(TallyProperty) is ExecutionTally tally)
         {
-            return;
+            tally.Add(rows);
         }
 
-        var snapshot = scan.Read();
-        _currentTrace.Value.RecordStage(
-            _currentStageNodeId.Value ?? _currentNodeId.Value,
-            "hydration/deferred-residual",
-            accepted ? "accepted" : "rejected",
-            null,
+        Telemetry.Requests.Add(
             1,
-            accepted ? 1 : 0,
-            snapshot.NextOffset / Math.Max(1, ScanBatchSize));
-    }
-
-    private void TraceCandidateEvaluation(
-        string role,
-        int availableCount,
-        int examinedCount,
-        int survivorCount,
-        int pageCount)
-    {
-        _currentTrace.Value?.RecordStage(
-            _currentStageNodeId.Value ?? _currentNodeId.Value,
-            role + "/candidate-evaluation",
-            examinedCount < availableCount ? "settled-early" : "exhausted",
-            null,
-            examinedCount,
-            survivorCount);
-    }
-
-    private void TraceBuilt(string relativeTarget, string diagnosticKey, string role)
-    {
-        _currentTrace.Value?.RecordRequestBuilt(_currentNodeId.Value, role, relativeTarget);
-    }
-
-    private void TraceExecuted(
-        string relativeTarget,
-        int? statusCode,
-        FetchOutcome outcome,
-        long elapsedMilliseconds,
-        string role)
-    {
-        _currentTrace.Value?.RecordRequestExecuted(
-            _currentNodeId.Value,
-            role,
-            relativeTarget,
-            statusCode,
-            outcome,
-            elapsedMilliseconds);
-    }
-
-    private void TraceStageSkipped(string role, string reason)
-    {
-        _currentTrace.Value?.RecordStage(_currentStageNodeId.Value ?? _currentNodeId.Value, role, "skipped", reason);
-    }
-
-    private void TraceRemoteResults(string relativeTarget, int count, int offset, string role)
-    {
-        _currentTrace.Value?.RecordRemoteRows(_currentNodeId.Value, role, relativeTarget, count, offset);
-    }
-
-    private void TraceResult(QueryPlan plan, QueryResult result, TimeSpan elapsed)
-    {
-        if (_currentTrace.Value is { } trace)
+            Telemetry.Provider,
+            new KeyValuePair<string, object?>("request_role", role),
+            new KeyValuePair<string, object?>("cache_hit", cacheHit));
+        if (activity is null)
         {
-            logger.LogTrace(
-                "EXEC MusicBrainz {ExecutionJson}",
-                plan.SerializeExecution(result, trace, elapsed, TerminalReason(plan, result)));
+            return;
         }
+
+        activity.SetTag("magpie.cache.hit", cacheHit);
+        activity.SetTag("magpie.request.rows", rows);
+        if (outcome is not (FetchOutcome.Success or FetchOutcome.NotFound))
+        {
+            activity.SetStatus(ActivityStatusCode.Error, outcome.ToString());
+        }
+
+        activity.Dispose();
     }
+
+    private string ScrubSecrets(string target) => SecretQueryValue.Replace(target, "$1redacted");
 
     private async Task<FetchResult<ResidualEntityData>> GetEntityDataAsync(
         SearchHit hit,
@@ -3123,46 +2988,45 @@ internal sealed class QueryExecutor(
         return ReleaseDuration(release);
     }
 
-    private Task<FetchResult<Uri>> GetCoverAsync(SearchHit hit, Settings settings, CancellationToken cancellationToken)
+    private async Task<FetchResult<Uri>> GetCoverAsync(
+        SearchHit hit,
+        Settings settings,
+        CancellationToken cancellationToken)
     {
         var key = new CoverCacheKey { ReleaseGroupMbid = hit.PrimaryMbid, ThumbnailSize = CoverThumbnailSize };
         var target = hit.PrimaryMbid.ReleaseGroupFrontTarget(CoverThumbnailSize);
-        return cache.GetCoverAsync(
+        using var activity = StartRequest("cover-art", target);
+        var loaded = false;
+        var fetched = await cache.GetCoverAsync(
             key,
-            async token =>
+            token =>
             {
-                TraceBuilt(target, hit.PrimaryMbid, "cover-art");
-                var stopwatch = Stopwatch.StartNew();
-                var result = await coverClient.GetReleaseGroupFrontAsync(
-                    hit.PrimaryMbid,
-                    CoverThumbnailSize,
-                    settings,
-                    token).ConfigureAwait(false);
-                TraceExecuted(target, result.StatusCode, result.Outcome, stopwatch.ElapsedMilliseconds, "cover-art");
-                TraceRemoteResults(target, result.Value is null ? 0 : 1, offset: 0, "cover-art");
-                return result;
+                loaded = true;
+                return coverClient.GetReleaseGroupFrontAsync(hit.PrimaryMbid, CoverThumbnailSize, settings, token);
             },
-            cancellationToken);
+            cancellationToken).ConfigureAwait(false);
+        EndRequest(activity, "cover-art", !loaded, fetched.Value is null ? 0 : 1, fetched.Outcome);
+        return fetched;
     }
 
-    private Task<FetchResult<EntityResponseDto>> GetEntityAsync(
+    private async Task<FetchResult<EntityResponseDto>> GetEntityAsync(
         EntityCacheKey key,
         Settings settings,
         CancellationToken cancellationToken)
     {
         var target = key.RequestTarget;
-        return cache.GetEntityAsync(
+        using var activity = StartRequest("hydration", target);
+        var loaded = false;
+        var fetched = await cache.GetEntityAsync(
             key,
-            async token =>
+            token =>
             {
-                TraceBuilt(target, key.Mbid, "hydration");
-                var stopwatch = Stopwatch.StartNew();
-                var result = await client.GetEntityAsync(key, settings, token).ConfigureAwait(false);
-                TraceExecuted(target, result.StatusCode, result.Outcome, stopwatch.ElapsedMilliseconds, "hydration");
-                TraceRemoteResults(target, result.Value is null ? 0 : 1, offset: 0, "hydration");
-                return result;
+                loaded = true;
+                return client.GetEntityAsync(key, settings, token);
             },
-            cancellationToken);
+            cancellationToken).ConfigureAwait(false);
+        EndRequest(activity, "hydration", !loaded, fetched.Value is null ? 0 : 1, fetched.Outcome);
+        return fetched;
     }
 
     private ResidualEvaluationResult EvaluateHit(IReadOnlyList<ResidualCriterion> residuals, SearchHit hit)
@@ -3171,7 +3035,6 @@ internal sealed class QueryExecutor(
         var hitResiduals = Residuals(residuals, ResidualNeed.Hit);
         if (hitResiduals.Count == 0)
         {
-            TraceStage("hit", "skipped", hit, hitResiduals.Count, accepted: true);
             return Result(accepted: true, warnings);
         }
 
@@ -3179,31 +3042,8 @@ internal sealed class QueryExecutor(
         {
             var residual = hitResiduals[index];
             var outcome = residual.Kind switch { ResidualKind.Genre => MatchGenres(residual, hit.Genres), _ => null };
-            TraceResidual(
-                "hit",
-                residual,
-                hit,
-                accepted: outcome != false,
-                reason: outcome is null
-                    ? "unverifiable retained"
-                    : outcome.Value
-                        ? "evaluated"
-                        : "candidate rejected");
             if (outcome == false)
             {
-                for (var remaining = index + 1; remaining < hitResiduals.Count; remaining++)
-                {
-                    TraceResidual(
-                        "hit",
-                        hitResiduals[remaining],
-                        hit,
-                        accepted: true,
-                        reason: "prior residual rejected",
-                        inputCount: 0);
-                }
-
-                TraceStage("hit", "completed", hit, hitResiduals.Count, accepted: false);
-                TraceDownstreamSkipped(residuals, hit, "hit");
                 return Result(accepted: false, warnings);
             }
 
@@ -3213,7 +3053,6 @@ internal sealed class QueryExecutor(
             }
         }
 
-        TraceStage("hit", "completed", hit, hitResiduals.Count, accepted: true);
         return Result(accepted: true, warnings);
     }
 
@@ -3243,19 +3082,12 @@ internal sealed class QueryExecutor(
         var referencesEvaluated = false;
         var genresEvaluated = false;
         var externalIdsEvaluated = false;
-        if (entityResidualCount == 0)
-        {
-            TraceStage("entity", "skipped", hit, residualCount: 0, accepted: true);
-        }
 
         if (aliases is not null)
         {
             aliasesEvaluated = true;
-            if (!AllMatch("entity", hit, aliasResiduals, residual => MatchAliases(residual, hit.Title, aliases)))
+            if (!AllMatch(aliasResiduals, residual => MatchAliases(residual, hit.Title, aliases)))
             {
-                TraceUnevaluatedEntityResiduals();
-                TraceStage("entity", "completed", hit, entityResidualCount, accepted: false);
-                TraceDownstreamSkipped(residuals, hit, "entity");
                 return Result(accepted: false, warnings);
             }
         }
@@ -3263,11 +3095,8 @@ internal sealed class QueryExecutor(
         if (relations is not null)
         {
             referencesEvaluated = true;
-            if (!AllMatch("entity", hit, referenceResiduals, residual => MatchReferences(residual, relations)))
+            if (!AllMatch(referenceResiduals, residual => MatchReferences(residual, relations)))
             {
-                TraceUnevaluatedEntityResiduals();
-                TraceStage("entity", "completed", hit, entityResidualCount, accepted: false);
-                TraceDownstreamSkipped(residuals, hit, "entity");
                 return Result(accepted: false, warnings);
             }
         }
@@ -3275,11 +3104,8 @@ internal sealed class QueryExecutor(
         if (genres is not null)
         {
             genresEvaluated = true;
-            if (!AllMatch("entity", hit, genreResiduals, residual => MatchGenres(residual, genres) == true))
+            if (!AllMatch(genreResiduals, residual => MatchGenres(residual, genres) == true))
             {
-                TraceUnevaluatedEntityResiduals();
-                TraceStage("entity", "completed", hit, entityResidualCount, accepted: false);
-                TraceDownstreamSkipped(residuals, hit, "entity");
                 return Result(accepted: false, warnings);
             }
         }
@@ -3313,13 +3139,11 @@ internal sealed class QueryExecutor(
 
         if (capabilities != LookupCapability.None)
         {
-            TraceHydrationRequested("entity", hit, capabilities.ToString());
             var fetched = await GetEntityDataAsync(
                 hit,
                 capabilities,
                 settings,
                 cancellationToken).ConfigureAwait(false);
-            TraceHydrationCompleted("entity", hit, capabilities.ToString(), fetched.Outcome);
             if (fetched is { Outcome: FetchOutcome.Success, Value: { } entity })
             {
                 if ((capabilities & LookupCapability.Aliases) != 0)
@@ -3401,11 +3225,8 @@ internal sealed class QueryExecutor(
         if (!aliasesEvaluated && aliases is not null)
         {
             aliasesEvaluated = true;
-            if (!AllMatch("entity", hit, aliasResiduals, residual => MatchAliases(residual, hit.Title, aliases)))
+            if (!AllMatch(aliasResiduals, residual => MatchAliases(residual, hit.Title, aliases)))
             {
-                TraceUnevaluatedEntityResiduals();
-                TraceStage("entity", "completed", hit, entityResidualCount, accepted: false);
-                TraceDownstreamSkipped(residuals, hit, "entity");
                 return Result(accepted: false, warnings);
             }
         }
@@ -3413,11 +3234,8 @@ internal sealed class QueryExecutor(
         if (!referencesEvaluated && relations is not null)
         {
             referencesEvaluated = true;
-            if (!AllMatch("entity", hit, referenceResiduals, residual => MatchReferences(residual, relations)))
+            if (!AllMatch(referenceResiduals, residual => MatchReferences(residual, relations)))
             {
-                TraceUnevaluatedEntityResiduals();
-                TraceStage("entity", "completed", hit, entityResidualCount, accepted: false);
-                TraceDownstreamSkipped(residuals, hit, "entity");
                 return Result(accepted: false, warnings);
             }
         }
@@ -3425,11 +3243,8 @@ internal sealed class QueryExecutor(
         if (!genresEvaluated && genres is not null)
         {
             genresEvaluated = true;
-            if (!AllMatch("entity", hit, genreResiduals, residual => MatchGenres(residual, genres) == true))
+            if (!AllMatch(genreResiduals, residual => MatchGenres(residual, genres) == true))
             {
-                TraceUnevaluatedEntityResiduals();
-                TraceStage("entity", "completed", hit, entityResidualCount, accepted: false);
-                TraceDownstreamSkipped(residuals, hit, "entity");
                 return Result(accepted: false, warnings);
             }
         }
@@ -3437,54 +3252,20 @@ internal sealed class QueryExecutor(
         if (!externalIdsEvaluated && externalIds is not null)
         {
             externalIdsEvaluated = true;
-            if (!AllMatch("entity", hit, externalIdResiduals, residual => MatchExternalIds(residual, externalIds)))
+            if (!AllMatch(externalIdResiduals, residual => MatchExternalIds(residual, externalIds)))
             {
-                TraceUnevaluatedEntityResiduals();
-                TraceStage("entity", "completed", hit, entityResidualCount, accepted: false);
-                TraceDownstreamSkipped(residuals, hit, "entity");
                 return Result(accepted: false, warnings);
             }
 
             evaluatedHit = evaluatedHit with { ExternalIds = externalIds };
         }
 
-        if (!aliasesEvaluated)
-        {
-            TraceResidualsRetained("entity", hit, aliasResiduals);
-            aliasesEvaluated = true;
-        }
-
-        if (!referencesEvaluated)
-        {
-            TraceResidualsRetained("entity", hit, referenceResiduals);
-            referencesEvaluated = true;
-        }
-
-        if (!genresEvaluated)
-        {
-            TraceResidualsRetained("entity", hit, genreResiduals);
-            genresEvaluated = true;
-        }
-
-        if (!externalIdsEvaluated)
-        {
-            TraceResidualsRetained("entity", hit, externalIdResiduals);
-            externalIdsEvaluated = true;
-        }
-
-        if (entityResidualCount > 0)
-        {
-            TraceStage("entity", "completed", hit, entityResidualCount, accepted: true);
-        }
-
         if (labelResiduals.Count > 0)
         {
             if (labels is not null &&
-                !AllMatch("representative-labels", hit, labelResiduals, residual => MatchLabels(residual, labels)))
+                !AllMatch(labelResiduals, residual => MatchLabels(residual, labels)))
             {
                 labelsEvaluated = true;
-                TraceStage("representative-labels", "completed", hit, labelResiduals.Count, accepted: false);
-                TraceDownstreamSkipped(residuals, hit, "representative-labels");
                 return Result(accepted: false, warnings);
             }
 
@@ -3495,19 +3276,10 @@ internal sealed class QueryExecutor(
 
             if (labels is null && !labelPrefetchFailed)
             {
-                TraceHydrationRequested(
-                    "representative-labels",
-                    hit,
-                    ResidualNeed.RepresentativeReleaseLabels.ToString());
                 var fetched = await GetRepresentativeReleaseLabelsAsync(
                     hit,
                     settings,
                     cancellationToken).ConfigureAwait(false);
-                TraceHydrationCompleted(
-                    "representative-labels",
-                    hit,
-                    ResidualNeed.RepresentativeReleaseLabels.ToString(),
-                    fetched.Outcome);
                 if (fetched is { Outcome: FetchOutcome.Success, Value: { } value })
                 {
                     labels = value;
@@ -3521,11 +3293,9 @@ internal sealed class QueryExecutor(
             }
 
             if (!labelsEvaluated && labels is not null &&
-                !AllMatch("representative-labels", hit, labelResiduals, residual => MatchLabels(residual, labels)))
+                !AllMatch(labelResiduals, residual => MatchLabels(residual, labels)))
             {
                 labelsEvaluated = true;
-                TraceStage("representative-labels", "completed", hit, labelResiduals.Count, accepted: false);
-                TraceDownstreamSkipped(residuals, hit, "representative-labels");
                 return Result(accepted: false, warnings);
             }
 
@@ -3534,114 +3304,61 @@ internal sealed class QueryExecutor(
                 labelsEvaluated = true;
                 evaluatedHit = evaluatedHit with { LabelReferences = labels };
             }
-
-            if (labels is null)
-            {
-                TraceResidualsRetained("representative-labels", hit, labelResiduals);
-            }
-
-            TraceStage("representative-labels", "completed", hit, labelResiduals.Count, accepted: true);
-        }
-        else
-        {
-            TraceStage("representative-labels", "skipped", hit, residualCount: 0, accepted: true);
         }
 
         var languageResiduals = Residuals(residuals, ResidualNeed.RepresentativeReleaseLanguage);
         if (languageResiduals.Count > 0)
         {
-            TraceHydrationRequested(
-                "representative-language",
-                hit,
-                ResidualNeed.RepresentativeReleaseLanguage.ToString());
             var fetched = await GetRepresentativeReleaseLanguageAsync(
                 hit,
                 settings,
                 cancellationToken).ConfigureAwait(false);
-            TraceHydrationCompleted(
-                "representative-language",
-                hit,
-                ResidualNeed.RepresentativeReleaseLanguage.ToString(),
-                fetched.Outcome);
             if (fetched is not { Outcome: FetchOutcome.Success, Value: { } value })
             {
                 warnings.Add(UnverifiableWarning(ResidualKind.Language, "representative-release hydration failed"));
-                TraceResidualsRetained("representative-language", hit, languageResiduals);
             }
             else
             {
                 evaluatedHit = evaluatedHit with { RepresentativeLanguage = value.Language };
                 if (!AllMatch(
-                    "representative-language",
-                    hit,
                     languageResiduals,
                     residual => MatchLanguage(residual, value.Language)))
                 {
-                    TraceStage("representative-language", "completed", hit, languageResiduals.Count, accepted: false);
-                    TraceDownstreamSkipped(residuals, hit, "representative-language");
                     return Result(accepted: false, warnings);
                 }
             }
-
-            TraceStage("representative-language", "completed", hit, languageResiduals.Count, accepted: true);
-        }
-        else
-        {
-            TraceStage("representative-language", "skipped", hit, residualCount: 0, accepted: true);
         }
 
         var durationResiduals = Residuals(residuals, ResidualNeed.RepresentativeReleaseDuration);
         if (durationResiduals.Count > 0)
         {
-            TraceHydrationRequested(
-                "representative-duration",
-                hit,
-                ResidualNeed.RepresentativeReleaseDuration.ToString());
             var fetched = await GetRepresentativeReleaseDurationAsync(
                 hit,
                 settings,
                 cancellationToken).ConfigureAwait(false);
-            TraceHydrationCompleted(
-                "representative-duration",
-                hit,
-                ResidualNeed.RepresentativeReleaseDuration.ToString(),
-                fetched.Outcome);
             if (fetched is not { Outcome: FetchOutcome.Success, Value: { } value })
             {
                 warnings.Add(UnverifiableWarning(ResidualKind.Duration, "representative-release hydration failed"));
-                TraceResidualsRetained("representative-duration", hit, durationResiduals);
             }
             else
             {
                 evaluatedHit = evaluatedHit with { Duration = value.Duration };
                 if (!AllMatch(
-                    "representative-duration",
-                    hit,
                     durationResiduals,
                     residual => MatchDuration(residual, value.Duration)))
                 {
-                    TraceStage("representative-duration", "completed", hit, durationResiduals.Count, accepted: false);
-                    TraceDownstreamSkipped(residuals, hit, "representative-duration");
                     return Result(accepted: false, warnings);
                 }
             }
-
-            TraceStage("representative-duration", "completed", hit, durationResiduals.Count, accepted: true);
-        }
-        else
-        {
-            TraceStage("representative-duration", "skipped", hit, residualCount: 0, accepted: true);
         }
 
         var coverResiduals = Residuals(residuals, ResidualNeed.CoverArt);
         if (coverResiduals.Count > 0)
         {
-            TraceHydrationRequested("cover", hit, ResidualNeed.CoverArt.ToString());
             var fetched = await GetCoverAsync(
                 hit,
                 settings,
                 cancellationToken).ConfigureAwait(false);
-            TraceHydrationCompleted("cover", hit, ResidualNeed.CoverArt.ToString(), fetched.Outcome);
             var coverUrl = fetched.Outcome switch
             {
                 FetchOutcome.Success => fetched.Value,
@@ -3651,45 +3368,14 @@ internal sealed class QueryExecutor(
             if (fetched.Outcome is not (FetchOutcome.Success or FetchOutcome.NotFound))
             {
                 warnings.Add(UnverifiableWarning(ResidualKind.ImagePresence, "cover-art lookup failed"));
-                TraceResidualsRetained("cover", hit, coverResiduals);
             }
-            else if (!AllMatch("cover", hit, coverResiduals, residual => MatchImage(residual, coverUrl)))
+            else if (!AllMatch(coverResiduals, residual => MatchImage(residual, coverUrl)))
             {
-                TraceStage("cover", "completed", hit, coverResiduals.Count, accepted: false);
                 return Result(accepted: false, warnings);
             }
-
-            TraceStage("cover", "completed", hit, coverResiduals.Count, accepted: true);
-        }
-        else
-        {
-            TraceStage("cover", "skipped", hit, residualCount: 0, accepted: true);
         }
 
         return Result(accepted: true, warnings, evaluatedHit);
-
-        void TraceUnevaluatedEntityResiduals()
-        {
-            if (!aliasesEvaluated)
-            {
-                TraceResidualsSkipped("entity", hit, aliasResiduals, "prior residual rejected");
-            }
-
-            if (!referencesEvaluated)
-            {
-                TraceResidualsSkipped("entity", hit, referenceResiduals, "prior residual rejected");
-            }
-
-            if (!genresEvaluated)
-            {
-                TraceResidualsSkipped("entity", hit, genreResiduals, "prior residual rejected");
-            }
-
-            if (!externalIdsEvaluated)
-            {
-                TraceResidualsSkipped("entity", hit, externalIdResiduals, "prior residual rejected");
-            }
-        }
     }
 
     private IReadOnlyList<ResidualCriterion> Residuals(IReadOnlyList<ResidualCriterion> residuals, ResidualNeed need)
@@ -3861,8 +3547,6 @@ internal sealed class QueryExecutor(
     }
 
     private bool AllMatch(
-        string stage,
-        SearchHit hit,
         IReadOnlyList<ResidualCriterion> residuals,
         Func<ResidualCriterion, bool> match)
     {
@@ -3871,143 +3555,13 @@ internal sealed class QueryExecutor(
         {
             if (!accepted)
             {
-                TraceResidual(stage, residual, hit, accepted: true, reason: "prior residual rejected", inputCount: 0);
                 continue;
             }
 
             accepted = match(residual);
-            TraceResidual(stage, residual, hit, accepted, accepted ? "evaluated" : "candidate rejected");
         }
 
         return accepted;
-    }
-
-    private void TraceStage(
-        string stage,
-        string status,
-        SearchHit hit,
-        int residualCount,
-        bool accepted,
-        string? reason = null,
-        int inputCount = 1)
-    {
-        var stageReason = reason ??
-            (status == "skipped" ? "no residuals declared" : accepted ? "evaluated" : "candidate rejected");
-        _currentTrace.Value?.RecordStage(
-            _currentStageNodeId.Value ?? _currentNodeId.Value,
-            stage + "/residuals",
-            status,
-            stageReason,
-            inputCount,
-            accepted ? inputCount : 0);
-    }
-
-    private void TraceResidual(
-        string stage,
-        ResidualCriterion residual,
-        SearchHit hit,
-        bool accepted,
-        string reason,
-        int inputCount = 1)
-    {
-        _currentTrace.Value?.RecordStage(
-            _currentStageNodeId.Value ?? _currentNodeId.Value,
-            stage + "/" + residual.Kind,
-            accepted ? "accepted" : "rejected",
-            reason,
-            inputCount,
-            accepted ? inputCount : 0);
-    }
-
-    private void TraceResidualsRetained(string stage, SearchHit hit, IReadOnlyList<ResidualCriterion> residuals)
-    {
-        foreach (var residual in residuals)
-        {
-            TraceResidual(stage, residual, hit, accepted: true, reason: "unverifiable retained");
-        }
-    }
-
-    private void TraceResidualsSkipped(
-        string stage,
-        SearchHit hit,
-        IReadOnlyList<ResidualCriterion> residuals,
-        string reason)
-    {
-        foreach (var residual in residuals)
-        {
-            TraceResidual(stage, residual, hit, accepted: true, reason: reason, inputCount: 0);
-        }
-    }
-
-    private void TraceDownstreamSkipped(
-        IReadOnlyList<ResidualCriterion> residuals,
-        SearchHit hit,
-        string rejectedStage)
-    {
-        if (rejectedStage == "hit")
-        {
-            var entityResiduals = residuals.Where(residual => residual.Need is
-                ResidualNeed.EntityAliases
-                or ResidualNeed.EntityUrlRelations
-                or ResidualNeed.EntityGenres).ToArray();
-            TraceSkippedStage("entity", hit, entityResiduals);
-        }
-
-        if (rejectedStage is "hit" or "entity")
-        {
-            TraceSkippedStage(
-                "representative-labels",
-                hit,
-                Residuals(residuals, ResidualNeed.RepresentativeReleaseLabels));
-        }
-
-        if (rejectedStage is "hit" or "entity" or "representative-labels")
-        {
-            TraceSkippedStage(
-                "representative-language",
-                hit,
-                Residuals(residuals, ResidualNeed.RepresentativeReleaseLanguage));
-        }
-
-        if (rejectedStage is "hit" or "entity" or "representative-labels" or "representative-language")
-        {
-            TraceSkippedStage("cover", hit, Residuals(residuals, ResidualNeed.CoverArt));
-        }
-    }
-
-    private void TraceSkippedStage(string stage, SearchHit hit, IReadOnlyList<ResidualCriterion> residuals)
-    {
-        TraceResidualsSkipped(stage, hit, residuals, "prior stage rejected");
-        TraceStage(
-            stage,
-            "skipped",
-            hit,
-            residuals.Count,
-            accepted: true,
-            reason: "prior stage rejected",
-            inputCount: 0);
-    }
-
-    private void TraceHydrationRequested(string stage, SearchHit hit, string need)
-    {
-        _currentTrace.Value?.RecordStage(
-            _currentStageNodeId.Value ?? _currentNodeId.Value,
-            stage + "/hydration",
-            "requested",
-            need,
-            1,
-            null);
-    }
-
-    private void TraceHydrationCompleted(string stage, SearchHit hit, string need, FetchOutcome outcome)
-    {
-        _currentTrace.Value?.RecordStage(
-            _currentStageNodeId.Value ?? _currentNodeId.Value,
-            stage + "/hydration",
-            outcome.ToString(),
-            need,
-            1,
-            outcome == FetchOutcome.Success ? 1 : 0);
     }
 
     private sealed record ResolvedArtistComposition
@@ -4040,6 +3594,22 @@ internal sealed class QueryExecutor(
         public required IReadOnlyList<string> ExcludedArtistMbids { get; init; }
 
         public IReadOnlyList<string> Warnings { get; init; } = [];
+    }
+
+    private sealed class ExecutionTally
+    {
+        private int _rowsFetched;
+        private int _requestCount;
+
+        internal int RowsFetched => Volatile.Read(ref _rowsFetched);
+
+        internal int RequestCount => Volatile.Read(ref _requestCount);
+
+        internal void Add(int rows)
+        {
+            Interlocked.Add(ref _rowsFetched, rows);
+            Interlocked.Increment(ref _requestCount);
+        }
     }
 
     private sealed class VerifiedScanDiagnostics

@@ -743,6 +743,11 @@ describe('buildUrl', () => {
         expect(result).toBe('/users?page=1&limit=10');
     });
 
+    it('appends query parameters to a path that already has a query', () => {
+        const result = buildUrl('/system/files?scope=content-1', { path: '/media/library' });
+        expect(result).toBe('/system/files?scope=content-1&path=%2Fmedia%2Flibrary');
+    });
+
     it('filters out undefined values', () => {
         const result = buildUrl('/users', { page: 1, status: undefined });
         expect(result).toBe('/users?page=1');

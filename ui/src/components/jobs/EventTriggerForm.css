@@ -59,6 +59,38 @@
         line-height: var(--leading-normal);
     }
 
+    .event-trigger-form__parameter-section {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-xs);
+    }
+
+    .event-trigger-form__parameter-section .job-parameter-field__label-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: var(--space-sm);
+    }
+
+    .event-trigger-form__parameters {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-lg);
+        padding: var(--space-md);
+        margin: 0;
+        border: 1px solid var(--border-default);
+        border-radius: var(--radius-md);
+    }
+
+    .event-trigger-form__legend {
+        padding: 0 var(--space-xs);
+        font-size: var(--text-xs);
+        font-weight: var(--weight-medium);
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--text-muted);
+    }
+
     .event-trigger-form__patterns {
         display: flex;
         flex-direction: column;

@@ -20,11 +20,15 @@ public interface IReleaseSearchQueryExecutor
     /// <param name="applicableIndexerIds">The ids of the indexers that this search can use</param>
     /// <param name="onConnectionStarted">The callback that takes the phase index and the connection name</param>
     /// <param name="cancellationToken">The token that cancels the operation</param>
-    /// <returns>The phases with their releases and connection tallies</returns>
+    /// <param name="selectedConnectionIds">
+    /// The ids of the only indexer connections to query, or <see langword="null"/> for every enabled connection
+    /// </param>
+    /// <returns>The phases with their releases, candidates, and connection outcomes</returns>
     Task<IReadOnlyList<ReleaseSearchPhase>> ExecuteAsync(
         IReadOnlyList<ReleaseSearchPhase> phases,
         IReadOnlyList<string> categories,
         ISet<Guid> applicableIndexerIds,
         Action<int, string>? onConnectionStarted = null,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default,
+        ISet<Guid>? selectedConnectionIds = null);
 }

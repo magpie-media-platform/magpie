@@ -12,6 +12,7 @@ import {
 import type { JobScopeValue } from '@/hooks/useJobs';
 import { editableCriteriaToEventContext, eventContextToEditableCriteria } from '@/lib/eventContextCriteria';
 import type { EventTriggerFormValues, EventTriggerFilterItem } from './EventTriggerForm';
+import { buildJobParameterPatch, normalizeJobParameterValues } from './jobParameters';
 
 const ADMIN_SCOPE = 'Administrative' as const;
 
@@ -83,12 +84,17 @@ export function useEventTriggerCrud({ scope = ADMIN_SCOPE, queryParams }: UseEve
                 };
 
                 if (values.id) {
+                    const originalParameters = currentEditingTrigger?.parameters ?? {};
+                    const parametersPatch = buildJobParameterPatch(originalParameters, values.parameters);
                     const patch: EventTriggerPatch = {
                         name: { value: values.name },
                         eventFilter: { value: eventFilter },
                         enabled: { value: values.enabled },
                         delaySeconds: { value: values.delaySeconds },
                     };
+                    if (parametersPatch) {
+                        patch.parameters = parametersPatch;
+                    }
                     await updateTrigger({ id: values.id, patch });
                     toast({
                         title: 'Event Trigger Updated',
@@ -104,6 +110,10 @@ export function useEventTriggerCrud({ scope = ADMIN_SCOPE, queryParams }: UseEve
                         enabled: values.enabled,
                         delaySeconds: values.delaySeconds,
                     };
+                    const parameters = normalizeJobParameterValues(values.parameters);
+                    if (Object.keys(parameters).length > 0) {
+                        create.parameters = parameters;
+                    }
                     await createTrigger(create);
                     toast({
                         title: 'Event Trigger Created',
@@ -189,6 +199,7 @@ export function useEventTriggerCrud({ scope = ADMIN_SCOPE, queryParams }: UseEve
             filters,
             enabled: currentEditingTrigger.enabled,
             delaySeconds: currentEditingTrigger.delaySeconds ?? 0,
+            parameters: { ...(currentEditingTrigger.parameters ?? {}) },
         };
     }, [currentEditingTrigger]);
 

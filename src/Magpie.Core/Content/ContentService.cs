@@ -9,6 +9,7 @@ using Magpie.Abstractions;
 using Magpie.Abstractions.Content;
 using Magpie.Abstractions.Repositories;
 using Magpie.Models;
+using Magpie.Models.Api;
 using Magpie.Models.Arguments;
 using Magpie.Models.Bulk;
 using Magpie.Models.Data;
@@ -16,6 +17,7 @@ using Magpie.Models.Enums;
 using Magpie.Models.Filtering;
 using Magpie.Models.Paging;
 using Magpie.Models.Patch;
+using Magpie.Models.Storage;
 using Magpie.Sdk.Content;
 using Magpie.Sdk.Integrations;
 using Magpie.Sdk.Services;
@@ -219,6 +221,70 @@ internal sealed class ContentService(
         return await contentHierarchyItemRepository
             .DeleteAsync(contentHierarchyItemId, actingUserId, cancellationToken)
             .ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public Task<ContentFileBrowserLocation?> GetFileBrowserLocationAsync(
+        Guid contentHierarchyItemId,
+        CancellationToken cancellationToken = default)
+    {
+        return contentFileService.GetBrowserLocationAsync(contentHierarchyItemId, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public Task<IReadOnlyList<FileSystemEntry>?> BrowseFilesAsync(
+        Guid contentHierarchyItemId,
+        string path,
+        CancellationToken cancellationToken = default)
+    {
+        return contentFileService.BrowseAsync(contentHierarchyItemId, path, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async Task<ContentFileAttachmentResult?> AttachFileAsync(
+        Guid contentHierarchyItemId,
+        string filePath,
+        Guid? actingUserId,
+        CancellationToken cancellationToken = default)
+    {
+        var operation = await contentFileService
+            .AttachAsync(
+                contentHierarchyItemId,
+                filePath,
+                actingUserId,
+                ct => MaterializeFulfillmentStatusAsync(
+                    contentHierarchyItemId,
+                    actingUserId,
+                    cancellationToken: ct),
+                cancellationToken)
+            .ConfigureAwait(false);
+        return operation.Result;
+    }
+
+    /// <inheritdoc />
+    public async Task<bool> UnlinkFileAsync(
+        Guid contentHierarchyItemId,
+        Guid mediaFileId,
+        Guid? actingUserId,
+        CancellationToken cancellationToken = default)
+    {
+        return await transactionManager.ExecuteWithTransactionAsync(
+            async ct =>
+            {
+                var operation = await contentFileService
+                    .UnlinkAsync(contentHierarchyItemId, mediaFileId, actingUserId, ct)
+                    .ConfigureAwait(false);
+                if (operation.FulfillmentChanged)
+                {
+                    await MaterializeFulfillmentStatusAsync(
+                        contentHierarchyItemId,
+                        actingUserId,
+                        cancellationToken: ct).ConfigureAwait(false);
+                }
+
+                return operation.Removed;
+            },
+            cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<BulkResult> BulkPatchAsync(

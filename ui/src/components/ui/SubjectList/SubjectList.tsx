@@ -19,6 +19,8 @@ export interface SubjectItem {
 
     kind: string;
 
+    kindLabel?: string;
+
     tags?: string[];
 
     createdAt?: string;
@@ -69,10 +71,10 @@ function TitleCell({ title }: { title: string }) {
     );
 }
 
-function KindCell({ kind }: { kind: string }) {
+function KindCell({ kind, label }: { kind: string; label?: string }) {
     return (
         <Badge variant="default" size="sm">
-            {formatSubjectKindLabel(kind)}
+            {label ?? formatSubjectKindLabel(kind)}
         </Badge>
     );
 }
@@ -122,7 +124,7 @@ export const SubjectList = forwardRef<HTMLDivElement, SubjectListProps>(
                     accessorKey: 'kind',
                     header: 'Kind',
                     size: 100,
-                    cell: ({ row }) => <KindCell kind={row.original.kind} />,
+                    cell: ({ row }) => <KindCell kind={row.original.kind} label={row.original.kindLabel} />,
                 },
                 {
                     id: 'tags',

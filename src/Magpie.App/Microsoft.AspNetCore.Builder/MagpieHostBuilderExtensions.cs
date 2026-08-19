@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Security.Claims;
 using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
@@ -10,6 +11,7 @@ using System.Threading.Tasks;
 using Magpie.Abstractions;
 using Magpie.Abstractions.Database;
 using Magpie.Abstractions.Repositories;
+using Magpie.Abstractions.Security;
 using Magpie.Api;
 using Magpie.App;
 using Magpie.Core.Config;
@@ -20,6 +22,7 @@ using Magpie.Models;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Sdk.Extensions;
+using Magpie.Sdk.Services;
 
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Data.Sqlite;
@@ -28,6 +31,11 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+
+using OpenTelemetry.Logs;
+using OpenTelemetry.Metrics;
+using OpenTelemetry.Resources;
+using OpenTelemetry.Trace;
 
 using PostgreSqlDbContextFactory = Magpie.Data.PostgreSQL.MagpieDbContextFactory;
 using SqliteDbContextFactory = Magpie.Data.SQLite.MagpieDbContextFactory;
@@ -132,6 +140,217 @@ public static class MagpieHostBuilderExtensions
         await context.Database.MigrateAsync(cancellationToken).ConfigureAwait(false);
     }
 
+    private static async Task BackfillMediaFilePathKeysAsync(
+        IHostApplicationBuilder builder,
+        ILogger logger,
+        CancellationToken cancellationToken)
+    {
+        var context = CreateBootstrapDbContext(builder.Configuration, builder.Environment.ContentRootPath);
+        await using var contextHandle = context.ConfigureAwait(false);
+        if (!await context.MediaFiles
+            .AnyAsync(mediaFile => mediaFile.PathKey.StartsWith("legacy:"), cancellationToken)
+            .ConfigureAwait(false))
+        {
+            return;
+        }
+
+        var services = builder.Services.BuildServiceProvider();
+        await using var serviceHandle = services.ConfigureAwait(false);
+        var scope = services.CreateAsyncScope();
+        await using var scopeHandle = scope.ConfigureAwait(false);
+        var contentTypeRegistry = scope.ServiceProvider.GetRequiredService<IContentTypeRegistry>();
+        var fileSystem = scope.ServiceProvider.GetRequiredService<IFileSystem>();
+        var transaction = await context.Database
+            .BeginTransactionAsync(cancellationToken)
+            .ConfigureAwait(false);
+        await using var transactionHandle = transaction.ConfigureAwait(false);
+        var mediaFiles = await context.MediaFiles
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+        var duplicates = new List<MediaFile>();
+        foreach (var group in mediaFiles.GroupBy(
+            mediaFile => OperatingSystem.IsWindows()
+                ? mediaFile.FilePath.ToUpperInvariant()
+                : mediaFile.FilePath,
+            StringComparer.Ordinal))
+        {
+            var survivor = group
+                .OrderBy(mediaFile => mediaFile.PathKey.StartsWith("legacy:", StringComparison.Ordinal) ? 1 : 0)
+                .ThenBy(mediaFile => mediaFile.CreatedAt)
+                .ThenBy(mediaFile => mediaFile.Id)
+                .First();
+            survivor.PathKey = group.Key;
+            duplicates.AddRange(group.Where(mediaFile => mediaFile.Id != survivor.Id));
+        }
+
+        context.MediaFiles.RemoveRange(duplicates);
+        await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        await ReconcileDuplicateFulfillmentAsync(
+            context,
+            mediaFiles,
+            duplicates,
+            contentTypeRegistry,
+            fileSystem,
+            cancellationToken)
+            .ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        if (duplicates.Count > 0)
+        {
+            logger.LogWarning(
+                "Removed {DuplicateCount} duplicate media file associations while normalizing path keys",
+                duplicates.Count);
+        }
+    }
+
+    private static async Task ReconcileDuplicateFulfillmentAsync(
+        MagpieDbContext context,
+        IReadOnlyCollection<MediaFile> mediaFiles,
+        IReadOnlyCollection<MediaFile> duplicates,
+        IContentTypeRegistry contentTypeRegistry,
+        IFileSystem fileSystem,
+        CancellationToken cancellationToken)
+    {
+        var duplicateIds = duplicates.Select(mediaFile => mediaFile.Id).ToHashSet();
+        var affectedContentItemIds = duplicates
+            .Select(mediaFile => mediaFile.ContentItemId)
+            .ToHashSet();
+        if (affectedContentItemIds.Count == 0)
+        {
+            return;
+        }
+
+        var contentItems = await context.ContentItems.ToListAsync(cancellationToken).ConfigureAwait(false);
+        var hierarchyItems = await context.ContentHierarchyItems
+            .AsNoTracking()
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+        var contentByHierarchyId = contentItems.ToDictionary(item => item.ContentHierarchyItemId);
+        var hierarchyById = hierarchyItems.ToDictionary(item => item.Id);
+        var retainedFilesByContentItemId = mediaFiles
+            .Where(mediaFile => !duplicateIds.Contains(mediaFile.Id))
+            .ToLookup(mediaFile => mediaFile.ContentItemId);
+        var now = DateTime.UtcNow;
+        var changedHierarchyIds = new HashSet<Guid>();
+        foreach (var contentItem in contentItems.Where(item => affectedContentItemIds.Contains(item.Id)))
+        {
+            if (contentItem.Fulfillment == FulfillmentStatus.FulfilledExternally)
+            {
+                continue;
+            }
+
+            var hierarchyItem = hierarchyById.GetValueOrDefault(contentItem.ContentHierarchyItemId);
+            var level = hierarchyItem is null
+                ? null
+                : contentTypeRegistry.GetDefinitionFor(hierarchyItem.ContentType)?.LevelDefinitions
+                    .FirstOrDefault(candidate => candidate.Slug == hierarchyItem.Level);
+            var acceptedFileTypes = level?.AcceptedFileTypes ?? [];
+            var acceptedSidecarTypes = level?.AcceptedSidecarTypes ?? [];
+            var hasPrimary = false;
+            foreach (var mediaFile in retainedFilesByContentItemId[contentItem.Id])
+            {
+                var matchesPrimary = acceptedFileTypes.Count > 0 && await fileSystem
+                    .MatchesAnyFileTypeAsync(mediaFile.FilePath, acceptedFileTypes, cancellationToken)
+                    .ConfigureAwait(false);
+                if (matchesPrimary || acceptedFileTypes.Count == 0 && !await fileSystem
+                        .MatchesAnyFileTypeAsync(mediaFile.FilePath, acceptedSidecarTypes, cancellationToken)
+                        .ConfigureAwait(false))
+                {
+                    hasPrimary = true;
+                    break;
+                }
+            }
+
+            var fulfillment = hasPrimary
+                ? contentItem.QualityStatus switch
+                {
+                    QualityStatus.UpgradeWanted => FulfillmentStatus.Upgradable,
+                    QualityStatus.Met => FulfillmentStatus.Fulfilled,
+                    _ when contentItem.Fulfillment == FulfillmentStatus.Missing => FulfillmentStatus.Fulfilled,
+                    _ => contentItem.Fulfillment
+                }
+                : FulfillmentStatus.Missing;
+            if (fulfillment == contentItem.Fulfillment)
+            {
+                continue;
+            }
+
+            contentItem.Fulfillment = fulfillment;
+            contentItem.ModifiedAt = now;
+            changedHierarchyIds.Add(contentItem.ContentHierarchyItemId);
+        }
+
+        var ancestorIds = new HashSet<Guid>();
+        foreach (var hierarchyItemId in changedHierarchyIds)
+        {
+            var parentId = hierarchyById.GetValueOrDefault(hierarchyItemId)?.ParentId;
+            while (parentId is { } id && ancestorIds.Add(id))
+            {
+                parentId = hierarchyById.GetValueOrDefault(id)?.ParentId;
+            }
+        }
+
+        var statuses = contentByHierarchyId.ToDictionary(entry => entry.Key, entry => entry.Value.Fulfillment);
+        foreach (var ancestorId in ancestorIds.OrderByDescending(id => GetHierarchyDepth(id, hierarchyById)))
+        {
+            var childStatuses = hierarchyItems
+                .Where(item => item.ParentId == ancestorId)
+                .Select(item => statuses.GetValueOrDefault(item.Id, FulfillmentStatus.Missing))
+                .ToArray();
+            var fulfillment = AggregateFulfillment(childStatuses);
+            statuses[ancestorId] = fulfillment;
+            if (contentByHierarchyId.TryGetValue(ancestorId, out var contentItem))
+            {
+                if (contentItem.Fulfillment != fulfillment)
+                {
+                    contentItem.Fulfillment = fulfillment;
+                    contentItem.ModifiedAt = now;
+                }
+            }
+            else if (fulfillment != FulfillmentStatus.Missing)
+            {
+                context.ContentItems.Add(new ContentItem
+                {
+                    Id = Guid.NewGuid(),
+                    ContentHierarchyItemId = ancestorId,
+                    Fulfillment = fulfillment,
+                    CreatedAt = now
+                });
+            }
+        }
+
+        await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private static int GetHierarchyDepth(
+        Guid hierarchyItemId,
+        IReadOnlyDictionary<Guid, ContentHierarchyItem> hierarchyById)
+    {
+        var depth = 0;
+        var parentId = hierarchyById.GetValueOrDefault(hierarchyItemId)?.ParentId;
+        while (parentId is { } id)
+        {
+            depth++;
+            parentId = hierarchyById.GetValueOrDefault(id)?.ParentId;
+        }
+
+        return depth;
+    }
+
+    private static FulfillmentStatus AggregateFulfillment(IReadOnlyCollection<FulfillmentStatus> statuses)
+    {
+        if (statuses.Count == 0 ||
+            statuses.All(status => status is not FulfillmentStatus.Missing and not FulfillmentStatus.Partial))
+        {
+            return statuses.Contains(FulfillmentStatus.Upgradable)
+                ? FulfillmentStatus.Upgradable
+                : FulfillmentStatus.Fulfilled;
+        }
+
+        return statuses.Any(status => status != FulfillmentStatus.Missing)
+            ? FulfillmentStatus.Partial
+            : FulfillmentStatus.Missing;
+    }
+
     private static async Task PrepareDatabaseAsync(
         IHostApplicationBuilder builder,
         ILogger logger,
@@ -210,6 +429,7 @@ public static class MagpieHostBuilderExtensions
 
         builder.Services.AddDefaultProviders();
         builder.AddMagpieClusterBackplane();
+        await BackfillMediaFilePathKeysAsync(builder, logger, cancellationToken).ConfigureAwait(false);
 
         return loaded;
     }
@@ -357,6 +577,8 @@ public static class MagpieHostBuilderExtensions
         builder.Services.AddMagpieAuth(builder.Configuration);
         builder.Services.AddMagpieHttpResilience();
 
+        AddMagpieObservability(builder, hostOptions);
+
         var provider = builder.Configuration[DatabaseProviderKey];
         var connectionString = builder.Configuration[DatabaseConnectionStringKey];
 
@@ -398,6 +620,80 @@ public static class MagpieHostBuilderExtensions
         }
 
         return builder;
+    }
+
+    private static void AddMagpieObservability(IHostApplicationBuilder builder, MagpieHostOptions hostOptions)
+    {
+        if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT")))
+        {
+            return;
+        }
+
+        var nodeId = string.IsNullOrWhiteSpace(hostOptions.Cluster.NodeId)
+            ? Environment.MachineName
+            : hostOptions.Cluster.NodeId;
+        var assembly = typeof(MagpieHostBuilderExtensions).Assembly;
+        var serviceVersion = assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
+            ?? assembly.GetName().Version?.ToString(3)
+            ?? "0.0.0";
+
+        builder.Services.AddOpenTelemetry()
+            .ConfigureResource(resource => resource
+                .AddService(serviceName: "magpie", serviceVersion: serviceVersion)
+                .AddAttributes(
+                [
+                    new KeyValuePair<string, object>("magpie.node_id", nodeId),
+                    new KeyValuePair<string, object>(
+                        "magpie.clustered",
+                        hostOptions.Cluster.Mode != ExtensionClusterMode.SingleNode),
+                ]))
+            .WithTracing(tracing =>
+            {
+                tracing
+                .AddSource("magpie.*")
+                .AddAspNetCoreInstrumentation(options =>
+                    options.EnrichWithHttpResponse = static (activity, response) =>
+                    {
+                        var user = response.HttpContext.User;
+                        if (user.FindFirst(ClaimTypes.Role)?.Value is { } role)
+                        {
+                            activity.SetTag("magpie.user.role", role);
+                        }
+
+                        if (user.FindFirst(MagpieClaims.AuthProviderType)?.Value is { } scheme)
+                        {
+                            activity.SetTag("magpie.auth.scheme", scheme);
+                        }
+                    })
+                .AddHttpClientInstrumentation(options =>
+                    options.EnrichWithHttpRequestMessage = static (activity, _) =>
+                    {
+                        if (activity.Parent?.GetTagItem("indexer.id") is string indexerId)
+                        {
+                            activity.SetTag("magpie.indexer.id", indexerId);
+                        }
+
+                        if (activity.Parent?.GetTagItem("magpie.media_server.id") is string mediaServerId)
+                        {
+                            activity.SetTag("magpie.media_server.id", mediaServerId);
+                        }
+                    })
+                .AddOtlpExporter();
+            })
+            .WithMetrics(metrics => metrics
+                .AddMeter("magpie.*")
+                .AddMeter("Polly")
+                .AddAspNetCoreInstrumentation()
+                .AddHttpClientInstrumentation()
+                .AddRuntimeInstrumentation()
+                .AddOtlpExporter())
+            .WithLogging(
+                logging => logging.AddOtlpExporter(),
+                options =>
+                {
+                    options.IncludeFormattedMessage = true;
+                    options.IncludeScopes = true;
+                });
     }
 
     private static async Task<IReadOnlyList<Extension>> ReadInstalledExtensionsAsync(

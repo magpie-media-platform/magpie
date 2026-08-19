@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Net.Http;
@@ -12,6 +11,7 @@ using Magpie.Models;
 using Magpie.Models.Api;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
+using Magpie.Sdk.Caching;
 using Magpie.Sdk.Integrations;
 
 using Microsoft.Extensions.Logging;
@@ -19,7 +19,7 @@ using Microsoft.Extensions.Logging;
 namespace Magpie.Extensions.Jellyfin;
 
 internal sealed class JellyfinMediaServerIntegration(
-    TimeProvider timeProvider,
+    ICacheFactory cacheFactory,
     ILogger<JellyfinMediaServerIntegration> logger,
     IJellyfinClient client) :
         IMediaServerIntegration,
@@ -38,8 +38,14 @@ internal sealed class JellyfinMediaServerIntegration(
     private readonly ILogger<JellyfinMediaServerIntegration> _logger = logger;
     private readonly IJellyfinClient _client = client;
 
-    private readonly ConcurrentDictionary<string, ResolutionCacheEntry> _resolutionCache =
-        [];
+    private readonly ICache _resolutionCache = cacheFactory.GetOrCreate(
+        "jellyfin-item-resolution",
+        () => new CachePolicy
+        {
+            Freshness = ResolutionCacheTtl,
+            Retention = ResolutionCacheTtl,
+            MaximumEntries = int.MaxValue
+        });
 
     private const string ServerWideCacheScope = "*server-wide*";
 
@@ -381,36 +387,37 @@ internal sealed class JellyfinMediaServerIntegration(
         CancellationToken cancellationToken)
     {
         var cacheKey = BuildResolutionCacheKey(server.Id, parsed, externalIds, libraryId);
-        var nowUtc = timeProvider.GetUtcNow();
-        if (_resolutionCache.TryGetValue(cacheKey, out var cached) && cached.ExpiresAtUtc > nowUtc)
+        if (_resolutionCache.TryGet<DeepLinkLookupResult>(cacheKey, out var cached))
         {
-            return new DeepLinkLookupResult(cached.ItemId, cached.Status);
+            Telemetry.DeepLinkLookups.Add(
+                1,
+                Telemetry.ProviderType,
+                new KeyValuePair<string, object?>("outcome", "cache_hit"));
+            return cached;
         }
 
         var result = await _client
             .TryFindItemIdByExternalIdsAsync(parsed, externalIds, title, libraryId, cancellationToken)
             .ConfigureAwait(false);
 
+        Telemetry.DeepLinkLookups.Add(
+            1,
+            Telemetry.ProviderType,
+            new KeyValuePair<string, object?>(
+                "outcome",
+                result.Status switch
+                {
+                    DeepLinkLookupStatus.Resolved => "resolved",
+                    DeepLinkLookupStatus.NotFound => "not_found",
+                    _ => "lookup_error",
+                }));
+
         if (result.Status != DeepLinkLookupStatus.LookupError)
         {
-            PruneExpiredResolutions(nowUtc);
-            _resolutionCache[cacheKey] =
-                new ResolutionCacheEntry(result.ItemId, result.Status, nowUtc + ResolutionCacheTtl);
+            _resolutionCache.Set(cacheKey, result);
         }
 
         return result;
-    }
-
-    private void PruneExpiredResolutions(DateTimeOffset nowUtc)
-    {
-        var cache = (ICollection<KeyValuePair<string, ResolutionCacheEntry>>)_resolutionCache;
-        foreach (var pair in _resolutionCache)
-        {
-            if (pair.Value.ExpiresAtUtc <= nowUtc)
-            {
-                cache.Remove(pair);
-            }
-        }
     }
 
     private string BuildResolutionCacheKey(
@@ -434,9 +441,4 @@ internal sealed class JellyfinMediaServerIntegration(
             contentType,
             rootFolderPath);
     }
-
-    private readonly record struct ResolutionCacheEntry(
-        string? ItemId,
-        DeepLinkLookupStatus Status,
-        DateTimeOffset ExpiresAtUtc);
 }

@@ -5,16 +5,22 @@ using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions;
+using Magpie.Abstractions.Releases;
 using Magpie.Abstractions.Repositories;
 using Magpie.Core.Events;
+using Magpie.Core.Observability;
+using Magpie.Core.Releases;
 using Magpie.Models;
 using Magpie.Models.Api;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
+using Magpie.Models.Releases;
 using Magpie.Sdk.Integrations;
 using Magpie.Sdk.Services;
 
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace Magpie.Core;
@@ -23,12 +29,16 @@ internal sealed class IndexerService(
     IIndexerRepository indexerRepository,
     IIndexerConnectionRepository indexerConnectionRepository,
     IIndexerFeedRepository indexerFeedRepository,
+    IContentHierarchyItemRepository contentHierarchyItemRepository,
+    IReleaseRepository releaseRepository,
+    IReleaseScopeRepository releaseScopeRepository,
     IEnumerable<IIndexerIntegration> indexerIntegrations,
     IEnumerable<IRuntimeIndexerIntegrationFactory> runtimeIndexerIntegrationFactories,
     IEnumerable<IIndexerFeedProvider> feedProviders,
     ISettingsService settingsService,
     ITransactionManager transactionManager,
     IEventBus eventBus,
+    IServiceProvider serviceProvider,
     TimeProvider timeProvider,
     ILogger<IndexerService> logger) : IIndexerService
 {
@@ -427,6 +437,146 @@ internal sealed class IndexerService(
         return connections;
     }
 
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<IndexerSearchCapabilities>> ListCapabilitiesAsync(
+        CancellationToken cancellationToken = default)
+    {
+        var connectedIndexerIds = (await indexerConnectionRepository.ListAllAsync(cancellationToken)
+            .ConfigureAwait(false))
+            .Select(connection => connection.IndexerId)
+            .ToHashSet();
+        var indexers = (await indexerRepository.ListAllAsync(cancellationToken).ConfigureAwait(false))
+            .Where(indexer => connectedIndexerIds.Contains(indexer.Id));
+        var capabilities = new List<IndexerSearchCapabilities>();
+        foreach (var indexer in indexers)
+        {
+            try
+            {
+                capabilities.Add(DescribeCapabilities(indexer));
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Could not describe search capabilities for indexer {IndexerId}", indexer.Id);
+                capabilities.Add(new IndexerSearchCapabilities { IndexerId = indexer.Id });
+            }
+        }
+
+        return capabilities;
+    }
+
+    /// <inheritdoc />
+    public async Task<IndexerSearchResponse?> SearchAsync(
+        IndexerSearchRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var selectedIds = request.ConnectionIds.ToHashSet();
+        var connections = (await indexerConnectionRepository.ListAllAsync(cancellationToken).ConfigureAwait(false))
+            .Where(connection => selectedIds.Contains(connection.Id))
+            .OrderBy(connection => connection.Name, StringComparer.Ordinal)
+            .ThenBy(connection => connection.Id)
+            .ToArray();
+        if (connections.Length == 0)
+        {
+            return new IndexerSearchResponse();
+        }
+
+        var indexerIds = connections
+            .Select(connection => connection.IndexerId)
+            .Distinct()
+            .ToHashSet();
+        var phases = await serviceProvider.GetRequiredService<IReleaseSearchQueryExecutor>().ExecuteAsync(
+            [new ReleaseSearchPhase { Request = request.Query, ReleaseFacts = [] }],
+            [],
+            indexerIds,
+            cancellationToken: cancellationToken,
+            selectedConnectionIds: selectedIds).ConfigureAwait(false);
+
+        var phase = phases[0];
+        var outcomes = phase.Connections.ToDictionary(outcome => outcome.ConnectionId);
+        var results = new List<IndexerSearchConnectionResult>(connections.Length);
+        foreach (var connection in connections)
+        {
+            outcomes.TryGetValue(connection.Id, out var outcome);
+            results.Add(new IndexerSearchConnectionResult
+            {
+                ConnectionId = connection.Id,
+                IndexerId = connection.IndexerId,
+                ConnectionName = connection.Name,
+                Enabled = connection.Enabled,
+                Status = connection.Status,
+                Attempted = outcome?.Attempted ?? false,
+                SkippedReason = connection.Enabled ? outcome?.SkippedReason : "disabled",
+                Warning = outcome?.Error,
+            });
+        }
+
+        if (results.Count > 0 &&
+            results.All(result => result.SkippedReason == ReleaseSearchQueryExecutor.RequestNotSupportedReason))
+        {
+            return null;
+        }
+
+        return new IndexerSearchResponse
+        {
+            Candidates =
+            [
+                .. phase.Candidates
+                    .OrderByDescending(candidate => candidate.Release.PublishDate)
+                    .ThenBy(candidate => candidate.Release.Title, StringComparer.Ordinal)
+                    .ThenBy(candidate => candidate.Release.ExternalId, StringComparer.Ordinal)
+                    .Select(candidate => new IndexerSearchCandidate
+                    {
+                        Key = candidate.Key,
+                        Release = candidate.Release,
+                        ConnectionIds = candidate.ConnectionIds,
+                    }),
+            ],
+            Connections = results,
+            ConnectionsAttempted = results.Count(result => result.Attempted),
+            ConnectionsSkipped = results.Count(result => result.SkippedReason is not null),
+        };
+    }
+
+    /// <inheritdoc />
+    public async Task<Guid?> MatchAsync(
+        Guid contentHierarchyItemId,
+        Release release,
+        Guid? actingUserId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(release);
+        ArgumentException.ThrowIfNullOrWhiteSpace(release.Title);
+
+        var item = await contentHierarchyItemRepository
+            .GetByIdAsync(contentHierarchyItemId, cancellationToken)
+            .ConfigureAwait(false);
+        if (item is null)
+        {
+            return null;
+        }
+
+        return await transactionManager.ExecuteWithTransactionAsync(
+            async transactionCancellationToken =>
+            {
+                var now = timeProvider.GetUtcNow().UtcDateTime;
+                release.Id = Guid.NewGuid();
+                release.CreatedAt = now;
+                release.CreatedByUserId = actingUserId;
+                release.ModifiedAt = null;
+                release.ModifiedByUserId = null;
+                await StoreReleaseAsync(release, actingUserId, transactionCancellationToken).ConfigureAwait(false);
+                await AddScopeAsync(
+                    release.Id,
+                    contentHierarchyItemId,
+                    actingUserId,
+                    transactionCancellationToken).ConfigureAwait(false);
+                return (Guid?)release.Id;
+            },
+            cancellationToken).ConfigureAwait(false);
+    }
+
     public async Task<IndexerConnection> CreateConnectionAsync(
         Guid indexerId,
         IndexerConnectionCreate create,
@@ -818,6 +968,11 @@ internal sealed class IndexerService(
 
         if (toStatus != fromStatus)
         {
+            ReleaseTelemetry.HealthTransitions.Add(
+                1,
+                new KeyValuePair<string, object?>("indexer_id", indexer.Id.ToString()),
+                new KeyValuePair<string, object?>("to_status", toStatus.ToString()));
+
             var healthChanged = IntegrationEventBuilder.BuildIntegrationHealthChangedEvent(
                 indexer.Id,
                 "indexer",
@@ -857,6 +1012,71 @@ internal sealed class IndexerService(
             cancellationToken).ConfigureAwait(false);
 
         return result;
+    }
+
+    private async Task StoreReleaseAsync(Release release, Guid? actingUserId, CancellationToken cancellationToken)
+    {
+        if (await releaseRepository.UpdateAsync(release, actingUserId, cancellationToken).ConfigureAwait(false))
+        {
+            return;
+        }
+
+        try
+        {
+            var persisted = await releaseRepository.CreateAsync(release, actingUserId, cancellationToken)
+                .ConfigureAwait(false);
+            release.Id = persisted.Id;
+        }
+        catch (DbUpdateException)
+        {
+            if (!await releaseRepository.UpdateAsync(release, actingUserId, cancellationToken).ConfigureAwait(false))
+            {
+                throw;
+            }
+        }
+    }
+
+    private async Task AddScopeAsync(
+        Guid releaseId,
+        Guid contentHierarchyItemId,
+        Guid? actingUserId,
+        CancellationToken cancellationToken)
+    {
+        var existing = await releaseScopeRepository.QueryAsync(
+            new ReleaseScopeQuery { ReleaseId = releaseId, ContentHierarchyItemId = contentHierarchyItemId },
+            new() { PageNumber = 1, PageSize = 1 },
+            null,
+            cancellationToken).ConfigureAwait(false);
+        if (existing.Items.Any())
+        {
+            return;
+        }
+
+        await releaseScopeRepository.CreateAsync(
+            new ReleaseScope
+            {
+                Id = Guid.NewGuid(),
+                ReleaseId = releaseId,
+                ContentHierarchyItemId = contentHierarchyItemId,
+            },
+            actingUserId,
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    private IndexerSearchCapabilities DescribeCapabilities(Indexer indexer)
+    {
+        var integration = ResolveIntegration(indexer);
+        if (integration is null)
+        {
+            return new IndexerSearchCapabilities { IndexerId = indexer.Id };
+        }
+
+        return new IndexerSearchCapabilities
+        {
+            IndexerId = indexer.Id,
+            SearchFacets = [.. integration.SearchFacets.Select(set => (IReadOnlyList<string>)[.. set])],
+            SupportsKeywordSearch = integration.SupportsKeywordSearch,
+        };
     }
 
     private async Task<ConfigurationTestResult> TestIndexerConnectionCoreAsync(

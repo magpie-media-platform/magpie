@@ -380,5 +380,5 @@ export function buildUrl(path: string, params?: object): string {
         return path;
     }
 
-    return `${path}?${queryString}`;
+    return `${path}${path.includes('?') ? '&' : '?'}${queryString}`;
 }

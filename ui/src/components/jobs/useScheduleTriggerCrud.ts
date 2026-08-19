@@ -5,69 +5,15 @@ import { useToast } from '@/components/ui/Toast';
 import {
     useScheduleTriggers,
     type ApiScheduleTrigger,
-    type DictionaryPatch,
     type ScheduleTriggerCreate,
     type ScheduleTriggerPatch,
     type ScheduleTriggerQueryParams,
 } from '@/hooks/useScheduleTriggers';
 import type { RunJobRequest, RunJobResult, JobScopeValue } from '@/hooks/useJobs';
 import type { ScheduleTriggerFormValues } from './ScheduleTriggerForm';
+import { buildJobParameterPatch, normalizeJobParameterValues } from './jobParameters';
 
 const ADMIN_SCOPE = 'Administrative' as const;
-
-function pruneEmptyParameters(parameters: Record<string, string>): Record<string, string> {
-    const next: Record<string, string> = {};
-    for (const [key, value] of Object.entries(parameters)) {
-        if (value !== '') {
-            next[key] = value;
-        }
-    }
-    return next;
-}
-
-function buildParameterPatch(
-    original: Record<string, string>,
-    next: Record<string, string>,
-): DictionaryPatch<string, string> | null {
-    const add: Record<string, string> = {};
-    const update: Record<string, string> = {};
-    const remove: string[] = [];
-
-    for (const [key, value] of Object.entries(next)) {
-        if (value === '') {
-            if (original[key] !== undefined) {
-                remove.push(key);
-            }
-            continue;
-        }
-        if (original[key] === undefined) {
-            add[key] = value;
-        } else if (original[key] !== value) {
-            update[key] = value;
-        }
-    }
-
-    for (const key of Object.keys(original)) {
-        if (next[key] === undefined) {
-            remove.push(key);
-        }
-    }
-
-    const patch: DictionaryPatch<string, string> = {};
-    if (Object.keys(add).length > 0) {
-        patch.add = add;
-    }
-    if (Object.keys(update).length > 0) {
-        patch.update = update;
-    }
-    if (remove.length > 0) {
-        patch.remove = remove;
-    }
-    if (!patch.add && !patch.update && !patch.remove) {
-        return null;
-    }
-    return patch;
-}
 
 interface UseScheduleTriggerCrudOptions {
     runJob: (request: RunJobRequest) => Promise<RunJobResult>;
@@ -126,7 +72,7 @@ export function useScheduleTriggerCrud({
             try {
                 if (values.id) {
                     const original = currentEditingTrigger?.parameters ?? {};
-                    const parametersPatch = buildParameterPatch(original, values.parameters);
+                    const parametersPatch = buildJobParameterPatch(original, values.parameters);
                     const patch: ScheduleTriggerPatch = {
                         name: { value: values.name },
                         schedule: { value: values.cronExpression },
@@ -149,7 +95,7 @@ export function useScheduleTriggerCrud({
                         scope,
                         enabled: values.enabled,
                     };
-                    const nonEmptyParameters = pruneEmptyParameters(values.parameters);
+                    const nonEmptyParameters = normalizeJobParameterValues(values.parameters);
                     if (Object.keys(nonEmptyParameters).length > 0) {
                         create.parameters = nonEmptyParameters;
                     }

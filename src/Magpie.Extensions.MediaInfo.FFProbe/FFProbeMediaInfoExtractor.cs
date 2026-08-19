@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
@@ -78,6 +79,14 @@ public sealed class FFProbeMediaInfoExtractor(ILogger<FFProbeMediaInfoExtractor>
         return properties;
     }
 
+    private static void RecordOutcome(Activity? activity, Stopwatch stopwatch, string outcome)
+    {
+        var tag = new KeyValuePair<string, object?>("outcome", outcome);
+        Telemetry.Invocations.Add(1, tag);
+        Telemetry.Duration.Record(stopwatch.Elapsed.TotalMilliseconds, tag);
+        activity?.SetTag("magpie.mediainfo.outcome", outcome);
+    }
+
     /// <inheritdoc />
     public async Task<MediaInfoModel?> ExtractAsync(string filePath, CancellationToken cancellationToken = default)
     {
@@ -90,9 +99,13 @@ public sealed class FFProbeMediaInfoExtractor(ILogger<FFProbeMediaInfoExtractor>
 
         if (!File.Exists(filePath))
         {
+            Telemetry.Invocations.Add(1, new KeyValuePair<string, object?>("outcome", "missing_file"));
             _logger.LogWarning("The FFprobe extractor skipped the missing file {FilePath}.", filePath);
             return null;
         }
+
+        using var activity = Telemetry.Source.StartActivity("ffprobe.analyse");
+        var stopwatch = Stopwatch.StartNew();
 
         FFMpegCore.IMediaAnalysis analysis;
         try
@@ -107,6 +120,8 @@ public sealed class FFProbeMediaInfoExtractor(ILogger<FFProbeMediaInfoExtractor>
         }
         catch (Exception ex)
         {
+            RecordOutcome(activity, stopwatch, "analysis_failed");
+            activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
             _logger.LogWarning(
                 ex,
                 "FFprobe failed to analyze the file {FilePath}.",
@@ -115,6 +130,8 @@ public sealed class FFProbeMediaInfoExtractor(ILogger<FFProbeMediaInfoExtractor>
         }
 
         cancellationToken.ThrowIfCancellationRequested();
+
+        RecordOutcome(activity, stopwatch, "success");
 
         var tracks = new List<MediaInfoTrack>();
 

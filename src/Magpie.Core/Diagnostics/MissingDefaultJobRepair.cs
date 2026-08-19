@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -119,7 +120,7 @@ internal sealed class MissingDefaultJobRepair(
             EventFilter = entry.EventFilter,
             Enabled = true,
             DelaySeconds = entry.DelaySeconds,
-            Parameters = [],
+            Parameters = new Dictionary<string, string>(entry.Parameters, StringComparer.Ordinal),
             CreatedAt = timeProvider.GetUtcNow().UtcDateTime,
         };
 

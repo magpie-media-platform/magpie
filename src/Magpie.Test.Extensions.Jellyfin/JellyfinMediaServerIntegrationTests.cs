@@ -5,6 +5,7 @@ using System.Net;
 using System.Net.Http;
 using System.Threading.Tasks;
 
+using Magpie.Core.Caching;
 using Magpie.Extensions.Jellyfin;
 using Magpie.Models;
 using Magpie.Models.Data;
@@ -38,6 +39,23 @@ public class JellyfinMediaServerIntegrationTests
     private const string MoviesPath = "/data/movies";
     private const string TvPath = "/data/tv";
 
+    private MemoryCacheFactory _cacheFactory = null!;
+    private MemoryCacheStore _cacheStore = null!;
+
+    [SetUp]
+    public void SetUp()
+    {
+        _cacheStore = new MemoryCacheStore(TimeProvider.System);
+        _cacheFactory = new MemoryCacheFactory(_cacheStore);
+    }
+
+    [TearDown]
+    public void TearDown()
+    {
+        _cacheFactory.Dispose();
+        _cacheStore.Dispose();
+    }
+
     [Test]
     public async Task TestConnectionAsync_ReturnsServerIdentity_WhenSettingsAreValid()
     {
@@ -48,7 +66,7 @@ public class JellyfinMediaServerIntegrationTests
             .Respond("application/json", SystemInfoJson);
 
         var integration = new JellyfinMediaServerIntegration(
-            TimeProvider.System,
+            _cacheFactory,
             NullLogger<JellyfinMediaServerIntegration>.Instance,
             new JellyfinClient(new HttpClient(handler, false), NullLogger<JellyfinClient>.Instance));
 
@@ -76,7 +94,7 @@ public class JellyfinMediaServerIntegrationTests
             .Respond(HttpStatusCode.Unauthorized);
 
         var integration = new JellyfinMediaServerIntegration(
-            TimeProvider.System,
+            _cacheFactory,
             NullLogger<JellyfinMediaServerIntegration>.Instance,
             new JellyfinClient(new HttpClient(handler, false), NullLogger<JellyfinClient>.Instance));
 
@@ -101,7 +119,7 @@ public class JellyfinMediaServerIntegrationTests
             .Respond(HttpStatusCode.Forbidden);
 
         var integration = new JellyfinMediaServerIntegration(
-            TimeProvider.System,
+            _cacheFactory,
             NullLogger<JellyfinMediaServerIntegration>.Instance,
             new JellyfinClient(new HttpClient(handler, false), NullLogger<JellyfinClient>.Instance));
 
@@ -125,7 +143,7 @@ public class JellyfinMediaServerIntegrationTests
         handler.When(HttpMethod.Get, "http://jellyfin.local:8096/System/Info/Public")
             .Throw(new HttpRequestException("connection refused"));
         var integration = new JellyfinMediaServerIntegration(
-            TimeProvider.System,
+            _cacheFactory,
             NullLogger<JellyfinMediaServerIntegration>.Instance,
             new JellyfinClient(new HttpClient(handler, false), NullLogger<JellyfinClient>.Instance));
 
@@ -147,7 +165,7 @@ public class JellyfinMediaServerIntegrationTests
         // Arrange
         var settings = new Dictionary<string, string> { ["apiKey"] = "k" };
         var integration = new JellyfinMediaServerIntegration(
-            TimeProvider.System,
+            _cacheFactory,
             NullLogger<JellyfinMediaServerIntegration>.Instance,
             new JellyfinClient(
                 new HttpClient(new MockHttpMessageHandler(), false),
@@ -171,7 +189,7 @@ public class JellyfinMediaServerIntegrationTests
         // Arrange
         var settings = new Dictionary<string, string> { ["host"] = "http://jellyfin.local:8096" };
         var integration = new JellyfinMediaServerIntegration(
-            TimeProvider.System,
+            _cacheFactory,
             NullLogger<JellyfinMediaServerIntegration>.Instance,
             new JellyfinClient(
                 new HttpClient(new MockHttpMessageHandler(), false),
@@ -198,7 +216,7 @@ public class JellyfinMediaServerIntegrationTests
             ["apiKey"] = "k"
         };
         var integration = new JellyfinMediaServerIntegration(
-            TimeProvider.System,
+            _cacheFactory,
             NullLogger<JellyfinMediaServerIntegration>.Instance,
             new JellyfinClient(
                 new HttpClient(new MockHttpMessageHandler(), false),
@@ -225,7 +243,7 @@ public class JellyfinMediaServerIntegrationTests
             .Respond(HttpStatusCode.NoContent);
 
         var integration = new JellyfinMediaServerIntegration(
-            TimeProvider.System,
+            _cacheFactory,
             NullLogger<JellyfinMediaServerIntegration>.Instance,
             new JellyfinClient(new HttpClient(handler, false), NullLogger<JellyfinClient>.Instance));
         var server = new MediaServer
@@ -263,7 +281,7 @@ public class JellyfinMediaServerIntegrationTests
             .Respond(HttpStatusCode.NotFound);
 
         var integration = new JellyfinMediaServerIntegration(
-            TimeProvider.System,
+            _cacheFactory,
             NullLogger<JellyfinMediaServerIntegration>.Instance,
             new JellyfinClient(new HttpClient(handler, false), NullLogger<JellyfinClient>.Instance));
         var server = new MediaServer
@@ -298,7 +316,7 @@ public class JellyfinMediaServerIntegrationTests
                 .Respond(HttpStatusCode.NoContent);
 
         var integration = new JellyfinMediaServerIntegration(
-            TimeProvider.System,
+            _cacheFactory,
             NullLogger<JellyfinMediaServerIntegration>.Instance,
             new JellyfinClient(new HttpClient(handler, false), NullLogger<JellyfinClient>.Instance));
 
@@ -436,7 +454,7 @@ public class JellyfinMediaServerIntegrationTests
     {
         // Arrange
         var integration = new JellyfinMediaServerIntegration(
-            TimeProvider.System,
+            _cacheFactory,
             NullLogger<JellyfinMediaServerIntegration>.Instance,
             Mock.Of<IJellyfinClient>());
 
@@ -751,7 +769,7 @@ public class JellyfinMediaServerIntegrationTests
                 "application/json",
                 "{\"Items\":[{\"Id\":\"abc-123\",\"ProviderIds\":{\"Imdb\":\"tt1234567\"}}]}");
         var integration = new JellyfinMediaServerIntegration(
-            TimeProvider.System,
+            _cacheFactory,
             NullLogger<JellyfinMediaServerIntegration>.Instance,
             new JellyfinClient(new HttpClient(handler, false), NullLogger<JellyfinClient>.Instance));
 
@@ -803,7 +821,7 @@ public class JellyfinMediaServerIntegrationTests
                 "application/json",
                 "{\"Items\":[{\"Id\":\"abc-123\",\"ProviderIds\":{\"Imdb\":\"tt1234567\"}}]}");
         var integration = new JellyfinMediaServerIntegration(
-            TimeProvider.System,
+            _cacheFactory,
             NullLogger<JellyfinMediaServerIntegration>.Instance,
             new JellyfinClient(new HttpClient(handler, false), NullLogger<JellyfinClient>.Instance));
 
@@ -861,7 +879,7 @@ public class JellyfinMediaServerIntegrationTests
                 "application/json",
                 "{\"Items\":[{\"Id\":\"abc-123\",\"ProviderIds\":{\"Imdb\":\"tt1234567\"}}]}");
         var integration = new JellyfinMediaServerIntegration(
-            TimeProvider.System,
+            _cacheFactory,
             NullLogger<JellyfinMediaServerIntegration>.Instance,
             new JellyfinClient(new HttpClient(handler, false), NullLogger<JellyfinClient>.Instance));
 
@@ -915,7 +933,7 @@ public class JellyfinMediaServerIntegrationTests
             })
             .Respond("application/json", "{\"Items\":[]}");
         var integration = new JellyfinMediaServerIntegration(
-            TimeProvider.System,
+            _cacheFactory,
             NullLogger<JellyfinMediaServerIntegration>.Instance,
             new JellyfinClient(new HttpClient(handler, false), NullLogger<JellyfinClient>.Instance));
 
@@ -973,7 +991,7 @@ public class JellyfinMediaServerIntegrationTests
                 "application/json",
                 "{\"Items\":[{\"Id\":\"abc-123\",\"ProviderIds\":{\"Imdb\":\"tt1234567\"}}]}");
         var integration = new JellyfinMediaServerIntegration(
-            TimeProvider.System,
+            _cacheFactory,
             NullLogger<JellyfinMediaServerIntegration>.Instance,
             new JellyfinClient(new HttpClient(handler, false), NullLogger<JellyfinClient>.Instance));
 
@@ -1021,7 +1039,7 @@ public class JellyfinMediaServerIntegrationTests
             })
             .Respond("application/json", "{\"Items\":[]}");
         var integration = new JellyfinMediaServerIntegration(
-            TimeProvider.System,
+            _cacheFactory,
             NullLogger<JellyfinMediaServerIntegration>.Instance,
             new JellyfinClient(new HttpClient(handler, false), NullLogger<JellyfinClient>.Instance));
 
@@ -1070,7 +1088,7 @@ public class JellyfinMediaServerIntegrationTests
                 "application/json",
                 "{\"Items\":[{\"Id\":\"abc-123\",\"ProviderIds\":{\"Imdb\":\"tt1234567\"}}]}");
         var integration = new JellyfinMediaServerIntegration(
-            TimeProvider.System,
+            _cacheFactory,
             NullLogger<JellyfinMediaServerIntegration>.Instance,
             new JellyfinClient(new HttpClient(handler, false), NullLogger<JellyfinClient>.Instance));
 
@@ -1112,7 +1130,7 @@ public class JellyfinMediaServerIntegrationTests
                 "application/json",
                 "{\"Items\":[{\"Id\":\"abc-123\",\"ProviderIds\":{\"Imdb\":\"tt1234567\"}}]}");
         var integration = new JellyfinMediaServerIntegration(
-            TimeProvider.System,
+            _cacheFactory,
             NullLogger<JellyfinMediaServerIntegration>.Instance,
             new JellyfinClient(new HttpClient(handler, false), NullLogger<JellyfinClient>.Instance));
 
@@ -1155,7 +1173,7 @@ public class JellyfinMediaServerIntegrationTests
         handler.When(HttpMethod.Get, "http://jellyfin.local:8096/Items*")
             .Respond("application/json", "{\"Items\":[]}");
         var integration = new JellyfinMediaServerIntegration(
-            TimeProvider.System,
+            _cacheFactory,
             NullLogger<JellyfinMediaServerIntegration>.Instance,
             new JellyfinClient(new HttpClient(handler, false), NullLogger<JellyfinClient>.Instance));
 
@@ -1198,7 +1216,7 @@ public class JellyfinMediaServerIntegrationTests
         handler.When(HttpMethod.Get, "http://jellyfin.local:8096/Items*")
             .Respond(HttpStatusCode.InternalServerError);
         var integration = new JellyfinMediaServerIntegration(
-            TimeProvider.System,
+            _cacheFactory,
             NullLogger<JellyfinMediaServerIntegration>.Instance,
             new JellyfinClient(new HttpClient(handler, false), NullLogger<JellyfinClient>.Instance));
 
@@ -1249,7 +1267,7 @@ public class JellyfinMediaServerIntegrationTests
                 "application/json",
                 "{\"Items\":[{\"Id\":\"abc-123\",\"ProviderIds\":{\"Imdb\":\"tt1234567\"}}]}");
         var integration = new JellyfinMediaServerIntegration(
-            TimeProvider.System,
+            _cacheFactory,
             NullLogger<JellyfinMediaServerIntegration>.Instance,
             new JellyfinClient(new HttpClient(handler, false), NullLogger<JellyfinClient>.Instance));
 
@@ -1331,7 +1349,7 @@ public class JellyfinMediaServerIntegrationTests
                 "application/json",
                 "{\"Items\":[{\"Id\":\"abc-123\",\"ProviderIds\":{\"Imdb\":\"tt1234567\"}}]}");
         var integration = new JellyfinMediaServerIntegration(
-            TimeProvider.System,
+            _cacheFactory,
             NullLogger<JellyfinMediaServerIntegration>.Instance,
             new JellyfinClient(new HttpClient(handler, false), NullLogger<JellyfinClient>.Instance));
 
@@ -1399,7 +1417,7 @@ public class JellyfinMediaServerIntegrationTests
         handler.When(HttpMethod.Get, "http://jellyfin.local:8096/Items*")
             .Respond("application/json", "{\"Items\":[]}");
         var integration = new JellyfinMediaServerIntegration(
-            TimeProvider.System,
+            _cacheFactory,
             NullLogger<JellyfinMediaServerIntegration>.Instance,
             new JellyfinClient(new HttpClient(handler, false), NullLogger<JellyfinClient>.Instance));
 
@@ -1442,7 +1460,7 @@ public class JellyfinMediaServerIntegrationTests
         handler.When(HttpMethod.Get, "http://jellyfin.local:8096/Items*")
             .Respond(HttpStatusCode.InternalServerError);
         var integration = new JellyfinMediaServerIntegration(
-            TimeProvider.System,
+            _cacheFactory,
             NullLogger<JellyfinMediaServerIntegration>.Instance,
             new JellyfinClient(new HttpClient(handler, false), NullLogger<JellyfinClient>.Instance));
 
@@ -1493,7 +1511,7 @@ public class JellyfinMediaServerIntegrationTests
                 "application/json",
                 "{\"Items\":[{\"Id\":\"abc-123\",\"ProviderIds\":{\"Imdb\":\"tt1234567\"}}]}");
         var integration = new JellyfinMediaServerIntegration(
-            TimeProvider.System,
+            _cacheFactory,
             NullLogger<JellyfinMediaServerIntegration>.Instance,
             new JellyfinClient(new HttpClient(handler, false), NullLogger<JellyfinClient>.Instance));
 
@@ -1553,7 +1571,7 @@ public class JellyfinMediaServerIntegrationTests
                 "application/json",
                 "{\"Items\":[{\"Id\":\"abc-123\",\"ProviderIds\":{\"Imdb\":\"tt1234567\"}}]}");
         var integration = new JellyfinMediaServerIntegration(
-            TimeProvider.System,
+            _cacheFactory,
             NullLogger<JellyfinMediaServerIntegration>.Instance,
             new JellyfinClient(new HttpClient(handler, false), NullLogger<JellyfinClient>.Instance));
 
@@ -1618,7 +1636,7 @@ public class JellyfinMediaServerIntegrationTests
                 "application/json",
                 "{\"Items\":[{\"Id\":\"abc-123\",\"ProviderIds\":{\"Imdb\":\"tt1234567\"}}]}");
         var integration = new JellyfinMediaServerIntegration(
-            TimeProvider.System,
+            _cacheFactory,
             NullLogger<JellyfinMediaServerIntegration>.Instance,
             new JellyfinClient(new HttpClient(handler, false), NullLogger<JellyfinClient>.Instance));
 
@@ -1680,7 +1698,7 @@ public class JellyfinMediaServerIntegrationTests
             })
             .Respond("application/json", "{\"Items\":[]}");
         var integration = new JellyfinMediaServerIntegration(
-            TimeProvider.System,
+            _cacheFactory,
             NullLogger<JellyfinMediaServerIntegration>.Instance,
             new JellyfinClient(new HttpClient(handler, false), NullLogger<JellyfinClient>.Instance));
 
@@ -1730,7 +1748,7 @@ public class JellyfinMediaServerIntegrationTests
         var handler = new MockHttpMessageHandler();
         var fallback = handler.Fallback.Respond(HttpStatusCode.OK);
         var integration = new JellyfinMediaServerIntegration(
-            TimeProvider.System,
+            _cacheFactory,
             NullLogger<JellyfinMediaServerIntegration>.Instance,
             new JellyfinClient(new HttpClient(handler, false), NullLogger<JellyfinClient>.Instance));
 
@@ -1772,7 +1790,7 @@ public class JellyfinMediaServerIntegrationTests
         // Arrange
         var handler = new MockHttpMessageHandler();
         var integration = new JellyfinMediaServerIntegration(
-            TimeProvider.System,
+            _cacheFactory,
             NullLogger<JellyfinMediaServerIntegration>.Instance,
             new JellyfinClient(new HttpClient(handler, false), NullLogger<JellyfinClient>.Instance));
 
@@ -1805,7 +1823,7 @@ public class JellyfinMediaServerIntegrationTests
     {
         // Arrange
         var integration = new JellyfinMediaServerIntegration(
-            TimeProvider.System,
+            _cacheFactory,
             NullLogger<JellyfinMediaServerIntegration>.Instance,
             Mock.Of<IJellyfinClient>());
 
@@ -1821,7 +1839,7 @@ public class JellyfinMediaServerIntegrationTests
     {
         // Arrange
         var integration = new JellyfinMediaServerIntegration(
-            TimeProvider.System,
+            _cacheFactory,
             NullLogger<JellyfinMediaServerIntegration>.Instance,
             Mock.Of<IJellyfinClient>());
 
@@ -1855,7 +1873,7 @@ public class JellyfinMediaServerIntegrationTests
     {
         // Arrange
         var integration = new JellyfinMediaServerIntegration(
-            TimeProvider.System,
+            _cacheFactory,
             NullLogger<JellyfinMediaServerIntegration>.Instance,
             Mock.Of<IJellyfinClient>());
 
@@ -1876,7 +1894,7 @@ public class JellyfinMediaServerIntegrationTests
     {
         // Arrange
         var integration = new JellyfinMediaServerIntegration(
-            TimeProvider.System,
+            _cacheFactory,
             NullLogger<JellyfinMediaServerIntegration>.Instance,
             Mock.Of<IJellyfinClient>());
 
@@ -1897,7 +1915,7 @@ public class JellyfinMediaServerIntegrationTests
     {
         // Arrange
         var integration = new JellyfinMediaServerIntegration(
-            TimeProvider.System,
+            _cacheFactory,
             NullLogger<JellyfinMediaServerIntegration>.Instance,
             Mock.Of<IJellyfinClient>());
         var settings = new Dictionary<string, string>
@@ -1922,7 +1940,7 @@ public class JellyfinMediaServerIntegrationTests
     {
         // Arrange
         var integration = new JellyfinMediaServerIntegration(
-            TimeProvider.System,
+            _cacheFactory,
             NullLogger<JellyfinMediaServerIntegration>.Instance,
             Mock.Of<IJellyfinClient>());
         var settings = new Dictionary<string, string>
@@ -1945,7 +1963,7 @@ public class JellyfinMediaServerIntegrationTests
     {
         // Arrange
         var integration = new JellyfinMediaServerIntegration(
-            TimeProvider.System,
+            _cacheFactory,
             NullLogger<JellyfinMediaServerIntegration>.Instance,
             Mock.Of<IJellyfinClient>());
         var settings = new Dictionary<string, string>
@@ -1974,7 +1992,7 @@ public class JellyfinMediaServerIntegrationTests
     {
         // Arrange
         var integration = new JellyfinMediaServerIntegration(
-            TimeProvider.System,
+            _cacheFactory,
             NullLogger<JellyfinMediaServerIntegration>.Instance,
             Mock.Of<IJellyfinClient>());
         var settings = new Dictionary<string, string>
@@ -1998,7 +2016,7 @@ public class JellyfinMediaServerIntegrationTests
     {
         // Arrange
         var subject = new JellyfinMediaServerIntegration(
-            TimeProvider.System,
+            _cacheFactory,
             NullLogger<JellyfinMediaServerIntegration>.Instance,
             Mock.Of<IJellyfinClient>());
 

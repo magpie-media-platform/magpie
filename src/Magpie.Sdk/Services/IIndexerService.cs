@@ -106,6 +106,42 @@ public interface IIndexerService
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Lists the search capabilities of every configured indexer.
+    /// </summary>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    /// <returns>The capabilities of each indexer</returns>
+    Task<IReadOnlyList<IndexerSearchCapabilities>> ListCapabilitiesAsync(
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Searches the selected indexer connections and coalesces the duplicate releases.
+    /// </summary>
+    /// <param name="request">The selected connection ids and the query to run</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    /// <returns>
+    /// The candidates and connection outcomes, or <see langword="null"/> when the query fits no shared query mode
+    /// </returns>
+    Task<IndexerSearchResponse?> SearchAsync(
+        IndexerSearchRequest request,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Stores or coalesces a raw release and adds one content hierarchy item to its scope.
+    /// </summary>
+    /// <param name="contentHierarchyItemId">The id of the content hierarchy item to associate</param>
+    /// <param name="release">The raw release to store</param>
+    /// <param name="actingUserId">The user to record as the actor, or <see langword="null"/> for the system</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    /// <returns>
+    /// The id of the stored release, or <see langword="null"/> when the content hierarchy item does not exist
+    /// </returns>
+    Task<Guid?> MatchAsync(
+        Guid contentHierarchyItemId,
+        Release release,
+        Guid? actingUserId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Creates a connection on an indexer.
     /// </summary>
     /// <param name="indexerId">The id of the indexer that owns the connection</param>

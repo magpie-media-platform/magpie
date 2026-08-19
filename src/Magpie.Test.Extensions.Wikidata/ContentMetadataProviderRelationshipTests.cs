@@ -30,7 +30,7 @@ internal sealed class ContentMetadataProviderRelationshipTests
     {
         // Arrange
         var entityResolver = new Mock<IEntityResolver>();
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         var subject = new ContentMetadataProvider(
             null!,
             entityResolver.Object,
@@ -82,7 +82,7 @@ internal sealed class ContentMetadataProviderRelationshipTests
                 UserAgent = "Magpie/test"
             });
         var entityResolver = new Mock<IEntityResolver>();
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         entityResolver.Setup(resolver => resolver.ResolveContentAsync(
             EntityKind.Movie,
             It.IsAny<ContentHierarchyItem>(),
@@ -139,7 +139,7 @@ internal sealed class ContentMetadataProviderRelationshipTests
                 UserAgent = "Magpie/test"
             });
         var entityResolver = new Mock<IEntityResolver>();
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         entityResolver.Setup(resolver => resolver.ResolveContentAsync(
             EntityKind.Movie,
             It.IsAny<ContentHierarchyItem>(),
@@ -259,7 +259,7 @@ internal sealed class ContentMetadataProviderRelationshipTests
                 UserAgent = "Magpie/test"
             });
         var entityResolver = new Mock<IEntityResolver>();
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         var existing = new MetadataContribution { ProviderType = "seed" };
         var contribution = new MetadataContribution { ProviderType = "seed", Language = "fr" };
         contribution.ExternalIds.Add(new ExternalId { Source = Constants.ProviderType, Value = "Q200" });
@@ -414,7 +414,7 @@ internal sealed class ContentMetadataProviderRelationshipTests
                 UserAgent = "Magpie/test"
             });
         var entityResolver = new Mock<IEntityResolver>();
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         entityResolver.Setup(resolver => resolver.ResolveContentAsync(
             EntityKind.Movie,
             It.IsAny<ContentHierarchyItem>(),
@@ -521,7 +521,7 @@ internal sealed class ContentMetadataProviderRelationshipTests
                 UserAgent = "Magpie/test"
             });
         var entityResolver = new Mock<IEntityResolver>();
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         entityResolver.Setup(resolver => resolver.ResolveContentAsync(
             EntityKind.Movie,
             It.IsAny<ContentHierarchyItem>(),

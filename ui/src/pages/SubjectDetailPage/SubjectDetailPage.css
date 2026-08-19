@@ -135,24 +135,6 @@
         overflow-wrap: break-word;
     }
 
-    .subject-detail-page__year {
-        font-size: var(--text-lg);
-        color: var(--text-secondary);
-        font-weight: var(--weight-normal);
-    }
-
-    .subject-detail-page__meta-row {
-        display: flex;
-        flex-wrap: wrap;
-        align-items: center;
-        gap: var(--space-sm);
-    }
-
-    .subject-detail-page__meta-label {
-        font-size: var(--text-sm);
-        color: var(--text-secondary);
-    }
-
     .subject-detail-page__bio {
         margin: 0;
         font-size: var(--text-base);
@@ -186,37 +168,6 @@
         background-color: var(--bg-secondary);
         border: 1px solid var(--border-default);
         border-radius: var(--radius-lg);
-    }
-
-    .subject-detail-page__section-title {
-        margin: 0;
-        font-size: var(--text-lg);
-        font-weight: var(--weight-semibold);
-        color: var(--text-primary);
-        display: flex;
-        align-items: center;
-        gap: var(--space-sm);
-
-        & svg {
-            color: var(--text-muted);
-        }
-    }
-
-    .subject-detail-page__awards {
-        list-style: none;
-        margin: 0;
-        padding: 0;
-        display: flex;
-        flex-direction: column;
-        gap: var(--space-sm);
-    }
-
-    .subject-detail-page__award-item {
-        padding: var(--space-sm) var(--space-md);
-        background-color: var(--bg-tertiary);
-        border-radius: var(--radius-md);
-        font-size: var(--text-sm);
-        color: var(--text-secondary);
     }
 
     .subject-detail-page__relationships {
@@ -309,10 +260,6 @@
         }
 
         .subject-detail-page__title-row {
-            justify-content: center;
-        }
-
-        .subject-detail-page__meta-row {
             justify-content: center;
         }
 

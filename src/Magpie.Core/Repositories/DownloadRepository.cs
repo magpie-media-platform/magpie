@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using Magpie.Abstractions;
 using Magpie.Abstractions.Repositories;
 using Magpie.Core.Events;
+using Magpie.Core.Observability;
 using Magpie.Data;
 using Magpie.Models;
 using Magpie.Models.Arguments;
@@ -1246,6 +1247,18 @@ internal sealed class DownloadRepository(
 
             if (affected > 0 && priorStatus is { } from)
             {
+                DownloadTelemetry.Transitions.Add(
+                    1,
+                    new("from_status", from.ToString()),
+                    new("to_status", status.ToString()));
+                if (status is DownloadStatus.Failed && from is not DownloadStatus.Failed)
+                {
+                    var reasonTag = new KeyValuePair<string, object?>(
+                        "reason",
+                        failureReason?.ToString() ?? "none");
+                    DownloadTelemetry.Failures.Add(1, reasonTag);
+                }
+
                 await transactionManager.OnCommittedAsync(
                     token => PublishStatusTransitionEventsAsync(
                         downloadId,
@@ -1340,6 +1353,18 @@ internal sealed class DownloadRepository(
 
             if (affected > 0 && priorStatus is { } from)
             {
+                DownloadTelemetry.Transitions.Add(
+                    1,
+                    new("from_status", from.ToString()),
+                    new("to_status", status.ToString()));
+                if (status is DownloadStatus.Failed && from is not DownloadStatus.Failed)
+                {
+                    var reasonTag = new KeyValuePair<string, object?>(
+                        "reason",
+                        failureReason?.ToString() ?? "none");
+                    DownloadTelemetry.Failures.Add(1, reasonTag);
+                }
+
                 await transactionManager.OnCommittedAsync(
                     token => PublishStatusTransitionEventsAsync(
                         downloadId,
@@ -1578,6 +1603,10 @@ internal sealed class DownloadRepository(
 
             if (transitioned)
             {
+                var stuckReasonTag = new KeyValuePair<string, object?>(
+                    "reason",
+                    nameof(DownloadFailureReason.DownloadStuck));
+                DownloadTelemetry.Failures.Add(1, stuckReasonTag);
                 await transactionManager.OnCommittedAsync(
                     token => eventBus.PublishAsync(
                         DownloadEventBuilder.BuildDownloadFailedEvent(
@@ -1676,6 +1705,8 @@ internal sealed class DownloadRepository(
 
             if (transitioned)
             {
+                var failedReasonTag = new KeyValuePair<string, object?>("reason", reason.ToString());
+                DownloadTelemetry.Failures.Add(1, failedReasonTag);
                 await transactionManager.OnCommittedAsync(
                     token => eventBus.PublishAsync(
                         DownloadEventBuilder.BuildDownloadFailedEvent(

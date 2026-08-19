@@ -46,7 +46,7 @@ internal sealed class ReleaseAutoGrabScanJob(
         [
             new(
                 MagpieJobs.Parameters.RetryCooldownHours,
-                "Minimum hours before a content item is considered for auto-grab again.",
+                "Minimum hours before a content item is considered for auto-grab again. Use 0 for no cooldown.",
                 DataType.Number,
                 false,
                 MagpieJobs.ParameterValues.DefaultRetryCooldownHours.ToString(CultureInfo.InvariantCulture)),
@@ -70,12 +70,13 @@ internal sealed class ReleaseAutoGrabScanJob(
         var correlationId = context.CorrelationId;
         var progress = progressReporter;
         var now = timeProvider.GetUtcNow().UtcDateTime;
-        var retryCooldownHours = ReadPositiveIntParameter(
+        var retryCooldownHours = ReadIntParameter(
             context.Parameters,
             MagpieJobs.Parameters.RetryCooldownHours,
-            MagpieJobs.ParameterValues.DefaultRetryCooldownHours);
+            MagpieJobs.ParameterValues.DefaultRetryCooldownHours,
+            minimum: 0);
         var retryCooldown = TimeSpan.FromHours(retryCooldownHours);
-        var backpressureThreshold = ReadPositiveIntParameter(
+        var backpressureThreshold = ReadIntParameter(
             context.Parameters,
             BackpressureThresholdParameter,
             DefaultBackpressureThreshold);
@@ -331,25 +332,29 @@ internal sealed class ReleaseAutoGrabScanJob(
         return candidates;
     }
 
-    private int ReadPositiveIntParameter(
+    private int ReadIntParameter(
         IReadOnlyDictionary<string, string> parameters,
         string parameterName,
-        int defaultValue)
+        int defaultValue,
+        int minimum = 1)
     {
         if (!parameters.TryGetValue(parameterName, out var raw))
         {
             return defaultValue;
         }
 
-        if (int.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var configured) && configured > 0)
+        if (int.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var configured) &&
+            configured >= minimum)
         {
             return configured;
         }
 
         logger.LogWarning(
-            "Parameter {Parameter} value {Raw} is not a positive integer. The job will use the default {Default}",
+            "Parameter {Parameter} value {Raw} is not an integer of at least {Minimum}. The job will use the " +
+            "default {Default}",
             parameterName,
             raw,
+            minimum,
             defaultValue);
 
         return defaultValue;

@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useMemo, type CSSProperties, type ReactNode } from 'react';
-import { useParams, Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
+import { useParams, Link, useLocation, useSearchParams } from 'react-router-dom';
 import {
     ArrowLeftIcon,
     ArrowClockwiseIcon,
+    BinocularsIcon,
     CircleNotchIcon,
     FilmSlateIcon,
     FunnelIcon,
     ImageBrokenIcon,
-    ListBulletsIcon,
     InfoIcon,
     ImagesIcon,
     UsersIcon,
@@ -16,57 +16,44 @@ import {
     WarningCircleIcon,
 } from '@phosphor-icons/react';
 
+import { Alert } from '@/components/ui/Alert';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { Breadcrumb, type BreadcrumbItem } from '@/components/ui/Breadcrumb';
 import { DetailsPanel, type DetailRow } from '@/components/ui/DetailsPanel';
+import { AwardsPanel } from '@/components/ui/AwardsPanel';
 import { DetailInfoGrid, DetailInfoRow } from '@/components/ui/DetailInfoGrid';
 import { CollapsibleChipList } from '@/components/ui/CollapsibleChipList';
 import { ExternalIdDetails, ExternalIds, type ExternalId } from '@/components/ui/ExternalIds';
 import { ImagesGallery, type GalleryImage } from '@/components/ui/ImagesGallery';
 import { MetadataLinks } from '@/components/ui/MetadataLinks';
 import { MetadataInspector } from '@/components/metadata-inspector/MetadataInspector';
+import { PreviewsTab } from '@/components/content/ContentTabs';
+import type { PreviewClip } from '@/components/ui/PreviewPlayer';
 import { SubjectDetailsHeaderSlot } from '@/components/ui/Slot/SubjectSlots';
 import { ExtensionTabContents, useTabSlotExtensions } from '@/components/ui/Slot/ExtensionTabs';
 import { Tabs, TabsContent, DetailTabTrigger, DetailTabsList } from '@/components/ui/Tabs';
 import { useToast } from '@/components/ui/Toast';
 import { useAuth } from '@/auth';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
-import { useLibraryTypes } from '@/hooks/useLibraryTypes';
+import { getStandardMetadataField, useLibraryTypes } from '@/hooks/useLibraryTypes';
+import { useSubjectMetadataInspector } from '@/hooks/useSubjectMetadataInspector';
 import { resolveSubjectKindLabel, resolveSubjectKindPluralLabel } from '@/types/subjects';
-import { humanizeCustomKey } from '@/lib/contentTypeDisplay';
 import { getErrorMessage, isNotFoundError } from '@/lib/errors';
 import { escapeQueryString } from '@/lib/simpleFilterQuery';
+import { extractTitle, isInternalSource, type ContentReference } from '@/lib/metadata';
+import { extractExternalIds, useSubject, useRefreshSubject, useSetPrimaryImage } from '@/hooks/useSubjects';
 import {
-    extractImageUrl,
-    extractTitle,
-    extractOverview,
-    extractYear,
-    extractReferences,
-    type ContentReference,
-} from '@/lib/metadata';
-import {
-    useSubject,
-    useRefreshSubject,
-    useSetPrimaryImage,
-    extractLanguage,
-    extractStatus,
-    extractGenres,
-    extractContentRating,
-    extractExternalIds,
-    extractAwards,
-    extractImages,
-    extractRelationships,
-    extractBirthDate,
-    extractDeathDate,
-    extractEstablished,
-    extractDissolved,
-    extractCustomValues,
-    type ApiMetadataContainer,
-} from '@/hooks/useSubjects';
-import { formatShortDate } from '@/lib/dateFormatting';
+    buildAwardGroups,
+    type AwardGroup,
+    type AlternateTextRow,
+    buildAlternateTextRows,
+    buildMaterializedDetailRows,
+    nonEmptyMetadataText,
+    sortByOrdinal,
+} from '@/lib/materializedMetadataDisplay';
 import { safeHttpUrl } from '@/lib/safeUrl';
-import type { FiltersPageCreateState } from '@/types/navigation';
+import type { LibraryAddPreloadState } from '@/types/navigation';
 
 import { SubjectContentTab } from './SubjectContentTab';
 import { useSubjectContent } from './useSubjectContent';
@@ -74,14 +61,8 @@ import { SubjectTagsChipStrip } from './SubjectTagsChipStrip';
 import './SubjectDetailPage.css';
 import '../DetailPageStates.css';
 
-interface SubjectImage {
-    id: string;
+interface SubjectImage extends GalleryImage {
     imageId?: string;
-    url: string;
-    type: 'poster' | 'backdrop' | 'banner' | 'screenshot' | 'logo';
-    isPrimary?: boolean;
-    width?: number;
-    height?: number;
 }
 
 type SubjectExternalId = ExternalId;
@@ -90,6 +71,9 @@ interface SubjectRelationship {
     id: string;
     kind: string;
     qualifier?: string;
+    subjectId?: string;
+    name?: string;
+    imageUrl?: string;
 }
 
 interface SubjectData {
@@ -99,16 +83,14 @@ interface SubjectData {
     imageUrl?: string;
     description?: string;
     genres?: string[];
-    contentRating?: string;
-    year?: number;
-    status?: string;
-    language?: string;
-    awards?: string[];
+    awards?: AwardGroup[];
     externalIds?: SubjectExternalId[];
     references?: ContentReference[];
     images?: SubjectImage[];
+    previews?: PreviewClip[];
     relationships?: SubjectRelationship[];
     detailRows?: DetailRow[];
+    alternateTexts?: AlternateTextRow[];
 }
 
 interface SubjectDetailLocationState {
@@ -130,7 +112,6 @@ interface TabDef {
 export function SubjectDetailPage() {
     const { subjectId } = useParams<{ subjectId: string }>();
     const location = useLocation();
-    const navigate = useNavigate();
     const [searchParams, setSearchParams] = useSearchParams();
     const rawTab = searchParams.get('tab');
     const activeTab = rawTab || DEFAULT_TAB;
@@ -161,13 +142,15 @@ export function SubjectDetailPage() {
         error: subjectError,
         refetch: refetchSubject,
     } = useSubject(subjectId ?? '');
+    const subjectMetadataQuery = useSubjectMetadataInspector(subjectId);
     const subjectContent = useSubjectContent(apiSubject?.metadataContainerId);
     const { subjectTypes, isLoading: isLibraryTypesLoading, error: libraryTypesError } = useLibraryTypes();
 
     const { tabs: extensionTabs, isReady: areExtensionTabsReady } = useTabSlotExtensions('subject.details.tabs');
     const { toast } = useToast();
     const { hasPermission } = useAuth();
-    const canCreateFilter = hasPermission('filters.own');
+    const canViewLibrary = hasPermission('content.view');
+    const canAddContent = hasPermission('content.add');
     const canEditSubject = hasPermission('subjects.edit');
     const refreshMutation = useRefreshSubject();
     const setPrimaryMutation = useSetPrimaryImage(subjectId ?? '');
@@ -237,39 +220,113 @@ export function SubjectDetailPage() {
         if (!apiSubject) return null;
 
         const container = apiSubject.metadataContainer;
+        const metadata = subjectMetadataQuery.data?.materialized;
+        const supportsGenres = !!getStandardMetadataField(kindType, 'Genres');
+        const supportsPreviews = !!getStandardMetadataField(kindType, 'Previews');
+        const images: SubjectImage[] = sortByOrdinal(metadata?.images).flatMap((image) => {
+            const url = nonEmptyMetadataText(image.url);
+            const type = nonEmptyMetadataText(image.type);
+            return url && type
+                ? [
+                      {
+                          id: image.id,
+                          imageId: image.id,
+                          url,
+                          type,
+                          isPrimary: image.isPrimary,
+                          width: image.width ?? undefined,
+                          height: image.height ?? undefined,
+                      },
+                  ]
+                : [];
+        });
+        const externalIdLinks = extractExternalIds(container);
 
         return {
             id: apiSubject.id,
-            title: extractTitle(container) ?? 'Unknown Subject',
+            title: nonEmptyMetadataText(metadata?.title) ?? extractTitle(container) ?? 'Unknown Subject',
             kind: apiSubject.kind,
-            imageUrl: extractImageUrl(container),
-            description: extractOverview(container),
-            genres: extractGenres(container),
-            contentRating: extractContentRating(container),
-            year: extractYear(container),
-            status: extractStatus(container),
-            language: extractLanguage(container),
-            awards: extractAwards(container),
-            externalIds: extractExternalIds(container),
-            references: extractReferences(container),
-            images: extractImages(container) as SubjectImage[],
-            relationships: extractRelationships(container),
-            detailRows: buildDetailRows(container),
+            imageUrl: images.find((image) => image.isPrimary)?.url ?? images[0]?.url,
+            description: nonEmptyMetadataText(metadata?.overview),
+            genres: supportsGenres
+                ? sortByOrdinal(metadata?.genres).flatMap((genre) => nonEmptyMetadataText(genre.name) ?? [])
+                : [],
+            awards: buildAwardGroups(metadata),
+            externalIds: sortByOrdinal(metadata?.externalIds).flatMap((externalId) => {
+                const id = nonEmptyMetadataText(externalId.value);
+                const source = nonEmptyMetadataText(externalId.source) ?? 'unknown';
+                return id && !isInternalSource(source)
+                    ? [
+                          {
+                              source,
+                              id,
+                              url: externalIdLinks.find(
+                                  (candidate) => candidate.source === source && candidate.id === id,
+                              )?.url,
+                          },
+                      ]
+                    : [];
+            }),
+            references: sortByOrdinal(metadata?.references).flatMap((reference) => {
+                const url = nonEmptyMetadataText(reference.url);
+                return url
+                    ? [
+                          {
+                              url,
+                              displayName: nonEmptyMetadataText(reference.displayName) ?? url,
+                              source: reference.source,
+                              kind: reference.kind,
+                          },
+                      ]
+                    : [];
+            }),
+            images,
+            previews: supportsPreviews
+                ? sortByOrdinal(metadata?.previews).flatMap((preview) => {
+                      const url = nonEmptyMetadataText(preview.url);
+                      const previewKind = nonEmptyMetadataText(preview.kind);
+                      return url && previewKind
+                          ? [
+                                {
+                                    url,
+                                    kind: previewKind,
+                                    title: nonEmptyMetadataText(preview.title),
+                                    mimeType: nonEmptyMetadataText(preview.mimeType),
+                                    embedKind: nonEmptyMetadataText(preview.embedKind),
+                                    language: nonEmptyMetadataText(preview.language),
+                                },
+                            ]
+                          : [];
+                  })
+                : [],
+            relationships: sortByOrdinal(metadata?.relationships).map((relationship) => {
+                const related = relationship.relatedMetadataContainerId
+                    ? subjectMetadataQuery.data?.subjects[relationship.relatedMetadataContainerId]
+                    : undefined;
+                return {
+                    id: relationship.id,
+                    kind: relationship.kind,
+                    qualifier: nonEmptyMetadataText(relationship.qualifier),
+                    subjectId: related?.subjectId,
+                    name: nonEmptyMetadataText(related?.name),
+                    imageUrl: nonEmptyMetadataText(related?.imageUrl),
+                };
+            }),
+            alternateTexts: buildAlternateTextRows(metadata),
+            detailRows: buildMaterializedDetailRows(
+                metadata,
+                kindType?.standardMetadataFields,
+                kindType?.customMetadataFields,
+            ),
         };
-    }, [apiSubject]);
+    }, [apiSubject, kindType, subjectMetadataQuery.data]);
 
-    const handleCreateFilter = useCallback(() => {
-        if (!subject) {
-            return;
-        }
-        const createState: FiltersPageCreateState = {
-            createQuery:
-                `Relationships has (Name = "${escapeQueryString(subject.title)}"` +
-                ` and Type = "${escapeQueryString(subject.kind)}")`,
-            createName: subject.title,
-        };
-        void navigate('/filters', { state: createState });
-    }, [subject, navigate]);
+    const subjectFilterQuery = subject
+        ? `Relationships has (Name = "${escapeQueryString(subject.title)}"` +
+          ` and Type = "${escapeQueryString(subject.kind)}")`
+        : '';
+    const librarySearch = new URLSearchParams({ filter: subjectFilterQuery }).toString();
+    const addContentState: LibraryAddPreloadState = { filterQuery: subjectFilterQuery };
 
     const breadcrumbs: BreadcrumbItem[] = useMemo(() => {
         const items: BreadcrumbItem[] = [
@@ -293,6 +350,7 @@ export function SubjectDetailPage() {
     }, [subject, kind, kindPluralLabel]);
 
     const imageCount = subject?.images?.length || 0;
+    const previewCount = subject?.previews?.length || 0;
     const relationshipCount = subject?.relationships?.length || 0;
     const relatedCount = subjectContent.totalItems;
 
@@ -318,6 +376,14 @@ export function SubjectDetailPage() {
                 count: imageCount,
             });
         }
+        if (previewCount > 0) {
+            defs.push({
+                value: 'previews',
+                label: 'Previews',
+                icon: <FilmSlateIcon weight="bold" aria-hidden="true" />,
+                count: previewCount,
+            });
+        }
         if (relationshipCount > 0) {
             defs.push({
                 value: 'relationships',
@@ -335,7 +401,7 @@ export function SubjectDetailPage() {
             });
         }
         return defs;
-    }, [relatedCount, imageCount, relationshipCount, extensionTabs]);
+    }, [relatedCount, imageCount, previewCount, relationshipCount, extensionTabs]);
 
     const effectiveTab = tabDefs.some((t) => t.value === activeTab) ? activeTab : DEFAULT_TAB;
 
@@ -344,6 +410,8 @@ export function SubjectDetailPage() {
             !apiSubject ||
             subjectError ||
             isLoading ||
+            subjectMetadataQuery.error ||
+            subjectMetadataQuery.isLoading ||
             isLibraryTypesLoading ||
             libraryTypesError ||
             !areExtensionTabsReady ||
@@ -363,10 +431,12 @@ export function SubjectDetailPage() {
         libraryTypesError,
         rawTab,
         setActiveTab,
+        subjectMetadataQuery.error,
+        subjectMetadataQuery.isLoading,
         subjectError,
     ]);
 
-    if (isLoading) {
+    if (isLoading || subjectMetadataQuery.isLoading || isLibraryTypesLoading) {
         return (
             <div className="subject-detail-page" data-page="subject-detail">
                 <div className="subject-detail-page__not-found">
@@ -424,6 +494,21 @@ export function SubjectDetailPage() {
         <div className="subject-detail-page" data-page="subject-detail">
             <Breadcrumb items={breadcrumbs} className="subject-detail-page__breadcrumb" />
 
+            {subjectMetadataQuery.error && (
+                <Alert
+                    variant="error"
+                    icon={<WarningCircleIcon weight="duotone" aria-hidden="true" />}
+                    title="Failed to Load Subject Metadata"
+                    data-testid="subject-metadata-error"
+                >
+                    <p>{getErrorMessage(subjectMetadataQuery.error)}</p>
+                    <Button variant="secondary" size="sm" onClick={() => subjectMetadataQuery.refetch()}>
+                        <ArrowClockwiseIcon weight="bold" aria-hidden="true" />
+                        Retry
+                    </Button>
+                </Alert>
+            )}
+
             {fromContent && (
                 <Link to={`/library/${fromContent.id}`} className="subject-detail-page__content-back-link">
                     <ArrowLeftIcon weight="bold" aria-hidden="true" />
@@ -464,38 +549,28 @@ export function SubjectDetailPage() {
                             <Badge variant="default" size="md">
                                 {kindLabel}
                             </Badge>
-                            {subject.year && <span className="subject-detail-page__year">({subject.year})</span>}
-                        </div>
-
-                        <div className="subject-detail-page__meta-row">
-                            {subject.contentRating && (
-                                <Badge variant="default" size="sm">
-                                    {subject.contentRating}
-                                </Badge>
-                            )}
-                            {subject.status && (
-                                <Badge variant={subject.status === 'Ended' ? 'default' : 'healthy'} size="sm">
-                                    {subject.status}
-                                </Badge>
-                            )}
-                            {subject.language && (
-                                <span className="subject-detail-page__meta-label">{subject.language}</span>
-                            )}
                         </div>
 
                         {subject.description && <p className="subject-detail-page__bio">{subject.description}</p>}
 
-                        {(canCreateFilter || canEditSubject) && (
+                        <AwardsPanel groups={subject.awards ?? []} data-component="subject-awards-panel" />
+
+                        {(canViewLibrary || canAddContent || canEditSubject) && (
                             <div className="subject-detail-page__actions">
-                                {canCreateFilter && (
-                                    <Button
-                                        variant="secondary"
-                                        size="sm"
-                                        onClick={handleCreateFilter}
-                                        data-action="create-filter"
-                                    >
-                                        <FunnelIcon weight="bold" aria-hidden="true" />
-                                        Create filter
+                                {canViewLibrary && (
+                                    <Button asChild variant="secondary" size="sm">
+                                        <Link to={`/library/all?${librarySearch}`} data-action="search-library">
+                                            <FunnelIcon weight="bold" aria-hidden="true" />
+                                            Search library
+                                        </Link>
+                                    </Button>
+                                )}
+                                {canAddContent && (
+                                    <Button asChild variant="secondary" size="sm">
+                                        <Link to="/library/add" state={addContentState} data-action="add-content">
+                                            <BinocularsIcon weight="bold" aria-hidden="true" />
+                                            Add content
+                                        </Link>
                                     </Button>
                                 )}
                                 {canEditSubject && (
@@ -582,26 +657,32 @@ export function SubjectDetailPage() {
                     <div className="subject-detail-page__facts details-panel-group" data-component="subject-facts">
                         <DetailsPanel
                             rows={subject.detailRows ?? []}
-                            title="Details"
-                            icon={<ListBulletsIcon weight="bold" aria-hidden="true" />}
+                            variant="facts"
+                            aria-label="Details"
                             data-component="subject-details-panel"
                         />
 
-                        {subject.externalIds && subject.externalIds.length > 0 && (
-                            <ExternalIdDetails ids={subject.externalIds} />
+                        {subject.alternateTexts && subject.alternateTexts.length > 0 && (
+                            <DetailsPanel
+                                title="Alternate texts"
+                                data-component="subject-alternate-texts"
+                                rows={subject.alternateTexts.map((alternate) => ({
+                                    key: alternate.id,
+                                    label: (
+                                        <>
+                                            {alternate.kind}
+                                            {alternate.language && (
+                                                <span className="details-panel__code">{alternate.language}</span>
+                                            )}
+                                        </>
+                                    ),
+                                    value: alternate.text,
+                                }))}
+                            />
                         )}
 
-                        {subject.awards && subject.awards.length > 0 && (
-                            <section className="subject-detail-page__section">
-                                <h2 className="subject-detail-page__section-title">Awards</h2>
-                                <ul className="subject-detail-page__awards">
-                                    {subject.awards.map((award, index) => (
-                                        <li key={`${award}-${index}`} className="subject-detail-page__award-item">
-                                            {award}
-                                        </li>
-                                    ))}
-                                </ul>
-                            </section>
+                        {subject.externalIds && subject.externalIds.length > 0 && (
+                            <ExternalIdDetails ids={subject.externalIds} />
                         )}
                     </div>
                 </TabsContent>
@@ -621,6 +702,12 @@ export function SubjectDetailPage() {
                     </TabsContent>
                 )}
 
+                {previewCount > 0 && (
+                    <TabsContent value="previews">
+                        <PreviewsTab previews={subject.previews ?? []} posterUrl={subject.imageUrl} />
+                    </TabsContent>
+                )}
+
                 {relationshipCount > 0 && (
                     <TabsContent value="relationships">
                         <div className="subject-detail-page__relationships">
@@ -633,14 +720,35 @@ export function SubjectDetailPage() {
                                             data-relationship-id={relationship.id}
                                         >
                                             <div className="subject-detail-page__person-avatar">
-                                                <div
-                                                    className="subject-detail-page__person-image subject-detail-page__person-image--placeholder"
-                                                    data-testid="subject-detail-page__person-image--placeholder"
-                                                >
-                                                    <UsersIcon weight="thin" aria-hidden="true" />
-                                                </div>
+                                                {relationship.imageUrl ? (
+                                                    <img
+                                                        className="subject-detail-page__person-image"
+                                                        src={relationship.imageUrl}
+                                                        alt=""
+                                                    />
+                                                ) : (
+                                                    <div
+                                                        className="subject-detail-page__person-image subject-detail-page__person-image--placeholder"
+                                                        data-testid="subject-detail-page__person-image--placeholder"
+                                                    >
+                                                        <UsersIcon weight="thin" aria-hidden="true" />
+                                                    </div>
+                                                )}
                                             </div>
                                             <div className="subject-detail-page__person-info">
+                                                {relationship.name &&
+                                                    (relationship.subjectId ? (
+                                                        <Link
+                                                            className="subject-detail-page__person-name"
+                                                            to={`/subjects/${relationship.subjectId}`}
+                                                        >
+                                                            {relationship.name}
+                                                        </Link>
+                                                    ) : (
+                                                        <span className="subject-detail-page__person-name">
+                                                            {relationship.name}
+                                                        </span>
+                                                    ))}
                                                 <span className="subject-detail-page__person-role">
                                                     {relationship.kind}
                                                 </span>
@@ -673,26 +781,5 @@ export function SubjectDetailPage() {
 }
 
 SubjectDetailPage.displayName = 'SubjectDetailPage';
-
-function buildDetailRows(container?: ApiMetadataContainer | null): DetailRow[] {
-    const rows: DetailRow[] = [];
-
-    const addDate = (label: string, value: string | undefined) => {
-        if (value) {
-            rows.push({ label, value: formatShortDate(value) });
-        }
-    };
-
-    addDate('Birth date', extractBirthDate(container));
-    addDate('Death date', extractDeathDate(container));
-    addDate('Established', extractEstablished(container));
-    addDate('Dissolved', extractDissolved(container));
-
-    for (const { key, value } of extractCustomValues(container)) {
-        rows.push({ label: humanizeCustomKey(key), value });
-    }
-
-    return rows;
-}
 
 export default SubjectDetailPage;

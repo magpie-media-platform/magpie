@@ -93,12 +93,21 @@ export interface FilesTabProps extends Omit<ComponentPropsWithoutRef<'div'>, 'ch
 
     unlinkingFileId?: string | null;
 
+    importing?: boolean;
+
     emptyMessage?: string;
 }
 
-function ImportFileButton({ onImport }: { onImport: () => void }) {
+function ImportFileButton({ onImport, importing }: { onImport: () => void; importing: boolean }) {
     return (
-        <Button variant="secondary" size="sm" onClick={onImport} data-action="import-file">
+        <Button
+            variant="secondary"
+            size="sm"
+            onClick={onImport}
+            loading={importing}
+            disabled={importing}
+            data-action="import-file"
+        >
             <PlusIcon weight="bold" aria-hidden="true" />
             Import file
         </Button>
@@ -520,6 +529,7 @@ export const FilesTab = forwardRef<HTMLDivElement, FilesTabProps>(
             onImportFile,
             deletingFileId = null,
             unlinkingFileId = null,
+            importing = false,
             emptyMessage = 'No files found',
             className,
             ...props
@@ -534,7 +544,11 @@ export const FilesTab = forwardRef<HTMLDivElement, FilesTabProps>(
                     <EmptyState
                         icon={<FileIcon weight="thin" aria-hidden="true" />}
                         title={emptyMessage}
-                        action={onImportFile ? <ImportFileButton onImport={onImportFile} /> : undefined}
+                        action={
+                            onImportFile ? (
+                                <ImportFileButton onImport={onImportFile} importing={importing} />
+                            ) : undefined
+                        }
                         size="sm"
                     />
                 </div>
@@ -554,7 +568,7 @@ export const FilesTab = forwardRef<HTMLDivElement, FilesTabProps>(
                     </span>
                     {onImportFile && (
                         <span className="files-tab__import-action">
-                            <ImportFileButton onImport={onImportFile} />
+                            <ImportFileButton onImport={onImportFile} importing={importing} />
                         </span>
                     )}
                 </div>

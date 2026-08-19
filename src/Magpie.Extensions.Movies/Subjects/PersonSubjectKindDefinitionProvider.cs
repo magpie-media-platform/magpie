@@ -34,7 +34,8 @@ internal sealed class PersonSubjectKindDefinitionProvider : ISubjectKindDefiniti
             PluralDisplayName = "People",
             IconName = "person",
             SupportedMetadataFields = PersonMetadataFields,
-            CustomMetadataFields = []
+            CustomMetadataFields = [],
+            FallbackIdentityFields = MetadataField.Title | MetadataField.BirthDate
         };
     }
 }

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.IdentityModel.Tokens.Jwt;
 using System.IO;
@@ -89,7 +90,9 @@ internal sealed class TokenService(
         };
 
         var token = _tokenHandler.CreateToken(tokenDescriptor);
-        return new IssuedAccessToken(_tokenHandler.WriteToken(token), expiresAt, accessTokenJti);
+        var written = _tokenHandler.WriteToken(token);
+        Telemetry.TokensIssued.Add(1, new KeyValuePair<string, object?>("kind", "access"));
+        return new IssuedAccessToken(written, expiresAt, accessTokenJti);
     }
 
     public async Task<IssuedToken> GenerateRefreshTokenAsync(
@@ -116,6 +119,7 @@ internal sealed class TokenService(
             },
             cancellationToken).ConfigureAwait(false);
 
+        Telemetry.TokensIssued.Add(1, new KeyValuePair<string, object?>("kind", "refresh"));
         return new IssuedToken(token, expiresAt);
     }
 

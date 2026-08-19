@@ -18,7 +18,7 @@ internal sealed class ContentMetadataProvider(
     ISettingsResolver settingsResolver,
     IMusicBrainzClient client,
     ICoverArtArchiveClient coverClient,
-    IQueryCache cache,
+    IQueryCoordinator cache,
     TimeProvider timeProvider,
     ILogger<ContentMetadataProvider> logger) : IContentHierarchyMetadataRelationshipProvider
 {

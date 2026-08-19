@@ -1,10 +1,12 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions.Repositories;
+using Magpie.Core.Observability;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Jobs;
@@ -89,12 +91,24 @@ internal sealed class DefaultJobRetryPolicy(
         var nextAttempt = (failed.Attempt ?? 1) + 1;
         if (nextAttempt > resolvedPolicy.MaxAttempts)
         {
+            JobsTelemetry.RetryAttemptsExhaustedTotal.Add(
+                1,
+                new KeyValuePair<string, object?>("job.type", failed.JobType));
             return null;
         }
 
         var originalId = failed.OriginalExecutionId ?? failed.Id;
         var notBeforeAt = ComputeNotBeforeAt(resolvedPolicy, nextAttempt, timeProvider.GetUtcNow().UtcDateTime);
-        return failed.ToRetry(originalId, nextAttempt, notBeforeAt);
+        var retry = failed.ToRetry(originalId, nextAttempt, notBeforeAt);
+        if (Activity.Current is { } currentActivity)
+        {
+            DistributedContextPropagator.Current.Inject(
+                currentActivity,
+                retry.TriggerContext,
+                static (carrier, key, value) => ((IDictionary<string, string>)carrier!)[key] = value);
+        }
+
+        return retry;
     }
 
     private async Task<JobRetryPolicy> ResolveAsync(CancellationToken cancellationToken)

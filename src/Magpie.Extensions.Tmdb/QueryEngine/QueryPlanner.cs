@@ -10,11 +10,9 @@ using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Models.Filtering;
 
-using Microsoft.Extensions.Logging;
-
 namespace Magpie.Extensions.Tmdb.QueryEngine;
 
-internal sealed class QueryPlanner(ILogger<QueryPlanner> logger) : IQueryPlanner
+internal sealed class QueryPlanner : IQueryPlanner
 {
     public QueryPlan Plan(QueryRequest request)
     {
@@ -93,13 +91,13 @@ internal sealed class QueryPlanner(ILogger<QueryPlanner> logger) : IQueryPlanner
                 requestedPage,
                 request.MaximumResults,
                 fingerprint),
-            Warnings = warnings,
+            Warnings = knownEmpty ? [] : warnings,
             RequestedPage = requestedPage,
             MaximumResults = request.MaximumResults,
             DefaultLanguagePreference = request.DefaultLanguagePreference,
             Fingerprint = fingerprint
         };
-        TracePlan(plan);
+        RecordPlan(plan, request.Route, knownEmpty, requestedPage > QueryLimits.MaximumPage);
         return plan;
     }
 
@@ -126,63 +124,44 @@ internal sealed class QueryPlanner(ILogger<QueryPlanner> logger) : IQueryPlanner
             knownEmpty |= ExcludesSource(criterion, route);
         }
 
-        AddTextFilters(criteria.Title, TextField.Title, textFilters, warnings, ref knownEmpty);
-        AddTextFilters(criteria.OriginalTitle, TextField.OriginalTitle, textFilters, warnings, ref knownEmpty);
-        AddTextFilters(criteria.Language, TextField.Language, textFilters, warnings, ref knownEmpty);
-        AddTextFilters(criteria.Overview, TextField.Overview, textFilters, warnings, ref knownEmpty);
-        AddTextFilters(criteria.ProductionStatus, TextField.ProductionStatus, textFilters, warnings, ref knownEmpty);
-        AddTemporalFilters(criteria.PublishDate, temporalFilters, warnings, ref knownEmpty);
+        AddTextFilters(criteria.Title, TextField.Title, textFilters, ref knownEmpty);
+        AddTextFilters(criteria.OriginalTitle, TextField.OriginalTitle, textFilters, ref knownEmpty);
+        AddTextFilters(criteria.Language, TextField.Language, textFilters, ref knownEmpty);
+        AddTextFilters(criteria.Overview, TextField.Overview, textFilters, ref knownEmpty);
+        AddTextFilters(criteria.ProductionStatus, TextField.ProductionStatus, textFilters, ref knownEmpty);
+        AddTemporalFilters(criteria.PublishDate, temporalFilters, ref knownEmpty);
         AddDurationFilters(criteria.Duration, route, durationFilters, warnings, ref knownEmpty);
 
-        AddAbsentPropertyWarning(
-            criteria.Established.And,
-            "TMDb content search does not provide established dates.",
-            warnings,
-            ref knownEmpty);
-        AddAbsentPropertyWarning(
-            criteria.Dissolved.And,
-            "TMDb content search does not provide dissolved dates.",
-            warnings,
-            ref knownEmpty);
-        AddAbsentPropertyWarning(
-            criteria.BirthDate.And,
-            "TMDb content search does not provide birth dates.",
-            warnings,
-            ref knownEmpty);
-        AddAbsentPropertyWarning(
-            criteria.DeathDate.And,
-            "TMDb content search does not provide death dates.",
-            warnings,
-            ref knownEmpty);
+        AddAbsentPropertyCriteria(criteria.Established.And, ref knownEmpty);
+        AddAbsentPropertyCriteria(criteria.Dissolved.And, ref knownEmpty);
+        AddAbsentPropertyCriteria(criteria.BirthDate.And, ref knownEmpty);
+        AddAbsentPropertyCriteria(criteria.DeathDate.And, ref knownEmpty);
         var customMetadataRequired = criteria.CustomMetadata.And
             .SelectMany(dictionary => dictionary.Items)
             .Any(item => AbsentPropertyExcludes(item.Value));
         if (customMetadataRequired)
         {
             knownEmpty = true;
-            warnings.Add("TMDb content search does not provide custom metadata.");
         }
 
         if (criteria.Awards.Some.Count > 0)
         {
             knownEmpty = true;
-            warnings.Add("TMDb content search does not provide award metadata.");
         }
 
         if (criteria.Tags.Some.Count > 0)
         {
             knownEmpty = true;
-            warnings.Add("TMDb content search does not provide tag metadata.");
         }
 
         foreach (var group in criteria.Genres.Some)
         {
-            AddGenreFilter(group, excluded: false, genreFilters, warnings, ref knownEmpty);
+            AddGenreFilter(group, excluded: false, genreFilters, ref knownEmpty);
         }
 
         foreach (var exclusion in criteria.Genres.None)
         {
-            AddGenreFilter([exclusion], excluded: true, genreFilters, warnings, ref knownEmpty);
+            AddGenreFilter([exclusion], excluded: true, genreFilters, ref knownEmpty);
         }
 
         foreach (var group in criteria.Relationships.Some)
@@ -377,10 +356,8 @@ internal sealed class QueryPlanner(ILogger<QueryPlanner> logger) : IQueryPlanner
         return !negate;
     }
 
-    private void AddAbsentPropertyWarning<T>(
+    private void AddAbsentPropertyCriteria<T>(
         IEnumerable<PropertyCriterion<T>> criteria,
-        string warning,
-        List<string> warnings,
         ref bool knownEmpty)
     {
         if (!criteria.Any(AbsentPropertyExcludes))
@@ -389,14 +366,12 @@ internal sealed class QueryPlanner(ILogger<QueryPlanner> logger) : IQueryPlanner
         }
 
         knownEmpty = true;
-        warnings.Add(warning);
     }
 
     private void AddTextFilters(
         CriteriaSet<PropertyCriterion<string>> criteria,
         TextField field,
         List<TextFilter> filters,
-        List<string> warnings,
         ref bool knownEmpty)
     {
         foreach (var criterion in criteria.And)
@@ -409,7 +384,6 @@ internal sealed class QueryPlanner(ILogger<QueryPlanner> logger) : IQueryPlanner
                     and not CriteriaValueOperator.IsNotNull)
             {
                 knownEmpty = true;
-                warnings.Add("TMDb cannot evaluate an unsupported text criterion.");
                 continue;
             }
 
@@ -420,7 +394,6 @@ internal sealed class QueryPlanner(ILogger<QueryPlanner> logger) : IQueryPlanner
     private void AddTemporalFilters(
         CriteriaSet<PropertyCriterion<TemporalValue>> criteria,
         List<TemporalFilter> filters,
-        List<string> warnings,
         ref bool knownEmpty)
     {
         foreach (var criterion in criteria.And)
@@ -439,7 +412,6 @@ internal sealed class QueryPlanner(ILogger<QueryPlanner> logger) : IQueryPlanner
                         or CriteriaValueOperator.LessThanOrEqual)))
             {
                 knownEmpty = true;
-                warnings.Add("TMDb cannot evaluate an unsupported publish date criterion.");
                 continue;
             }
 
@@ -462,7 +434,6 @@ internal sealed class QueryPlanner(ILogger<QueryPlanner> logger) : IQueryPlanner
             if (!nullCheck && (values.Count == 0 || values.Any(value => value < TimeSpan.Zero) || !IsRangeOperator(op)))
             {
                 knownEmpty = true;
-                warnings.Add("TMDb cannot evaluate an unsupported duration criterion.");
                 continue;
             }
 
@@ -478,7 +449,6 @@ internal sealed class QueryPlanner(ILogger<QueryPlanner> logger) : IQueryPlanner
         IReadOnlyList<GenreCriteria> alternatives,
         bool excluded,
         List<GenreFilter> filters,
-        List<string> warnings,
         ref bool knownEmpty)
     {
         var compiled = new List<IReadOnlyList<GenrePredicate>>();
@@ -497,6 +467,7 @@ internal sealed class QueryPlanner(ILogger<QueryPlanner> logger) : IQueryPlanner
                         and not CriteriaValueOperator.IsNotNull)
                 {
                     unusable = true;
+                    incomplete = true;
                     break;
                 }
 
@@ -507,10 +478,6 @@ internal sealed class QueryPlanner(ILogger<QueryPlanner> logger) : IQueryPlanner
             {
                 compiled.Add(predicates);
             }
-            else
-            {
-                incomplete = true;
-            }
         }
 
         if (compiled.Count > 0)
@@ -518,12 +485,7 @@ internal sealed class QueryPlanner(ILogger<QueryPlanner> logger) : IQueryPlanner
             filters.Add(new GenreFilter(excluded, compiled));
         }
 
-        if (incomplete || compiled.Count == 0)
-        {
-            warnings.Add("TMDb ignored an unsupported genre alternative.");
-        }
-
-        if (!excluded && compiled.Count == 0)
+        if (compiled.Count == 0 && (!excluded || incomplete))
         {
             knownEmpty = true;
         }
@@ -538,17 +500,25 @@ internal sealed class QueryPlanner(ILogger<QueryPlanner> logger) : IQueryPlanner
     {
         var alternatives = new List<SubjectAlternative>();
         var incomplete = false;
+        var cannotCompile = false;
         var requiresLocalVerification = false;
         var networkOnlyAlternatives = 0;
         foreach (var relationship in relationships)
         {
-            if (!TryMapRoles(relationship, route, out var roles, out var rolesIncomplete))
+            if (!TryMapRoles(
+                relationship,
+                route,
+                out var roles,
+                out var rolesIncomplete,
+                out var rolesCannotCompile))
             {
                 incomplete = true;
+                cannotCompile |= rolesCannotCompile;
                 continue;
             }
 
             incomplete |= rolesIncomplete;
+            cannotCompile |= rolesCannotCompile;
             requiresLocalVerification |= rolesIncomplete;
             if (route == ContentRoute.Movie && roles.Contains(SubjectRole.Network))
             {
@@ -563,6 +533,8 @@ internal sealed class QueryPlanner(ILogger<QueryPlanner> logger) : IQueryPlanner
             if (relationship.Qualifier.And.Any() || relationship.RelatedMetadataContainerId.And.Any())
             {
                 incomplete = true;
+                cannotCompile |= relationship.Qualifier.And.Any(criterion =>
+                    !IsTextOperator(criterion.Operator.NormalizeOperator(criterion.Negate).Operator));
                 requiresLocalVerification = true;
             }
 
@@ -573,6 +545,7 @@ internal sealed class QueryPlanner(ILogger<QueryPlanner> logger) : IQueryPlanner
                 if (negate || !IsTextOperator(op))
                 {
                     incomplete = true;
+                    cannotCompile |= !IsTextOperator(op);
                     requiresLocalVerification = true;
                     continue;
                 }
@@ -600,6 +573,9 @@ internal sealed class QueryPlanner(ILogger<QueryPlanner> logger) : IQueryPlanner
                         !criterion.IsPositiveEquality())))
                 {
                     incomplete = true;
+                    cannotCompile |= group.Any(externalId =>
+                        externalId.Source.And.Concat(externalId.Value.And).Any(criterion =>
+                            !IsTextOperator(criterion.Operator.NormalizeOperator(criterion.Negate).Operator)));
                     requiresLocalVerification = true;
                 }
 
@@ -618,6 +594,9 @@ internal sealed class QueryPlanner(ILogger<QueryPlanner> logger) : IQueryPlanner
             if (relationship.ExternalIds.None.Any())
             {
                 incomplete = true;
+                cannotCompile |= relationship.ExternalIds.None.Any(externalId =>
+                    externalId.Source.And.Concat(externalId.Value.And).Any(criterion =>
+                        !IsTextOperator(criterion.Operator.NormalizeOperator(criterion.Negate).Operator)));
                 requiresLocalVerification = true;
             }
 
@@ -645,7 +624,7 @@ internal sealed class QueryPlanner(ILogger<QueryPlanner> logger) : IQueryPlanner
             filters.Add(new SubjectFilter(excluded, alternatives, requiresLocalVerification));
         }
 
-        if (alternatives.Count == 0 && incomplete && !excluded)
+        if (incomplete && (excluded ? cannotCompile : alternatives.Count == 0))
         {
             knownEmpty = true;
         }
@@ -705,17 +684,13 @@ internal sealed class QueryPlanner(ILogger<QueryPlanner> logger) : IQueryPlanner
             filters.Add(new ContentIdFilter(excluded, alternatives));
         }
 
-        if (unsupportedRoute)
-        {
-            warnings.Add("TMDb cannot resolve TheTVDB content identifiers for movies.");
-        }
-
-        if (invalid || alternatives.Count == 0 && !unsupportedRoute)
+        if ((alternatives.Count > 0 || excluded) && (invalid || alternatives.Count == 0 && !unsupportedRoute))
         {
             warnings.Add("TMDb ignored an invalid exact content identifier.");
         }
 
-        if (!excluded && alternatives.Count == 0)
+        if (excluded && (invalid || unsupportedRoute) ||
+            alternatives.Count == 0 && (!excluded || invalid || unsupportedRoute))
         {
             knownEmpty = true;
         }
@@ -884,7 +859,7 @@ internal sealed class QueryPlanner(ILogger<QueryPlanner> logger) : IQueryPlanner
             usable.Add(folded);
         }
 
-        if (incomplete)
+        if (incomplete && (usable.Count > 0 || excluded))
         {
             warnings.Add(unsupportedWarning);
         }
@@ -895,7 +870,7 @@ internal sealed class QueryPlanner(ILogger<QueryPlanner> logger) : IQueryPlanner
             return;
         }
 
-        if (!excluded && (impossible || incomplete))
+        if (incomplete || (!excluded && impossible))
         {
             knownEmpty = true;
         }
@@ -2049,37 +2024,40 @@ internal sealed class QueryPlanner(ILogger<QueryPlanner> logger) : IQueryPlanner
         RelationshipCriteria relationship,
         ContentRoute route,
         out IReadOnlyList<SubjectRole> roles,
-        out bool incomplete)
+        out bool incomplete,
+        out bool cannotCompile)
     {
         var roleCriteria = relationship.Kind.And.Concat(relationship.Type.And).ToList();
         if (roleCriteria.Count == 0)
         {
             roles = DefaultRoles(route);
             incomplete = false;
+            cannotCompile = false;
             return true;
         }
 
-        var hasIncompleteValues = roleCriteria.Any(criterion => !criterion.IsPositiveEquality());
+        cannotCompile = roleCriteria.Any(criterion => !criterion.IsPositiveEquality());
+        var hasUnmappedValues = false;
         var clauses = roleCriteria.Where(CandidateFilterExtensions.IsPositiveEquality)
             .Select(criterion =>
             {
                 var values = TextValues(criterion);
                 var mapped = values.Select(MapRole).Where(role => role is not null).Select(role => role!.Value)
                     .Distinct().ToList();
-                hasIncompleteValues |= mapped.Count != values.Count;
+                hasUnmappedValues |= mapped.Count != values.Count;
                 return mapped;
             })
             .ToList();
         if (clauses.Count == 0 || clauses.Any(clause => clause.Count == 0))
         {
             roles = [];
-            incomplete = hasIncompleteValues;
+            incomplete = cannotCompile || hasUnmappedValues;
             return false;
         }
 
         var intersection = clauses.Skip(1).Aggregate(clauses[0].ToList(), IntersectRoles);
         roles = intersection;
-        incomplete = hasIncompleteValues;
+        incomplete = cannotCompile || hasUnmappedValues;
         return true;
     }
 
@@ -2492,12 +2470,29 @@ internal sealed class QueryPlanner(ILogger<QueryPlanner> logger) : IQueryPlanner
         return hasCountry && hasRating;
     }
 
-    private void TracePlan(QueryPlan plan)
+    private void RecordPlan(QueryPlan plan, ContentRoute route, bool knownEmpty, bool pageLimitExceeded)
     {
-        if (logger.IsEnabled(LogLevel.Trace))
+        var contentType = new KeyValuePair<string, object?>("content_type", route.ContentTypeName());
+        Telemetry.Plans.Add(
+            1,
+            Telemetry.ProviderTag,
+            contentType,
+            new KeyValuePair<string, object?>("anchor_kind", plan.AnchorKindName()));
+        if (knownEmpty)
         {
-            var planJson = plan.SerializePlan();
-            logger.LogTrace("TMDb query plan {Plan}", planJson);
+            Telemetry.PlansRefused.Add(
+                1,
+                Telemetry.ProviderTag,
+                contentType,
+                new KeyValuePair<string, object?>("reason", TerminalReason.KnownEmpty));
+        }
+        else if (pageLimitExceeded)
+        {
+            Telemetry.PlansRefused.Add(
+                1,
+                Telemetry.ProviderTag,
+                contentType,
+                new KeyValuePair<string, object?>("reason", TerminalReason.Unbounded));
         }
     }
 }

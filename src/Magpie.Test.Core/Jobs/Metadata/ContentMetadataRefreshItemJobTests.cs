@@ -9,12 +9,15 @@ using Magpie.Abstractions.Repositories;
 using Magpie.Core.Jobs;
 using Magpie.Core.Jobs.Metadata;
 using Magpie.Models;
+using Magpie.Models.Arguments;
 using Magpie.Models.Data;
+using Magpie.Models.Enums;
 using Magpie.Models.Jobs;
 using Magpie.Models.Paging;
 using Magpie.Sdk.Content;
 using Magpie.Sdk.Services;
 
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
 using Moq;
@@ -106,6 +109,13 @@ public sealed class ContentMetadataRefreshItemJobTests
                 Kind = subject.Kind,
                 MetadataContainerId = Guid.NewGuid()
             });
+        _subjectRepository
+            .Setup(repository => repository.QueryAsync(
+                It.IsAny<SubjectQuery>(),
+                It.IsAny<PagingParameter>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<Subject>());
 
         _contentTypeRegistry = new Mock<IContentTypeRegistry>();
         _contentTypeRegistry
@@ -141,7 +151,14 @@ public sealed class ContentMetadataRefreshItemJobTests
             ]);
 
         _subjectKindRegistry = new Mock<ISubjectKindRegistry>();
-        _subjectKindRegistry.Setup(registry => registry.Contains("person")).Returns(true);
+        _subjectKindRegistry.SetupGet(registry => registry.Definitions).Returns(
+        [
+            new SubjectKindDefinition
+            {
+                Slug = "person",
+                CustomMetadataFields = []
+            }
+        ]);
 
         _transactionManager = new Mock<ITransactionManager>();
         _transactionManager
@@ -275,6 +292,692 @@ public sealed class ContentMetadataRefreshItemJobTests
                     It.IsAny<Relationship>(),
                     It.IsAny<CancellationToken>()),
                 Times.Exactly(2));
+        }
+    }
+
+    [TestCase(
+        MetadataField.Title | MetadataField.BirthDate,
+        1,
+        1,
+        null,
+        null,
+        1,
+        0,
+        TestName = "RefreshAsync_UsesExistingSubject_WhenFallbackIdentityIsComplete")]
+    [TestCase(
+        MetadataField.Title | MetadataField.BirthDate,
+        0,
+        1,
+        null,
+        null,
+        2,
+        0,
+        TestName = "RefreshAsync_CreatesSubject_WhenFallbackIdentityIsMissing")]
+    [TestCase(
+        MetadataField.Title | MetadataField.OriginalTitle,
+        0,
+        0,
+        null,
+        null,
+        2,
+        0,
+        TestName = "RefreshAsync_CreatesSubject_WhenNameIsTheOnlyFallbackField")]
+    [TestCase(
+        MetadataField.BirthDate,
+        1,
+        1,
+        null,
+        null,
+        1,
+        0,
+        TestName = "RefreshAsync_UsesExistingSubject_WhenFallbackIdentityHasOneNonNameField")]
+    [TestCase(
+        MetadataField.Title | MetadataField.BirthDate,
+        1,
+        2,
+        "shared",
+        "shared",
+        1,
+        0,
+        TestName = "RefreshAsync_UsesExistingSubject_WhenExternalIdMatches")]
+    [TestCase(
+        MetadataField.Title | MetadataField.BirthDate,
+        1,
+        1,
+        "first",
+        "second",
+        2,
+        0,
+        TestName = "RefreshAsync_CreatesSubject_WhenExternalIdsConflict")]
+    [TestCase(
+        MetadataField.Title | MetadataField.BirthDate | MetadataField.ExternalIds,
+        1,
+        1,
+        null,
+        null,
+        2,
+        1,
+        TestName = "RefreshAsync_CreatesSubjectAndWarns_WhenFallbackIdentityFieldIsUnsupported")]
+    public async Task RefreshAsync_UsesExistingOrCreatesSubject_WhenFallbackIdentityVaries(
+        MetadataField fallbackFields,
+        int firstBirthDay,
+        int secondBirthDay,
+        string? firstExternalId,
+        string? secondExternalId,
+        int expectedSubjectCount,
+        int expectedWarningCount)
+    {
+        // Arrange
+        _subjectKindRegistry.SetupGet(registry => registry.Definitions).Returns(
+        [
+            new SubjectKindDefinition
+            {
+                Slug = "person",
+                CustomMetadataFields = [],
+                FallbackIdentityFields = fallbackFields
+            }
+        ]);
+        var provider = new Mock<IContentHierarchyMetadataRelationshipProvider>();
+        provider.Setup(p => p.ProviderType).Returns(ProviderType);
+        provider.Setup(p => p.SupportedContentTypes).Returns(["movie"]);
+        provider
+            .Setup(p => p.TryGetMetadataAsync(It.IsAny<MetadataFetchRequest>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ContentHierarchyMetadataResult
+            {
+                Contribution = new MetadataContribution { ProviderType = ProviderType, Title = "The Matrix" }
+            });
+        provider
+            .Setup(p => p.GetRelationshipsAsync(
+                It.IsAny<MetadataRelationshipRequest>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+            [
+                new SubjectRelationshipDefinition
+                {
+                    RelationshipKind = "cast",
+                    RelationshipQualifier = "first",
+                    SubjectKind = "person",
+                    SubjectName = "Carrie-Anne Moss",
+                    SubjectExternalIds = firstExternalId is null
+                        ? new Dictionary<string, string>()
+                        : new Dictionary<string, string> { ["catalog"] = firstExternalId },
+                    InitialSubjectContribution = new MetadataContribution
+                    {
+                        ProviderType = ProviderType,
+                        Title = "Carrie-Anne Moss",
+                        OriginalTitle = "Carrie-Anne Moss",
+                        BirthDate = firstBirthDay == 0 ? null : new DateTime(1967, 1, firstBirthDay)
+                    }
+                },
+                new SubjectRelationshipDefinition
+                {
+                    RelationshipKind = "cast",
+                    RelationshipQualifier = "second",
+                    SubjectKind = "person",
+                    SubjectName = "Carrie-Anne Moss",
+                    SubjectExternalIds = secondExternalId is null
+                        ? new Dictionary<string, string>()
+                        : new Dictionary<string, string> { ["catalog"] = secondExternalId },
+                    InitialSubjectContribution = new MetadataContribution
+                    {
+                        ProviderType = "provider-b",
+                        Title = " carrie-anne moss ",
+                        OriginalTitle = " carrie-anne moss ",
+                        BirthDate = secondBirthDay == 0 ? null : new DateTime(1967, 1, secondBirthDay)
+                    }
+                }
+            ]);
+
+        var testLogger = new Mock<ILogger<ContentMetadataRefreshItemJob>>();
+        var subject = new ContentMetadataRefreshItemJob(
+            [provider.Object],
+            _contentRepository.Object,
+            _containerRepository.Object,
+            _subjectRepository.Object,
+            _eventBus.Object,
+            _contentTypeRegistry.Object,
+            _transactionManager.Object,
+            _jobManager.Object,
+            _subjectKindRegistry.Object,
+            TimeProvider.System,
+            testLogger.Object);
+
+        // Act
+        await subject.RefreshAsync(_itemId, null, null, null).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            _subjectRepository.Verify(
+                repository => repository.CreateAsync(
+                    It.IsAny<Subject>(),
+                    It.IsAny<Guid?>(),
+                    It.IsAny<CancellationToken>()),
+                Times.Exactly(expectedSubjectCount));
+            testLogger.Verify(
+                value => value.Log(
+                    LogLevel.Warning,
+                    It.IsAny<EventId>(),
+                    It.Is<It.IsAnyType>((state, _) => state.ToString()!.Contains(
+                        "unsupported fallback identity fields",
+                        StringComparison.Ordinal)),
+                    It.IsAny<Exception?>(),
+                    It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
+                Times.Exactly(expectedWarningCount));
+        }
+    }
+
+    [Test]
+    public async Task RefreshAsync_CreatesSubject_WhenContainerHasConflictingExternalId()
+    {
+        // Arrange
+        _subjectKindRegistry.SetupGet(registry => registry.Definitions).Returns(
+        [
+            new SubjectKindDefinition
+            {
+                Slug = "person",
+                CustomMetadataFields = [],
+                FallbackIdentityFields = MetadataField.Title | MetadataField.BirthDate
+            }
+        ]);
+        var provider = new Mock<IContentHierarchyMetadataRelationshipProvider>();
+        provider.Setup(value => value.ProviderType).Returns(ProviderType);
+        provider.Setup(value => value.SupportedContentTypes).Returns(["movie"]);
+        provider
+            .Setup(value => value.TryGetMetadataAsync(
+                It.IsAny<MetadataFetchRequest>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ContentHierarchyMetadataResult
+            {
+                Contribution = new MetadataContribution { ProviderType = ProviderType, Title = "The Matrix" }
+            });
+        provider
+            .Setup(value => value.GetRelationshipsAsync(
+                It.IsAny<MetadataRelationshipRequest>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+            [
+                new SubjectRelationshipDefinition
+                {
+                    RelationshipKind = "cast",
+                    RelationshipQualifier = "a",
+                    SubjectKind = "person",
+                    SubjectName = "Jane",
+                    SubjectExternalIds = new Dictionary<string, string> { ["tmdb"] = "1" },
+                    InitialSubjectContribution = new MetadataContribution
+                    {
+                        ProviderType = ProviderType,
+                        Title = "Jane",
+                        BirthDate = new DateTime(1970, 1, 1)
+                    }
+                },
+                new SubjectRelationshipDefinition
+                {
+                    RelationshipKind = "cast",
+                    RelationshipQualifier = "b",
+                    SubjectKind = "person",
+                    SubjectName = "Jane",
+                    InitialSubjectContribution = new MetadataContribution
+                    {
+                        ProviderType = "provider-b",
+                        Title = "Jane",
+                        BirthDate = new DateTime(1970, 1, 1)
+                    }
+                },
+                new SubjectRelationshipDefinition
+                {
+                    RelationshipKind = "cast",
+                    RelationshipQualifier = "c",
+                    SubjectKind = "person",
+                    SubjectName = "Jane",
+                    SubjectExternalIds = new Dictionary<string, string> { ["tmdb"] = "2" },
+                    InitialSubjectContribution = new MetadataContribution
+                    {
+                        ProviderType = "provider-c",
+                        Title = "Jane",
+                        BirthDate = new DateTime(1970, 1, 1)
+                    }
+                }
+            ]);
+
+        var subject = new ContentMetadataRefreshItemJob(
+            [provider.Object],
+            _contentRepository.Object,
+            _containerRepository.Object,
+            _subjectRepository.Object,
+            _eventBus.Object,
+            _contentTypeRegistry.Object,
+            _transactionManager.Object,
+            _jobManager.Object,
+            _subjectKindRegistry.Object,
+            TimeProvider.System,
+            NullLogger<ContentMetadataRefreshItemJob>.Instance);
+
+        // Act
+        await subject.RefreshAsync(_itemId, null, null, null).ConfigureAwait(false);
+
+        // Assert
+        _subjectRepository.Verify(
+            repository => repository.CreateAsync(
+                It.IsAny<Subject>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()),
+            Times.Exactly(2));
+    }
+
+    [Test]
+    public async Task RefreshAsync_CreatesSubject_WhenFallbackIdentityIsAmbiguous()
+    {
+        // Arrange
+        _subjectKindRegistry.SetupGet(registry => registry.Definitions).Returns(
+        [
+            new SubjectKindDefinition
+            {
+                Slug = "person",
+                CustomMetadataFields = [],
+                FallbackIdentityFields = MetadataField.Title | MetadataField.BirthDate
+            }
+        ]);
+        var provider = new Mock<IContentHierarchyMetadataRelationshipProvider>();
+        provider.Setup(value => value.ProviderType).Returns(ProviderType);
+        provider.Setup(value => value.SupportedContentTypes).Returns(["movie"]);
+        provider
+            .Setup(value => value.TryGetMetadataAsync(
+                It.IsAny<MetadataFetchRequest>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ContentHierarchyMetadataResult
+            {
+                Contribution = new MetadataContribution { ProviderType = ProviderType, Title = "The Matrix" }
+            });
+        provider
+            .Setup(value => value.GetRelationshipsAsync(
+                It.IsAny<MetadataRelationshipRequest>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+            [
+                new SubjectRelationshipDefinition
+                {
+                    RelationshipKind = "cast",
+                    RelationshipQualifier = "a",
+                    SubjectKind = "person",
+                    SubjectName = "Jane",
+                    SubjectExternalIds = new Dictionary<string, string> { ["tmdb"] = "1" },
+                    InitialSubjectContribution = new MetadataContribution
+                    {
+                        ProviderType = ProviderType,
+                        Title = "Jane",
+                        BirthDate = new DateTime(1970, 1, 1)
+                    }
+                },
+                new SubjectRelationshipDefinition
+                {
+                    RelationshipKind = "cast",
+                    RelationshipQualifier = "b",
+                    SubjectKind = "person",
+                    SubjectName = "Jane",
+                    SubjectExternalIds = new Dictionary<string, string> { ["tmdb"] = "2" },
+                    InitialSubjectContribution = new MetadataContribution
+                    {
+                        ProviderType = "provider-b",
+                        Title = "Jane",
+                        BirthDate = new DateTime(1970, 1, 1)
+                    }
+                },
+                new SubjectRelationshipDefinition
+                {
+                    RelationshipKind = "cast",
+                    RelationshipQualifier = "c",
+                    SubjectKind = "person",
+                    SubjectName = "Jane",
+                    SubjectExternalIds = new Dictionary<string, string> { ["imdb"] = "3" },
+                    InitialSubjectContribution = new MetadataContribution
+                    {
+                        ProviderType = "provider-c",
+                        Title = "Jane",
+                        BirthDate = new DateTime(1970, 1, 1)
+                    }
+                }
+            ]);
+        var testLogger = new Mock<ILogger<ContentMetadataRefreshItemJob>>();
+
+        var subject = new ContentMetadataRefreshItemJob(
+            [provider.Object],
+            _contentRepository.Object,
+            _containerRepository.Object,
+            _subjectRepository.Object,
+            _eventBus.Object,
+            _contentTypeRegistry.Object,
+            _transactionManager.Object,
+            _jobManager.Object,
+            _subjectKindRegistry.Object,
+            TimeProvider.System,
+            testLogger.Object);
+
+        // Act
+        await subject.RefreshAsync(_itemId, null, null, null).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            _subjectRepository.Verify(
+                repository => repository.CreateAsync(
+                    It.IsAny<Subject>(),
+                    It.IsAny<Guid?>(),
+                    It.IsAny<CancellationToken>()),
+                Times.Exactly(3));
+            testLogger.Verify(
+                value => value.Log(
+                    LogLevel.Warning,
+                    It.IsAny<EventId>(),
+                    It.Is<It.IsAnyType>((state, _) =>
+                        state.ToString()!.Contains("ambiguous", StringComparison.Ordinal)),
+                    It.IsAny<Exception?>(),
+                    It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
+                Times.Once);
+        }
+    }
+
+    [Test]
+    public async Task RefreshAsync_UsesPersistedSubject_WhenInRunSubjectMatchesOnlyByFallbackIdentity()
+    {
+        // Arrange
+        var persistedContainerId = Guid.NewGuid();
+        _subjectKindRegistry.SetupGet(registry => registry.Definitions).Returns(
+        [
+            new SubjectKindDefinition
+            {
+                Slug = "person",
+                CustomMetadataFields = [],
+                FallbackIdentityFields = MetadataField.Title | MetadataField.BirthDate
+            }
+        ]);
+        _subjectRepository
+            .Setup(repository => repository.QueryAsync(
+                It.Is<SubjectQuery>(query =>
+                    query.Kind == "person" &&
+                    query.ExternalId != null &&
+                    query.ExternalId.Source.And.Single().Value == "imdb" &&
+                    query.ExternalId.Value.And.Single().Value == "nm9"),
+                It.IsAny<PagingParameter>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<Subject>
+            {
+                Items =
+                [
+                    new Subject
+                    {
+                        Id = Guid.NewGuid(),
+                        Kind = "person",
+                        MetadataContainerId = persistedContainerId
+                    }
+                ]
+            });
+        var provider = new Mock<IContentHierarchyMetadataRelationshipProvider>();
+        provider.Setup(value => value.ProviderType).Returns(ProviderType);
+        provider.Setup(value => value.SupportedContentTypes).Returns(["movie"]);
+        provider
+            .Setup(value => value.TryGetMetadataAsync(
+                It.IsAny<MetadataFetchRequest>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ContentHierarchyMetadataResult
+            {
+                Contribution = new MetadataContribution { ProviderType = ProviderType, Title = "The Matrix" }
+            });
+        provider
+            .Setup(value => value.GetRelationshipsAsync(
+                It.IsAny<MetadataRelationshipRequest>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+            [
+                new SubjectRelationshipDefinition
+                {
+                    RelationshipKind = "cast",
+                    RelationshipQualifier = "catalog-credit",
+                    SubjectKind = "person",
+                    SubjectName = "Jane Doe",
+                    SubjectExternalIds = new Dictionary<string, string> { ["catalog"] = "100" },
+                    InitialSubjectContribution = new MetadataContribution
+                    {
+                        ProviderType = ProviderType,
+                        Title = "Jane Doe",
+                        BirthDate = new DateTime(1970, 1, 1)
+                    }
+                },
+                new SubjectRelationshipDefinition
+                {
+                    RelationshipKind = "cast",
+                    RelationshipQualifier = "imdb-credit",
+                    SubjectKind = "person",
+                    SubjectName = "Jane Doe",
+                    SubjectExternalIds = new Dictionary<string, string> { ["imdb"] = "nm9" },
+                    InitialSubjectContribution = new MetadataContribution
+                    {
+                        ProviderType = "provider-b",
+                        Title = "Jane Doe",
+                        BirthDate = new DateTime(1970, 1, 1)
+                    }
+                }
+            ]);
+
+        var subject = new ContentMetadataRefreshItemJob(
+            [provider.Object],
+            _contentRepository.Object,
+            _containerRepository.Object,
+            _subjectRepository.Object,
+            _eventBus.Object,
+            _contentTypeRegistry.Object,
+            _transactionManager.Object,
+            _jobManager.Object,
+            _subjectKindRegistry.Object,
+            TimeProvider.System,
+            NullLogger<ContentMetadataRefreshItemJob>.Instance);
+
+        // Act
+        await subject.RefreshAsync(_itemId, null, null, null).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            _subjectRepository.Verify(
+                repository => repository.CreateAsync(
+                    It.IsAny<Subject>(),
+                    It.IsAny<Guid?>(),
+                    It.IsAny<CancellationToken>()),
+                Times.Once);
+            _containerRepository.Verify(
+                repository => repository.AddRelationshipAsync(
+                    It.Is<Relationship>(relationship =>
+                        relationship.Qualifier == "imdb-credit" &&
+                        relationship.RelatedMetadataContainerId == persistedContainerId),
+                    It.IsAny<CancellationToken>()),
+                Times.Once);
+        }
+    }
+
+    [Test]
+    public async Task RefreshAsync_ReusesFallbackIdentity_WhenLaterDefinitionMatchesItsExternalId()
+    {
+        // Arrange
+        _subjectKindRegistry.SetupGet(registry => registry.Definitions).Returns(
+        [
+            new SubjectKindDefinition
+            {
+                Slug = "person",
+                CustomMetadataFields = [],
+                FallbackIdentityFields = MetadataField.Title | MetadataField.BirthDate
+            }
+        ]);
+        var provider = new Mock<IContentHierarchyMetadataRelationshipProvider>();
+        provider.Setup(value => value.ProviderType).Returns(ProviderType);
+        provider.Setup(value => value.SupportedContentTypes).Returns(["movie"]);
+        provider
+            .Setup(value => value.TryGetMetadataAsync(
+                It.IsAny<MetadataFetchRequest>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ContentHierarchyMetadataResult
+            {
+                Contribution = new MetadataContribution { ProviderType = ProviderType, Title = "The Matrix" }
+            });
+        provider
+            .Setup(value => value.GetRelationshipsAsync(
+                It.IsAny<MetadataRelationshipRequest>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+            [
+                new SubjectRelationshipDefinition
+                {
+                    RelationshipKind = "cast",
+                    RelationshipQualifier = "catalog-credit",
+                    SubjectKind = "person",
+                    SubjectName = "Jane Doe",
+                    SubjectExternalIds = new Dictionary<string, string> { ["catalog"] = "100" },
+                    InitialSubjectContribution = new MetadataContribution
+                    {
+                        ProviderType = ProviderType,
+                        Title = "Jane Doe",
+                        BirthDate = new DateTime(1970, 1, 1)
+                    }
+                },
+                new SubjectRelationshipDefinition
+                {
+                    RelationshipKind = "cast",
+                    RelationshipQualifier = "first-imdb-credit",
+                    SubjectKind = "person",
+                    SubjectName = "Jane Doe",
+                    SubjectExternalIds = new Dictionary<string, string> { ["imdb"] = "nm9" },
+                    InitialSubjectContribution = new MetadataContribution
+                    {
+                        ProviderType = "provider-b",
+                        Title = "Jane Doe",
+                        BirthDate = new DateTime(1970, 1, 1)
+                    }
+                },
+                new SubjectRelationshipDefinition
+                {
+                    RelationshipKind = "cast",
+                    RelationshipQualifier = "second-imdb-credit",
+                    SubjectKind = "person",
+                    SubjectName = "Jane Doe",
+                    SubjectExternalIds = new Dictionary<string, string> { ["imdb"] = "nm9" },
+                    InitialSubjectContribution = new MetadataContribution
+                    {
+                        ProviderType = "provider-c",
+                        Title = "Jane Doe"
+                    }
+                }
+            ]);
+
+        var subject = new ContentMetadataRefreshItemJob(
+            [provider.Object],
+            _contentRepository.Object,
+            _containerRepository.Object,
+            _subjectRepository.Object,
+            _eventBus.Object,
+            _contentTypeRegistry.Object,
+            _transactionManager.Object,
+            _jobManager.Object,
+            _subjectKindRegistry.Object,
+            TimeProvider.System,
+            NullLogger<ContentMetadataRefreshItemJob>.Instance);
+
+        // Act
+        await subject.RefreshAsync(_itemId, null, null, null).ConfigureAwait(false);
+
+        // Assert
+        _subjectRepository.Verify(
+            repository => repository.CreateAsync(
+                It.IsAny<Subject>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Test]
+    public async Task RefreshAsync_UsesExternalIdOnly_WhenKindDeclaresNoFallbackFields()
+    {
+        // Arrange
+        var existingContainerId = Guid.NewGuid();
+        _subjectRepository
+            .Setup(repository => repository.QueryAsync(
+                It.Is<SubjectQuery>(query =>
+                    query.Kind == "person" &&
+                    query.ExternalId != null &&
+                    query.ExternalId.Source.And.Single().Value == "catalog" &&
+                    query.ExternalId.Value.And.Single().Value == "shared"),
+                It.IsAny<PagingParameter>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<Subject>
+            {
+                Items =
+                [
+                    new Subject
+                    {
+                        Id = Guid.NewGuid(),
+                        Kind = "person",
+                        MetadataContainerId = existingContainerId
+                    }
+                ]
+            });
+        var provider = new Mock<IContentHierarchyMetadataRelationshipProvider>();
+        provider.Setup(value => value.ProviderType).Returns(ProviderType);
+        provider.Setup(value => value.SupportedContentTypes).Returns(["movie"]);
+        provider
+            .Setup(value => value.TryGetMetadataAsync(
+                It.IsAny<MetadataFetchRequest>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ContentHierarchyMetadataResult
+            {
+                Contribution = new MetadataContribution { ProviderType = ProviderType, Title = "The Matrix" }
+            });
+        provider
+            .Setup(value => value.GetRelationshipsAsync(
+                It.IsAny<MetadataRelationshipRequest>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+            [
+                new SubjectRelationshipDefinition
+                {
+                    RelationshipKind = "cast",
+                    RelationshipQualifier = "Trinity",
+                    SubjectKind = "person",
+                    SubjectName = "Carrie-Anne Moss",
+                    SubjectExternalIds = new Dictionary<string, string> { ["catalog"] = "shared" }
+                }
+            ]);
+
+        var subject = new ContentMetadataRefreshItemJob(
+            [provider.Object],
+            _contentRepository.Object,
+            _containerRepository.Object,
+            _subjectRepository.Object,
+            _eventBus.Object,
+            _contentTypeRegistry.Object,
+            _transactionManager.Object,
+            _jobManager.Object,
+            _subjectKindRegistry.Object,
+            TimeProvider.System,
+            NullLogger<ContentMetadataRefreshItemJob>.Instance);
+
+        // Act
+        await subject.RefreshAsync(_itemId, null, null, null).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            _subjectRepository.Verify(
+                repository => repository.CreateAsync(
+                    It.IsAny<Subject>(),
+                    It.IsAny<Guid?>(),
+                    It.IsAny<CancellationToken>()),
+                Times.Never);
+            _containerRepository.Verify(
+                repository => repository.AddRelationshipAsync(
+                    It.Is<Relationship>(relationship =>
+                        relationship.RelatedMetadataContainerId == existingContainerId),
+                    It.IsAny<CancellationToken>()),
+                Times.Once);
         }
     }
 

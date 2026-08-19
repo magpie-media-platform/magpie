@@ -132,6 +132,20 @@ describe('DownloadQueueWidget active downloads', () => {
         expect(screen.getByText('Parks and Recreation S02E01')).toBeInTheDocument();
     });
 
+    it('links a download title to its content when associated content exists', () => {
+        const downloads: ActiveDownloadItem[] = [{ ...activeDownloads[0], contentId: 'content-1' }];
+
+        renderWithRouter(<DownloadQueueWidget counts={defaultCounts} activeDownloads={downloads} />);
+
+        expect(screen.getByText('Breaking Bad S01E01').closest('a')).toHaveAttribute('href', '/library/content-1');
+    });
+
+    it('renders a download title without associated content as plain text', () => {
+        renderWithRouter(<DownloadQueueWidget counts={defaultCounts} activeDownloads={[activeDownloads[0]]} />);
+
+        expect(screen.getByText('Breaking Bad S01E01').closest('a')).toBeNull();
+    });
+
     it('displays download metadata', () => {
         renderWithRouter(<DownloadQueueWidget counts={defaultCounts} activeDownloads={activeDownloads} />);
 

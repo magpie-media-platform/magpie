@@ -1,11 +1,13 @@
 import { Link } from 'react-router-dom';
-import { ArrowLeftIcon } from '@phosphor-icons/react';
+import { ArrowLeftIcon, GridFourIcon, ListIcon } from '@phosphor-icons/react';
 
 import { ContentListSlot } from '@/components/ui/Slot/ContentSlots';
 import { CdnPhosphorIcon } from '@/components/ui/CdnPhosphorIcon';
 import { PullToRefresh } from '@/components/ui/PullToRefresh';
 import { PageHeader } from '@/components/ui/PageHeader';
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/Tabs';
 import { TABLE_LAYOUT_QUERY } from '@/hooks/ui/useCardLayout';
+import { usePersistentState } from '@/hooks/usePersistentState';
 
 import { LibraryTypePicker } from './LibraryTypePicker';
 import { LibraryFilters } from './LibraryFilters';
@@ -21,6 +23,8 @@ import './LibraryPage.css';
 export function LibraryPage() {
     const library = useLibraryPage();
     const { currentContentType, selectedLevel, routeContentTypeSlug, pageTitle, pageIconName } = library;
+    const [storedView, setStoredView] = usePersistentState<string>('library-view', 'list');
+    const view = storedView === 'gallery' ? 'gallery' : 'list';
 
     if (library.hasInvalidContentTypeSlug) {
         return null;
@@ -54,6 +58,24 @@ export function LibraryPage() {
                                 aria-hidden="true"
                                 data-testid="library-page__icon"
                             />
+                        }
+                        actions={
+                            <Tabs value={view} onValueChange={setStoredView}>
+                                <TabsList
+                                    className="library-page__view-switch"
+                                    aria-label="Content view"
+                                    data-testid="library-page__view-switch"
+                                >
+                                    <TabsTrigger value="list" data-action="view-list">
+                                        <ListIcon weight="bold" aria-hidden="true" />
+                                        List
+                                    </TabsTrigger>
+                                    <TabsTrigger value="gallery" data-action="view-gallery">
+                                        <GridFourIcon weight="bold" aria-hidden="true" />
+                                        Gallery
+                                    </TabsTrigger>
+                                </TabsList>
+                            </Tabs>
                         }
                     />
 
@@ -124,6 +146,7 @@ export function LibraryPage() {
                         canEditContent={library.canEditContent}
                         addContentTo={library.addContentTo}
                         onClearSearchAndFilters={library.handleClearSearchAndFilters}
+                        view={view}
                     />
                 </ContentListSlot>
             </PullToRefresh>

@@ -24,6 +24,38 @@ internal static class FilterFieldRegistryExtensions
         CriteriaValueOperator.NotEndsWithString,
     ];
 
+    private static readonly HashSet<CriteriaValueOperator> UnsupportedRelationshipTextOperators =
+    [
+        CriteriaValueOperator.GreaterThan,
+        CriteriaValueOperator.GreaterThanOrEqual,
+        CriteriaValueOperator.LessThan,
+        CriteriaValueOperator.LessThanOrEqual,
+        CriteriaValueOperator.NotStartsWithString,
+        CriteriaValueOperator.NotEndsWithString,
+    ];
+
+    private static readonly HashSet<CriteriaValueOperator> UnsupportedRelationshipContainerIdOperators =
+    [
+        CriteriaValueOperator.GreaterThan,
+        CriteriaValueOperator.GreaterThanOrEqual,
+        CriteriaValueOperator.LessThan,
+        CriteriaValueOperator.LessThanOrEqual,
+        CriteriaValueOperator.ContainsString,
+        CriteriaValueOperator.NotContainsString,
+        CriteriaValueOperator.StartsWithString,
+        CriteriaValueOperator.NotStartsWithString,
+        CriteriaValueOperator.EndsWithString,
+        CriteriaValueOperator.NotEndsWithString,
+    ];
+
+    private static readonly HashSet<CriteriaValueOperator> UnsupportedRelationshipExternalIdOperators =
+    [
+        CriteriaValueOperator.GreaterThan,
+        CriteriaValueOperator.GreaterThanOrEqual,
+        CriteriaValueOperator.LessThan,
+        CriteriaValueOperator.LessThanOrEqual,
+    ];
+
     private static readonly CollectionFieldDefinition GenreFieldDefinition = CreateGenreFieldDefinition(nameof(Genre));
 
     private static readonly CollectionFieldDefinition GenresFieldDefinition =
@@ -677,15 +709,31 @@ internal static class FilterFieldRegistryExtensions
             typeof(string),
             new Dictionary<string, ItemFieldInfo>(StringComparer.OrdinalIgnoreCase)
             {
-                [nameof(RelationshipCriteria.Kind)] = new(nameof(RelationshipCriteria.Kind), typeof(string)),
-                [nameof(RelationshipCriteria.Type)] = new(nameof(RelationshipCriteria.Type), typeof(string)),
-                [nameof(RelationshipCriteria.Qualifier)] = new(nameof(RelationshipCriteria.Qualifier), typeof(string)),
-                [nameof(RelationshipCriteria.Subject)] = new(nameof(RelationshipCriteria.Subject), typeof(string)),
-                ["Name"] = new(nameof(RelationshipCriteria.Subject), typeof(string)),
+                [nameof(RelationshipCriteria.Kind)] =
+                    new(nameof(RelationshipCriteria.Kind), typeof(string), UnsupportedRelationshipTextOperators),
+                [nameof(RelationshipCriteria.Type)] =
+                    new(nameof(RelationshipCriteria.Type), typeof(string), UnsupportedRelationshipTextOperators),
+                [nameof(RelationshipCriteria.Qualifier)] =
+                    new(nameof(RelationshipCriteria.Qualifier), typeof(string), UnsupportedRelationshipTextOperators),
+                [nameof(RelationshipCriteria.Subject)] =
+                    new(nameof(RelationshipCriteria.Subject), typeof(string), UnsupportedRelationshipTextOperators),
+                ["Name"] =
+                    new(nameof(RelationshipCriteria.Subject), typeof(string), UnsupportedRelationshipTextOperators),
                 [nameof(RelationshipCriteria.RelatedMetadataContainerId)] =
-                    new(nameof(RelationshipCriteria.RelatedMetadataContainerId), typeof(Guid)),
-                ["ExternalId"] = new(nameof(ExternalIdCriteria.Value), typeof(string)),
-                ["ExternalIdSource"] = new(nameof(ExternalIdCriteria.Source), typeof(string))
+                    new(
+                        nameof(RelationshipCriteria.RelatedMetadataContainerId),
+                        typeof(Guid),
+                        UnsupportedRelationshipContainerIdOperators),
+                ["ExternalId"] =
+                    new(
+                        nameof(ExternalIdCriteria.Value),
+                        typeof(string),
+                        UnsupportedRelationshipExternalIdOperators),
+                ["ExternalIdSource"] =
+                    new(
+                        nameof(ExternalIdCriteria.Source),
+                        typeof(string),
+                        UnsupportedRelationshipExternalIdOperators)
             },
             value => new RelationshipCriteria
             {

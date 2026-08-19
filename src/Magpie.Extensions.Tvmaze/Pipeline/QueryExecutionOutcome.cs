@@ -25,6 +25,4 @@ internal sealed record QueryExecutionOutcome
     public List<NodeExecutionOutcome> Branches { get; } = [];
 
     public Dictionary<string, int> Rejections { get; } = [];
-
-    public List<WireAttemptOutcome> WireAttempts { get; } = [];
 }

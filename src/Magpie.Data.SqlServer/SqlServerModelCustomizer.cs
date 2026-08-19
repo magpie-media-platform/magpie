@@ -11,6 +11,8 @@ internal sealed class SqlServerModelCustomizer(ModelCustomizerDependencies depen
     public override void Customize(ModelBuilder modelBuilder, DbContext context)
     {
         base.Customize(modelBuilder, context);
+        modelBuilder.Entity<MediaFile>().Property(e => e.FilePath).UseCollation("Latin1_General_100_BIN2");
+        modelBuilder.Entity<MediaFile>().Property(e => e.PathKey).UseCollation("Latin1_General_100_BIN2");
         modelBuilder.Entity<ReleaseIdentityKey>()
             .HasIndex(e => new { e.Authority, e.Value })
             .IsUnique()

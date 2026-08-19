@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/Button';
 import { Pager } from '@/components/ui/Pager';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { PullToRefresh } from '@/components/ui/PullToRefresh';
+import { Switch } from '@/components/ui/Switch';
 import { JobExecutionFilters, type JobExecutionFilterState } from '@/components/ui/JobExecutionFilters';
 import { ExecutionRow } from '@/components/jobs/ExecutionRow';
 import { useAuth } from '@/auth';
@@ -37,10 +38,11 @@ const EXECUTIONS_PAGE_SIZE = 50;
 
 type MyJobsFilters = JobExecutionFilterState & {
     tab: string;
+    rootsOnly: string;
     [key: string]: string;
 };
 
-const DEFAULT_FILTERS: MyJobsFilters = { tab: 'executions', template: '', status: '' };
+const DEFAULT_FILTERS: MyJobsFilters = { tab: 'executions', template: '', status: '', rootsOnly: '1' };
 
 function specsToTemplateOptions(specs: ReturnType<typeof useJobSpecs>['specs']): TemplateOption[] {
     return specs
@@ -70,6 +72,7 @@ export function MyJobsPage() {
     });
 
     const activeTab = filters.tab;
+    const rootsOnly = filters.rootsOnly !== '0';
     const executionFilters: JobExecutionFilterState = useMemo(
         () => ({ template: filters.template, status: filters.status }),
         [filters.template, filters.status],
@@ -89,6 +92,13 @@ export function MyJobsPage() {
         [setFilters],
     );
 
+    const setRootsOnly = useCallback(
+        (next: boolean) => {
+            setFilters({ rootsOnly: next ? '1' : '0' });
+        },
+        [setFilters],
+    );
+
     const { hasPermission, user } = useAuth();
     const canManageTriggers = hasPermission('jobs.schedule');
     const canViewAdminJobs = hasPermission('jobs.view');
@@ -98,6 +108,7 @@ export function MyJobsPage() {
     const executionQueryParams: JobExecutionQueryParams = useMemo(() => {
         const params: JobExecutionQueryParams = {
             mine: true,
+            rootsOnly,
             pageNumber: page,
             pageSize: EXECUTIONS_PAGE_SIZE,
         };
@@ -109,7 +120,7 @@ export function MyJobsPage() {
             params.status = wireStatuses;
         }
         return params;
-    }, [page, executionFilters.template, executionFilters.status]);
+    }, [rootsOnly, page, executionFilters.template, executionFilters.status]);
 
     const { jobs: userJobs, pagination, runJob, refetch: refetchJobs } = useJobs(executionQueryParams);
     const linkedJobIsListed = linkedJobId !== null && userJobs.some((execution) => execution.id === linkedJobId);
@@ -229,12 +240,29 @@ export function MyJobsPage() {
                             </div>
                         )}
 
-                        <JobExecutionFilters
-                            filters={executionFilters}
-                            templates={templateOptions}
-                            statusOptions={statusFilterOptions}
-                            onChange={setExecutionFilters}
-                        />
+                        <div className="my-jobs-page__executions-toolbar">
+                            <JobExecutionFilters
+                                filters={executionFilters}
+                                templates={templateOptions}
+                                statusOptions={statusFilterOptions}
+                                onChange={setExecutionFilters}
+                            />
+                            <label
+                                htmlFor="my-jobs-page-roots-only"
+                                className="my-jobs-page__roots-toggle"
+                                data-control="roots-only"
+                            >
+                                <Switch
+                                    id="my-jobs-page-roots-only"
+                                    size="sm"
+                                    checked={rootsOnly}
+                                    onCheckedChange={setRootsOnly}
+                                    aria-label="Show top level only"
+                                    data-action="toggle-roots-only"
+                                />
+                                <span>Show top level only</span>
+                            </label>
+                        </div>
 
                         <div className="my-jobs-page__list" role="list" aria-label="Job history">
                             {displayedUserJobs.length === 0 ? (

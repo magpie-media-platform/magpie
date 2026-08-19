@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.Linq;
 using System.Net;
@@ -22,6 +23,7 @@ using Microsoft.Extensions.Logging;
 namespace Magpie.Extensions.Cardigann;
 
 internal sealed class CardigannIndexerIntegration(
+    Guid indexerId,
     CardigannDefinition definition,
     IResultParser parser,
     ICardigannSessionManager sessions,
@@ -187,21 +189,63 @@ internal sealed class CardigannIndexerIntegration(
         var variables = BuildVariables(request, settings);
 
         var path = definition.Search.Paths[0];
-        var requestUri = BuildRequestUri(baseUri, path, variables);
+        var method = ResolveSearchMethod(path.Method);
+        var requestUri = method == HttpMethod.Post
+            ? new Uri(baseUri, path.Path.RenderCardigannTemplate(variables))
+            : BuildRequestUri(baseUri, path, variables);
+        var requestBody = method == HttpMethod.Post ? BuildRequestParameters(path, variables) : null;
+        if (Activity.Current?.OperationName == "magpie.release-query.request")
+        {
+            var redactedVariables = RedactSecretVariables(variables, definition.Settings);
+            Activity.Current.SetTag("magpie.request.method", method.Method);
+            Activity.Current.SetTag(
+                "magpie.request.target",
+                (method == HttpMethod.Post
+                    ? new Uri(baseUri, path.Path.RenderCardigannTemplate(redactedVariables))
+                    : BuildRequestUri(baseUri, path, redactedVariables)).PathAndQuery);
+            Activity.Current.SetTag(
+                "magpie.request.body",
+                method == HttpMethod.Post ? BuildRequestParameters(path, redactedVariables) : null);
+        }
 
-        var body = await FetchBodyAsync(HttpMethod.Get, requestUri, settings, baseUri, cancellationToken)
+        var body = await FetchBodyAsync(method, requestUri, requestBody, settings, baseUri, cancellationToken)
             .ConfigureAwait(false);
 
         var isJson = string.Equals(path.Response?.Type, "json", StringComparison.OrdinalIgnoreCase);
         var releases = isJson
             ? parser.ParseJson(body, definition, baseUri, variables)
             : parser.Parse(body, definition, baseUri, variables);
+        releases = releases.Take(request.MaximumResults).ToArray();
         var resolved = isJson || definition.Download is null
             ? releases
             : await ResolveDownloadsAsync(releases, definition.Download, baseUri, settings, cancellationToken)
                 .ConfigureAwait(false);
 
         return resolved;
+    }
+
+    private static IReadOnlyDictionary<string, object?> RedactSecretVariables(
+        IReadOnlyDictionary<string, object?> variables,
+        IReadOnlyList<CardigannSettingDefinition> settings)
+    {
+        var redacted = new Dictionary<string, object?>(variables);
+        foreach (var setting in settings.Where(setting =>
+                     setting.Type is "password" or "cookie" && !string.IsNullOrEmpty(setting.Name)))
+        {
+            redacted[$".Config.{setting.Name}"] = "[REDACTED]";
+        }
+
+        return redacted;
+    }
+
+    private static HttpMethod ResolveSearchMethod(string? method)
+    {
+        return method?.ToLowerInvariant() switch
+        {
+            null or "" or "get" => HttpMethod.Get,
+            "post" => HttpMethod.Post,
+            _ => throw new InvalidOperationException($"Cardigann search method '{method}' is not supported.")
+        };
     }
 
     private static IReadOnlyList<IReadOnlyCollection<string>> BuildSearchFacets(CapabilitiesBlock caps)
@@ -335,7 +379,8 @@ internal sealed class CardigannIndexerIntegration(
         string body;
         try
         {
-            body = await FetchBodyAsync(method, targetUri, settings, baseUri, cancellationToken).ConfigureAwait(false);
+            body = await FetchBodyAsync(method, targetUri, null, settings, baseUri, cancellationToken)
+                .ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
@@ -397,6 +442,7 @@ internal sealed class CardigannIndexerIntegration(
                 baseUri,
                 HttpMethod.Get,
                 baseUri,
+                formBody: null,
                 ResolveUserAgent(settings),
                 captureCookies: false,
                 cancellationToken)
@@ -452,6 +498,7 @@ internal sealed class CardigannIndexerIntegration(
     private async Task<string> FetchBodyAsync(
         HttpMethod method,
         Uri requestUri,
+        string? formBody,
         IReadOnlyDictionary<string, string> settings,
         Uri baseUri,
         CancellationToken cancellationToken)
@@ -470,6 +517,7 @@ internal sealed class CardigannIndexerIntegration(
                 baseUri,
                 method,
                 requestUri,
+                formBody,
                 ResolveUserAgent(settings),
                 captureCookies: login is not null,
                 cancellationToken)
@@ -529,7 +577,7 @@ internal sealed class CardigannIndexerIntegration(
         var cookieValue = ResolveCookieValue(settings);
         var userAgent = ResolveUserAgent(settings);
 
-        return await sessions
+        var outcome = await sessions
             .EnsureLoggedInAsync(
                 SessionKey(baseUri),
                 login,
@@ -540,6 +588,13 @@ internal sealed class CardigannIndexerIntegration(
                 forceRefresh,
                 cancellationToken)
             .ConfigureAwait(false);
+
+        Telemetry.Logins.Add(
+            1,
+            new KeyValuePair<string, object?>("indexer_id", indexerId.ToString()),
+            new KeyValuePair<string, object?>("outcome", outcome.Success ? "success" : "failure"));
+
+        return outcome;
     }
 
     private async Task<ConfigurationTestResult> TestLoginAsync(
@@ -549,6 +604,10 @@ internal sealed class CardigannIndexerIntegration(
     {
         if (definition.Login!.Captcha is not null)
         {
+            Telemetry.Logins.Add(
+                1,
+                new KeyValuePair<string, object?>("indexer_id", indexerId.ToString()),
+                new KeyValuePair<string, object?>("outcome", "failure"));
             logger.LogWarning(
                 "The Cardigann login test failed for tracker {Tracker}. Cardigann does not support a captcha login.",
                 definition.Id);
@@ -718,6 +777,20 @@ internal sealed class CardigannIndexerIntegration(
     {
         var renderedPath = path.Path.RenderCardigannTemplate(variables);
 
+        var parameters = BuildRequestParameters(path, variables);
+        if (parameters.Length == 0)
+        {
+            return new Uri(baseUri, renderedPath);
+        }
+
+        var separator = renderedPath.Contains('?', StringComparison.Ordinal) ? "&" : "?";
+        return new Uri(baseUri, renderedPath + separator + parameters);
+    }
+
+    private string BuildRequestParameters(
+        SearchPath path,
+        IReadOnlyDictionary<string, object?> variables)
+    {
         var inputs = new Dictionary<string, string>();
         foreach (var pair in definition.Search.Inputs)
         {
@@ -749,14 +822,7 @@ internal sealed class CardigannIndexerIntegration(
             query.Add($"{Uri.EscapeDataString(key)}={Uri.EscapeDataString(value)}");
         }
 
-        var pathWithQuery = renderedPath;
-        if (query.Count > 0)
-        {
-            var separator = renderedPath.Contains('?', StringComparison.Ordinal) ? "&" : "?";
-            pathWithQuery = renderedPath + separator + string.Join("&", query);
-        }
-
-        return new Uri(baseUri, pathWithQuery);
+        return string.Join("&", query);
     }
 
     private Uri ResolveBaseUri(IReadOnlyDictionary<string, string> settings)

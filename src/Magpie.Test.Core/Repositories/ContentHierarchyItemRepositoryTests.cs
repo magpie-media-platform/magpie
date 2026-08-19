@@ -1816,6 +1816,7 @@ public class ContentHierarchyItemRepositoryTests
                 ContentItemId = contentItem.Id,
                 FileKind = "Video",
                 FilePath = "/movies/movie-with-files/movie.mkv",
+                PathKey = "/movies/movie-with-files/movie.mkv",
                 FileSize = 1024,
                 CreatedAt = DateTime.UtcNow
             },
@@ -1824,6 +1825,7 @@ public class ContentHierarchyItemRepositoryTests
                 ContentItemId = contentItem.Id,
                 FileKind = "Subtitle",
                 FilePath = "/movies/movie-with-files/movie.en.srt",
+                PathKey = "/movies/movie-with-files/movie.en.srt",
                 FileSize = 16,
                 CreatedAt = DateTime.UtcNow
             });
@@ -1894,6 +1896,7 @@ public class ContentHierarchyItemRepositoryTests
             ContentItemId = childContentItem.Id,
             FileKind = "Video",
             FilePath = "/episodes/season-with-files/s01e01.mkv",
+            PathKey = "/episodes/season-with-files/s01e01.mkv",
             FileSize = 2048,
             CreatedAt = DateTime.UtcNow
         });
@@ -7995,6 +7998,7 @@ public class ContentHierarchyItemRepositoryTests
             FileKind = "audio",
             MimeType = "audio/mpeg",
             FilePath = "/library/audiobooks/book/10 - Chapter 10.mp3",
+            PathKey = "/library/audiobooks/book/10 - Chapter 10.mp3",
             CreatedAt = DateTime.UtcNow
         });
         contentItem.MediaFiles.Add(new MediaFile
@@ -8002,6 +8006,7 @@ public class ContentHierarchyItemRepositoryTests
             FileKind = "audio",
             MimeType = "audio/mpeg",
             FilePath = "/library/audiobooks/book/2 - Chapter 2.mp3",
+            PathKey = "/library/audiobooks/book/2 - Chapter 2.mp3",
             CreatedAt = DateTime.UtcNow
         });
         contentItem.MediaFiles.Add(new MediaFile
@@ -8009,6 +8014,7 @@ public class ContentHierarchyItemRepositoryTests
             FileKind = "audio",
             MimeType = "audio/mpeg",
             FilePath = "/library/audiobooks/book/1 - Chapter 1.mp3",
+            PathKey = "/library/audiobooks/book/1 - Chapter 1.mp3",
             CreatedAt = DateTime.UtcNow
         });
         _context.ContentHierarchyItems.Add(item);
@@ -8976,6 +8982,7 @@ public class ContentHierarchyItemRepositoryTests
             ContentItemId = contentItem.Id,
             FileKind = "Video",
             FilePath = "/movies/detailed-movie/detailed.mkv",
+            PathKey = "/movies/detailed-movie/detailed.mkv",
             FileSize = 1024,
             CreatedAt = DateTime.UtcNow
         });

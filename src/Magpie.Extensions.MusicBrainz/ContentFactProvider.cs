@@ -51,62 +51,58 @@ internal sealed class ContentFactProvider(IMetadataService metadataService) : IC
             .ConfigureAwait(false);
         foreach (var metadata in relatedMetadata)
         {
-            var alternateTitles =
-                from alternate in metadata.AlternateTexts ?? []
-                where (string.Equals(alternate.Kind, "Name", StringComparison.OrdinalIgnoreCase) ||
-                    string.Equals(alternate.Kind, "Title", StringComparison.OrdinalIgnoreCase)) &&
-                    alternate.Text.Split([' '], StringSplitOptions.RemoveEmptyEntries).Length > 1
-                select alternate.Text;
-            artists.AddRange(
-                from title in alternateTitles.Prepend(metadata.OriginalTitle).Prepend(metadata.Title)
-                where !string.IsNullOrWhiteSpace(title)
-                select title.Trim());
+            artists.AddRange(GetTitles(metadata));
         }
+
+        artists = artists.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
 
         if (artists.Count == 0 && artist is not null)
         {
-            var fallback = target.Metadata.TryGetValue(artist.Id, out var artistMetadata)
-                ? artistMetadata.Title
-                : null;
-            if (fallback is not null)
+            if (target.Metadata.TryGetValue(artist.Id, out var artistMetadata))
             {
-                artists.Add(fallback);
+                artists.AddRange(GetTitles(artistMetadata));
             }
         }
 
-        var albumTitle = album is not null && target.Metadata.TryGetValue(album.Id, out var albumMetadata)
-            ? albumMetadata.Title
-            : null;
-        var trackTitle = track is not null && target.Metadata.TryGetValue(track.Id, out var trackMetadata)
-            ? trackMetadata.Title
-            : null;
+        var albumTitles = album is not null && target.Metadata.TryGetValue(album.Id, out var albumMetadata)
+            ? GetTitles(albumMetadata)
+            : [];
+        var trackTitles = track is not null && target.Metadata.TryGetValue(track.Id, out var trackMetadata)
+            ? GetTitles(trackMetadata)
+            : [];
         var rows = new List<(string? Artist, string? Album, string? Track)>();
         if (track is not null)
         {
-            if (trackTitle is null)
+            if (trackTitles.Count == 0)
             {
                 return [];
             }
 
             foreach (var artistTitle in artists)
             {
-                if (albumTitle is not null)
+                foreach (var trackTitle in trackTitles)
                 {
-                    rows.Add((artistTitle, albumTitle, trackTitle));
-                }
+                    foreach (var albumTitle in albumTitles)
+                    {
+                        rows.Add((artistTitle, albumTitle, trackTitle));
+                    }
 
-                rows.Add((artistTitle, null, trackTitle));
+                    rows.Add((artistTitle, null, trackTitle));
+                }
             }
         }
-        else if (albumTitle is not null)
+        else
         {
             foreach (var artistTitle in artists)
             {
-                rows.Add((artistTitle, albumTitle, null));
+                foreach (var albumTitle in albumTitles)
+                {
+                    rows.Add((artistTitle, albumTitle, null));
+                }
             }
         }
 
-        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var factSets = new List<IReadOnlyList<ContentFact>>();
         foreach (var row in rows)
         {
@@ -140,4 +136,11 @@ internal sealed class ContentFactProvider(IMetadataService metadataService) : IC
 
         return factSets;
     }
+
+    private static List<string> GetTitles(MaterializedMetadata metadata) =>
+        new[] { metadata.Title, metadata.OriginalTitle }
+            .Where(title => !string.IsNullOrWhiteSpace(title))
+            .Select(title => title!.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
 }

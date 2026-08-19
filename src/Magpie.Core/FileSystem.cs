@@ -9,9 +9,9 @@ using Magpie.Abstractions.Repositories;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Models.Storage;
+using Magpie.Sdk.Caching;
 using Magpie.Sdk.Services;
 
-using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
 
 namespace Magpie.Core;
@@ -19,9 +19,18 @@ namespace Magpie.Core;
 internal sealed class FileSystem(
     IBlockedFileTypeRepository blockedFileTypeRepository,
     IMimeMappingRepository mimeMappingRepository,
-    IMemoryCache cache,
+    ICacheFactory cacheFactory,
     ILogger<FileSystem> logger) : IFileSystem
 {
+    private readonly ICache _cache = cacheFactory.GetOrCreate(
+        "mime-type",
+        () => new CachePolicy
+        {
+            Freshness = TimeSpan.FromMinutes(5),
+            Retention = TimeSpan.FromMinutes(5),
+            MaximumEntries = 100_000,
+        });
+
     private static string CacheKey(string normalizedExtension) => $"mime:{normalizedExtension}";
 
     private static string? NormalizeExtension(string extensionOrPath)
@@ -88,16 +97,15 @@ internal sealed class FileSystem(
             return null;
         }
 
-        return await cache.GetOrCreateAsync(
+        return await _cache.GetOrAddAsync(
             CacheKey(normalized),
-            async entry =>
+            async token =>
             {
-                entry.AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(5);
-                entry.Size = 1;
-                var mapping = await mimeMappingRepository.GetByIdAsync(normalized, cancellationToken)
+                var mapping = await mimeMappingRepository.GetByIdAsync(normalized, token)
                     .ConfigureAwait(false);
                 return mapping?.MimeType;
-            }).ConfigureAwait(false);
+            },
+            cancellationToken).ConfigureAwait(false);
     }
 
     public bool FileExists(string path)
@@ -196,6 +204,29 @@ internal sealed class FileSystem(
         return !Path.IsPathRooted(relative) &&
             relative != ".." &&
             !relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal);
+    }
+
+    public bool PathContainsLink(string root, string path)
+    {
+        var relative = Path.GetRelativePath(root, path);
+        if (relative == ".")
+        {
+            return false;
+        }
+
+        var current = Path.GetFullPath(root);
+        foreach (var segment in relative.Split(
+            [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
+            StringSplitOptions.RemoveEmptyEntries))
+        {
+            current = Path.Combine(current, segment);
+            if ((File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     public bool HasPathPrefix(string path, string prefix)
@@ -345,13 +376,13 @@ internal sealed class FileSystem(
             var created = await mimeMappingRepository
                 .CreateAsync(mapping, actingUserId, cancellationToken)
                 .ConfigureAwait(false);
-            cache.Remove(CacheKey(normalized));
+            _cache.Remove(CacheKey(normalized));
             return created;
         }
 
         existing.MimeType = mimeType;
         await mimeMappingRepository.UpdateAsync(existing, actingUserId, cancellationToken).ConfigureAwait(false);
-        cache.Remove(CacheKey(normalized));
+        _cache.Remove(CacheKey(normalized));
         return existing;
     }
 
@@ -370,7 +401,7 @@ internal sealed class FileSystem(
         var deleted = await mimeMappingRepository
             .DeleteAsync(normalized, actingUserId, cancellationToken)
             .ConfigureAwait(false);
-        cache.Remove(CacheKey(normalized));
+        _cache.Remove(CacheKey(normalized));
         return deleted;
     }
 }

@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
@@ -5,6 +6,7 @@ using System.Threading.Tasks;
 using Magpie.Models;
 using Magpie.Models.Api;
 using Magpie.Models.Data;
+using Magpie.Models.Enums;
 using Magpie.Models.Storage;
 using Magpie.Sdk.Api;
 using Magpie.Sdk.Services;
@@ -41,7 +43,9 @@ internal sealed class SystemEndpointGroup : IApiEndpointGroup
         builder.MapGet("files", BrowseFilesAsync)
             .WithName(nameof(BrowseFilesAsync))
             .Produces<IReadOnlyList<FileSystemEntry>>()
-            .RequireAdmin();
+            .ProducesProblem(StatusCodes.Status400BadRequest)
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .RequireManager();
 
         builder.MapPost("restart", RestartHostAsync)
             .WithName(nameof(RestartHostAsync))
@@ -104,9 +108,36 @@ internal sealed class SystemEndpointGroup : IApiEndpointGroup
 
     internal async Task<IResult> BrowseFilesAsync(
         [FromServices] IFileSystem fileSystem,
+        [FromServices] IContentService contentService,
+        AuthenticatedUser user,
         string? path,
+        Guid? scope,
         CancellationToken cancellationToken)
     {
+        if (scope is { } contentId)
+        {
+            if (path is null)
+            {
+                var location = await contentService.GetFileBrowserLocationAsync(contentId, cancellationToken)
+                    .ConfigureAwait(false);
+                if (location is null)
+                {
+                    return Results.NotFound();
+                }
+
+                path = location.InitialPath;
+            }
+
+            var scopedEntries = await contentService.BrowseFilesAsync(contentId, path, cancellationToken)
+                .ConfigureAwait(false);
+            return scopedEntries is null ? Results.NotFound() : Results.Ok(scopedEntries);
+        }
+
+        if (!user.IsInRole(Role.Admin))
+        {
+            return Results.Forbid();
+        }
+
         var entries = await fileSystem.BrowseAsync(path, cancellationToken).ConfigureAwait(false);
 
         return Results.Ok(entries);

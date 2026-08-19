@@ -17,9 +17,33 @@ import type { ContentDetailItem } from '@/types/content';
 const mockUseExtensions = vi.fn();
 const mockUseSlotExtensions = vi.fn();
 
-vi.mock('./ImportContentFileDialog', () => ({
-    ImportContentFileDialog: ({ open, initialPath }: { open: boolean; initialPath?: string }) =>
-        open ? <div role="dialog" aria-label="Import host file" data-initial-path={initialPath} /> : null,
+vi.mock('@/components/configuration/FileBrowser', () => ({
+    FileBrowser: ({
+        open,
+        initialPath,
+        rootPath,
+        endpoint,
+        onSelect,
+    }: {
+        open: boolean;
+        initialPath?: string;
+        rootPath?: string;
+        endpoint?: string;
+        onSelect: (path: string) => void;
+    }) =>
+        open ? (
+            <div
+                role="dialog"
+                aria-label="Import file"
+                data-initial-path={initialPath}
+                data-root-path={rootPath}
+                data-endpoint={endpoint}
+            >
+                <button type="button" onClick={() => onSelect('/media/library/The Matrix/new.mkv')}>
+                    Select host file
+                </button>
+            </div>
+        ) : null,
 }));
 
 vi.mock('@/extensions/useExtensions', () => ({
@@ -74,6 +98,7 @@ const rawContentData: Record<string, RawDetailItem> = {
         factValues: { status: 'Ended' },
         externalIds: [
             { source: 'Provider H', value: 'tt0903747', url: 'https://www.provider-h.example/title/tt0903747/' },
+            { source: 'internal.magpie', value: 'technical-id' },
         ],
     },
     'content-files': {
@@ -129,6 +154,7 @@ const rawContentData: Record<string, RawDetailItem> = {
         posterUrl: 'https://example.com/gladiator.jpg',
         level: 'movie',
         levelLabel: 'Movie',
+        contentType: 'movie',
         monitoring: true,
         effectiveMonitoring: true,
         fulfillment: 'missing',
@@ -216,6 +242,9 @@ const mockUseContentList = vi.fn();
 const mockUseRefreshContent = vi.fn();
 const mockUseSearchContentReleases = vi.fn();
 const mockUseRescanContentMediaInfo = vi.fn();
+const mockUseMetadataInspector = vi.fn();
+const mockMetadataInspectorState = { isLoading: false, error: null as unknown };
+const mockMetadataInspectorRefetch = vi.fn();
 
 vi.mock('@/hooks/useContent', () => ({
     useContentHierarchy: (activeId: string | undefined, parentId: string | undefined, rootId: string | undefined) =>
@@ -226,7 +255,7 @@ vi.mock('@/hooks/useContent', () => ({
     useSearchContentReleases: (options?: unknown) => mockUseSearchContentReleases(options),
     useRescanContentMediaInfo: (options?: unknown) => mockUseRescanContentMediaInfo(options),
     useMediaServerLinks: () => ({ data: [], isLoading: false }),
-    useMetadataInspector: () => ({ data: undefined, isLoading: true, error: null }),
+    useMetadataInspector: (id: string | undefined) => mockUseMetadataInspector(id),
     usePatchMetadataInspector: () => ({ mutate: vi.fn(), isPending: false }),
     useReorderMetadataContributions: () => ({ mutateAsync: vi.fn(), isPending: false }),
     useUpdateContent: () => ({ mutate: vi.fn(), isPending: false }),
@@ -280,7 +309,31 @@ vi.mock('@/hooks/useLibraryTypes', async () => {
                     id: 'movie',
                     name: 'Movie',
                     slug: 'movie',
-                    levels: [{ slug: 'movie', displayName: 'Movie', parentSlug: null, subfolder: 'movies' }],
+                    levels: [
+                        {
+                            slug: 'movie',
+                            displayName: 'Movie',
+                            parentSlug: null,
+                            subfolder: 'movies',
+                            standardMetadataFields: [
+                                { field: 'OriginalTitle', displayName: 'Original title' },
+                                { field: 'SortTitle', displayName: 'Sort title' },
+                                { field: 'Language', displayName: 'Language' },
+                                { field: 'PublishDate', displayName: 'Publish date' },
+                                { field: 'Duration', displayName: 'Duration' },
+                                { field: 'SequenceNumber', displayName: 'Sequence number' },
+                                { field: 'ProductionStatus', displayName: 'Production status' },
+                                { field: 'Established', displayName: 'Established' },
+                                { field: 'Dissolved', displayName: 'Dissolved' },
+                                { field: 'BirthDate', displayName: 'Birth date' },
+                                { field: 'DeathDate', displayName: 'Death date' },
+                                { field: 'ContentRatings', displayName: 'Content ratings' },
+                                { field: 'Genres', displayName: 'Genres' },
+                                { field: 'Previews', displayName: 'Previews' },
+                            ],
+                            customMetadataFields: [{ key: 'network', displayName: 'Network' }],
+                        },
+                    ],
                 },
                 {
                     id: 'tv',
@@ -291,6 +344,23 @@ vi.mock('@/hooks/useLibraryTypes', async () => {
                             slug: 'show',
                             displayName: 'Show',
                             parentSlug: null,
+                            standardMetadataFields: [
+                                { field: 'OriginalTitle', displayName: 'Original title' },
+                                { field: 'SortTitle', displayName: 'Sort title' },
+                                { field: 'Language', displayName: 'Language' },
+                                { field: 'PublishDate', displayName: 'Publish date' },
+                                { field: 'Duration', displayName: 'Duration' },
+                                { field: 'SequenceNumber', displayName: 'Sequence number' },
+                                { field: 'ProductionStatus', displayName: 'Production status' },
+                                { field: 'Established', displayName: 'Established' },
+                                { field: 'Dissolved', displayName: 'Dissolved' },
+                                { field: 'BirthDate', displayName: 'Birth date' },
+                                { field: 'DeathDate', displayName: 'Death date' },
+                                { field: 'ContentRatings', displayName: 'Content ratings' },
+                                { field: 'Genres', displayName: 'Genres' },
+                                { field: 'Previews', displayName: 'Previews' },
+                            ],
+                            customMetadataFields: [{ key: 'network', displayName: 'Network' }],
                             standardFactFields: [{ key: 'status', displayName: 'Status' }],
                         },
                         { slug: 'season', displayName: 'Season', parentSlug: 'show' },
@@ -365,10 +435,32 @@ vi.mock('@/hooks/useContentReleases', async () => {
     };
 });
 
-const { mockHasRole, mockDeleteFileMutate, mockDeleteFilePending, mockRemoveContentMutate } = vi.hoisted(() => ({
+const {
+    mockHasRole,
+    mockDeleteFileMutate,
+    mockDeleteFilePending,
+    mockAttachFileMutate,
+    mockAttachFilePending,
+    mockUnlinkFileMutate,
+    mockUnlinkFilePending,
+    mockFileBrowserLocation,
+    mockFileBrowserLocationRefetch,
+    mockRemoveContentMutate,
+} = vi.hoisted(() => ({
     mockHasRole: { current: (_minRole: number): boolean => true },
     mockDeleteFileMutate: vi.fn(),
     mockDeleteFilePending: { current: false as boolean },
+    mockAttachFileMutate: vi.fn(),
+    mockAttachFilePending: { current: false as boolean },
+    mockUnlinkFileMutate: vi.fn(),
+    mockUnlinkFilePending: { current: false as boolean },
+    mockFileBrowserLocation: {
+        current: {
+            rootPath: '/media/library',
+            initialPath: '/media/library/The Matrix',
+        } as { rootPath: string; initialPath: string } | undefined,
+    },
+    mockFileBrowserLocationRefetch: vi.fn(),
     mockRemoveContentMutate: vi.fn(),
 }));
 
@@ -392,6 +484,15 @@ vi.mock('@/hooks/useDeleteContentFile', () => ({
     useDeleteContentFile: () => ({
         mutate: mockDeleteFileMutate,
         isPending: mockDeleteFilePending.current,
+    }),
+}));
+
+vi.mock('@/hooks/useContentFileMutations', () => ({
+    useAttachContentFile: () => ({ mutate: mockAttachFileMutate, isPending: mockAttachFilePending.current }),
+    useUnlinkContentFile: () => ({ mutate: mockUnlinkFileMutate, isPending: mockUnlinkFilePending.current }),
+    useContentFileBrowserLocation: () => ({
+        data: mockFileBrowserLocation.current,
+        refetch: mockFileBrowserLocationRefetch,
     }),
 }));
 
@@ -496,6 +597,19 @@ describe('ContentDetailPage', () => {
         mockLatestDownloadLoading.current = false;
         mockHasRole.current = () => true;
         mockDeleteFilePending.current = false;
+        mockAttachFilePending.current = false;
+        mockUnlinkFilePending.current = false;
+        mockFileBrowserLocation.current = {
+            rootPath: '/media/library',
+            initialPath: '/media/library/The Matrix',
+        };
+        mockFileBrowserLocationRefetch.mockResolvedValue({
+            data: mockFileBrowserLocation.current,
+            error: null,
+            isError: false,
+        });
+        mockMetadataInspectorState.isLoading = false;
+        mockMetadataInspectorState.error = null;
         mockUseExtensions.mockReturnValue(defaultContext);
         mockUseSlotExtensions.mockReturnValue(noExtensions);
 
@@ -541,6 +655,134 @@ describe('ContentDetailPage', () => {
         mockUseSearchContentReleases.mockReturnValue(mockMutationResult);
         mockUseRescanContentMediaInfo.mockReturnValue(mockMutationResult);
         mockUseJobExecution.mockReturnValue({ job: null, isLoading: false, error: null, refetch: vi.fn() });
+        mockUseMetadataInspector.mockImplementation((id: string | undefined) => {
+            const item = id ? mockContentData[id] : undefined;
+            return {
+                data:
+                    item && !mockMetadataInspectorState.isLoading && !mockMetadataInspectorState.error
+                        ? {
+                              materialized: {
+                                  containerId: `metadata-${item.id}`,
+                                  contentHierarchyItemId: item.id,
+                                  title: item.title,
+                                  overview: item.overview,
+                                  publishDate: item.publishDate,
+                                  productionStatus: item.factValues?.status as string | undefined,
+                                  originalTitle: item.id === 'content-1' ? 'BrBa' : undefined,
+                                  sortTitle: item.id === 'content-1' ? 'Breaking Bad, The' : undefined,
+                                  language: item.id === 'content-1' ? 'en' : undefined,
+                                  duration: item.id === 'content-1' ? '01:42:30' : undefined,
+                                  sequenceNumber: item.id === 'content-1' ? 7 : undefined,
+                                  established: item.id === 'content-1' ? '2000-01-02T15:30:00-08:00' : undefined,
+                                  dissolved: item.id === 'content-1' ? '2001-02-03T00:00:00Z' : undefined,
+                                  birthDate: item.id === 'content-1' ? '1956-03-07T00:00:00Z' : undefined,
+                                  deathDate: item.id === 'content-1' ? '2020-12-01T00:00:00Z' : undefined,
+                                  alternateTexts:
+                                      item.id === 'content-1'
+                                          ? [
+                                                {
+                                                    id: 'alternate-2',
+                                                    ordinal: 2,
+                                                    kind: 'Title',
+                                                    text: 'Los Pollos',
+                                                    language: 'es',
+                                                },
+                                                {
+                                                    id: 'alternate-1',
+                                                    ordinal: 1,
+                                                    kind: 'Description',
+                                                    text: 'Chimie',
+                                                    language: 'fr',
+                                                },
+                                            ]
+                                          : [],
+                                  contentRatings:
+                                      item.id === 'content-1'
+                                          ? [
+                                                { id: 'rating-2', ordinal: 2, body: 'BBFC', rating: '15' },
+                                                { id: 'rating-1', ordinal: 1, body: 'MPAA', rating: 'TV-MA' },
+                                            ]
+                                          : [],
+                                  awards:
+                                      item.id === 'content-1'
+                                          ? [
+                                                {
+                                                    id: 'award-1',
+                                                    ordinal: 1,
+                                                    body: 'Emmy Awards',
+                                                    name: 'Outstanding Drama Series',
+                                                    status: 'Won',
+                                                    year: 2013,
+                                                },
+                                                {
+                                                    id: 'award-2',
+                                                    ordinal: 2,
+                                                    body: 'Emmy Awards',
+                                                    name: 'Outstanding Drama Series',
+                                                    status: 'nominated',
+                                                    year: 2014,
+                                                },
+                                                {
+                                                    id: 'award-3',
+                                                    ordinal: 3,
+                                                    body: 'Emmy Awards',
+                                                    name: 'Ensemble Prize',
+                                                    category: 'Repertory',
+                                                },
+                                                {
+                                                    id: 'award-4',
+                                                    ordinal: 4,
+                                                    body: 'Critics Circle',
+                                                    name: 'Breakthrough Performance',
+                                                    status: 'finalist',
+                                                    year: 2009,
+                                                },
+                                            ]
+                                          : [],
+                                  relationships: [
+                                      {
+                                          id: `relationship-${item.id}`,
+                                          ordinal: 0,
+                                          kind: 'Related',
+                                          relatedMetadataContainerId: `subject-${item.id}`,
+                                      },
+                                  ],
+                                  customMetadata:
+                                      item.id === 'content-1'
+                                          ? [
+                                                { id: 'custom-1', key: 'network', value: 'AMC' },
+                                                { id: 'custom-2', key: 'provider-secret', value: 'hidden' },
+                                            ]
+                                          : [],
+                                  externalIds: item.externalIds?.map((externalId, ordinal) => ({
+                                      id: `external-${ordinal}`,
+                                      ordinal,
+                                      value: externalId.value,
+                                      source: externalId.source,
+                                  })),
+                                  genres: item.genres?.map((name, ordinal) => ({
+                                      id: `genre-${ordinal}`,
+                                      ordinal,
+                                      name,
+                                  })),
+                                  previews: item.previews.map((preview, ordinal) => ({
+                                      id: `preview-${ordinal}`,
+                                      ordinal,
+                                      ...preview,
+                                  })),
+                                  images: item.images.map((image, ordinal) => ({ ...image, ordinal })),
+                              },
+                              contributions: [],
+                              subjects: {},
+                          }
+                        : undefined,
+                isLoading: mockMetadataInspectorState.isLoading,
+                error:
+                    mockMetadataInspectorState.error ??
+                    (item || mockMetadataInspectorState.isLoading ? null : createApiError(404, 'Not found')),
+                refetch: mockMetadataInspectorRefetch,
+            };
+        });
     });
 
     describe('page structure', () => {
@@ -741,10 +983,11 @@ describe('ContentDetailPage', () => {
             ).toEqual(['Monitoring', 'Path', 'Root Folder', 'Quality', 'Tags', 'Publish Date', 'Links', 'Genres']);
         });
 
-        it('keeps the publish date row with the standard fallback when no date is materialized', async () => {
+        it('omits the publish date row when no date is materialized', async () => {
             renderWithRouter('content-3');
 
-            expect(await screen.findByTestId('content-publish-date-row')).toHaveTextContent('Publish Date--');
+            await screen.findByRole('heading', { name: /Dune: Part Two/i, level: 1 });
+            expect(screen.queryByTestId('content-publish-date-row')).not.toBeInTheDocument();
         });
 
         it('renders the fulfillment status badge', async () => {
@@ -772,6 +1015,19 @@ describe('ContentDetailPage', () => {
 
             renderWithRouter('content-1');
             expect(screen.getByTestId('content-detail-page__loading')).toBeInTheDocument();
+        });
+
+        it('preserves a conditional-tab deep link while metadata is loading', async () => {
+            mockMetadataInspectorState.isLoading = true;
+
+            renderWithRouter('content-trailers', undefined, undefined, '?tab=previews&view=grid');
+
+            expect(screen.getByTestId('content-detail-page__loading')).toBeInTheDocument();
+            await waitFor(() => {
+                expect(screen.getByTestId('content-detail-page__location-search')).toHaveTextContent(
+                    '?tab=previews&view=grid',
+                );
+            });
         });
     });
 
@@ -1293,6 +1549,155 @@ describe('ContentDetailPage', () => {
             expect(within(tabPanel).getAllByText(/no files attached/i).length).toBeGreaterThan(0);
         });
 
+        it('opens the host-file picker at the effective path within the configured root', async () => {
+            const user = userEvent.setup();
+            renderWithRouter('content-files', undefined, undefined, '?tab=files');
+
+            await user.click(await screen.findByRole('button', { name: 'Import file' }));
+
+            const dialog = screen.getByRole('dialog', { name: 'Import file' });
+            expect(dialog).toHaveAttribute('data-initial-path', '/media/library/The Matrix');
+            expect(dialog).toHaveAttribute('data-root-path', '/media/library');
+            expect(dialog).toHaveAttribute('data-endpoint', '/system/files?scope=content-files');
+            expect(mockFileBrowserLocationRefetch).toHaveBeenCalledTimes(1);
+        });
+
+        it('refetches the browser location every time the host-file picker opens', async () => {
+            const user = userEvent.setup();
+            renderWithRouter('content-files', undefined, undefined, '?tab=files');
+
+            await user.click(await screen.findByRole('button', { name: 'Import file' }));
+            await user.click(screen.getByRole('button', { name: 'Select host file' }));
+            await user.click(screen.getByRole('button', { name: 'Import file' }));
+
+            expect(mockFileBrowserLocationRefetch).toHaveBeenCalledTimes(2);
+        });
+
+        it('fetches the browser location before opening the host-file picker when it is not cached', async () => {
+            const user = userEvent.setup();
+            mockFileBrowserLocation.current = undefined;
+            mockFileBrowserLocationRefetch.mockImplementation(async () => {
+                mockFileBrowserLocation.current = {
+                    rootPath: '/media/library',
+                    initialPath: '/media/library/The Matrix',
+                };
+                return { data: mockFileBrowserLocation.current, error: null, isError: false };
+            });
+            renderWithRouter('content-files', undefined, undefined, '?tab=files');
+
+            await user.click(await screen.findByRole('button', { name: 'Import file' }));
+
+            expect(mockFileBrowserLocationRefetch).toHaveBeenCalledTimes(1);
+            expect(await screen.findByRole('dialog', { name: 'Import file' })).toBeInTheDocument();
+        });
+
+        it('shows an error when the browser location cannot be fetched', async () => {
+            const user = userEvent.setup();
+            mockFileBrowserLocation.current = undefined;
+            mockFileBrowserLocationRefetch.mockResolvedValue({
+                data: undefined,
+                error: createApiError(503, 'Browser offline'),
+                isError: true,
+            });
+            renderWithRouter('content-files', undefined, undefined, '?tab=files');
+
+            await user.click(await screen.findByRole('button', { name: 'Import file' }));
+
+            expect(await screen.findByText('File browser unavailable')).toBeInTheDocument();
+            expect(screen.getByText('Browser offline')).toBeInTheDocument();
+        });
+
+        it('does not open the host-file picker with stale data after a failed refresh', async () => {
+            const user = userEvent.setup();
+            mockFileBrowserLocationRefetch.mockResolvedValue({
+                data: mockFileBrowserLocation.current,
+                error: createApiError(503, 'Browser offline'),
+                isError: true,
+            });
+            renderWithRouter('content-files', undefined, undefined, '?tab=files');
+
+            await user.click(await screen.findByRole('button', { name: 'Import file' }));
+
+            expect(await screen.findByText('File browser unavailable')).toBeInTheDocument();
+            expect(screen.queryByRole('dialog', { name: 'Import file' })).not.toBeInTheDocument();
+        });
+
+        it('attaches the selected host file and identifies primary content', async () => {
+            const user = userEvent.setup();
+            mockAttachFileMutate.mockImplementation((_variables, options) => {
+                options.onSuccess({
+                    mediaFile: { id: 'new-file', filePath: '/media/library/The Matrix/new.mkv' },
+                    isPrimary: true,
+                });
+            });
+            renderWithRouter('content-files', undefined, undefined, '?tab=files');
+
+            await user.click(await screen.findByRole('button', { name: 'Import file' }));
+            await user.click(screen.getByRole('button', { name: 'Select host file' }));
+
+            expect(mockAttachFileMutate).toHaveBeenCalledWith(
+                {
+                    contentHierarchyItemId: 'content-files',
+                    filePath: '/media/library/The Matrix/new.mkv',
+                },
+                expect.any(Object),
+            );
+            expect(await screen.findByText('The file is attached as primary content.')).toBeInTheDocument();
+        });
+
+        it('confirms that unlink keeps the host file before removing the association', async () => {
+            const user = userEvent.setup();
+            renderWithRouter('content-files', undefined, undefined, '?tab=files');
+
+            await user.click(await screen.findByRole('button', { name: 'Unlink the-matrix.mkv' }));
+
+            const dialog = screen.getByRole('dialog');
+            expect(within(dialog).getByText(/removes only the association/i)).toBeInTheDocument();
+            expect(within(dialog).getByText(/host file stays on disk/i)).toBeInTheDocument();
+            await user.click(within(dialog).getByRole('button', { name: 'Unlink' }));
+            expect(mockUnlinkFileMutate).toHaveBeenCalledWith(
+                { contentHierarchyItemId: 'content-files', mediaFileId: 'media-file-1' },
+                expect.any(Object),
+            );
+        });
+
+        it('keeps the unlink dialog open and shows the server error after failure', async () => {
+            const user = userEvent.setup();
+            mockUnlinkFileMutate.mockImplementation((_variables, options) => {
+                options.onError(new Error('The association could not be removed.'));
+            });
+            renderWithRouter('content-files', undefined, undefined, '?tab=files');
+
+            await user.click(await screen.findByRole('button', { name: 'Unlink the-matrix.mkv' }));
+            await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Unlink' }));
+
+            expect(screen.getByRole('dialog')).toBeInTheDocument();
+            expect(await screen.findByText('The association could not be removed.')).toBeInTheDocument();
+        });
+
+        it('blocks repeated unlink submissions while the request is pending', async () => {
+            const user = userEvent.setup();
+            mockUnlinkFilePending.current = true;
+            renderWithRouter('content-files', undefined, undefined, '?tab=files');
+
+            await user.click(await screen.findByRole('button', { name: 'Unlink the-matrix.mkv' }));
+
+            expect(within(screen.getByRole('dialog')).getByRole('button', { name: 'Unlinking...' })).toBeDisabled();
+            expect(document.querySelector('[data-action="unlink-file"]')).toBeDisabled();
+            expect(document.querySelector('[data-action="delete-file"]')).toBeDisabled();
+            expect(mockUnlinkFileMutate).not.toHaveBeenCalled();
+        });
+
+        it('hides file mutation actions from users below Manager', async () => {
+            mockHasRole.current = () => false;
+            renderWithRouter('content-files', undefined, undefined, '?tab=files');
+
+            await screen.findByText('the-matrix.mkv');
+            expect(screen.queryByRole('button', { name: 'Import file' })).not.toBeInTheDocument();
+            expect(screen.queryByRole('button', { name: 'Unlink the-matrix.mkv' })).not.toBeInTheDocument();
+            expect(screen.queryByRole('button', { name: 'Delete the-matrix.mkv' })).not.toBeInTheDocument();
+        });
+
         it('switches to Activity tab when clicked', async () => {
             const user = userEvent.setup();
             renderWithRouter('content-1');
@@ -1328,6 +1733,17 @@ describe('ContentDetailPage', () => {
 
             expect(screen.getByTestId('content-detail-page__location-search')).toHaveTextContent(
                 '?tab=files&view=grid',
+            );
+        });
+
+        it('opens a metadata-backed Previews deep link without rewriting it', async () => {
+            renderWithRouter('content-trailers', undefined, undefined, '?tab=previews&view=grid');
+
+            await waitFor(() => {
+                expect(screen.getByRole('tab', { name: /previews/i })).toHaveAttribute('aria-selected', 'true');
+            });
+            expect(screen.getByTestId('content-detail-page__location-search')).toHaveTextContent(
+                '?tab=previews&view=grid',
             );
         });
 
@@ -1397,6 +1813,9 @@ describe('ContentDetailPage', () => {
             const facts = document.querySelector('[data-component="content-facts"]') as HTMLElement;
             expect(facts.closest('[role="tabpanel"]')).not.toBeNull();
             expect(within(facts).getByText('Ended')).toBeInTheDocument();
+            expect(
+                within(screen.getByRole('region', { name: 'Content supporting information' })).queryByText('Ended'),
+            ).not.toBeInTheDocument();
             expect(within(facts).getByText('tt0903747')).toBeInTheDocument();
             expect(within(facts).queryByText('Drama')).not.toBeInTheDocument();
         });
@@ -1818,9 +2237,113 @@ describe('ContentDetailPage', () => {
 
             expect(facts.closest('[role="tabpanel"]')).not.toBeNull();
             expect(within(facts).getByText('Ended')).toBeInTheDocument();
+            expect(
+                within(screen.getByRole('region', { name: 'Content supporting information' })).queryByText('Ended'),
+            ).not.toBeInTheDocument();
             expect(within(facts).getByText('tt0903747')).toBeInTheDocument();
             expect(within(facts).queryByText('Drama')).not.toBeInTheDocument();
             expect(within(facts).queryByText('Crime')).not.toBeInTheDocument();
+        });
+
+        it('renders the exact title, alternate-text, and declared custom rows', async () => {
+            renderWithRouter('content-1', undefined, undefined, '?tab=details');
+            const details = await waitFor(() => screen.getByRole('region', { name: 'Details' }));
+
+            expect(
+                within(details)
+                    .getAllByRole('term')
+                    .map((node) => node.textContent),
+            ).toEqual([
+                'Original title',
+                'Sort title',
+                'Language',
+                'Duration',
+                'Sequence number',
+                'Production status',
+                'Established',
+                'Dissolved',
+                'Birth date',
+                'Death date',
+                'Network',
+            ]);
+            expect(
+                within(screen.getByRole('heading', { name: 'Alternate texts' }).closest('section') as HTMLElement)
+                    .getAllByRole('term')
+                    .map((node) => node.textContent),
+            ).toEqual(['Descriptionfr', 'Titlees']);
+            expect(
+                within(details)
+                    .getAllByRole('definition')
+                    .map((node) => node.textContent),
+            ).toEqual([
+                'BrBa',
+                'Breaking Bad, The',
+                'en',
+                '1 h 42 m',
+                '7',
+                'Ended',
+                'Jan 2, 2000',
+                'Feb 3, 2001',
+                'Mar 7, 1956',
+                'Dec 1, 2020',
+                'AMC',
+            ]);
+            expect(
+                within(screen.getByRole('heading', { name: 'Alternate texts' }).closest('section') as HTMLElement)
+                    .getAllByRole('definition')
+                    .map((node) => node.textContent),
+            ).toEqual(['Chimie', 'Los Pollos']);
+            expect(within(details).queryByText('hidden')).not.toBeInTheDocument();
+        });
+
+        it('renders grouped awards under the overview in materialized order', async () => {
+            renderWithRouter('content-1');
+            const awards = await waitFor(() => {
+                const node = document.querySelector('[data-component="content-awards-panel"]');
+                expect(node).toBeInTheDocument();
+                return node as HTMLElement;
+            });
+
+            expect(awards.closest('header')).toBe(screen.getByRole('banner'));
+            expect(
+                within(awards)
+                    .getAllByRole('term')
+                    .map((node) => node.textContent),
+            ).toEqual(['Emmy Awards', 'Critics Circle']);
+            expect(Array.from(awards.querySelectorAll('.awards-panel__entry')).map((node) => node.textContent)).toEqual(
+                [
+                    'Outstanding Drama Series 2013, 2014 (nominated)',
+                    'Ensemble Prize · Repertory',
+                    'Breakthrough Performance 2009 (finalist)',
+                ],
+            );
+        });
+
+        it('appends every content rating to the header badge row', async () => {
+            renderWithRouter('content-1');
+
+            const header = await screen.findByRole('banner');
+            expect(
+                Array.from(header.querySelectorAll('.content-details-header__badges > .badge')).map(
+                    (badge) => badge.textContent,
+                ),
+            ).toEqual(['Show', 'Fulfilled']);
+            expect(
+                Array.from(header.querySelectorAll('.content-details-header__rating')).map((chip) => chip.textContent),
+            ).toEqual(['MPAATV-MA', 'BBFC15']);
+        });
+
+        it('formats the materialized duration for reading', async () => {
+            renderWithRouter('content-1', undefined, undefined, '?tab=details');
+
+            expect(await screen.findByText('1 h 42 m')).toBeInTheDocument();
+        });
+
+        it('keeps internal external IDs out of Links and Details', async () => {
+            renderWithRouter('content-1', undefined, undefined, '?tab=details');
+
+            await screen.findByText('tt0903747');
+            expect(screen.queryByText('technical-id')).not.toBeInTheDocument();
         });
     });
 
@@ -1844,14 +2367,12 @@ describe('ContentDetailPage', () => {
             expect(previewsTab).toHaveTextContent('2');
         });
 
-        it('keeps the Previews tab (without a count) but hides the poster preview when no previews exist', async () => {
+        it('omits the Previews tab and poster preview when no previews exist', async () => {
             renderWithRouter('content-3');
             await waitFor(() => {
                 expect(screen.getByRole('heading', { name: /Dune: Part Two/i })).toBeInTheDocument();
             });
-            const previewsTab = screen.getByRole('tab', { name: /previews/i });
-            expect(previewsTab).toBeInTheDocument();
-            expect(previewsTab).not.toHaveTextContent(/\d/);
+            expect(screen.queryByRole('tab', { name: /previews/i })).not.toBeInTheDocument();
             expect(screen.queryByTestId('content-details-header__poster--preview')).not.toBeInTheDocument();
             expect(screen.getByAltText('Dune: Part Two artwork')).toBeInTheDocument();
         });
@@ -2022,6 +2543,33 @@ describe('ContentDetailPage', () => {
 
             await user.click(screen.getByRole('button', { name: /retry/i }));
             expect(mockRefetch).toHaveBeenCalled();
+        });
+
+        it('shows a scoped metadata error beside the surviving page and retries the inspector query', async () => {
+            mockMetadataInspectorState.error = createApiError(500, 'Inspector failed');
+
+            const user = userEvent.setup();
+            renderWithRouter('content-1');
+
+            const alert = await screen.findByTestId('content-metadata-error');
+            expect(within(alert).getByText('Failed to Load Content Metadata')).toBeInTheDocument();
+            expect(within(alert).getByText('Inspector failed')).toBeInTheDocument();
+
+            expect(screen.getByRole('banner')).toBeInTheDocument();
+            expect(screen.getByRole('heading', { name: /Breaking Bad/i })).toBeInTheDocument();
+            expect(screen.getByTestId('content-policy-settings')).toBeInTheDocument();
+            expect(screen.queryByRole('heading', { name: 'Content Not Found' })).not.toBeInTheDocument();
+
+            await user.click(within(alert).getByRole('button', { name: /retry/i }));
+            expect(mockMetadataInspectorRefetch).toHaveBeenCalled();
+        });
+
+        it('shows not found rather than a metadata error when both queries 404', async () => {
+            renderWithRouter('nonexistent-id');
+
+            expect(await screen.findByRole('heading', { name: 'Content Not Found' })).toBeInTheDocument();
+            expect(screen.queryByTestId('content-metadata-error')).not.toBeInTheDocument();
+            expect(screen.getByRole('link', { name: /library/i })).toHaveAttribute('href', '/library');
         });
     });
 

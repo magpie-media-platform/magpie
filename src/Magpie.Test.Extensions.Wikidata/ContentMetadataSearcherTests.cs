@@ -156,7 +156,7 @@ internal sealed class ContentMetadataSearcherTests
                 ]
             }
         };
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetEntityAsync(
             "Q100",
             It.IsAny<RequestContext>(),
@@ -358,7 +358,7 @@ internal sealed class ContentMetadataSearcherTests
             Assert.That(result.Supported, Is.True);
             Assert.That(result.Matches, Is.Empty);
             Assert.That(result.PageInfo.HasMore, Is.False);
-            Assert.That(result.Warnings.Single(), Does.Contain("searches for shows only"));
+            Assert.That(result.Warnings, Is.Empty);
         }
     }
 
@@ -382,10 +382,7 @@ internal sealed class ContentMetadataSearcherTests
             {
                 Hits = [new SearchHit { Qid = "Q3", TypeQid = "Q5398426", Label = "Mixed Scope Show" }],
                 PageInfo = new ProviderSearchPageInfo { RequestedPage = 1, HasMore = false },
-                Warnings =
-                [
-                    "Wikidata cannot safely apply Duration; that criterion was not sent to Wikidata."
-                ]
+                Warnings = ["execution warning"]
             });
         var subject = new ContentMetadataSearcher(
             settingsResolver.Object,
@@ -442,7 +439,7 @@ internal sealed class ContentMetadataSearcherTests
                 Has.Some.Contains("searches for shows only"));
             Assert.That(
                 result.Warnings.Select(warning => warning),
-                Has.Some.Contains("cannot safely apply Duration"));
+                Does.Contain("execution warning"));
         }
     }
 
@@ -479,7 +476,7 @@ internal sealed class ContentMetadataSearcherTests
         {
             Assert.That(result.Supported, Is.True);
             Assert.That(result.Matches, Is.Empty);
-            Assert.That(result.Warnings.Single(), Does.Contain("searches for shows only"));
+            Assert.That(result.Warnings, Is.Empty);
         }
     }
 
@@ -515,7 +512,7 @@ internal sealed class ContentMetadataSearcherTests
     }
 
     [Test]
-    public async Task AdvancedSearchAsync_ReturnsWarnedUnsupportedWithoutRequest_WhenScopeCannotBeEvaluated()
+    public async Task AdvancedSearchAsync_ReturnsEmptyWithoutWarning_WhenScopeCannotBeEvaluated()
     {
         // Arrange
         var subject = new ContentMetadataSearcher(
@@ -545,9 +542,9 @@ internal sealed class ContentMetadataSearcherTests
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(result.Supported, Is.False);
+            Assert.That(result.Supported, Is.True);
             Assert.That(result.Matches, Is.Empty);
-            Assert.That(result.Warnings.Single(), Does.Contain("cannot evaluate"));
+            Assert.That(result.Warnings, Is.Empty);
         }
     }
 }

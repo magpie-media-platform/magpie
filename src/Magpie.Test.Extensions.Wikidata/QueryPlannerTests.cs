@@ -183,7 +183,7 @@ internal sealed class QueryPlannerTests
     }
 
     [Test]
-    public void Plan_NegativeOnly_ReturnsEmptyAndUnsupportedApplication()
+    public void Plan_NegativeOnly_ReturnsEmptyWithoutWarning()
     {
         // Arrange
         var criteria = new MetadataCriteria
@@ -202,9 +202,7 @@ internal sealed class QueryPlannerTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(result.Strategy, Is.EqualTo(QueryStrategy.Empty));
-            Assert.That(
-                result.Warnings.Select(warning => warning),
-                Has.Some.Contains("requires a supported positive"));
+            Assert.That(result.Warnings, Is.Empty);
         }
     }
 
@@ -245,22 +243,11 @@ internal sealed class QueryPlannerTests
             Assert.That(residual.TextField, Is.EqualTo(ResidualTextField.Title));
             Assert.That(residual.Criterion!.Operator, Is.EqualTo(CriteriaValueOperator.Regex));
             Assert.That(residual.Criterion.Values, Is.EqualTo(["^The"]));
-            Assert.That(
-                result.Warnings.Select(warning => warning),
-                Has.Some.Contains("requires a supported positive"));
-            Assert.That(
-                result.Warnings.Select(warning => warning),
-                Has.Some.Contains(nameof(MetadataCriteria.Title)));
-            Assert.That(
-                result.Warnings.Select(warning => warning),
-                Has.None.Contains("cannot safely apply"));
+            Assert.That(result.Warnings, Is.Empty);
             Assert.That(disposition.Source, Is.EqualTo("Title.And[0]"));
             Assert.That(disposition.Disposition, Is.EqualTo(CriterionDispositionKind.Residual));
             Assert.That(disposition.Reason, Does.Contain("no selective server bound"));
-            Assert.That(disposition.Warning, Does.Contain("supported positive server bound"));
-            Assert.That(
-                result.Warnings.Select(warning => warning),
-                Does.Contain(disposition.Warning));
+            Assert.That(disposition.Warning, Is.Null);
         }
     }
 
@@ -382,15 +369,168 @@ internal sealed class QueryPlannerTests
 
         // Act
         var result = subject.Plan(EntityKind.Movie, criteria, 1);
+        var disposition = result.CriterionDispositions.Single();
 
         // Assert
         using (Assert.EnterMultipleScope())
         {
+            Assert.That(result.Strategy, Is.EqualTo(QueryStrategy.Empty));
             Assert.That(result.Filters, Is.Empty);
             Assert.That(result.ResidualFilters, Is.Empty);
+            Assert.That(result.Warnings, Is.Empty);
+            Assert.That(disposition.Disposition, Is.EqualTo(CriterionDispositionKind.Refused));
+        }
+    }
+
+    [Test]
+    public void Plan_UsesSupportedExternalIdAlternative_WhenSiblingAlternativeIsUnsupported()
+    {
+        // Arrange
+        var criteria = new MetadataCriteria
+        {
+            ExternalIds = new CollectionCriteria<ExternalIdCriteria>
+            {
+                Some =
+                [
+                    [
+                        new ExternalIdCriteria
+                        {
+                            Source = new CriteriaSet<PropertyCriterion<string>>
+                            {
+                                And = [new PropertyCriterion<string> { Values = ["P999999"] }]
+                            },
+                            Value = new CriteriaSet<PropertyCriterion<string>>
+                            {
+                                And = [new PropertyCriterion<string> { Values = ["unsafe"] }]
+                            }
+                        },
+                        new ExternalIdCriteria
+                        {
+                            Source = new CriteriaSet<PropertyCriterion<string>>
+                            {
+                                And = [new PropertyCriterion<string> { Values = ["imdb"] }]
+                            },
+                            Value = new CriteriaSet<PropertyCriterion<string>>
+                            {
+                                And = [new PropertyCriterion<string> { Values = ["tt0133093"] }]
+                            }
+                        }
+                    ]
+                ]
+            }
+        };
+        var subject = new QueryPlanner();
+
+        // Act
+        var result = subject.Plan(EntityKind.Movie, criteria, 1);
+        var filter = result.Filters.Single();
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.Strategy, Is.EqualTo(QueryStrategy.Structured));
+            Assert.That(filter.Kind, Is.EqualTo(QueryFilterKind.ExternalId));
+            Assert.That(filter.Alternatives.Single().ExternalIds.Single().Value, Is.EqualTo("tt0133093"));
+            Assert.That(result.Warnings, Is.Empty);
+        }
+    }
+
+    [Test]
+    public void Plan_KeepsSupportedExternalIdSource_WhenSiblingSourceIsUnsupported()
+    {
+        // Arrange
+        var criteria = new MetadataCriteria
+        {
+            ExternalIds = new CollectionCriteria<ExternalIdCriteria>
+            {
+                Some =
+                [[
+                    new ExternalIdCriteria
+                    {
+                        Source = new CriteriaSet<PropertyCriterion<string>>
+                        {
+                            And =
+                            [
+                                new PropertyCriterion<string>
+                                {
+                                    Operator = CriteriaValueOperator.In,
+                                    Values = ["imdb", "tvdb"]
+                                }
+                            ]
+                        },
+                        Value = new CriteriaSet<PropertyCriterion<string>>
+                        {
+                            And = [new PropertyCriterion<string> { Values = ["tt0133093"] }]
+                        }
+                    }
+                ]]
+            }
+        };
+        var subject = new QueryPlanner();
+
+        // Act
+        var plan = subject.Plan(EntityKind.Movie, criteria, 1);
+        var externalIds = plan.Filters.Single().Alternatives.Single().ExternalIds;
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(plan.Strategy, Is.EqualTo(QueryStrategy.Structured));
+            Assert.That(externalIds.Single().PropertyId, Is.EqualTo(Constants.ImdbPropertyId));
+            Assert.That(externalIds.Single().Value, Is.EqualTo("tt0133093"));
+            Assert.That(plan.Warnings, Is.Empty);
+        }
+    }
+
+    [Test]
+    public void Plan_ReturnsEmpty_WhenExternalIdExclusionSourceIsUnsupported()
+    {
+        // Arrange
+        var criteria = new MetadataCriteria
+        {
+            Title = new CriteriaSet<PropertyCriterion<string>>
+            {
+                And = [new PropertyCriterion<string> { Values = ["The Matrix"] }]
+            },
+            ExternalIds = new CollectionCriteria<ExternalIdCriteria>
+            {
+                None =
+                [
+                    new ExternalIdCriteria
+                    {
+                        Source = new CriteriaSet<PropertyCriterion<string>>
+                        {
+                            And =
+                            [
+                                new PropertyCriterion<string>
+                                {
+                                    Operator = CriteriaValueOperator.In,
+                                    Values = ["imdb", "tvdb"]
+                                }
+                            ]
+                        },
+                        Value = new CriteriaSet<PropertyCriterion<string>>
+                        {
+                            And = [new PropertyCriterion<string> { Values = ["tt0133093"] }]
+                        }
+                    }
+                ]
+            }
+        };
+        var subject = new QueryPlanner();
+
+        // Act
+        var plan = subject.Plan(EntityKind.Movie, criteria, 1);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(plan.Strategy, Is.EqualTo(QueryStrategy.Empty));
+            Assert.That(plan.Filters.Single().Kind, Is.EqualTo(QueryFilterKind.Title));
+            Assert.That(plan.Warnings, Is.Empty);
             Assert.That(
-                result.Warnings.Select(warning => warning),
-                Has.Some.Contains(nameof(MetadataCriteria.ExternalIds)));
+                plan.CriterionDispositions[1].Disposition,
+                Is.EqualTo(CriterionDispositionKind.Refused));
         }
     }
 
@@ -973,15 +1113,7 @@ internal sealed class QueryPlannerTests
             Assert.That(subjectFilter.Criterion!.Operator, Is.EqualTo(CriteriaValueOperator.ContainsString));
             Assert.That(subjectFilter.Criterion.Negate, Is.False);
             Assert.That(subjectFilter.Names, Is.EqualTo(["Laurence Fishburne"]));
-            Assert.That(
-                result.Warnings.Select(warning => warning),
-                Has.Some.Contains("requires a supported positive"));
-            Assert.That(
-                result.Warnings.Select(warning => warning),
-                Has.Some.Contains(nameof(MetadataCriteria.Relationships)));
-            Assert.That(
-                result.Warnings.Select(warning => warning),
-                Has.None.Contains("cannot safely apply"));
+            Assert.That(result.Warnings, Is.Empty);
         }
     }
 
@@ -1143,12 +1275,7 @@ internal sealed class QueryPlannerTests
             Assert.That(result.Strategy, Is.EqualTo(QueryStrategy.Empty));
             Assert.That(result.Filters, Is.Empty);
             Assert.That(result.ResidualFilters.Single().RelationshipGroup!.OuterNegate, Is.True);
-            Assert.That(
-                result.Warnings.Select(warning => warning),
-                Has.Some.Contains("positive server bound"));
-            Assert.That(
-                result.Warnings.Select(warning => warning),
-                Has.Some.Contains(RelationshipFieldKeys.Subject));
+            Assert.That(result.Warnings, Is.Empty);
         }
     }
 
@@ -1198,7 +1325,7 @@ internal sealed class QueryPlannerTests
     }
 
     [Test]
-    public void Plan_RelatedMetadataContainerId_IsRefusedWithoutRelationshipWarning()
+    public void Plan_RelatedMetadataContainerId_ReturnsEmptyWithoutWarning()
     {
         // Arrange
         var criteria = new MetadataCriteria
@@ -1231,10 +1358,8 @@ internal sealed class QueryPlannerTests
             Assert.That(result.ResidualFilters, Is.Empty);
             Assert.That(
                 result.CriterionDispositions.Single().Disposition,
-                Is.EqualTo(CriterionDispositionKind.Refused));
-            Assert.That(
-                result.Warnings.Select(warning => warning),
-                Has.None.Contains(nameof(MetadataCriteria.Relationships)));
+                Is.EqualTo(CriterionDispositionKind.ProvablyUnsatisfiable));
+            Assert.That(result.Warnings, Is.Empty);
         }
     }
 
@@ -1543,15 +1668,7 @@ internal sealed class QueryPlannerTests
             Assert.That(plan.Strategy, Is.EqualTo(QueryStrategy.Empty));
             Assert.That(plan.Filters, Is.Empty);
             Assert.That(plan.ResidualFilters.Single().RelationshipGroup!.OuterNegate, Is.True);
-            Assert.That(
-                plan.Warnings.Select(warning => warning),
-                Has.Some.Contains("requires a supported positive"));
-            Assert.That(
-                plan.Warnings.Select(warning => warning),
-                Has.Some.Contains(nameof(MetadataCriteria.Relationships)));
-            Assert.That(
-                plan.Warnings.Select(warning => warning),
-                Has.None.Contains("cannot safely apply"));
+            Assert.That(plan.Warnings, Is.Empty);
         }
     }
 
@@ -1627,7 +1744,7 @@ internal sealed class QueryPlannerTests
     }
 
     [Test]
-    public void Plan_CustomRelationshipSubjectAndExternalId_MapToOneBoundAlternative()
+    public void Plan_CustomRelationshipSubjectAndExternalId_SkipsUnsupportedSource()
     {
         // Arrange
         var criteria = new MetadataCriteria
@@ -1650,7 +1767,7 @@ internal sealed class QueryPlannerTests
                             },
                             [RelationshipFieldKeys.ExternalIdSource] = new PropertyCriterion<string>
                             {
-                                Values = ["imdb"]
+                                Values = ["imdb", "unsupported"]
                             },
                             [RelationshipFieldKeys.Subject] = new PropertyCriterion<string>
                             {
@@ -1795,7 +1912,7 @@ internal sealed class QueryPlannerTests
     }
 
     [Test]
-    public void Plan_InvalidCustomRelationshipSubject_DoesNotSuppressValidExternalIdBound()
+    public void Plan_ReturnsEmpty_WhenCustomRelationshipSubjectHasTooManyNames()
     {
         // Arrange
         var criteria = new MetadataCriteria
@@ -1834,14 +1951,567 @@ internal sealed class QueryPlannerTests
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(result.Strategy, Is.EqualTo(QueryStrategy.Structured));
+            Assert.That(result.Strategy, Is.EqualTo(QueryStrategy.Empty));
             Assert.That(
                 result.Filters.Single().Alternatives.Single().ExternalIdGroups.Single().ExternalIds.Single()
                     .Value,
                 Is.EqualTo("nm0000206"));
+            Assert.That(result.Warnings, Is.Empty);
+        }
+    }
+
+    [Test]
+    public void Plan_CustomRelationshipSubject_KeepsQidWhenNamesExceedLimit()
+    {
+        // Arrange
+        var criteria = new MetadataCriteria
+        {
+            CustomMetadata = new CriteriaSet<DictionaryCriteria<PropertyCriterion<string>>>
+            {
+                And =
+                [
+                    new DictionaryCriteria<PropertyCriterion<string>>
+                    {
+                        Items = new Dictionary<string, PropertyCriterion<string>>
+                        {
+                            [RelationshipFieldKeys.Subject] = new PropertyCriterion<string>
+                            {
+                                Operator = CriteriaValueOperator.In,
+                                Values = ["Q42", "one", "two", "three", "four", "five", "six"]
+                            }
+                        }
+                    }
+                ]
+            }
+        };
+        var subject = new QueryPlanner();
+
+        // Act
+        var result = subject.Plan(EntityKind.Movie, criteria, 1);
+        var alternative = result.Filters.Single().Alternatives.Single();
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.Strategy, Is.EqualTo(QueryStrategy.Structured));
+            Assert.That(alternative.Qids, Is.EqualTo(["Q42"]));
+            Assert.That(alternative.Names, Is.Empty);
+            Assert.That(result.Warnings, Is.Empty);
+        }
+    }
+
+    [Test]
+    public void Plan_ReturnsEmpty_WhenRelationshipHasTooManySubjectNames()
+    {
+        // Arrange
+        var criteria = new MetadataCriteria
+        {
+            ExternalIds = new CollectionCriteria<ExternalIdCriteria>
+            {
+                Some =
+                [[
+                    new ExternalIdCriteria
+                    {
+                        Source = new CriteriaSet<PropertyCriterion<string>>
+                        {
+                            And = [new PropertyCriterion<string> { Values = ["imdb"] }]
+                        },
+                        Value = new CriteriaSet<PropertyCriterion<string>>
+                        {
+                            And = [new PropertyCriterion<string> { Values = ["tt0133093"] }]
+                        }
+                    }
+                ]]
+            },
+            Relationships = new CollectionCriteria<RelationshipCriteria>
+            {
+                Some =
+                [[
+                    new RelationshipCriteria
+                    {
+                        Subject = new CriteriaSet<PropertyCriterion<string>>
+                        {
+                            And =
+                            [
+                                new PropertyCriterion<string>
+                                {
+                                    Operator = CriteriaValueOperator.In,
+                                    Values = ["a", "b", "c", "d", "e", "f"]
+                                }
+                            ]
+                        }
+                    }
+                ]]
+            }
+        };
+        var subject = new QueryPlanner();
+
+        // Act
+        var plan = subject.Plan(EntityKind.Movie, criteria, 1);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(plan.Strategy, Is.EqualTo(QueryStrategy.Empty));
+            Assert.That(plan.Filters.Single().Kind, Is.EqualTo(QueryFilterKind.ExternalId));
             Assert.That(
-                result.Warnings.Select(warning => warning),
-                Has.Some.Contains(RelationshipFieldKeys.Subject));
+                plan.Filters.Single().Alternatives.Single().ExternalIds.Single().Value,
+                Is.EqualTo("tt0133093"));
+            Assert.That(plan.Warnings, Is.Empty);
+            Assert.That(plan.CriterionDispositions[1].Disposition, Is.EqualTo(CriterionDispositionKind.Refused));
+        }
+    }
+
+    [Test]
+    public void Plan_RelationshipSubject_KeepsQidWhenNamesExceedLimit()
+    {
+        // Arrange
+        var criteria = new MetadataCriteria
+        {
+            Relationships = new CollectionCriteria<RelationshipCriteria>
+            {
+                Some =
+                [[
+                    new RelationshipCriteria
+                    {
+                        Subject = new CriteriaSet<PropertyCriterion<string>>
+                        {
+                            And =
+                            [
+                                new PropertyCriterion<string>
+                                {
+                                    Operator = CriteriaValueOperator.In,
+                                    Values = ["Q42", "one", "two", "three", "four", "five", "six"]
+                                }
+                            ]
+                        },
+                        Qualifier = new CriteriaSet<PropertyCriterion<string>>
+                        {
+                            And = [new PropertyCriterion<string> { Values = ["Hero"] }]
+                        }
+                    }
+                ]]
+            }
+        };
+        var subject = new QueryPlanner();
+
+        // Act
+        var plan = subject.Plan(EntityKind.Movie, criteria, 1);
+        var alternative = plan.Filters.Single().Alternatives.Single();
+        var residual = plan.ResidualFilters.Single().RelationshipGroup!.Alternatives.Single();
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(plan.Strategy, Is.EqualTo(QueryStrategy.Structured));
+            Assert.That(alternative.Qids, Is.EqualTo(["Q42"]));
+            Assert.That(alternative.Names, Is.Empty);
+            Assert.That(residual.Subjects.Single().Qids, Is.EqualTo(["Q42"]));
+            Assert.That(residual.Subjects.Single().Names, Is.Empty);
+            Assert.That(residual.Qualifiers.Single().Criterion!.Values, Is.EqualTo(["Hero"]));
+            Assert.That(plan.Warnings, Is.Empty);
+        }
+    }
+
+    [Test]
+    public void Plan_ReturnsEmpty_WhenRelationshipSubjectOperatorIsUnsupported()
+    {
+        // Arrange
+        var criteria = new MetadataCriteria
+        {
+            Title = new CriteriaSet<PropertyCriterion<string>>
+            {
+                And = [new PropertyCriterion<string> { Values = ["The Matrix"] }]
+            },
+            Relationships = new CollectionCriteria<RelationshipCriteria>
+            {
+                Some =
+                [[
+                    new RelationshipCriteria
+                    {
+                        Subject = new CriteriaSet<PropertyCriterion<string>>
+                        {
+                            And =
+                            [
+                                new PropertyCriterion<string>
+                                {
+                                    Operator = CriteriaValueOperator.Regex,
+                                    Values = ["^Tom"]
+                                }
+                            ]
+                        }
+                    }
+                ]]
+            }
+        };
+        var subject = new QueryPlanner();
+
+        // Act
+        var plan = subject.Plan(EntityKind.Movie, criteria, 1);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(plan.Strategy, Is.EqualTo(QueryStrategy.Empty));
+            Assert.That(plan.Filters.Single().Kind, Is.EqualTo(QueryFilterKind.Title));
+            Assert.That(plan.Warnings, Is.Empty);
+            Assert.That(plan.CriterionDispositions[1].Disposition, Is.EqualTo(CriterionDispositionKind.Refused));
+        }
+    }
+
+    [Test]
+    public void Plan_UsesTitleBound_WhenNegatedCustomRoleIsAbsent()
+    {
+        // Arrange
+        var criteria = new MetadataCriteria
+        {
+            Title = new CriteriaSet<PropertyCriterion<string>>
+            {
+                And = [new PropertyCriterion<string> { Values = ["The Matrix"] }]
+            },
+            CustomMetadata = new CriteriaSet<DictionaryCriteria<PropertyCriterion<string>>>
+            {
+                And =
+                [
+                    new DictionaryCriteria<PropertyCriterion<string>>
+                    {
+                        Items = new Dictionary<string, PropertyCriterion<string>>
+                        {
+                            ["relationship.subject.chef"] = new PropertyCriterion<string>
+                            {
+                                Negate = true,
+                                Values = ["X"]
+                            }
+                        }
+                    }
+                ]
+            }
+        };
+        var subject = new QueryPlanner();
+
+        // Act
+        var plan = subject.Plan(EntityKind.Movie, criteria, 1);
+        var disposition = plan.CriterionDispositions[1];
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(plan.Strategy, Is.EqualTo(QueryStrategy.TitleSearch));
+            Assert.That(plan.Filters.Single().Kind, Is.EqualTo(QueryFilterKind.Title));
+            Assert.That(plan.Warnings, Is.Empty);
+            Assert.That(disposition.Disposition, Is.EqualTo(CriterionDispositionKind.Omitted));
+        }
+    }
+
+    [Test]
+    public void Plan_ReturnsEmpty_WhenNegatedCustomCriterionCannotCompile()
+    {
+        // Arrange
+        var criteria = new MetadataCriteria
+        {
+            Title = new CriteriaSet<PropertyCriterion<string>>
+            {
+                And = [new PropertyCriterion<string> { Values = ["The Matrix"] }]
+            },
+            CustomMetadata = new CriteriaSet<DictionaryCriteria<PropertyCriterion<string>>>
+            {
+                And =
+                [
+                    new DictionaryCriteria<PropertyCriterion<string>>
+                    {
+                        Items = new Dictionary<string, PropertyCriterion<string>>
+                        {
+                            [RelationshipFieldKeys.Subject] = new PropertyCriterion<string>
+                            {
+                                Operator = CriteriaValueOperator.Regex,
+                                Negate = true,
+                                Values = ["^X"]
+                            }
+                        }
+                    }
+                ]
+            }
+        };
+        var subject = new QueryPlanner();
+
+        // Act
+        var plan = subject.Plan(EntityKind.Movie, criteria, 1);
+        var disposition = plan.CriterionDispositions[1];
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(plan.Strategy, Is.EqualTo(QueryStrategy.Empty));
+            Assert.That(plan.Filters.Single().Kind, Is.EqualTo(QueryFilterKind.Title));
+            Assert.That(plan.Warnings, Is.Empty);
+            Assert.That(disposition.Disposition, Is.EqualTo(CriterionDispositionKind.Refused));
+        }
+    }
+
+    [Test]
+    public void Plan_ReturnsEmpty_WhenCustomRoleIsAbsent()
+    {
+        // Arrange
+        var criteria = new MetadataCriteria
+        {
+            CustomMetadata = new CriteriaSet<DictionaryCriteria<PropertyCriterion<string>>>
+            {
+                And =
+                [
+                    new DictionaryCriteria<PropertyCriterion<string>>
+                    {
+                        Items = new Dictionary<string, PropertyCriterion<string>>
+                        {
+                            [RelationshipFieldKeys.ExternalId] = new PropertyCriterion<string>
+                            {
+                                Values = ["nm0000206"]
+                            },
+                            [RelationshipFieldKeys.ExternalIdSource] = new PropertyCriterion<string>
+                            {
+                                Values = ["imdb"]
+                            },
+                            ["relationship.subject.chef"] = new PropertyCriterion<string>
+                            {
+                                Values = ["X"]
+                            }
+                        }
+                    }
+                ]
+            }
+        };
+        var subject = new QueryPlanner();
+
+        // Act
+        var plan = subject.Plan(EntityKind.Movie, criteria, 1);
+        var disposition = plan.CriterionDispositions.Single(value =>
+            value.Source == "CustomMetadata.And[0].relationship.subject.chef");
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(plan.Strategy, Is.EqualTo(QueryStrategy.Empty));
+            Assert.That(
+                plan.Filters.Single().Alternatives.Single().ExternalIdGroups.Single().ExternalIds.Single().Value,
+                Is.EqualTo("nm0000206"));
+            Assert.That(disposition.Disposition, Is.EqualTo(CriterionDispositionKind.ProvablyUnsatisfiable));
+        }
+    }
+
+    [TestCase("relationship.subject", CriteriaValueOperator.Regex, "^Tom")]
+    public void Plan_ReturnsEmpty_WhenCustomRelationshipSubjectIsUnsupported(
+        string key,
+        CriteriaValueOperator valueOperator,
+        string value)
+    {
+        // Arrange
+        var criteria = new MetadataCriteria
+        {
+            CustomMetadata = new CriteriaSet<DictionaryCriteria<PropertyCriterion<string>>>
+            {
+                And =
+                [
+                    new DictionaryCriteria<PropertyCriterion<string>>
+                    {
+                        Items = new Dictionary<string, PropertyCriterion<string>>
+                        {
+                            [RelationshipFieldKeys.ExternalId] = new PropertyCriterion<string>
+                            {
+                                Values = ["nm0000206"]
+                            },
+                            [RelationshipFieldKeys.ExternalIdSource] = new PropertyCriterion<string>
+                            {
+                                Values = ["imdb"]
+                            },
+                            [key] = new PropertyCriterion<string>
+                            {
+                                Operator = valueOperator,
+                                Values = [value]
+                            }
+                        }
+                    }
+                ]
+            }
+        };
+        var subject = new QueryPlanner();
+
+        // Act
+        var result = subject.Plan(EntityKind.Movie, criteria, 1);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.Strategy, Is.EqualTo(QueryStrategy.Empty));
+            Assert.That(
+                result.Filters.Single().Alternatives.Single().ExternalIdGroups.Single().ExternalIds.Single().Value,
+                Is.EqualTo("nm0000206"));
+            Assert.That(result.Warnings, Is.Empty);
+        }
+    }
+
+    [Test]
+    public void Plan_ReturnsEmpty_WhenContentRatingOperatorIsUnsupported()
+    {
+        // Arrange
+        var criteria = new MetadataCriteria
+        {
+            ExternalIds = new CollectionCriteria<ExternalIdCriteria>
+            {
+                Some =
+                [[
+                    new ExternalIdCriteria
+                    {
+                        Source = new CriteriaSet<PropertyCriterion<string>>
+                        {
+                            And = [new PropertyCriterion<string> { Values = ["imdb"] }]
+                        },
+                        Value = new CriteriaSet<PropertyCriterion<string>>
+                        {
+                            And = [new PropertyCriterion<string> { Values = ["tt0133093"] }]
+                        }
+                    }
+                ]]
+            },
+            ContentRatings = new CollectionCriteria<ContentRatingCriteria>
+            {
+                Some =
+                [[
+                    new ContentRatingCriteria
+                    {
+                        Body = new CriteriaSet<PropertyCriterion<string>>
+                        {
+                            And =
+                            [
+                                new PropertyCriterion<string>
+                                {
+                                    Operator = CriteriaValueOperator.GreaterThan,
+                                    Value = "MPAA"
+                                }
+                            ]
+                        }
+                    }
+                ]]
+            }
+        };
+        var subject = new QueryPlanner();
+
+        // Act
+        var plan = subject.Plan(EntityKind.Movie, criteria, 1);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(plan.Strategy, Is.EqualTo(QueryStrategy.Empty));
+            Assert.That(plan.Filters.Single().Kind, Is.EqualTo(QueryFilterKind.ExternalId));
+            Assert.That(
+                plan.Filters.Single().Alternatives.Single().ExternalIds.Single().Value,
+                Is.EqualTo("tt0133093"));
+            Assert.That(plan.Warnings, Is.Empty);
+        }
+    }
+
+    [Test]
+    public void Plan_ReturnsEmpty_WhenUnsupportedSubjectIsInAnotherDictionary()
+    {
+        // Arrange
+        var criteria = new MetadataCriteria
+        {
+            CustomMetadata = new CriteriaSet<DictionaryCriteria<PropertyCriterion<string>>>
+            {
+                And =
+                [
+                    new DictionaryCriteria<PropertyCriterion<string>>
+                    {
+                        Items = new Dictionary<string, PropertyCriterion<string>>
+                        {
+                            [RelationshipFieldKeys.ExternalId] = new PropertyCriterion<string>
+                            {
+                                Values = ["nm0000206"]
+                            },
+                            [RelationshipFieldKeys.ExternalIdSource] = new PropertyCriterion<string>
+                            {
+                                Values = ["imdb"]
+                            }
+                        }
+                    },
+                    new DictionaryCriteria<PropertyCriterion<string>>
+                    {
+                        Items = new Dictionary<string, PropertyCriterion<string>>
+                        {
+                            [RelationshipFieldKeys.Subject] = new PropertyCriterion<string>
+                            {
+                                Operator = CriteriaValueOperator.Regex,
+                                Values = ["^Tom"]
+                            }
+                        }
+                    }
+                ]
+            }
+        };
+        var subject = new QueryPlanner();
+
+        // Act
+        var plan = subject.Plan(EntityKind.Movie, criteria, 1);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(plan.Strategy, Is.EqualTo(QueryStrategy.Empty));
+            Assert.That(
+                plan.Filters.Single().Alternatives.Single().ExternalIdGroups.Single().ExternalIds.Single().Value,
+                Is.EqualTo("nm0000206"));
+            Assert.That(plan.Warnings, Is.Empty);
+        }
+    }
+
+    [Test]
+    public void Plan_ReturnsEmpty_WhenDurationOperatorIsUnsupported()
+    {
+        // Arrange
+        var criteria = new MetadataCriteria
+        {
+            ExternalIds = new CollectionCriteria<ExternalIdCriteria>
+            {
+                Some =
+                [[
+                    new ExternalIdCriteria
+                    {
+                        Source = new CriteriaSet<PropertyCriterion<string>>
+                        {
+                            And = [new PropertyCriterion<string> { Values = ["imdb"] }]
+                        },
+                        Value = new CriteriaSet<PropertyCriterion<string>>
+                        {
+                            And = [new PropertyCriterion<string> { Values = ["tt0133093"] }]
+                        }
+                    }
+                ]]
+            },
+            Duration = new CriteriaSet<PropertyCriterion<TimeSpan>>
+            {
+                And =
+                [
+                    new PropertyCriterion<TimeSpan>
+                    {
+                        Operator = CriteriaValueOperator.ContainsString,
+                        Values = [TimeSpan.FromMinutes(90)]
+                    }
+                ]
+            }
+        };
+        var subject = new QueryPlanner();
+
+        // Act
+        var plan = subject.Plan(EntityKind.Movie, criteria, 1);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(plan.Strategy, Is.EqualTo(QueryStrategy.Empty));
+            Assert.That(plan.Filters.Single().Kind, Is.EqualTo(QueryFilterKind.ExternalId));
+            Assert.That(
+                plan.Filters.Single().Alternatives.Single().ExternalIds.Single().Value,
+                Is.EqualTo("tt0133093"));
+            Assert.That(plan.Warnings, Is.Empty);
         }
     }
 
@@ -1985,7 +2655,7 @@ internal sealed class QueryPlannerTests
     }
 
     [Test]
-    public void Plan_ReturnsUnsupported_WhenCaseVariantCustomKeyOperatorsDiffer()
+    public void Plan_ReturnsEmptyWithoutWarning_WhenCaseVariantCustomKeyOperatorsDiffer()
     {
         // Arrange
         var criteria = new MetadataCriteria
@@ -2025,15 +2695,14 @@ internal sealed class QueryPlannerTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(criteria.CustomMetadata.And.Single().Items, Has.Count.EqualTo(3));
+            Assert.That(result.Strategy, Is.EqualTo(QueryStrategy.Empty));
             Assert.That(result.Filters, Is.Empty);
-            Assert.That(
-                result.Warnings.Select(warning => warning),
-                Has.Some.Contains(RelationshipFieldKeys.ExternalId));
+            Assert.That(result.Warnings, Is.Empty);
         }
     }
 
     [Test]
-    public void Plan_DoesNotSendRelationshipAlternativeSubset_WhenOneAlternativeIsUnsupported()
+    public void Plan_UsesSupportedRelationshipAlternative_WhenSiblingHasNoWikidataData()
     {
         // Arrange
         var criteria = new MetadataCriteria
@@ -2073,14 +2742,109 @@ internal sealed class QueryPlannerTests
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(result.Filters, Is.Empty);
-            Assert.That(result.ResidualFilters, Is.Empty);
+            Assert.That(result.Filters.Single().Alternatives, Has.Count.EqualTo(1));
+            Assert.That(result.ResidualFilters.Single().RelationshipGroup!.Alternatives, Has.Count.EqualTo(1));
             Assert.That(
                 result.CriterionDispositions.Single().Disposition,
-                Is.EqualTo(CriterionDispositionKind.Refused));
-            Assert.That(
-                result.Warnings.Select(warning => warning),
-                Has.None.Contains(nameof(MetadataCriteria.Relationships)));
+                Is.EqualTo(CriterionDispositionKind.ServerFilterAndResidual));
+            Assert.That(result.Warnings, Is.Empty);
+        }
+    }
+
+    [Test]
+    public void Plan_UsesResidualRelationshipAlternative_WhenSiblingOperatorIsUnsupported()
+    {
+        // Arrange
+        var criteria = new MetadataCriteria
+        {
+            Relationships = new CollectionCriteria<RelationshipCriteria>
+            {
+                Some =
+                [[
+                    new RelationshipCriteria
+                    {
+                        Kind = new CriteriaSet<PropertyCriterion<string>>
+                        {
+                            And = [new PropertyCriterion<string> { Values = ["director"] }]
+                        },
+                        Qualifier = new CriteriaSet<PropertyCriterion<string>>
+                        {
+                            And = [new PropertyCriterion<string> { Values = ["Neo"] }]
+                        }
+                    },
+                    new RelationshipCriteria
+                    {
+                        Kind = new CriteriaSet<PropertyCriterion<string>>
+                        {
+                            And = [new PropertyCriterion<string> { Values = ["cast"] }]
+                        },
+                        Qualifier = new CriteriaSet<PropertyCriterion<string>>
+                        {
+                            And = [new PropertyCriterion<string>
+                            {
+                                Operator = CriteriaValueOperator.GreaterThan,
+                                Values = ["Neo"]
+                            }]
+                        }
+                    }
+                ]]
+            }
+        };
+        var subject = new QueryPlanner();
+
+        // Act
+        var plan = subject.Plan(EntityKind.Movie, criteria, 1);
+        var coarse = plan.Filters.Single().Alternatives.Single();
+        var residual = plan.ResidualFilters.Single().RelationshipGroup!.Alternatives.Single();
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(plan.Strategy, Is.EqualTo(QueryStrategy.Structured));
+            Assert.That(coarse.PropertyIds, Is.EqualTo(["P57"]));
+            Assert.That(residual.Qualifiers.Single().Criterion!.Values, Is.EqualTo(["Neo"]));
+            Assert.That(plan.Warnings, Is.Empty);
+        }
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public void Plan_ReturnsEmpty_WhenRelationshipQualifierOperatorIsUnsupported(bool excluded)
+    {
+        // Arrange
+        var relationship = new RelationshipCriteria
+        {
+            Kind = new CriteriaSet<PropertyCriterion<string>>
+            {
+                And = [new PropertyCriterion<string> { Values = ["director"] }]
+            },
+            Qualifier = new CriteriaSet<PropertyCriterion<string>>
+            {
+                And = [new PropertyCriterion<string>
+                {
+                    Operator = CriteriaValueOperator.GreaterThan,
+                    Values = ["Neo"]
+                }]
+            }
+        };
+        var criteria = new MetadataCriteria
+        {
+            Relationships = excluded
+                ? new CollectionCriteria<RelationshipCriteria> { None = [relationship] }
+                : new CollectionCriteria<RelationshipCriteria> { Some = [[relationship]] }
+        };
+        var subject = new QueryPlanner();
+
+        // Act
+        var plan = subject.Plan(EntityKind.Movie, criteria, 1);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(plan.Strategy, Is.EqualTo(QueryStrategy.Empty));
+            Assert.That(plan.Filters, Is.Empty);
+            Assert.That(plan.ResidualFilters, Is.Empty);
+            Assert.That(plan.Warnings, Is.Empty);
         }
     }
 
@@ -2169,9 +2933,7 @@ internal sealed class QueryPlannerTests
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(
-                result.Warnings.Select(warning => warning),
-                Has.Some.Contains("Genres name matching"));
+            Assert.That(result.Warnings, Is.Empty);
         }
     }
 
@@ -2674,15 +3436,7 @@ internal sealed class QueryPlannerTests
             Assert.That(residual.Hydration, Is.EqualTo(ResidualHydration.None));
             Assert.That(residual.Criterion!.Values, Is.EqualTo(["Returning Series"]));
             Assert.That(result.UsesLocalPaging, Is.True);
-            Assert.That(
-                result.Warnings.Select(warning => warning),
-                Has.Some.Contains("requires a supported positive"));
-            Assert.That(
-                result.Warnings.Select(warning => warning),
-                Has.Some.Contains("ProductionStatus"));
-            Assert.That(
-                result.Warnings.Select(warning => warning),
-                Has.None.Contains("cannot safely apply"));
+            Assert.That(result.Warnings, Is.Empty);
         }
     }
 
@@ -3439,15 +4193,7 @@ internal sealed class QueryPlannerTests
             Assert.That(plan.Filters, Is.Empty);
             Assert.That(plan.ResidualFilters, Has.Count.EqualTo(1));
             Assert.That(plan.UsesLocalPaging, Is.True);
-            Assert.That(
-                plan.Warnings.Select(warning => warning),
-                Has.Some.Contains("requires a supported positive"));
-            Assert.That(
-                plan.Warnings.Select(warning => warning),
-                Has.Some.Contains(nameof(MetadataCriteria.Language)));
-            Assert.That(
-                plan.Warnings.Select(warning => warning),
-                Has.None.Contains("cannot safely apply"));
+            Assert.That(plan.Warnings, Is.Empty);
         }
     }
 
@@ -3680,14 +4426,12 @@ internal sealed class QueryPlannerTests
                 Has.Some.Matches<
                     ResidualCollectionPredicate>(predicate =>
                         predicate.Field == ResidualCollectionField.ContentRatingRating));
-            Assert.That(
-                plan.Warnings.Select(warning => warning),
-                Has.Some.Contains("ContentRatings name matching"));
+            Assert.That(plan.Warnings, Is.Empty);
             Assert.That(disposition.Source, Is.EqualTo("ContentRatings.Some[0]"));
             Assert.That(
                 disposition.Disposition,
                 Is.EqualTo(CriterionDispositionKind.ServerFilterAndResidual));
-            Assert.That(disposition.Warning, Does.Contain("name matching"));
+            Assert.That(disposition.Warning, Is.Null);
         }
     }
 
@@ -3736,9 +4480,7 @@ internal sealed class QueryPlannerTests
             Assert.That(predicate.Field, Is.EqualTo(ResidualCollectionField.ContentRatingRating));
             Assert.That(predicate.EntityQids, Is.EqualTo(["Q123"]));
             Assert.That(predicate.StringValues, Is.EqualTo(["R"]));
-            Assert.That(
-                plan.Warnings.Select(warning => warning),
-                Has.Some.Contains("ContentRatings name matching"));
+            Assert.That(plan.Warnings, Is.Empty);
         }
     }
 
@@ -3861,9 +4603,7 @@ internal sealed class QueryPlannerTests
             Assert.That(plan.Strategy, Is.EqualTo(QueryStrategy.Empty));
             Assert.That(plan.Filters.Single().Operator, Is.EqualTo(CriteriaValueOperator.IsNotNull));
             Assert.That(plan.ResidualFilters, Is.Empty);
-            Assert.That(
-                plan.Warnings.Select(warning => warning),
-                Has.Some.Contains("requires a supported positive"));
+            Assert.That(plan.Warnings, Is.Empty);
             Assert.That(
                 disposition.Disposition,
                 Is.EqualTo(CriterionDispositionKind.ServerFilter));
@@ -4019,9 +4759,7 @@ internal sealed class QueryPlannerTests
             Assert.That(plan.Strategy, Is.EqualTo(QueryStrategy.Empty));
             Assert.That(filter.Operator, Is.EqualTo(CriteriaValueOperator.IsNotNull));
             Assert.That(plan.ResidualFilters, Is.Empty);
-            Assert.That(
-                plan.Warnings.Select(warning => warning),
-                Has.Some.Contains("requires a supported positive"));
+            Assert.That(plan.Warnings, Is.Empty);
         }
     }
 
@@ -4094,9 +4832,7 @@ internal sealed class QueryPlannerTests
             Assert.That(
                 residual.CollectionGroup.Alternatives[1].Predicates.Single().Operator,
                 Is.EqualTo(CriteriaValueOperator.ContainsString));
-            Assert.That(
-                plan.Warnings.Select(warning => warning),
-                Has.Some.Contains("ContentRatings name matching"));
+            Assert.That(plan.Warnings, Is.Empty);
         }
     }
 
@@ -4440,7 +5176,7 @@ internal sealed class QueryPlannerTests
 
     [TestCase(nameof(MetadataCriteria.ContentRatings))]
     [TestCase(nameof(MetadataCriteria.Images))]
-    public void Plan_PossibleUnsupportedCollectionAlternative_RemainsWarning(string fieldName)
+    public void Plan_ReturnsEmpty_WhenCollectionCriterionIsUnsupported(string fieldName)
     {
         // Arrange
         var criteria = fieldName == nameof(MetadataCriteria.ContentRatings)
@@ -4502,12 +5238,6 @@ internal sealed class QueryPlannerTests
                     ]
                 }
             };
-        var filterKind = fieldName == nameof(MetadataCriteria.ContentRatings)
-            ? QueryFilterKind.ContentRating
-            : QueryFilterKind.Image;
-        var unsupportedField = fieldName == nameof(MetadataCriteria.ContentRatings)
-            ? nameof(MetadataCriteria.ContentRatings) + "." + nameof(ContentRatingCriteria.Body)
-            : nameof(MetadataCriteria.Images) + "." + nameof(ImageCriteria.Type);
         var subject = new QueryPlanner();
 
         // Act
@@ -4516,12 +5246,63 @@ internal sealed class QueryPlannerTests
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(plan.Strategy, Is.EqualTo(QueryStrategy.TitleSearch));
-            Assert.That(plan.Filters, Has.None.Matches<QueryFilter>(filter => filter.Kind == filterKind));
+            Assert.That(plan.Strategy, Is.EqualTo(QueryStrategy.Empty));
+            Assert.That(plan.Filters.Single().Kind, Is.EqualTo(QueryFilterKind.Title));
             Assert.That(plan.ResidualFilters, Is.Empty);
-            Assert.That(
-                plan.Warnings.Select(warning => warning),
-                Has.Some.Contains(unsupportedField));
+            Assert.That(plan.Warnings, Is.Empty);
+        }
+    }
+
+    [Test]
+    public void Plan_UsesSupportedCollectionAlternative_WhenSiblingAlternativeIsUnsupported()
+    {
+        // Arrange
+        var criteria = new MetadataCriteria
+        {
+            ContentRatings = new CollectionCriteria<ContentRatingCriteria>
+            {
+                Some =
+                [
+                    [
+                        new ContentRatingCriteria
+                        {
+                            Body = new CriteriaSet<PropertyCriterion<string>>
+                            {
+                                And =
+                                [
+                                    new PropertyCriterion<string>
+                                    {
+                                        Operator = CriteriaValueOperator.GreaterThan,
+                                        Value = "MPAA"
+                                    }
+                                ]
+                            }
+                        },
+                        new ContentRatingCriteria
+                        {
+                            Rating = new CriteriaSet<PropertyCriterion<string>>
+                            {
+                                And = [new PropertyCriterion<string> { Value = "Q123" }]
+                            }
+                        }
+                    ]
+                ]
+            }
+        };
+        var subject = new QueryPlanner();
+
+        // Act
+        var plan = subject.Plan(EntityKind.Movie, criteria, 1);
+        var filter = plan.Filters.Single();
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(plan.Strategy, Is.EqualTo(QueryStrategy.Structured));
+            Assert.That(filter.Kind, Is.EqualTo(QueryFilterKind.ContentRating));
+            Assert.That(filter.Alternatives.Single().Qids, Is.EqualTo(["Q123"]));
+            Assert.That(plan.ResidualFilters, Is.Empty);
+            Assert.That(plan.Warnings, Is.Empty);
         }
     }
 
@@ -5111,9 +5892,7 @@ internal sealed class QueryPlannerTests
             Assert.That(
                 residual.CollectionGroup.Alternatives.Single().Predicates.Single().Field,
                 Is.EqualTo(ResidualCollectionField.AwardName));
-            Assert.That(
-                plan.Warnings.Select(warning => warning),
-                Has.Some.Contains("Awards name matching"));
+            Assert.That(plan.Warnings, Is.Empty);
         }
     }
 
@@ -6549,11 +7328,8 @@ internal sealed class QueryPlannerTests
             Assert.That(
                 contentRatingDisposition.Disposition,
                 Is.EqualTo(CriterionDispositionKind.ServerFilterAndResidual));
-            Assert.That(contentRatingDisposition.Warning, Does.Contain("ContentRatings name matching"));
-            Assert.That(plan.Warnings, Has.Count.EqualTo(1));
-            Assert.That(
-                plan.Warnings.Single(),
-                Does.Contain("ContentRatings name matching"));
+            Assert.That(contentRatingDisposition.Warning, Is.Null);
+            Assert.That(plan.Warnings, Is.Empty);
         }
     }
 
@@ -6626,7 +7402,7 @@ internal sealed class QueryPlannerTests
     }
 
     [Test]
-    public void Plan_RelationshipExternalIdSourceAndValueSets_PreserveEveryValidPair()
+    public void Plan_RelationshipExternalIdSourceAndValueSets_SkipUnsupportedSources()
     {
         // Arrange
         var criteria = new MetadataCriteria
@@ -6656,7 +7432,7 @@ internal sealed class QueryPlannerTests
                                                     new PropertyCriterion<string>
                                                     {
                                                         Operator = CriteriaValueOperator.In,
-                                                        Values = ["wikidata", "imdb"]
+                                                        Values = ["wikidata", "imdb", "unsupported"]
                                                     }
                                                 ]
                                             },
@@ -6674,6 +7450,10 @@ internal sealed class QueryPlannerTests
                                         }
                                     ]
                                 ]
+                            },
+                            Qualifier = new CriteriaSet<PropertyCriterion<string>>
+                            {
+                                And = [new PropertyCriterion<string> { Values = ["Hero"] }]
                             }
                         }
                     ]
@@ -6685,6 +7465,7 @@ internal sealed class QueryPlannerTests
         // Act
         var plan = subject.Plan(EntityKind.Movie, criteria, 1);
         var group = plan.Filters.Single().Alternatives.Single().ExternalIdGroups.Single();
+        var residual = plan.ResidualFilters.Single().RelationshipGroup!.Alternatives.Single();
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -6696,12 +7477,17 @@ internal sealed class QueryPlannerTests
             Assert.That(
                 group.ExternalIds.Select(value => value.Value),
                 Is.EquivalentTo(["Q43416", "nm0000206"]));
+            Assert.That(residual.ExternalIdGroups.Single().Qids, Is.EqualTo(["Q43416"]));
+            Assert.That(
+                residual.ExternalIdGroups.Single().ExternalIds.Select(value => value.Value),
+                Is.EquivalentTo(["Q43416", "nm0000206"]));
+            Assert.That(residual.Qualifiers.Single().Criterion!.Values, Is.EqualTo(["Hero"]));
             Assert.That(plan.Warnings, Is.Empty);
         }
     }
 
     [Test]
-    public void Plan_RefusesRelationshipWithoutWarning_WhenWikidataHasNoDataForTheCriterion()
+    public void Plan_ReturnsEmptyWithoutWarning_WhenWikidataHasNoDataForTheRelationshipCriterion()
     {
         // Arrange
         var criteria = new MetadataCriteria
@@ -6760,11 +7546,438 @@ internal sealed class QueryPlannerTests
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(plan.Strategy, Is.EqualTo(QueryStrategy.TitleSearch));
+            Assert.That(plan.Strategy, Is.EqualTo(QueryStrategy.Empty));
             Assert.That(plan.Filters.Single().Kind, Is.EqualTo(QueryFilterKind.Title));
             Assert.That(plan.Warnings, Is.Empty);
             Assert.That(disposition.Source, Is.EqualTo("Relationships.Some[0]"));
-            Assert.That(disposition.Disposition, Is.EqualTo(CriterionDispositionKind.Refused));
+            Assert.That(disposition.Disposition, Is.EqualTo(CriterionDispositionKind.ProvablyUnsatisfiable));
+        }
+    }
+
+    [Test]
+    public void Plan_UsesTitleBound_WhenExcludedRelationshipsHaveNoWikidataData()
+    {
+        // Arrange
+        var criteria = new MetadataCriteria
+        {
+            Title = new CriteriaSet<PropertyCriterion<string>>
+            {
+                And = [new PropertyCriterion<string> { Values = ["The Matrix"] }]
+            },
+            Relationships = new CollectionCriteria<RelationshipCriteria>
+            {
+                None =
+                [
+                    new RelationshipCriteria
+                    {
+                        Kind = new CriteriaSet<PropertyCriterion<string>>
+                        {
+                            And = [new PropertyCriterion<string> { Values = ["chef"] }]
+                        }
+                    },
+                    new RelationshipCriteria
+                    {
+                        RelatedMetadataContainerId = new CriteriaSet<PropertyCriterion<Guid>>
+                        {
+                            And =
+                            [
+                                new PropertyCriterion<Guid>
+                                {
+                                    Value = new Guid("8a1a2fb2-06a1-4d1b-9c5e-1f2b3c4d5e6f")
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }
+        };
+        var subject = new QueryPlanner();
+
+        // Act
+        var plan = subject.Plan(EntityKind.Movie, criteria, 1);
+        var relationshipDispositions = plan.CriterionDispositions
+            .Where(value => value.Source.StartsWith("Relationships", StringComparison.Ordinal))
+            .ToArray();
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(plan.Strategy, Is.EqualTo(QueryStrategy.TitleSearch));
+            Assert.That(plan.Filters.Single().Kind, Is.EqualTo(QueryFilterKind.Title));
+            Assert.That(plan.Warnings, Is.Empty);
+            Assert.That(relationshipDispositions, Has.Length.EqualTo(2));
+            Assert.That(
+                relationshipDispositions.Select(value => value.Disposition),
+                Is.All.EqualTo(CriterionDispositionKind.Omitted));
+        }
+    }
+
+    [Test]
+    public void Plan_ReturnsEmpty_WhenExcludedRelationshipSubjectOperatorIsUnsupported()
+    {
+        // Arrange
+        var criteria = new MetadataCriteria
+        {
+            Title = new CriteriaSet<PropertyCriterion<string>>
+            {
+                And = [new PropertyCriterion<string> { Values = ["The Matrix"] }]
+            },
+            Relationships = new CollectionCriteria<RelationshipCriteria>
+            {
+                None =
+                [
+                    new RelationshipCriteria
+                    {
+                        Subject = new CriteriaSet<PropertyCriterion<string>>
+                        {
+                            And =
+                            [
+                                new PropertyCriterion<string>
+                                {
+                                    Operator = CriteriaValueOperator.Regex,
+                                    Values = ["^Keanu"]
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }
+        };
+        var subject = new QueryPlanner();
+
+        // Act
+        var plan = subject.Plan(EntityKind.Movie, criteria, 1);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(plan.Strategy, Is.EqualTo(QueryStrategy.Empty));
+            Assert.That(plan.Filters.Single().Kind, Is.EqualTo(QueryFilterKind.Title));
+            Assert.That(plan.Warnings, Is.Empty);
+            Assert.That(
+                plan.CriterionDispositions[1].Disposition,
+                Is.EqualTo(CriterionDispositionKind.Refused));
+        }
+    }
+
+    [Test]
+    public void Plan_ReturnsEmpty_WhenRelationshipKindOperatorCannotCompile()
+    {
+        // Arrange
+        var criteria = new MetadataCriteria
+        {
+            ExternalIds = new CollectionCriteria<ExternalIdCriteria>
+            {
+                Some =
+                [[
+                    new ExternalIdCriteria
+                    {
+                        Source = new CriteriaSet<PropertyCriterion<string>>
+                        {
+                            And = [new PropertyCriterion<string> { Values = ["imdb"] }]
+                        },
+                        Value = new CriteriaSet<PropertyCriterion<string>>
+                        {
+                            And = [new PropertyCriterion<string> { Values = ["tt0133093"] }]
+                        }
+                    }
+                ]]
+            },
+            Relationships = new CollectionCriteria<RelationshipCriteria>
+            {
+                Some =
+                [[
+                    new RelationshipCriteria
+                    {
+                        Kind = new CriteriaSet<PropertyCriterion<string>>
+                        {
+                            And =
+                            [
+                                new PropertyCriterion<string>
+                                {
+                                    Operator = CriteriaValueOperator.ContainsString,
+                                    Values = ["act"]
+                                }
+                            ]
+                        },
+                        Subject = new CriteriaSet<PropertyCriterion<string>>
+                        {
+                            And = [new PropertyCriterion<string> { Values = ["Q40096"] }]
+                        }
+                    }
+                ]]
+            }
+        };
+        var subject = new QueryPlanner();
+
+        // Act
+        var plan = subject.Plan(EntityKind.Movie, criteria, 1);
+        var externalId = plan.Filters.Single().Alternatives.Single().ExternalIds.Single();
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(plan.Strategy, Is.EqualTo(QueryStrategy.Empty));
+            Assert.That(externalId.PropertyId, Is.EqualTo(Constants.ImdbPropertyId));
+            Assert.That(externalId.Value, Is.EqualTo("tt0133093"));
+            Assert.That(plan.CriterionDispositions[1].Disposition, Is.EqualTo(CriterionDispositionKind.Refused));
+            Assert.That(plan.Warnings, Is.Empty);
+        }
+    }
+
+    [Test]
+    public void Plan_MapsKnownRole_WhenPositiveRelationshipKindListIsPartlyMappable()
+    {
+        // Arrange
+        var criteria = new MetadataCriteria
+        {
+            Relationships = new CollectionCriteria<RelationshipCriteria>
+            {
+                Some =
+                [[
+                    new RelationshipCriteria
+                    {
+                        Kind = new CriteriaSet<PropertyCriterion<string>>
+                        {
+                            And =
+                            [
+                                new PropertyCriterion<string>
+                                {
+                                    Operator = CriteriaValueOperator.In,
+                                    Values = ["director", "actor"]
+                                }
+                            ]
+                        },
+                        Subject = new CriteriaSet<PropertyCriterion<string>>
+                        {
+                            And = [new PropertyCriterion<string> { Values = ["Q40096"] }]
+                        }
+                    }
+                ]]
+            }
+        };
+        var subject = new QueryPlanner();
+
+        // Act
+        var plan = subject.Plan(EntityKind.Movie, criteria, 1);
+        var filter = plan.Filters.Single();
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(plan.Strategy, Is.EqualTo(QueryStrategy.Structured));
+            Assert.That(filter.Kind, Is.EqualTo(QueryFilterKind.Relationship));
+            Assert.That(filter.Negate, Is.False);
+            Assert.That(filter.Alternatives.Single().PropertyIds, Is.EqualTo(["P57"]));
+            Assert.That(filter.Alternatives.Single().Qids, Is.EqualTo(["Q40096"]));
+            Assert.That(plan.Warnings, Is.Empty);
+            Assert.That(
+                plan.CriterionDispositions.Single().Disposition,
+                Is.EqualTo(CriterionDispositionKind.ServerFilter));
+        }
+    }
+
+    [Test]
+    public void Plan_MapsKnownRole_WhenExcludedRelationshipKindListIsPartlyMappable()
+    {
+        // Arrange
+        var criteria = new MetadataCriteria
+        {
+            Title = new CriteriaSet<PropertyCriterion<string>>
+            {
+                And = [new PropertyCriterion<string> { Values = ["The Matrix"] }]
+            },
+            Relationships = new CollectionCriteria<RelationshipCriteria>
+            {
+                None =
+                [
+                    new RelationshipCriteria
+                    {
+                        Kind = new CriteriaSet<PropertyCriterion<string>>
+                        {
+                            And =
+                            [
+                                new PropertyCriterion<string>
+                                {
+                                    Operator = CriteriaValueOperator.In,
+                                    Values = ["director", "actor"]
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }
+        };
+        var subject = new QueryPlanner();
+
+        // Act
+        var plan = subject.Plan(EntityKind.Movie, criteria, 1);
+        var filter = plan.Filters.Single(value => value.Kind == QueryFilterKind.Relationship);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(plan.Strategy, Is.EqualTo(QueryStrategy.TitleSearch));
+            Assert.That(filter.Negate, Is.True);
+            Assert.That(filter.Alternatives.Single().PropertyIds, Is.EqualTo(["P57"]));
+            Assert.That(plan.Warnings, Is.Empty);
+            Assert.That(
+                plan.CriterionDispositions[1].Disposition,
+                Is.EqualTo(CriterionDispositionKind.ServerFilter));
+        }
+    }
+
+    [Test]
+    public void Plan_UsesSupportedRelationshipAlternative_WhenSiblingSubjectCannotCompile()
+    {
+        // Arrange
+        var criteria = new MetadataCriteria
+        {
+            Relationships = new CollectionCriteria<RelationshipCriteria>
+            {
+                Some =
+                [[
+                    new RelationshipCriteria
+                    {
+                        Subject = new CriteriaSet<PropertyCriterion<string>>
+                        {
+                            And = [new PropertyCriterion<string> { Values = ["Q123"] }]
+                        }
+                    },
+                    new RelationshipCriteria
+                    {
+                        Subject = new CriteriaSet<PropertyCriterion<string>>
+                        {
+                            And =
+                            [
+                                new PropertyCriterion<string>
+                                {
+                                    Operator = CriteriaValueOperator.Regex,
+                                    Values = ["^Tom"]
+                                }
+                            ]
+                        }
+                    }
+                ]]
+            }
+        };
+        var subject = new QueryPlanner();
+
+        // Act
+        var plan = subject.Plan(EntityKind.Movie, criteria, 1);
+        var alternative = plan.Filters.Single().Alternatives.Single();
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(plan.Strategy, Is.EqualTo(QueryStrategy.Structured));
+            Assert.That(alternative.Qids, Is.EqualTo(["Q123"]));
+            Assert.That(plan.Warnings, Is.Empty);
+            Assert.That(
+                plan.CriterionDispositions.Single().Disposition,
+                Is.EqualTo(CriterionDispositionKind.ServerFilter));
+        }
+    }
+
+    [Test]
+    public void Plan_KeepsResidualForSupportedNameAlternative_WhenSiblingSubjectCannotCompile()
+    {
+        // Arrange
+        var criteria = new MetadataCriteria
+        {
+            Relationships = new CollectionCriteria<RelationshipCriteria>
+            {
+                Some =
+                [[
+                    new RelationshipCriteria
+                    {
+                        Subject = new CriteriaSet<PropertyCriterion<string>>
+                        {
+                            And = [new PropertyCriterion<string> { Values = ["Tom Hanks"] }]
+                        }
+                    },
+                    new RelationshipCriteria
+                    {
+                        Subject = new CriteriaSet<PropertyCriterion<string>>
+                        {
+                            And =
+                            [
+                                new PropertyCriterion<string>
+                                {
+                                    Operator = CriteriaValueOperator.Regex,
+                                    Values = ["^Tom"]
+                                }
+                            ]
+                        }
+                    }
+                ]]
+            }
+        };
+        var subject = new QueryPlanner();
+
+        // Act
+        var plan = subject.Plan(EntityKind.Movie, criteria, 1);
+        var alternative = plan.Filters.Single().Alternatives.Single();
+        var residual = plan.ResidualFilters.Single().RelationshipGroup!.Alternatives.Single();
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(plan.Strategy, Is.EqualTo(QueryStrategy.Structured));
+            Assert.That(alternative.Names, Is.EqualTo(["Tom Hanks"]));
+            Assert.That(residual.Subjects.Single().Names, Is.EqualTo(["Tom Hanks"]));
+            Assert.That(plan.Warnings, Is.Empty);
+            Assert.That(
+                plan.CriterionDispositions.Single().Disposition,
+                Is.EqualTo(CriterionDispositionKind.ServerFilterAndResidual));
+        }
+    }
+
+    [Test]
+    public void Plan_ReturnsEmpty_WhenExcludedGenreOperatorIsUnsupported()
+    {
+        // Arrange
+        var criteria = new MetadataCriteria
+        {
+            Title = new CriteriaSet<PropertyCriterion<string>>
+            {
+                And = [new PropertyCriterion<string> { Values = ["The Matrix"] }]
+            },
+            Genres = new CollectionCriteria<GenreCriteria>
+            {
+                None =
+                [
+                    new GenreCriteria
+                    {
+                        Name = new CriteriaSet<PropertyCriterion<string>>
+                        {
+                            And =
+                            [
+                                new PropertyCriterion<string>
+                                {
+                                    Operator = CriteriaValueOperator.GreaterThan,
+                                    Values = ["^Act"]
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }
+        };
+        var subject = new QueryPlanner();
+
+        // Act
+        var plan = subject.Plan(EntityKind.Movie, criteria, 1);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(plan.Strategy, Is.EqualTo(QueryStrategy.Empty));
+            Assert.That(plan.Filters.Single().Kind, Is.EqualTo(QueryFilterKind.Title));
+            Assert.That(plan.Warnings, Is.Empty);
+            Assert.That(
+                plan.CriterionDispositions[1].Disposition,
+                Is.EqualTo(CriterionDispositionKind.Refused));
         }
     }
 }

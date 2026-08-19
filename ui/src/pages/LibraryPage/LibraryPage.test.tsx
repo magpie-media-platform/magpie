@@ -2389,4 +2389,183 @@ describe('LibraryPage', () => {
             expect(screen.getByRole('button', { name: /clear search and filters/i })).toBeInTheDocument();
         });
     });
+
+    describe('gallery view', () => {
+        afterEach(() => {
+            localStorage.clear();
+        });
+
+        it('defaults to list when nothing is stored', () => {
+            renderLibraryPage();
+
+            expect(screen.queryByTestId('library-page__gallery')).not.toBeInTheDocument();
+            expect(document.querySelector('[data-component="content-list"]')).toBeInTheDocument();
+        });
+
+        it('restores gallery from local storage', () => {
+            localStorage.setItem('library-view', JSON.stringify('gallery'));
+
+            renderLibraryPage();
+
+            expect(screen.getByTestId('library-page__gallery')).toBeInTheDocument();
+            expect(document.querySelector('[data-component="content-list"]')).not.toBeInTheDocument();
+        });
+
+        it('falls back to list when the stored value is not a known view', () => {
+            localStorage.setItem('library-view', JSON.stringify('mosaic'));
+
+            renderLibraryPage();
+
+            expect(screen.queryByTestId('library-page__gallery')).not.toBeInTheDocument();
+        });
+
+        it('falls back to list when the stored value is malformed json', () => {
+            localStorage.setItem('library-view', '{not json');
+
+            renderLibraryPage();
+
+            expect(screen.queryByTestId('library-page__gallery')).not.toBeInTheDocument();
+        });
+
+        it('persists gallery when the switch is used', async () => {
+            const user = userEvent.setup();
+            renderLibraryPage();
+
+            await user.click(screen.getByRole('tab', { name: /gallery/i }));
+
+            expect(screen.getByTestId('library-page__gallery')).toBeInTheDocument();
+            expect(localStorage.getItem('library-view')).toBe(JSON.stringify('gallery'));
+        });
+
+        it('keeps an explicit list role on the gallery', () => {
+            localStorage.setItem('library-view', JSON.stringify('gallery'));
+
+            renderLibraryPage();
+
+            expect(screen.getByRole('list', { name: 'Content gallery' })).toHaveAttribute('role', 'list');
+        });
+
+        it('renders one navigating link per item outside selection mode', () => {
+            localStorage.setItem('library-view', JSON.stringify('gallery'));
+
+            renderLibraryPage();
+
+            const grid = screen.getByRole('list', { name: 'Content gallery' });
+            const links = within(grid).getAllByRole('link');
+
+            expect(links).toHaveLength(mockContentItems.length);
+            expect(links[0]).toHaveAttribute('href', '/library/content-1');
+            expect(within(links[0]).queryByRole('link')).not.toBeInTheDocument();
+        });
+
+        it('names each tile by its title alone and leaves the poster decorative', () => {
+            localStorage.setItem('library-view', JSON.stringify('gallery'));
+
+            renderLibraryPage();
+
+            const grid = screen.getByRole('list', { name: 'Content gallery' });
+
+            expect(within(grid).getByText('Breaking Bad')).toBeInTheDocument();
+            expect(within(grid).getByRole('link', { name: /^Breaking Bad/ })).toBeInTheDocument();
+            expect(within(grid).queryByAltText(/artwork/)).not.toBeInTheDocument();
+        });
+
+        it('renders the placeholder instead of an image when artwork is missing', () => {
+            mockUseContentList.mockReturnValue({
+                data: {
+                    items: [{ ...mockContentItems[0], posterUrl: undefined }],
+                    pageNumber: 1,
+                    pageSize: 100,
+                    totalItems: 1,
+                },
+                isLoading: false,
+                error: null,
+                refetch: vi.fn(),
+            });
+            localStorage.setItem('library-view', JSON.stringify('gallery'));
+
+            renderLibraryPage();
+
+            const grid = screen.getByRole('list', { name: 'Content gallery' });
+
+            expect(within(grid).queryByRole('img')).not.toBeInTheDocument();
+            expect(grid.querySelector('.library-gallery-tile__poster--placeholder')).toBeInTheDocument();
+        });
+
+        it('swaps tiles to selection targets without dropping the toolbar', async () => {
+            const user = userEvent.setup();
+            localStorage.setItem('library-view', JSON.stringify('gallery'));
+
+            renderLibraryPage();
+
+            const gallery = screen.getByTestId('library-page__gallery');
+            expect(within(gallery).getByRole('button', { name: /^select$/i })).toBeInTheDocument();
+
+            await user.click(within(gallery).getByRole('button', { name: /^select$/i }));
+
+            const grid = screen.getByRole('list', { name: 'Content gallery' });
+            expect(within(grid).queryAllByRole('link')).toHaveLength(0);
+            expect(within(grid).getAllByRole('button')).toHaveLength(mockContentItems.length);
+            expect(within(grid).getAllByRole('button')[0]).toHaveAttribute('aria-pressed', 'false');
+            expect(within(gallery).getByRole('button', { name: /stop selecting/i })).toBeInTheDocument();
+        });
+
+        it('toggles selection when a tile is activated in selection mode', async () => {
+            const user = userEvent.setup();
+            localStorage.setItem('library-view', JSON.stringify('gallery'));
+
+            renderLibraryPage();
+
+            const gallery = screen.getByTestId('library-page__gallery');
+            await user.click(within(gallery).getByRole('button', { name: /^select$/i }));
+
+            const grid = screen.getByRole('list', { name: 'Content gallery' });
+            const tile = within(grid).getAllByRole('button')[0];
+
+            await user.click(tile);
+
+            expect(within(grid).getAllByRole('button')[0]).toHaveAttribute('aria-pressed', 'true');
+        });
+
+        it('offers both sort controls and flips direction from the gallery toolbar', async () => {
+            const user = userEvent.setup();
+            localStorage.setItem('library-view', JSON.stringify('gallery'));
+
+            renderLibraryPage();
+
+            const gallery = screen.getByTestId('library-page__gallery');
+            expect(within(gallery).getByLabelText('Sort by field')).toBeInTheDocument();
+
+            const ascending = within(gallery).getByLabelText('Sort ascending');
+            const descending = within(gallery).getByLabelText('Sort descending');
+            const startedAscending = ascending.getAttribute('aria-pressed') === 'true';
+            expect(descending).toHaveAttribute('aria-pressed', String(!startedAscending));
+
+            await user.click(startedAscending ? descending : ascending);
+
+            await waitFor(() => {
+                expect(within(gallery).getByLabelText('Sort ascending')).toHaveAttribute(
+                    'aria-pressed',
+                    String(!startedAscending),
+                );
+                expect(within(gallery).getByLabelText('Sort descending')).toHaveAttribute(
+                    'aria-pressed',
+                    String(startedAscending),
+                );
+            });
+        });
+
+        it('declares a two-position switch with the active view selected', () => {
+            localStorage.setItem('library-view', JSON.stringify('gallery'));
+
+            renderLibraryPage();
+
+            const swtch = screen.getByTestId('library-page__view-switch');
+
+            expect(swtch).toHaveAttribute('aria-label', 'Content view');
+            expect(within(swtch).getAllByRole('tab')).toHaveLength(2);
+            expect(within(swtch).getByRole('tab', { name: /gallery/i })).toHaveAttribute('aria-selected', 'true');
+            expect(within(swtch).getByRole('tab', { name: /list/i })).toHaveAttribute('aria-selected', 'false');
+        });
+    });
 });

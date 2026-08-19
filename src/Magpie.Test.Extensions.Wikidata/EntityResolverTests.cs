@@ -43,7 +43,7 @@ internal sealed class EntityResolverTests
                     }
                 }
             ]);
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetIdentityAsync(
             It.IsAny<string>(),
             It.IsAny<Func<CancellationToken, Task<EntityResolution>>>(),
@@ -108,7 +108,7 @@ internal sealed class EntityResolverTests
     {
         // Arrange
         var client = new Mock<IWikidataClient>();
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         IEntityResolver subject = new EntityResolver(client.Object, cache.Object);
         var seed = new MetadataContribution { ProviderType = "seed" };
         seed.ExternalIds.Add(new ExternalId { Source = Constants.ProviderType, Value = "Q999" });
@@ -169,7 +169,7 @@ internal sealed class EntityResolverTests
                 }
             ]);
         string? cacheKey = null;
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetIdentityAsync(
             It.IsAny<string>(),
             It.IsAny<Func<CancellationToken, Task<EntityResolution>>>(),
@@ -237,7 +237,7 @@ internal sealed class EntityResolverTests
                     }
                 }
             ]);
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetIdentityAsync(
             It.IsAny<string>(),
             It.IsAny<Func<CancellationToken, Task<EntityResolution>>>(),
@@ -276,7 +276,7 @@ internal sealed class EntityResolverTests
     {
         // Arrange
         var client = new Mock<IWikidataClient>();
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         IEntityResolver subject = new EntityResolver(client.Object, cache.Object);
         var contribution = new MetadataContribution { ProviderType = "seed" };
         contribution.ExternalIds.Add(new ExternalId { Source = Constants.ImdbSource, Value = "co0144901" });
@@ -331,7 +331,7 @@ internal sealed class EntityResolverTests
                 }
             ]);
         var cacheKeys = new List<string>();
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetIdentityAsync(
             It.IsAny<string>(),
             It.IsAny<Func<CancellationToken, Task<EntityResolution>>>(),
@@ -406,7 +406,7 @@ internal sealed class EntityResolverTests
                 }
             ]);
         string? cacheKey = null;
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetEntityAsync(
             "Q100",
             It.IsAny<RequestContext>(),
@@ -509,7 +509,7 @@ internal sealed class EntityResolverTests
     {
         // Arrange
         var client = new Mock<IWikidataClient>();
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         IEntityResolver subject = new EntityResolver(client.Object, cache.Object);
         var item = new ContentHierarchyItem
         {
@@ -568,7 +568,7 @@ internal sealed class EntityResolverTests
                 }
             ]);
         string? cacheKey = null;
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetIdentityAsync(
             It.IsAny<string>(),
             It.IsAny<Func<CancellationToken, Task<EntityResolution>>>(),
@@ -623,7 +623,7 @@ internal sealed class EntityResolverTests
     {
         // Arrange
         var client = new Mock<IWikidataClient>();
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         IEntityResolver subject = new EntityResolver(client.Object, cache.Object);
         var item = new ContentHierarchyItem
         {
@@ -666,7 +666,7 @@ internal sealed class EntityResolverTests
     {
         // Arrange
         var client = new Mock<IWikidataClient>();
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         IEntityResolver subject = new EntityResolver(client.Object, cache.Object);
         var item = new ContentHierarchyItem
         {

@@ -569,7 +569,9 @@ export function WishlistForm({
                             <FilterBar
                                 value={filterQuery}
                                 onChange={handleFilterQueryChange}
+                                onSubmit={handlePreview}
                                 context="content"
+                                loading={preview.isPending}
                                 expanded={filterBarExpanded}
                                 onExpandedChange={setFilterBarExpanded}
                                 readOnly={readOnly || (!isEditing && isSubmitting)}

@@ -19,15 +19,12 @@ namespace Magpie.Extensions.Wikidata;
 internal sealed class ContentMetadataSearcher(
     ISettingsResolver settingsResolver,
     ISearchEngine queryEngine,
-    IQueryCache cache,
+    IQueryCoordinator cache,
     TimeProvider timeProvider,
     ILogger<ContentMetadataSearcher> logger) : IContentHierarchyMetadataAdvancedSearcher
 {
     private static readonly string ShowLevelWarning
         = "Wikidata advanced search searches for shows only. It does not search for seasons or episodes.";
-
-    private static readonly string UnsupportedScopeWarning
-        = "Wikidata cannot evaluate the content type or level criteria. The search did not run.";
 
     public string ProviderType => Constants.ProviderType;
 
@@ -88,7 +85,13 @@ internal sealed class ContentMetadataSearcher(
         if (contentTypeScope == CriteriaMatchResult.Unverifiable ||
             levelScope == CriteriaMatchResult.Unverifiable)
         {
-            return UnsupportedScope();
+            return EmptySupported();
+        }
+
+        if (contentTypeScope == CriteriaMatchResult.Rejected ||
+            levelScope == CriteriaMatchResult.Rejected)
+        {
+            return EmptySupported();
         }
 
         var searchesUnsupportedTvLevel = contentType == Constants.TvContentType &&
@@ -96,11 +99,6 @@ internal sealed class ContentMetadataSearcher(
             (EvaluateScope(levelCriteria, Constants.SeasonLevel) == CriteriaMatchResult.Matched ||
                 EvaluateScope(levelCriteria, Constants.EpisodeLevel) == CriteriaMatchResult.Matched);
         var scopeWarnings = searchesUnsupportedTvLevel ? new[] { ShowLevelWarning } : [];
-        if (contentTypeScope == CriteriaMatchResult.Rejected ||
-            levelScope == CriteriaMatchResult.Rejected)
-        {
-            return EmptySupported(scopeWarnings);
-        }
 
         var context = await settingsResolver.ResolveAsync(defaultLanguagePreference, cancellationToken)
             .ConfigureAwait(false);
@@ -181,8 +179,7 @@ internal sealed class ContentMetadataSearcher(
             or Constants.EpisodeLevel;
     }
 
-    private static MetadataSearchPage EmptySupported(
-        IReadOnlyList<string> warnings)
+    private static MetadataSearchPage EmptySupported()
     {
         return new()
         {
@@ -193,17 +190,9 @@ internal sealed class ContentMetadataSearcher(
                 RequestedPage = 1,
                 HasMore = false
             },
-            Warnings = warnings
+            Warnings = []
         };
     }
-
-    private static MetadataSearchPage UnsupportedScope() => new()
-    {
-        Supported = false,
-        Matches = [],
-        PageInfo = ProviderSearchPageInfo.Unsupported,
-        Warnings = [UnsupportedScopeWarning]
-    };
 
     private static string[] TextValues(PropertyCriterion<string> criterion)
     {

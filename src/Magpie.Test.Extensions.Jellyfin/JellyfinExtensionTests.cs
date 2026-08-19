@@ -1,6 +1,8 @@
 using System;
 
+using Magpie.Core.Caching;
 using Magpie.Extensions.Jellyfin;
+using Magpie.Sdk.Caching;
 using Magpie.Sdk.Integrations;
 
 using Microsoft.Extensions.DependencyInjection;
@@ -39,6 +41,8 @@ public class JellyfinExtensionTests
         var services = new ServiceCollection();
         services.AddLogging();
         services.AddSingleton(TimeProvider.System);
+        services.AddSingleton(new MemoryCacheStore(TimeProvider.System));
+        services.AddScoped<ICacheFactory, MemoryCacheFactory>();
         new JellyfinExtension().RegisterServices(services);
 
         // Act
@@ -47,7 +51,8 @@ public class JellyfinExtensionTests
             ValidateOnBuild = true,
             ValidateScopes = true
         });
-        var subject = provider.GetRequiredService<IMediaServerIntegration>();
+        using var scope = provider.CreateScope();
+        var subject = scope.ServiceProvider.GetRequiredService<IMediaServerIntegration>();
 
         // Assert
         Assert.That(subject, Is.InstanceOf<JellyfinMediaServerIntegration>());

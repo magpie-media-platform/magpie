@@ -10,6 +10,7 @@ using Magpie.Abstractions.Jobs;
 using Magpie.Abstractions.Repositories;
 using Magpie.Core.Config;
 using Magpie.Core.Events;
+using Magpie.Core.Observability;
 using Magpie.Models;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
@@ -372,6 +373,10 @@ internal sealed class JobRuntimeBackgroundService(
                 continue;
             }
 
+            JobsTelemetry.AdmissionWaitTime.Record(
+                Math.Max(0, (_time.GetUtcNow().UtcDateTime - claimed.CreatedAt).TotalMilliseconds),
+                new KeyValuePair<string, object?>("job.type", claimed.JobType));
+
             concurrencyScheduler.CommitAdmission(selected);
             Dispatch(claimed.Id);
             admittedAny = true;
@@ -567,7 +572,16 @@ internal sealed class JobRuntimeBackgroundService(
             },
             cancellationToken).ConfigureAwait(false);
 
-        if (created is null || trigger.ExecutionMode is not JobExecutionMode.Immediate)
+        if (created is null)
+        {
+            return;
+        }
+
+        JobsTelemetry.ScheduleTriggerLag.Record(
+            Math.Max(0, (asOfUtc - expectedNextRun).TotalSeconds),
+            new KeyValuePair<string, object?>("job.type", trigger.JobType));
+
+        if (trigger.ExecutionMode is not JobExecutionMode.Immediate)
         {
             return;
         }
@@ -857,7 +871,8 @@ internal sealed class JobRuntimeBackgroundService(
                     retryPolicy,
                     job,
                     reason,
-                    timeoutAudit: true)
+                    timeoutAudit: true,
+                    reclaimKind: "timeout")
                     .ConfigureAwait(false);
             }
             catch (Exception ex)
@@ -890,7 +905,8 @@ internal sealed class JobRuntimeBackgroundService(
                 retryPolicy,
                 job,
                 reason,
-                timeoutAudit: false)
+                timeoutAudit: false,
+                reclaimKind: "stale_heartbeat")
                 .ConfigureAwait(false);
             return;
         }
@@ -955,6 +971,10 @@ internal sealed class JobRuntimeBackgroundService(
             try
             {
                 var reason = $"No registered handler for job type {job.JobType}";
+                JobsTelemetry.FailuresTotal.Add(
+                    1,
+                    new KeyValuePair<string, object?>("job.type", job.JobType),
+                    new KeyValuePair<string, object?>("reason_kind", "no_handler"));
                 logger.LogWarning(
                     "The job runtime worker will mark stale Queued job execution {JobExecutionId} Failed. " +
                     "No handler exists for {JobType}",
@@ -988,7 +1008,9 @@ internal sealed class JobRuntimeBackgroundService(
 
         try
         {
-            using var listener = eventBus.CreateListener("job.cancellation.requested");
+            using var listener = eventBus is EventBus bus
+                ? bus.CreateListener("job.cancellation.requested", localOnly: false, callSite: "cancellation")
+                : eventBus.CreateListener("job.cancellation.requested");
             await foreach (var magpieEvent in listener.ReadAllAsync(stoppingToken).ConfigureAwait(false))
             {
                 if (!TryGetJobCancellationRequest(magpieEvent, out var executionId, out var ownerNodeId))
@@ -1094,7 +1116,8 @@ internal sealed class JobRuntimeBackgroundService(
                         retryPolicy,
                         orphan,
                         reason,
-                        timeoutAudit: false)
+                        timeoutAudit: false,
+                        reclaimKind: "startup_orphan")
                         .ConfigureAwait(false);
                 }
                 catch (Exception ex)
@@ -1124,7 +1147,8 @@ internal sealed class JobRuntimeBackgroundService(
         IJobRetryPolicy retryPolicy,
         JobExecution orphan,
         string reason,
-        bool timeoutAudit)
+        bool timeoutAudit,
+        string reclaimKind)
     {
         var spec = string.IsNullOrWhiteSpace(orphan.JobType)
             ? null
@@ -1191,6 +1215,15 @@ internal sealed class JobRuntimeBackgroundService(
             return;
         }
 
+        JobsTelemetry.OrphanReclaimsTotal.Add(
+            1,
+            new KeyValuePair<string, object?>("job.type", orphan.JobType),
+            new KeyValuePair<string, object?>("reclaim_kind", reclaimKind));
+        JobsTelemetry.FailuresTotal.Add(
+            1,
+            new KeyValuePair<string, object?>("job.type", orphan.JobType),
+            new KeyValuePair<string, object?>("reason_kind", "orphan_reclaim"));
+
         logger.LogWarning(
             "The job runtime worker reclaimed orphaned Running job execution {ExecutionId} ({JobType}) " +
             "owned by node {NodeId}: {Reason}",
@@ -1201,6 +1234,7 @@ internal sealed class JobRuntimeBackgroundService(
 
         if (result.Retry is { } retry)
         {
+            JobsTelemetry.RetriesTotal.Add(1, new KeyValuePair<string, object?>("job.type", orphan.JobType));
             logger.LogInformation(
                 "The job runtime worker queued {Policy} execution {NextExecutionId} for {ExecutionId} " +
                 "({JobType}) as attempt {Attempt} at {NotBeforeAt:O}",

@@ -89,6 +89,8 @@ internal sealed class MagpieAuthenticationHandler(
             return AuthenticateResult.NoResult();
         }
 
+        Telemetry.AuthenticationFailures.Add(1, new KeyValuePair<string, object?>("scheme", failure.Provider));
+
         Logger.LogInformation(
             "Authentication failed for the {Provider} credential because {Reason}",
             failure.Provider,

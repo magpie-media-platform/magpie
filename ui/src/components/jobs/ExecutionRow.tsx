@@ -89,7 +89,10 @@ export function ExecutionRow({ execution, autoExpand = false }: ExecutionRowProp
 
     const duration = calculateDuration(execution.startedAt, execution.completedAt);
     const jobName = humanizeJobType(execution.jobType);
-    const progress = execution.progress ?? 0;
+    const progress =
+        typeof execution.progress === 'number' && Number.isFinite(execution.progress)
+            ? Math.min(isActive ? 99 : 100, Math.max(0, Math.round(execution.progress)))
+            : 0;
 
     const fillModifier =
         progress > 0

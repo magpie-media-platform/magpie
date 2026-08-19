@@ -39,7 +39,7 @@ public sealed class JellyfinExtension : IExtension
                 AllowAutoRedirect = false
             });
 
-        services.AddSingleton<IMediaServerIntegration, JellyfinMediaServerIntegration>();
+        services.AddScoped<IMediaServerIntegration, JellyfinMediaServerIntegration>();
 
         services.AddScoped<IDiagnosticCheck, JellyfinLibraryMappingDiagnostic>();
 

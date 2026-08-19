@@ -24,7 +24,7 @@ internal sealed class SubjectMetadataProviderTests
     {
         // Arrange
         var entityResolver = new Mock<IEntityResolver>();
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         var subject = new SubjectMetadataProvider(
             null!,
             entityResolver.Object,
@@ -63,7 +63,7 @@ internal sealed class SubjectMetadataProviderTests
                 UserAgent = "Magpie/test"
             });
         var entityResolver = new Mock<IEntityResolver>();
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         entityResolver.Setup(resolver => resolver.ResolveSubjectAsync(
             EntityKind.Person,
             It.IsAny<IEnumerable<MetadataContribution>>(),
@@ -106,7 +106,7 @@ internal sealed class SubjectMetadataProviderTests
                 UserAgent = "Magpie/test"
             });
         var entityResolver = new Mock<IEntityResolver>();
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         entityResolver.Setup(resolver => resolver.ResolveSubjectAsync(
             EntityKind.Studio,
             It.IsAny<IEnumerable<MetadataContribution>>(),
@@ -175,7 +175,7 @@ internal sealed class SubjectMetadataProviderTests
                 UserAgent = "Magpie/test"
             });
         var entityResolver = new Mock<IEntityResolver>();
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         entityResolver.Setup(resolver => resolver.ResolveSubjectAsync(
             EntityKind.Person,
             It.IsAny<IEnumerable<MetadataContribution>>(),
@@ -309,7 +309,7 @@ internal sealed class SubjectMetadataProviderTests
                 UserAgent = "Magpie/test"
             });
         var entityResolver = new Mock<IEntityResolver>();
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         entityResolver.Setup(resolver => resolver.ResolveSubjectAsync(
             EntityKind.Person,
             It.IsAny<IEnumerable<MetadataContribution>>(),

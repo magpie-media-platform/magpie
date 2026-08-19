@@ -416,7 +416,8 @@ public sealed class ReleaseSearchServiceTests
                 [_indexerIntegration.Object, _secondIndexerIntegration.Object],
                 [],
                 TimeProvider.System,
-                NullLogger<ReleaseSearchQueryExecutor>.Instance),
+                NullLogger<ReleaseSearchQueryExecutor>.Instance,
+                _releaseEvaluationService.Object),
             _releaseService.Object,
             _releaseEvaluationService.Object,
             [_firstReleaseComparer.Object, _secondReleaseComparer.Object],
@@ -677,7 +678,7 @@ public sealed class ReleaseSearchServiceTests
 
     [TestCase("weak", "strong", "strong")]
     [TestCase("strong", "weak", "strong")]
-    public async Task SearchAsync_PersistsPositiveDuplicateOnce_RegardlessOfPhaseOrder(
+    public async Task SearchAsync_EvaluatesDuplicateOnce_WithMergedProducingFacts(
         string firstTerm,
         string secondTerm,
         string positiveTerm)
@@ -718,15 +719,14 @@ public sealed class ReleaseSearchServiceTests
                 It.IsAny<ContentTarget>(),
                 It.IsAny<IReadOnlyList<IReadOnlyList<ContentFact>>>(),
                 It.IsAny<Release>(),
-                It.Is<IReadOnlyList<ContentFact>>(facts => facts.Count == 1 && facts[0].Value == positiveTerm)))
-            .Returns(ReleaseMatchResult.Confident);
-        _factProvider
-            .Setup(provider => provider.IsMatch(
-                It.IsAny<ContentTarget>(),
-                It.IsAny<IReadOnlyList<IReadOnlyList<ContentFact>>>(),
-                It.IsAny<Release>(),
-                It.Is<IReadOnlyList<ContentFact>>(facts => facts.Count == 1 && facts[0].Value != positiveTerm)))
-            .Returns(ReleaseMatchResult.NoMatch);
+                It.IsAny<IReadOnlyList<ContentFact>>()))
+            .Returns((
+                ContentTarget _,
+                IReadOnlyList<IReadOnlyList<ContentFact>> _,
+                Release _,
+                IReadOnlyList<ContentFact> facts) => facts.Any(fact => fact.Value == positiveTerm)
+                    ? ReleaseMatchResult.Confident
+                    : ReleaseMatchResult.NoMatch);
         _indexerIntegration
             .Setup(integration => integration.SearchAsync(
                 It.IsAny<ReleaseSearchRequest>(),
@@ -784,9 +784,16 @@ public sealed class ReleaseSearchServiceTests
         _releaseEvaluationService.Verify(
             service => service.ResolveScopeAsync(
                 It.IsAny<Release>(),
-                It.Is<IReadOnlyList<ContentFact>>(facts => facts.Count == 1 && facts[0].Value == positiveTerm),
+                It.Is<IReadOnlyList<ContentFact>>(facts =>
+                    facts.Select(fact => fact.Value).SequenceEqual(new[] { firstTerm, secondTerm })),
                 _contentHierarchyItemId,
                 It.IsAny<CancellationToken>()),
+            Times.Once);
+        _releaseEvaluationService.Verify(
+            service => service.AssessMatch(
+                It.IsAny<Release>(),
+                It.IsAny<IReadOnlyList<ContentFact>>(),
+                It.IsAny<ReleaseEvaluationContext>()),
             Times.Once);
     }
 
@@ -1356,10 +1363,16 @@ public sealed class ReleaseSearchServiceTests
                     It.IsAny<Guid?>(),
                     It.IsAny<CancellationToken>()),
                 Times.Never);
+            _releaseScopeRepository.Verify(
+                repository => repository.DeleteAsync(
+                    It.IsAny<Guid>(),
+                    It.IsAny<Guid?>(),
+                    It.IsAny<CancellationToken>()),
+                Times.Never);
             progress.Verify(
                 p => p.Report(
                     It.IsAny<double?>(),
-                    "The search completed without a query because no indexer was applicable."),
+                    "The search completed without changing saved results because no query executed."),
                 Times.Once);
         }
     }
@@ -1563,7 +1576,9 @@ public sealed class ReleaseSearchServiceTests
             requests,
             Has.Some.Matches<ReleaseSearchRequest>(request =>
                 request.IdSearchParameter == facetKey &&
-                request.IdSearchValue == "tt1160419"));
+                request.IdSearchValue == "tt1160419" &&
+                request.IdSearchSource == source &&
+                request.IdSearchIdentityValue == "tt1160419"));
     }
 
     [Test]
@@ -1862,11 +1877,15 @@ public sealed class ReleaseSearchServiceTests
         {
             Assert.That(candidates, Has.Count.EqualTo(1));
             Assert.That(candidates![0].MatchResult, Is.EqualTo(ReleaseMatchResult.Identity));
+            Assert.That(candidates[0].Release.ExternalIds.Select(externalId =>
+                (externalId.Source, externalId.Value)), Does.Contain(("imdb", "tt1160419")));
             _indexerIntegration.Verify(
                 integration => integration.SearchAsync(
                     It.Is<ReleaseSearchRequest>(request =>
                         request.IdSearchParameter == "imdbid" &&
-                        request.IdSearchValue == "tt1160419"),
+                        request.IdSearchValue == "tt1160419" &&
+                        request.IdSearchSource == "imdb" &&
+                        request.IdSearchIdentityValue == "tt1160419"),
                     It.IsAny<IReadOnlyDictionary<string, string>>(),
                     It.IsAny<CancellationToken>()),
                 Times.Once);
@@ -1875,7 +1894,7 @@ public sealed class ReleaseSearchServiceTests
                     It.Is<ReleaseSearchRequest>(request => request.IdSearchParameter == null),
                     It.IsAny<IReadOnlyDictionary<string, string>>(),
                     It.IsAny<CancellationToken>()),
-                Times.AtLeastOnce);
+                Times.Never);
             _factProvider.Verify(
                 provider => provider.IsMatch(
                     It.IsAny<ContentTarget>(),

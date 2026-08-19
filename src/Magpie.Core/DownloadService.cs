@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 
 using Magpie.Abstractions;
 using Magpie.Abstractions.Repositories;
+using Magpie.Core.Observability;
 using Magpie.Models;
 using Magpie.Models.Arguments;
 using Magpie.Models.Bulk;
@@ -141,10 +142,13 @@ internal sealed class DownloadService(
         bool ignoreFailedTaint = false,
         CancellationToken cancellationToken = default)
     {
+        var modeTag = new KeyValuePair<string, object?>("mode", ignoreFailedTaint ? "interactive" : "auto");
+
         var integration = downloadClientIntegrations.LastOrDefault(
             candidate => string.Equals(candidate.ProviderType, source.ProviderType, StringComparison.Ordinal));
         if (integration is null)
         {
+            ReleaseTelemetry.Grabs.Add(1, modeTag, new("outcome", "no_download_client"));
             throw new InvalidOperationException(
                 $"No download client integration is available for provider type {source.ProviderType}.");
         }
@@ -156,6 +160,9 @@ internal sealed class DownloadService(
                 .ConfigureAwait(false);
             if (taints.Count > 0)
             {
+                var refusedTag = new KeyValuePair<string, object?>("ignored", "false");
+                ReleaseTelemetry.GrabTaints.Add(1, refusedTag);
+                ReleaseTelemetry.Grabs.Add(1, modeTag, new("outcome", "tainted"));
                 logger.LogInformation(
                     "The download service refused the grab of release {ReleaseId} on client " +
                     "{DownloadClientId}. {TaintCount} prior Failed rows exist",
@@ -167,6 +174,8 @@ internal sealed class DownloadService(
         }
         else
         {
+            var ignoredTag = new KeyValuePair<string, object?>("ignored", "true");
+            ReleaseTelemetry.GrabTaints.Add(1, ignoredTag);
             logger.LogInformation(
                 "The manual grab of release {ReleaseId} on client {DownloadClientId} ignored the " +
                 "prior Failed grab taint",
@@ -182,6 +191,7 @@ internal sealed class DownloadService(
                 cancellationToken)
             .ConfigureAwait(false);
 
+        ReleaseTelemetry.Grabs.Add(1, modeTag, new("outcome", "accepted"));
         return GrabResult.FromSuccess(downloadInfo);
     }
 
@@ -755,6 +765,7 @@ internal sealed class DownloadService(
 
         var accepted = await dispatch(capability, download.ExternalId, client.Settings, cancellationToken)
             .ConfigureAwait(false);
+
         if (!accepted)
         {
             return false;

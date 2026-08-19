@@ -64,6 +64,7 @@ describe('useEventTriggerCrud', () => {
                 filters: [],
                 enabled: true,
                 delaySeconds: 0,
+                parameters: {},
             });
         });
 
@@ -88,6 +89,7 @@ describe('useEventTriggerCrud', () => {
                 filters: [],
                 enabled: true,
                 delaySeconds: 5,
+                parameters: {},
             });
         });
 
@@ -113,6 +115,7 @@ describe('useEventTriggerCrud', () => {
                 filters: [],
                 enabled: true,
                 delaySeconds: 20,
+                parameters: {},
             });
         });
 
@@ -120,6 +123,57 @@ describe('useEventTriggerCrud', () => {
             expect.objectContaining({
                 id: 'trigger-1',
                 patch: expect.objectContaining({ delaySeconds: { value: 20 } }),
+            }),
+        );
+    });
+
+    it('stores event binding expressions in trigger parameters', async () => {
+        const { result } = renderHook(() => useEventTriggerCrud());
+
+        await act(async () => {
+            await result.current.handleSubmit({
+                name: 'Bound Trigger',
+                templateId: 'ContentMetadataRefreshItem',
+                eventNamePatterns: ['content.added'],
+                filters: [],
+                enabled: true,
+                delaySeconds: 0,
+                parameters: { contentItemId: '${event.content.itemId}' },
+            });
+        });
+
+        expect(mockCreateTrigger).toHaveBeenCalledWith(
+            expect.objectContaining({ parameters: { contentItemId: '${event.content.itemId}' } }),
+        );
+    });
+
+    it('patches changed event trigger parameters', async () => {
+        mockTriggers = [makeTrigger({ parameters: { contentItemId: 'static', removed: 'old' } })];
+        const { result } = renderHook(() => useEventTriggerCrud());
+
+        act(() => {
+            result.current.handleEdit(mockTriggers[0]);
+        });
+
+        await act(async () => {
+            await result.current.handleSubmit({
+                ...result.current.formInitialValues!,
+                parameters: {
+                    contentItemId: '${event.content.itemId}',
+                    added: 'new',
+                },
+            });
+        });
+
+        expect(mockUpdateTrigger).toHaveBeenCalledWith(
+            expect.objectContaining({
+                patch: expect.objectContaining({
+                    parameters: {
+                        add: { added: 'new' },
+                        update: { contentItemId: '${event.content.itemId}' },
+                        remove: ['removed'],
+                    },
+                }),
             }),
         );
     });
@@ -142,6 +196,7 @@ describe('useEventTriggerCrud', () => {
             expect.objectContaining({
                 eventNamePatterns: ['a.b', 'c.d', 'e.f'],
                 delaySeconds: 15,
+                parameters: {},
             }),
         );
     });
@@ -201,6 +256,7 @@ describe('useEventTriggerCrud', () => {
                 ],
                 enabled: true,
                 delaySeconds: 0,
+                parameters: {},
             });
         });
 

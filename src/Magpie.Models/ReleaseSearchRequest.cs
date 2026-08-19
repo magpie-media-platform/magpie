@@ -58,4 +58,9 @@ public sealed record ReleaseSearchRequest
     /// The category slugs to search in.
     /// </summary>
     public IReadOnlyList<string> Categories { get; init; } = [];
+
+    /// <summary>
+    /// The maximum number of results that the caller needs from this search.
+    /// </summary>
+    public int MaximumResults { get; init; } = 20;
 }

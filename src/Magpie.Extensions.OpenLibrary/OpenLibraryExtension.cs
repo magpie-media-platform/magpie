@@ -43,7 +43,6 @@ public sealed class OpenLibraryExtension : IExtension
         services.AddSingleton<IOpenLibraryClient, OpenLibraryClient>();
         services.AddScoped<ISettingsResolver, SettingsResolver>();
         services.AddSingleton<IQueryPlanner, QueryPlanner>();
-        services.AddSingleton<IQueryCache, QueryCache>();
         services.AddScoped<IQueryExecutor, QueryExecutor>();
         services.AddScoped<ISearchEngine, SearchEngine>();
         services.AddScoped<IContentHierarchyMetadataSearcher, ContentMetadataSearcher>();

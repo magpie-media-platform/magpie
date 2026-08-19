@@ -9,6 +9,9 @@ internal sealed class SearchPath
     [YamlMember(Alias = "path", ApplyNamingConventions = false)]
     public string Path { get; set; } = string.Empty;
 
+    [YamlMember(Alias = "method", ApplyNamingConventions = false)]
+    public string? Method { get; set; }
+
     [YamlMember(Alias = "inputs", ApplyNamingConventions = false)]
     public Dictionary<string, string>? Inputs { get; set; }
 

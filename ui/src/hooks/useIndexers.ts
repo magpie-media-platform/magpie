@@ -49,6 +49,10 @@ export interface ApiIndexer {
     connectionCount?: number;
 
     definitionType?: string | null;
+
+    searchFacets?: string[][];
+
+    supportsKeywordSearch?: boolean;
 }
 
 export interface ApiIndexerConnection {

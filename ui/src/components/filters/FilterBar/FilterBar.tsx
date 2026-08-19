@@ -1,4 +1,12 @@
-import { useState, useCallback, useEffect, useRef, forwardRef, type ComponentPropsWithoutRef } from 'react';
+import {
+    useState,
+    useCallback,
+    useEffect,
+    useRef,
+    forwardRef,
+    type ComponentPropsWithoutRef,
+    type KeyboardEvent,
+} from 'react';
 import {
     FunnelIcon,
     CaretDownIcon,
@@ -29,10 +37,12 @@ export interface SavedFilterOption {
 
 const SAVED_FILTER_NONE = '__none__';
 
-export interface FilterBarProps extends Omit<ComponentPropsWithoutRef<'div'>, 'onChange'> {
+export interface FilterBarProps extends Omit<ComponentPropsWithoutRef<'div'>, 'onChange' | 'onSubmit'> {
     value: string;
 
     onChange: (value: string) => void;
+
+    onSubmit?: () => void;
 
     context?: 'content' | 'subject';
 
@@ -78,6 +88,7 @@ export const FilterBar = forwardRef<HTMLDivElement, FilterBarProps>(
         {
             value,
             onChange,
+            onSubmit,
             context = 'content',
             loading = false,
             onSave,
@@ -98,6 +109,7 @@ export const FilterBar = forwardRef<HTMLDivElement, FilterBarProps>(
             defaultSubjectKind,
             lockSubjectKind,
             className,
+            onKeyDownCapture,
             ...props
         },
         ref,
@@ -166,6 +178,36 @@ export const FilterBar = forwardRef<HTMLDivElement, FilterBarProps>(
             [canUseSimpleMode],
         );
 
+        const handleKeyDownCapture = useCallback(
+            (event: KeyboardEvent<HTMLDivElement>) => {
+                onKeyDownCapture?.(event);
+                const target = event.target;
+                if (
+                    event.defaultPrevented ||
+                    event.key !== 'Enter' ||
+                    event.nativeEvent.isComposing ||
+                    loading ||
+                    readOnly ||
+                    !(target instanceof HTMLElement) ||
+                    target instanceof HTMLTextAreaElement ||
+                    !target.closest('input, [contenteditable="true"], [role="textbox"]') ||
+                    target.closest('[aria-multiline="true"]') ||
+                    target.closest('[role="combobox"][aria-expanded="true"]') ||
+                    event.currentTarget.querySelector('[role="listbox"]')
+                ) {
+                    return;
+                }
+
+                event.preventDefault();
+                if (onSubmit) {
+                    onSubmit();
+                } else {
+                    onChange(value);
+                }
+            },
+            [loading, onChange, onKeyDownCapture, onSubmit, readOnly, value],
+        );
+
         const classes = [
             'filter-bar',
             isExpanded && 'filter-bar--expanded',
@@ -176,7 +218,14 @@ export const FilterBar = forwardRef<HTMLDivElement, FilterBarProps>(
             .join(' ');
 
         return (
-            <div ref={ref} className={classes} data-component="filter-bar" data-expanded={isExpanded} {...props}>
+            <div
+                ref={ref}
+                className={classes}
+                data-component="filter-bar"
+                data-expanded={isExpanded}
+                onKeyDownCapture={handleKeyDownCapture}
+                {...props}
+            >
                 <div className="filter-bar__header">
                     {collapsible ? (
                         <button

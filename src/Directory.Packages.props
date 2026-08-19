@@ -52,6 +52,12 @@
       <PrivateAssets>all</PrivateAssets>
     </PackageVersion>
     <PackageVersion Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.2" />
+    <PackageVersion Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.17.0" />
+    <PackageVersion Include="OpenTelemetry.Extensions.Hosting" Version="1.17.0" />
+    <PackageVersion Include="OpenTelemetry.Instrumentation.AspNetCore" Version="1.17.0" />
+    <PackageVersion Include="OpenTelemetry.Instrumentation.EntityFrameworkCore" Version="1.17.0-beta.1" />
+    <PackageVersion Include="OpenTelemetry.Instrumentation.Http" Version="1.17.0" />
+    <PackageVersion Include="OpenTelemetry.Instrumentation.Runtime" Version="1.17.0" />
     <PackageVersion Include="NUnit" Version="4.4.0" />
     <PackageVersion Include="NUnit.Analyzers" Version="4.11.2">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
@@ -68,6 +74,7 @@
     <PackageVersion Include="Superpower" Version="3.0.0" />
     <PackageVersion Include="Swashbuckle.AspNetCore" Version="7.3.1" />
     <PackageVersion Include="System.CommandLine" Version="2.0.0" />
+    <PackageVersion Include="System.Diagnostics.DiagnosticSource" Version="10.0.9" />
     <PackageVersion Include="System.DirectoryServices.Protocols" Version="9.0.2" />
     <PackageVersion Include="System.IdentityModel.Tokens.Jwt" Version="8.7.0" />
     <PackageVersion Include="System.Reactive" Version="6.1.0" />

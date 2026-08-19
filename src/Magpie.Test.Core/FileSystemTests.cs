@@ -6,11 +6,11 @@ using System.Threading.Tasks;
 
 using Magpie.Abstractions.Repositories;
 using Magpie.Core;
+using Magpie.Core.Caching;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Sdk.Services;
 
-using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging.Abstractions;
 
 using Moq;
@@ -22,7 +22,8 @@ namespace Magpie.Test.Core;
 [TestFixture]
 public class FileSystemTests
 {
-    private MemoryCache _cache = null!;
+    private MemoryCacheFactory _cacheFactory = null!;
+    private MemoryCacheStore _cacheStore = null!;
     private Mock<IBlockedFileTypeRepository> _blockedFileTypes = null!;
     private Mock<IMimeMappingRepository> _mimeMappings = null!;
     private IFileSystem _subject = null!;
@@ -30,20 +31,22 @@ public class FileSystemTests
     [OneTimeSetUp]
     public void SetUp()
     {
-        _cache = new(new MemoryCacheOptions());
+        _cacheStore = new MemoryCacheStore(TimeProvider.System);
+        _cacheFactory = new MemoryCacheFactory(_cacheStore);
         _blockedFileTypes = new Mock<IBlockedFileTypeRepository>();
         _mimeMappings = new Mock<IMimeMappingRepository>();
         _subject = new FileSystem(
             _blockedFileTypes.Object,
             _mimeMappings.Object,
-            _cache,
+            _cacheFactory,
             NullLogger<FileSystem>.Instance);
     }
 
     [OneTimeTearDown]
     public void TearDown()
     {
-        _cache.Dispose();
+        _cacheFactory.Dispose();
+        _cacheStore.Dispose();
     }
 
     [TestCase(null, FileKind.Unknown)]
@@ -79,6 +82,42 @@ public class FileSystemTests
             Assert.That(_subject.IsPathWithin(root, child), Is.True);
             Assert.That(_subject.IsPathWithin(root, sibling), Is.False);
             Assert.That(_subject.PathsEqual(root, root + Path.DirectorySeparatorChar), Is.True);
+        }
+    }
+
+    [Test]
+    public void PathContainsLink_Result_WhenFileIsSymbolicLink()
+    {
+        // Arrange
+        var testRoot = Path.Combine(Path.GetTempPath(), "magpie-file-system-tests", Guid.NewGuid().ToString("N"));
+        var outsidePath = Path.Combine(Path.GetTempPath(), "magpie-file-system-tests", Guid.NewGuid().ToString("N"));
+        var linkPath = Path.Combine(testRoot, "linked.txt");
+        Directory.CreateDirectory(testRoot);
+        Directory.CreateDirectory(outsidePath);
+        File.WriteAllText(Path.Combine(outsidePath, "target.txt"), "target");
+
+        try
+        {
+            try
+            {
+                File.CreateSymbolicLink(linkPath, Path.Combine(outsidePath, "target.txt"));
+            }
+            catch (Exception ex) when (ex is UnauthorizedAccessException or IOException or
+                PlatformNotSupportedException)
+            {
+                Assert.Ignore("The platform does not permit symbolic link creation.");
+            }
+
+            // Act
+            var result = _subject.PathContainsLink(testRoot, linkPath);
+
+            // Assert
+            Assert.That(result, Is.True);
+        }
+        finally
+        {
+            Directory.Delete(testRoot, recursive: true);
+            Directory.Delete(outsidePath, recursive: true);
         }
     }
 

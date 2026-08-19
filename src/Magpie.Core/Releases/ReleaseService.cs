@@ -313,38 +313,30 @@ internal sealed class ReleaseService(
         var groups = new List<(
             Release Release,
             List<Guid> ReleaseIds,
-            HashSet<(string Authority, string Value)> IdentityKeys,
-            HashSet<(Guid IndexerId, string? ExternalId, Uri? InfoUrl)> SourceIdentities,
+            List<Release> Observations,
             List<ReleaseSource> Sources)>();
         foreach (var release in releases.OrderBy(item => item.CreatedAt).ThenBy(item => item.Id))
         {
             EnsureViewSource(release);
-            var identityKeys = ViewIdentityKeys(release);
-            var sourceIdentities = ViewSourceIdentities(release);
             var matchingGroupIndexes = Enumerable.Range(0, groups.Count)
-                .Where(index => SameLogicalRelease(
-                    groups[index].IdentityKeys,
-                    identityKeys,
-                    groups[index].SourceIdentities,
-                    sourceIdentities))
+                .Where(index => groups[index].Observations.Any(existing =>
+                    existing.RefersToSameRelease(release)))
                 .ToArray();
             if (matchingGroupIndexes.Length == 0)
             {
-                groups.Add((release, [release.Id], identityKeys, sourceIdentities, [.. release.Sources]));
+                groups.Add((release, [release.Id], [release], [.. release.Sources]));
                 continue;
             }
 
             var group = groups[matchingGroupIndexes[0]];
             group.ReleaseIds.Add(release.Id);
-            group.IdentityKeys.UnionWith(identityKeys);
-            group.SourceIdentities.UnionWith(sourceIdentities);
+            group.Observations.Add(release);
             group.Sources.AddRange(release.Sources);
             foreach (var index in matchingGroupIndexes.Skip(1).Reverse())
             {
                 var mergedGroup = groups[index];
                 group.ReleaseIds.AddRange(mergedGroup.ReleaseIds);
-                group.IdentityKeys.UnionWith(mergedGroup.IdentityKeys);
-                group.SourceIdentities.UnionWith(mergedGroup.SourceIdentities);
+                group.Observations.AddRange(mergedGroup.Observations);
                 group.Sources.AddRange(mergedGroup.Sources);
                 groups.RemoveAt(index);
             }
@@ -359,66 +351,6 @@ internal sealed class ReleaseService(
                     .DistinctBy(source => (source.IndexerId, source.ExternalId, source.InfoUrl))
                     .ToArray()))
         ];
-    }
-
-    private static HashSet<(string Authority, string Value)> ViewIdentityKeys(Release release) =>
-        release.IdentityKeys
-            .Where(key => !string.IsNullOrWhiteSpace(key.Authority) && !string.IsNullOrWhiteSpace(key.Value))
-            .Select(key => (
-                Authority: key.Authority.Trim().ToLowerInvariant(),
-
-                Value: key.Value.Trim().ToLowerInvariant()))
-            .ToHashSet();
-
-    private static HashSet<(Guid IndexerId, string? ExternalId, Uri? InfoUrl)> ViewSourceIdentities(
-        Release release)
-    {
-        var identities = new HashSet<(Guid IndexerId, string? ExternalId, Uri? InfoUrl)>();
-        foreach (var source in release.Sources)
-        {
-            if (source.IndexerId is not { } indexerId)
-            {
-                continue;
-            }
-
-            if (!string.IsNullOrWhiteSpace(source.ExternalId))
-            {
-                identities.Add((indexerId, source.ExternalId, null));
-            }
-            else if (source.InfoUrl is not null)
-            {
-                identities.Add((indexerId, null, source.InfoUrl));
-            }
-        }
-
-        return identities;
-    }
-
-    private static bool SameLogicalRelease(
-        HashSet<(string Authority, string Value)> leftKeys,
-        HashSet<(string Authority, string Value)> rightKeys,
-        HashSet<(Guid IndexerId, string? ExternalId, Uri? InfoUrl)> leftSources,
-        HashSet<(Guid IndexerId, string? ExternalId, Uri? InfoUrl)> rightSources)
-    {
-        var leftImmutableKeys = leftKeys
-            .Where(key => key.Authority != "fallback" &&
-                !key.Authority.StartsWith("indexer:", StringComparison.Ordinal))
-            .ToHashSet();
-        var rightImmutableKeys = rightKeys
-            .Where(key => key.Authority != "fallback" &&
-                !key.Authority.StartsWith("indexer:", StringComparison.Ordinal))
-            .ToHashSet();
-        if (leftImmutableKeys.Count > 0 && rightImmutableKeys.Count > 0)
-        {
-            return leftImmutableKeys.Overlaps(rightImmutableKeys);
-        }
-
-        if (leftKeys.Overlaps(rightKeys))
-        {
-            return true;
-        }
-
-        return leftSources.Overlaps(rightSources);
     }
 
     private static void EnsureViewSource(Release release)

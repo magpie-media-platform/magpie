@@ -25,5 +25,6 @@ internal sealed class MediaFileConfiguration : IEntityTypeConfiguration<MediaFil
             .OnDelete(DeleteBehavior.Restrict);
         builder.HasIndex(e => e.ContentItemId);
         builder.HasIndex(e => e.FilePath).IsUnique();
+        builder.HasIndex(e => e.PathKey).IsUnique();
     }
 }

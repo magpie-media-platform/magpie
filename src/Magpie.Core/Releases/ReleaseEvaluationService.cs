@@ -9,6 +9,7 @@ using System.Threading.Tasks;
 
 using Magpie.Abstractions.Releases;
 using Magpie.Abstractions.Repositories;
+using Magpie.Core.Observability;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
@@ -391,6 +392,18 @@ internal sealed class ReleaseEvaluationService(
                 release.Title);
         }
 
+        ReleaseTelemetry.ReleasesEvaluated.Add(
+            1,
+            new KeyValuePair<string, object?>(
+                "match_result",
+                matchResult switch
+                {
+                    ReleaseMatchResult.Identity => "identity",
+                    ReleaseMatchResult.Confident => "confident",
+                    ReleaseMatchResult.Indeterminate => "indeterminate",
+                    _ => "no_match",
+                }));
+
         return new ReleaseAssessment
         {
             MatchResult = matchResult,
@@ -426,6 +439,22 @@ internal sealed class ReleaseEvaluationService(
         var searchedContext = await CreateEvaluationContextAsync(contentHierarchyItemId, cancellationToken)
             .ConfigureAwait(false);
         var searchedMatch = AssessMatch(release, releaseFacts, searchedContext);
+        return await ResolveScopeAsync(
+            release,
+            releaseFacts,
+            searchedContext,
+            searchedMatch,
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    internal async Task<ReleaseScopeResolution> ResolveScopeAsync(
+        Release release,
+        IReadOnlyList<ContentFact> releaseFacts,
+        ReleaseEvaluationContext searchedContext,
+        ReleaseAssessment searchedMatch,
+        CancellationToken cancellationToken = default)
+    {
+        var contentHierarchyItemId = searchedContext.ContentHierarchyItemId;
         List<object>? scopeTrace = logger.IsEnabled(LogLevel.Trace) ? [] : null;
         if (scopeTrace is not null)
         {
@@ -933,6 +962,10 @@ internal sealed class ReleaseEvaluationService(
         var listExclude = FirstMatchingRule(listRules, RuleKind.Exclude, properties);
         if (listExclude is not null)
         {
+            ReleaseTelemetry.QualityDecisions.Add(
+                1,
+                new KeyValuePair<string, object?>("decision", "excluded"),
+                new KeyValuePair<string, object?>("cutoff_met", false));
             return QualityResult(
                 matchedQualityTierId: null,
                 matchedRankOrdinal: null,
@@ -945,6 +978,10 @@ internal sealed class ReleaseEvaluationService(
         var listAcceptFailure = FirstUnmetAcceptRule(listRules, properties);
         if (listAcceptFailure is not null)
         {
+            ReleaseTelemetry.QualityDecisions.Add(
+                1,
+                new KeyValuePair<string, object?>("decision", "accept_rule_unmet"),
+                new KeyValuePair<string, object?>("cutoff_met", false));
             return QualityResult(
                 matchedQualityTierId: null,
                 matchedRankOrdinal: null,
@@ -1000,6 +1037,11 @@ internal sealed class ReleaseEvaluationService(
         var reasons = isAcceptable
             ? matched.Select(rank => $"Matched {rank.QualityTier!.Name}").ToArray()
             : ["No quality tier matched."];
+
+        ReleaseTelemetry.QualityDecisions.Add(
+            1,
+            new KeyValuePair<string, object?>("decision", matchedRank is null ? "no_tier_matched" : "matched"),
+            new KeyValuePair<string, object?>("cutoff_met", isCutoffMet));
 
         return QualityResult(
             matchedRank?.QualityTierId,

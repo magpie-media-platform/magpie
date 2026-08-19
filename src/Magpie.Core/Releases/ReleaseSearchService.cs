@@ -10,6 +10,7 @@ using Magpie.Abstractions.Releases;
 using Magpie.Abstractions.Repositories;
 using Magpie.Core.Events;
 using Magpie.Core.Jobs;
+using Magpie.Core.Observability;
 using Magpie.Models;
 using Magpie.Models.Api;
 using Magpie.Models.Arguments;
@@ -208,14 +209,12 @@ internal sealed class ReleaseSearchService(
     }
 
     private static IReadOnlyList<ReleaseSearchPhase> BuildPlan(
-        IReadOnlyList<IReadOnlyList<ContentFact>> factSets,
-        IReadOnlyList<IReadOnlyCollection<string>> searchFacets,
-        bool supportsKeywordSearch)
+        IReadOnlyList<IReadOnlyList<ContentFact>> factSets)
     {
         var phases = new List<ReleaseSearchPhase>();
         foreach (var factSet in factSets)
         {
-            if (TryBuildPhase(factSet, searchFacets, supportsKeywordSearch) is not { } phase ||
+            if (TryBuildPhase(factSet) is not { } phase ||
                 ContainsEquivalentPhase(phases, phase))
             {
                 continue;
@@ -224,16 +223,12 @@ internal sealed class ReleaseSearchService(
             phases.Add(phase);
         }
 
-        return phases;
+        return [.. phases.OrderBy(phase => string.IsNullOrWhiteSpace(phase.Request.IdSearchParameter) ? 1 : 0)];
     }
 
-    private static ReleaseSearchPhase? TryBuildPhase(
-        IReadOnlyList<ContentFact> factSet,
-        IReadOnlyList<IReadOnlyCollection<string>> searchFacets,
-        bool supportsKeywordSearch)
+    private static ReleaseSearchPhase? TryBuildPhase(IReadOnlyList<ContentFact> factSet)
     {
         var values = new List<string>();
-        var requiredFacetKeys = new List<string>();
         var hasAnyFacet = false;
         var idFactIndex = -1;
         string? idSearchParameter = null;
@@ -253,11 +248,6 @@ internal sealed class ReleaseSearchService(
             }
 
             hasAnyFacet = true;
-            foreach (var key in fact.Facets.Keys)
-            {
-                requiredFacetKeys.Add(key);
-            }
-
             if (!string.IsNullOrWhiteSpace(fact.Value) || fact.Facets.Count != 1)
             {
                 continue;
@@ -266,7 +256,7 @@ internal sealed class ReleaseSearchService(
             var pair = fact.Facets.Single();
             if (idFactIndex >= 0)
             {
-                return null;
+                continue;
             }
 
             idFactIndex = i;
@@ -274,9 +264,7 @@ internal sealed class ReleaseSearchService(
             idSearchValue = pair.Value;
         }
 
-        if ((values.Count == 0 && !hasAnyFacet) ||
-            (values.Count > 0 && !supportsKeywordSearch) ||
-            (hasAnyFacet && !FitsAnyFacetSet(requiredFacetKeys, values.Count > 0, searchFacets)))
+        if (values.Count == 0 && !hasAnyFacet)
         {
             return null;
         }
@@ -315,29 +303,12 @@ internal sealed class ReleaseSearchService(
                 Title = values.Count > 0 ? string.Join(" ", values) : null,
                 IdSearchParameter = idSearchParameter,
                 IdSearchValue = idSearchValue,
+                IdSearchSource = idSearchParameter,
+                IdSearchIdentityValue = idSearchValue,
                 Criteria = criteria,
             },
             ReleaseFacts = releaseFacts,
         };
-    }
-
-    private static bool FitsAnyFacetSet(
-        IReadOnlyList<string> requiredFacetKeys,
-        bool requiresQ,
-        IReadOnlyList<IReadOnlyCollection<string>> searchFacets)
-    {
-        var required = requiredFacetKeys.Select(key => key.NormalizeExternalIdentifierName()).ToArray();
-
-        foreach (var set in searchFacets)
-        {
-            var available = set.Select(f => f.NormalizeExternalIdentifierName()).ToHashSet(StringComparer.Ordinal);
-            if ((!requiresQ || available.Contains("Q")) && required.All(available.Contains))
-            {
-                return true;
-            }
-        }
-
-        return false;
     }
 
     private static bool ContainsEquivalentPhase(
@@ -351,8 +322,14 @@ internal sealed class ReleaseSearchService(
         return string.Equals(leftRequest.Title, rightRequest.Title, StringComparison.Ordinal) &&
             string.Equals(leftRequest.IdSearchParameter, rightRequest.IdSearchParameter, StringComparison.Ordinal) &&
             string.Equals(leftRequest.IdSearchValue, rightRequest.IdSearchValue, StringComparison.Ordinal) &&
+            string.Equals(leftRequest.IdSearchSource, rightRequest.IdSearchSource, StringComparison.Ordinal) &&
+            string.Equals(
+                leftRequest.IdSearchIdentityValue,
+                rightRequest.IdSearchIdentityValue,
+                StringComparison.Ordinal) &&
             CriteriaEqual(leftRequest.Criteria, rightRequest.Criteria) &&
-            ReleaseFactsEqual(left.ReleaseFacts, right.ReleaseFacts);
+            left.ReleaseFacts.Count == right.ReleaseFacts.Count &&
+            left.ReleaseFacts.Zip(right.ReleaseFacts).All(pair => pair.First.ContentEquals(pair.Second));
     }
 
     private static bool CriteriaEqual(
@@ -385,87 +362,38 @@ internal sealed class ReleaseSearchService(
         return !rightEnumerator.MoveNext();
     }
 
-    private static bool ReleaseFactsEqual(IReadOnlyList<ContentFact> left, IReadOnlyList<ContentFact> right)
-    {
-        if (left.Count != right.Count)
-        {
-            return false;
-        }
-
-        for (var i = 0; i < left.Count; i++)
-        {
-            if (!string.Equals(left[i].Value, right[i].Value, StringComparison.Ordinal) ||
-                !FacetsEqual(left[i].Facets, right[i].Facets))
-            {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
-    private static bool FacetsEqual(
-        IReadOnlyDictionary<string, string> left,
-        IReadOnlyDictionary<string, string> right) =>
-        left.Count == right.Count &&
-        left.All(pair => right.TryGetValue(pair.Key, out var value) &&
-            string.Equals(pair.Value, value, StringComparison.Ordinal));
-
     private bool IsDuplicateCandidate(Release release, Release candidate)
-    {
-        var releaseHasIdentity = false;
-        var candidateHasIdentity = candidate.IdentityKeys.Any(candidateKey =>
-            !string.IsNullOrWhiteSpace(candidateKey.Authority) &&
-            !string.IsNullOrWhiteSpace(candidateKey.Value));
-        foreach (var releaseKey in release.IdentityKeys)
-        {
-            if (string.IsNullOrWhiteSpace(releaseKey.Authority) ||
-                string.IsNullOrWhiteSpace(releaseKey.Value))
-            {
-                continue;
-            }
-
-            releaseHasIdentity = true;
-            if (candidate.IdentityKeys.Any(candidateKey =>
-                string.Equals(
-                    releaseKey.Authority?.Trim(),
-                    candidateKey.Authority?.Trim(),
-                    StringComparison.OrdinalIgnoreCase) &&
-                string.Equals(
-                    releaseKey.Value?.Trim(),
-                    candidateKey.Value?.Trim(),
-                    StringComparison.OrdinalIgnoreCase)))
-            {
-                return true;
-            }
-        }
-
-        if (releaseHasIdentity && candidateHasIdentity)
-        {
-            return false;
-        }
-
-        return release.IndexerId is { } indexerId &&
-            candidate.IndexerId == indexerId &&
-            !string.IsNullOrWhiteSpace(release.ExternalId) &&
-            string.Equals(release.ExternalId, candidate.ExternalId, StringComparison.Ordinal);
-    }
+        => release.RefersToSameRelease(candidate);
 
     public async Task<IReadOnlyList<InteractiveSearchCandidate>?> SearchInteractiveAsync(
         Guid contentHierarchyItemId,
         CancellationToken cancellationToken = default)
     {
+        using var activity = ReleaseTelemetry.Source.StartActivity("ReleaseSearch");
+        activity?.SetTag("content_hierarchy_item_id", contentHierarchyItemId.ToString());
+        activity?.SetTag("trigger", "interactive");
+        activity?.SetTag("escalation_turn", false);
+
+        static void RecordTurn(string outcome) =>
+            ReleaseTelemetry.SearchTurns.Add(
+                1,
+                new KeyValuePair<string, object?>("trigger", "interactive"),
+                new KeyValuePair<string, object?>("escalation", false),
+                new KeyValuePair<string, object?>("outcome", outcome));
+
         var context = await releaseEvaluationService
             .CreateEvaluationContextAsync(contentHierarchyItemId, cancellationToken)
             .ConfigureAwait(false);
         if (context.Target is not { } target)
         {
+            RecordTurn("no_target");
             return null;
         }
 
         var factSets = context.ContentFacts;
         if (factSets.Count == 0)
         {
+            RecordTurn("no_plan");
             logger.LogInformation(
                 "The interactive search found no terms for content hierarchy item {ContentHierarchyItemId}",
                 contentHierarchyItemId);
@@ -473,13 +401,16 @@ internal sealed class ReleaseSearchService(
         }
 
         var contentType = target.Item.ContentType;
-        var (searchFacets, supportsKeywordSearch) = await AggregateSearchCapabilitiesAsync(
-            contentType,
+        var (searchFacets, supportsKeywordSearch, connectionCount) = await AggregateSearchCapabilitiesAsync(
             cancellationToken)
             .ConfigureAwait(false);
-        var plan = BuildPlan(factSets, searchFacets, supportsKeywordSearch);
+        var plan = BuildPlan(factSets);
+
+        activity?.SetTag("phase_count", plan.Count);
+        activity?.SetTag("indexer_connection_count", connectionCount);
         if (plan.Count == 0)
         {
+            RecordTurn("no_plan");
             logger.LogInformation(
                 "The interactive search built no query plan for content hierarchy item " +
                 "{ContentHierarchyItemId}. No indexer accepted the search terms of this item",
@@ -514,68 +445,75 @@ internal sealed class ReleaseSearchService(
 
         var coalesced =
             new List<(Release Release, IReadOnlyList<ContentFact> ReleaseFacts, ReleaseAssessment Assessment)>();
-        var executedPhases = await queryExecutor.ExecuteAsync(
-            plan,
-            categories,
-            applicableIndexerIds,
-            cancellationToken: cancellationToken).ConfigureAwait(false);
-        foreach (var phase in executedPhases)
+        IReadOnlyList<ReleaseSearchPhase> executedPhases;
+        if (queryExecutor is ReleaseSearchQueryExecutor { CanExecutePlan: true } engine)
         {
-            foreach (var release in phase.Releases)
+            var execution = await engine.ExecutePlanAsync(
+                plan,
+                categories,
+                applicableIndexerIds,
+                context,
+                automatic: false,
+                maximumResults: PageSize,
+                cancellationToken: cancellationToken,
+                useCache: false).ConfigureAwait(false);
+            executedPhases = execution.ExecutedRoutes;
+            coalesced.AddRange(execution.Results.Select(result =>
+                (result.Release, result.ReleaseFacts, result.Assessment)));
+        }
+        else
+        {
+            executedPhases = await queryExecutor.ExecuteAsync(
+                plan,
+                categories,
+                applicableIndexerIds,
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+            foreach (var phase in executedPhases)
             {
-                ReleaseAssessment assessment;
-                try
+                foreach (var release in phase.Releases)
                 {
-                    assessment = releaseEvaluationService.AssessMatch(release, phase.ReleaseFacts, context);
-                }
-                catch (Exception ex)
-                {
-                    logger.LogWarning(ex, "Evaluation of interactive release {ReleaseTitle} failed", release.Title);
-                    assessment = new ReleaseAssessment { MatchResult = ReleaseMatchResult.NoMatch };
-                }
+                    ReleaseAssessment assessment;
+                    try
+                    {
+                        assessment = releaseEvaluationService.AssessMatch(release, phase.ReleaseFacts, context);
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.LogWarning(ex, "Evaluation of interactive release {ReleaseTitle} failed", release.Title);
+                        assessment = new ReleaseAssessment { MatchResult = ReleaseMatchResult.NoMatch };
+                    }
 
-                var existingIndex = coalesced.FindIndex(existing => IsDuplicateCandidate(release, existing.Release));
-                var disposition = "added";
-                if (existingIndex < 0)
-                {
-                    coalesced.Add((release, phase.ReleaseFacts, assessment));
-                }
-                else if (assessment.MatchResult > coalesced[existingIndex].Assessment.MatchResult)
-                {
-                    coalesced[existingIndex] = (release, phase.ReleaseFacts, assessment);
-                    disposition = "replaced";
-                }
-                else
-                {
-                    disposition = "duplicate-weaker";
-                }
+                    var existingIndex = coalesced.FindIndex(
+                        existing => IsDuplicateCandidate(release, existing.Release));
+                    var disposition = "added";
+                    if (existingIndex < 0)
+                    {
+                        coalesced.Add((release, phase.ReleaseFacts, assessment));
+                    }
+                    else if (assessment.MatchResult > coalesced[existingIndex].Assessment.MatchResult)
+                    {
+                        coalesced[existingIndex] = (release, phase.ReleaseFacts, assessment);
+                        disposition = "replaced";
+                    }
+                    else
+                    {
+                        disposition = "duplicate-weaker";
+                    }
 
-                if (logger.IsEnabled(LogLevel.Trace))
-                {
-                    logger.LogTrace(
-                        "EVAL ReleaseSearch {EvaluationJson}",
-                        JsonSerializer.Serialize(new
-                        {
-                            Mode = "Interactive",
-                            ContentHierarchyItemId = contentHierarchyItemId,
-                            StableIdentity = release.IdentityKeys
-                                .Where(key =>
-                                    !string.IsNullOrWhiteSpace(key.Authority) &&
-                                    !string.IsNullOrWhiteSpace(key.Value))
-                                .Select(key => new
-                                {
-                                    key.Authority,
-                                    key.Value,
-                                }),
-                            ExternalFallback = new
+                    if (logger.IsEnabled(LogLevel.Trace))
+                    {
+                        logger.LogTrace(
+                            "EVAL ReleaseSearch {EvaluationJson}",
+                            JsonSerializer.Serialize(new
                             {
-                                release.IndexerId,
-                                release.ExternalId,
-                            },
-                            phase.ReleaseFacts,
-                            MatchResult = assessment.MatchResult.ToString(),
-                            Disposition = disposition,
-                        }));
+                                Mode = "Interactive",
+                                ContentHierarchyItemId = contentHierarchyItemId,
+                                PlanNodeId = (string?)null,
+                                phase.ReleaseFacts,
+                                MatchResult = assessment.MatchResult.ToString(),
+                                Disposition = disposition,
+                            }));
+                    }
                 }
             }
         }
@@ -594,9 +532,12 @@ internal sealed class ReleaseSearchService(
         }
 
         var orderedCandidates = Rank(candidates);
-
-        return await EnrichInteractiveCandidatesAsync(orderedCandidates, cancellationToken)
+        activity?.SetTag("release_count", orderedCandidates.Count);
+        var enriched = await EnrichInteractiveCandidatesAsync(orderedCandidates, cancellationToken)
             .ConfigureAwait(false);
+        RecordTurn("completed");
+
+        return enriched;
     }
 
     public async Task SearchAsync(
@@ -617,6 +558,16 @@ internal sealed class ReleaseSearchService(
             cancellationToken).ConfigureAwait(false);
         if (skipReason is not null)
         {
+            ReleaseTelemetry.SearchSkipped.Add(
+                1,
+                new KeyValuePair<string, object?>(
+                    "reason",
+                    skipReason is SearchSkipReason.Active ? "active" : "recently_completed"));
+            ReleaseTelemetry.SearchTurns.Add(
+                1,
+                new KeyValuePair<string, object?>("trigger", "automatic"),
+                new KeyValuePair<string, object?>("escalation", false),
+                new KeyValuePair<string, object?>("outcome", "skipped"));
             progress?.Report(
                 1,
                 skipReason is SearchSkipReason.Active
@@ -812,7 +763,9 @@ internal sealed class ReleaseSearchService(
                         left.Candidate.Release.PublishDate);
                     return comparison != 0
                         ? comparison
-                        : left.Candidate.Release.Id.CompareTo(right.Candidate.Release.Id);
+                        : string.CompareOrdinal(
+                            StableReleaseKey(left.Candidate.Release),
+                            StableReleaseKey(right.Candidate.Release));
                 });
                 ranked.AddRange(tieGroup);
             }
@@ -856,6 +809,17 @@ internal sealed class ReleaseSearchService(
         return [.. ranked.Select(candidate => candidate.Candidate)];
     }
 
+    private string StableReleaseKey(Release release)
+    {
+        var identity = release.IdentityKeys
+            .Where(key => !string.IsNullOrWhiteSpace(key.Authority) && !string.IsNullOrWhiteSpace(key.Value))
+            .OrderBy(key => key.Authority, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(key => key.Value, StringComparer.OrdinalIgnoreCase)
+            .Select(key => $"{key.Authority!.Trim().ToUpperInvariant()}:{key.Value!.Trim().ToUpperInvariant()}")
+            .FirstOrDefault();
+        return identity ?? $"{release.IndexerId:D}:{release.ExternalId}:{release.Title}";
+    }
+
     private async Task RunSearchTurnAsync(
         ContentHierarchyItem item,
         Guid? userId,
@@ -865,6 +829,18 @@ internal sealed class ReleaseSearchService(
         bool escalationTurn,
         CancellationToken cancellationToken)
     {
+        using var activity = ReleaseTelemetry.Source.StartActivity("ReleaseSearch");
+        activity?.SetTag("content_hierarchy_item_id", item.Id.ToString());
+        activity?.SetTag("trigger", "automatic");
+        activity?.SetTag("escalation_turn", escalationTurn);
+
+        void RecordTurn(string outcome) =>
+            ReleaseTelemetry.SearchTurns.Add(
+                1,
+                new KeyValuePair<string, object?>("trigger", "automatic"),
+                new KeyValuePair<string, object?>("escalation", escalationTurn),
+                new KeyValuePair<string, object?>("outcome", outcome));
+
         ReleaseEvaluationContext? evaluationContext = null;
         try
         {
@@ -887,6 +863,7 @@ internal sealed class ReleaseSearchService(
 
         if (evaluationContext is not { Target: { } target } context)
         {
+            RecordTurn("no_target");
             logger.LogInformation(
                 "The release search skipped content hierarchy item {ContentHierarchyItemId}. The search " +
                 "resolved no target",
@@ -898,6 +875,7 @@ internal sealed class ReleaseSearchService(
         var factSets = context.ContentFacts;
         if (factSets.Count == 0)
         {
+            RecordTurn("no_plan");
             logger.LogInformation(
                 "The release search skipped content hierarchy item {ContentHierarchyItemId}. The search " +
                 "resolved no terms",
@@ -907,13 +885,16 @@ internal sealed class ReleaseSearchService(
         }
 
         var contentType = target.Item.ContentType;
-        var (searchFacets, supportsKeywordSearch) = await AggregateSearchCapabilitiesAsync(
-            contentType,
+        var (searchFacets, supportsKeywordSearch, connectionCount) = await AggregateSearchCapabilitiesAsync(
             cancellationToken)
             .ConfigureAwait(false);
-        var plan = BuildPlan(factSets, searchFacets, supportsKeywordSearch);
+        var plan = BuildPlan(factSets);
+
+        activity?.SetTag("phase_count", plan.Count);
+        activity?.SetTag("indexer_connection_count", connectionCount);
         if (plan.Count == 0)
         {
+            RecordTurn("no_plan");
             logger.LogInformation(
                 "The release search skipped content hierarchy item {ContentHierarchyItemId}. The search " +
                 "built no query plan, because no indexer accepted the terms of this item",
@@ -961,29 +942,72 @@ internal sealed class ReleaseSearchService(
         var retainedReleaseIds = new HashSet<Guid>();
         var rejectedReleaseIds = new HashSet<Guid>();
         var autoGrabHierarchyItemIds = new HashSet<Guid>();
-        var result = await queryExecutor.ExecuteAsync(
-            plan,
-            categories,
-            applicableIndexerIds,
-            (phaseIndex, name) => progress?.ReportFraction(
-                phaseIndex,
-                plan.Count,
-                $"The search will query indexer {name}."),
-            cancellationToken).ConfigureAwait(false);
+        ReleaseQueryExecution? engineExecution = null;
+        IReadOnlyList<ReleaseSearchPhase> result;
+        if (queryExecutor is ReleaseSearchQueryExecutor { CanExecutePlan: true } engine)
+        {
+            engineExecution = await engine.ExecutePlanAsync(
+                plan,
+                categories,
+                applicableIndexerIds,
+                context,
+                automatic: true,
+                maximumResults: 20,
+                (phaseIndex, name) => progress?.ReportFraction(
+                    phaseIndex,
+                    Math.Max(plan.Count, 1),
+                    $"The search will query indexer {name}."),
+                cancellationToken).ConfigureAwait(false);
+            result = engineExecution.ExecutedRoutes;
+            if (engineExecution.ConnectionsAttempted == 0)
+            {
+                activity?.SetTag("terminal_reason", engineExecution.Warning ?? "no-execution");
+                RecordTurn("completed");
+                logger.LogInformation(
+                    "The release search for {ContentHierarchyItemId} issued no queries ({Reason})",
+                    item.Id,
+                    engineExecution.Warning ?? "no-execution");
+                progress?.Report(1, "The search completed without changing saved results because no query executed.");
+                return;
+            }
+        }
+        else
+        {
+            result = await queryExecutor.ExecuteAsync(
+                plan,
+                categories,
+                applicableIndexerIds,
+                (phaseIndex, name) => progress?.ReportFraction(
+                    phaseIndex,
+                    plan.Count,
+                    $"The search will query indexer {name}."),
+                cancellationToken).ConfigureAwait(false);
+        }
 
-        var releaseCount = result.Sum(phase => phase.Releases.Count);
-        await PersistReleasesAsync(
-            result,
-            item,
-            context,
-            retainedReleaseIds,
-            rejectedReleaseIds,
-            autoGrabHierarchyItemIds,
-            userId,
-            cancellationToken).ConfigureAwait(false);
+        var releaseCount = engineExecution?.Results.Count ?? result.Sum(phase => phase.Releases.Count);
+        activity?.SetTag("release_count", releaseCount);
 
-        var searchCompleted = result.All(phase => phase.ConnectionsAttempted == 0 || phase.ConnectionsSucceeded > 0) &&
-            result.Sum(phase => phase.ConnectionsSucceeded) > 0;
+        using (var persistActivity = ReleaseTelemetry.Source.StartActivity("PersistResults"))
+        {
+            persistActivity?.SetTag("release_count", releaseCount);
+            await PersistReleasesAsync(
+                result,
+                item,
+                context,
+                retainedReleaseIds,
+                rejectedReleaseIds,
+                autoGrabHierarchyItemIds,
+                userId,
+                engineExecution?.Results,
+                cancellationToken).ConfigureAwait(false);
+            persistActivity?.SetTag("retained_count", retainedReleaseIds.Count);
+            persistActivity?.SetTag("rejected_count", rejectedReleaseIds.Count);
+        }
+
+        var searchCompleted = engineExecution is not null
+            ? engineExecution.ConnectionsSucceeded > 0
+            : result.All(phase => phase.ConnectionsAttempted == 0 || phase.ConnectionsSucceeded > 0) &&
+                result.Sum(phase => phase.ConnectionsSucceeded) > 0;
         if (!searchCompleted)
         {
             var connectionsAttempted = result.Sum(phase => phase.ConnectionsAttempted);
@@ -994,6 +1018,7 @@ internal sealed class ReleaseSearchService(
                     $"Search for {item.Id} incomplete; {connectionsSucceeded}/{connectionsAttempted} succeeded");
             }
 
+            RecordTurn("completed");
             logger.LogInformation(
                 "The release search for {ContentHierarchyItemId} issued no queries. The search is complete",
                 item.Id);
@@ -1052,6 +1077,7 @@ internal sealed class ReleaseSearchService(
             },
             cancellationToken).ConfigureAwait(false);
 
+        RecordTurn("completed");
         progress?.Report(1, "The release search completed.");
     }
 
@@ -1489,6 +1515,10 @@ internal sealed class ReleaseSearchService(
     {
         if (release is null || string.IsNullOrWhiteSpace(release.Title))
         {
+            ReleaseTelemetry.Grabs.Add(
+                1,
+                new KeyValuePair<string, object?>("mode", "interactive"),
+                new KeyValuePair<string, object?>("outcome", "invalid_release"));
             return new InteractiveReleaseGrabOutcome(
                 InteractiveReleaseGrabResult.InvalidRelease, null, "A release with a title is required.");
         }
@@ -1498,6 +1528,10 @@ internal sealed class ReleaseSearchService(
             .ConfigureAwait(false);
         if (hierarchyItem is null)
         {
+            ReleaseTelemetry.Grabs.Add(
+                1,
+                new KeyValuePair<string, object?>("mode", "interactive"),
+                new KeyValuePair<string, object?>("outcome", "content_not_found"));
             return new InteractiveReleaseGrabOutcome(InteractiveReleaseGrabResult.ContentNotFound, null, null);
         }
 
@@ -1507,6 +1541,10 @@ internal sealed class ReleaseSearchService(
                 .GetAsync(hierarchyItem.EffectiveRootFolderId, cancellationToken)
                 .ConfigureAwait(false);
             var rootFolderName = rootFolder?.Name ?? hierarchyItem.EffectiveRootFolderId.ToString();
+            ReleaseTelemetry.Grabs.Add(
+                1,
+                new KeyValuePair<string, object?>("mode", "interactive"),
+                new KeyValuePair<string, object?>("outcome", "invalid_release"));
             return new InteractiveReleaseGrabOutcome(
                 InteractiveReleaseGrabResult.InvalidRelease,
                 null,
@@ -1549,7 +1587,14 @@ internal sealed class ReleaseSearchService(
                 release.ModifiedAt = null;
                 release.ModifiedByUserId = null;
                 await UpsertReleaseAsync(
-                    release, [], contentHierarchyItemId, actingUserId, actingUserId, transactionCancellationToken)
+                    release,
+                    [],
+                    null,
+                    null,
+                    contentHierarchyItemId,
+                    actingUserId,
+                    actingUserId,
+                    transactionCancellationToken)
                     .ConfigureAwait(false);
                 persisted = release;
             },
@@ -1733,6 +1778,7 @@ internal sealed class ReleaseSearchService(
         HashSet<Guid> rejectedReleaseIds,
         HashSet<Guid> autoGrabHierarchyItemIds,
         Guid? userId,
+        IReadOnlyList<EvaluatedRelease>? evaluatedResults,
         CancellationToken cancellationToken)
     {
         await transactionManager.ExecuteWithTransactionAsync(
@@ -1743,25 +1789,73 @@ internal sealed class ReleaseSearchService(
                     Release Release,
                     IReadOnlyList<ContentFact> ReleaseFacts,
                     ReleaseAssessment Assessment)>();
-                foreach (var phase in phases)
+                if (evaluatedResults is not null)
                 {
-                    foreach (var release in phase.Releases)
+                    resolved.AddRange(evaluatedResults.Select(result =>
+                        (result.Release, result.ReleaseFacts, result.Assessment)));
+                }
+                else
+                {
+                    foreach (var phase in phases)
                     {
-                        cancellationToken.ThrowIfCancellationRequested();
-                        ReleaseAssessment assessment;
-                        try
+                        foreach (var release in phase.Releases)
                         {
-                            assessment = releaseEvaluationService.AssessMatch(
-                                release,
-                                phase.ReleaseFacts,
-                                evaluationContext);
-                        }
-                        catch (Exception ex)
-                        {
-                            logger.LogWarning(
-                                ex,
-                                "The evaluation of release {ReleaseTitle} failed, so the search dropped this release",
-                                release.Title);
+                            cancellationToken.ThrowIfCancellationRequested();
+                            ReleaseAssessment assessment;
+                            try
+                            {
+                                assessment = releaseEvaluationService.AssessMatch(
+                                    release,
+                                    phase.ReleaseFacts,
+                                    evaluationContext);
+                            }
+                            catch (Exception ex)
+                            {
+                                logger.LogWarning(
+                                    ex,
+                                    "The evaluation of release {ReleaseTitle} failed, so the search dropped this release",
+                                    release.Title);
+                                if (logger.IsEnabled(LogLevel.Trace))
+                                {
+                                    logger.LogTrace(
+                                        "EVAL ReleaseSearch {EvaluationJson}",
+                                        JsonSerializer.Serialize(new
+                                        {
+                                            Mode = "Automatic",
+                                            ContentHierarchyItemId = item.Id,
+                                            ReleaseFacts = phase.ReleaseFacts,
+                                            MatchResult = (string?)null,
+                                            Disposition = "dropped-evaluation-failed",
+                                            Failure = ex.Message,
+                                        }));
+                                }
+
+                                if (await FindStoredReleaseAsync(release, cancellationToken).ConfigureAwait(false) is
+                                    { } failedRelease)
+                                {
+                                    rejectedReleaseIds.Add(failedRelease.Id);
+                                }
+
+                                continue;
+                            }
+
+                            var existingIndex = resolved.FindIndex(existing =>
+                                IsDuplicateCandidate(release, existing.Release));
+                            var disposition = "held";
+                            if (existingIndex < 0)
+                            {
+                                resolved.Add((release, phase.ReleaseFacts, assessment));
+                            }
+                            else if (assessment.MatchResult > resolved[existingIndex].Assessment.MatchResult)
+                            {
+                                resolved[existingIndex] = (release, phase.ReleaseFacts, assessment);
+                                disposition = "replaced";
+                            }
+                            else
+                            {
+                                disposition = "duplicate-weaker";
+                            }
+
                             if (logger.IsEnabled(LogLevel.Trace))
                             {
                                 logger.LogTrace(
@@ -1785,64 +1879,10 @@ internal sealed class ReleaseSearchService(
                                             release.ExternalId,
                                         },
                                         ReleaseFacts = phase.ReleaseFacts,
-                                        MatchResult = (string?)null,
-                                        Disposition = "dropped-evaluation-failed",
-                                        Failure = ex.Message,
+                                        MatchResult = assessment.MatchResult.ToString(),
+                                        Disposition = disposition,
                                     }));
                             }
-
-                            if (await FindStoredReleaseAsync(release, cancellationToken).ConfigureAwait(false) is
-                                { } failedRelease)
-                            {
-                                rejectedReleaseIds.Add(failedRelease.Id);
-                            }
-
-                            continue;
-                        }
-
-                        var existingIndex = resolved.FindIndex(existing =>
-                            IsDuplicateCandidate(release, existing.Release));
-                        var disposition = "held";
-                        if (existingIndex < 0)
-                        {
-                            resolved.Add((release, phase.ReleaseFacts, assessment));
-                        }
-                        else if (assessment.MatchResult > resolved[existingIndex].Assessment.MatchResult)
-                        {
-                            resolved[existingIndex] = (release, phase.ReleaseFacts, assessment);
-                            disposition = "replaced";
-                        }
-                        else
-                        {
-                            disposition = "duplicate-weaker";
-                        }
-
-                        if (logger.IsEnabled(LogLevel.Trace))
-                        {
-                            logger.LogTrace(
-                                "EVAL ReleaseSearch {EvaluationJson}",
-                                JsonSerializer.Serialize(new
-                                {
-                                    Mode = "Automatic",
-                                    ContentHierarchyItemId = item.Id,
-                                    StableIdentity = release.IdentityKeys
-                                        .Where(key =>
-                                            !string.IsNullOrWhiteSpace(key.Authority) &&
-                                            !string.IsNullOrWhiteSpace(key.Value))
-                                        .Select(key => new
-                                        {
-                                            key.Authority,
-                                            key.Value,
-                                        }),
-                                    ExternalFallback = new
-                                    {
-                                        release.IndexerId,
-                                        release.ExternalId,
-                                    },
-                                    ReleaseFacts = phase.ReleaseFacts,
-                                    MatchResult = assessment.MatchResult.ToString(),
-                                    Disposition = disposition,
-                                }));
                         }
                     }
                 }
@@ -1893,6 +1933,8 @@ internal sealed class ReleaseSearchService(
                     var upsert = await UpsertReleaseAsync(
                         acceptedObservation.Release,
                         acceptedObservation.ReleaseFacts,
+                        evaluationContext,
+                        acceptedObservation.Assessment,
                         item.Id,
                         userId,
                         null,
@@ -2042,8 +2084,11 @@ internal sealed class ReleaseSearchService(
             .Select(indexer => indexer.Id)];
     }
 
-    private async Task<(IReadOnlyList<IReadOnlyCollection<string>> SearchFacets, bool SupportsKeywordSearch)>
-        AggregateSearchCapabilitiesAsync(string contentType, CancellationToken cancellationToken)
+    private async Task<(
+        IReadOnlyList<IReadOnlyCollection<string>> SearchFacets,
+        bool SupportsKeywordSearch,
+        int ConnectionCount)>
+        AggregateSearchCapabilitiesAsync(CancellationToken cancellationToken)
     {
         var indexers = (await indexerRepository.ListAllAsync(cancellationToken).ConfigureAwait(false))
             .ToDictionary(indexer => indexer.Id);
@@ -2051,16 +2096,12 @@ internal sealed class ReleaseSearchService(
 
         var distinctFacetSets = new List<HashSet<string>>();
         var supportsKeywordSearch = false;
+        var connectionCount = 0;
 
         foreach (var connection in connections)
         {
-            if (!connection.Enabled)
-            {
-                continue;
-            }
-
-            if (!indexers.TryGetValue(connection.IndexerId, out var indexer) ||
-                !IndexerSupportsContentType(indexer, contentType))
+            connectionCount++;
+            if (!indexers.TryGetValue(connection.IndexerId, out var indexer))
             {
                 continue;
             }
@@ -2085,7 +2126,7 @@ internal sealed class ReleaseSearchService(
             }
         }
 
-        return (distinctFacetSets, supportsKeywordSearch);
+        return (distinctFacetSets, supportsKeywordSearch, connectionCount);
     }
 
     private IIndexerIntegration? ResolveIndexerIntegration(Indexer indexer)
@@ -2188,6 +2229,8 @@ internal sealed class ReleaseSearchService(
     private async Task<ReleaseUpsertResult> UpsertReleaseAsync(
         Release release,
         IReadOnlyList<ContentFact> releaseFacts,
+        ReleaseEvaluationContext? searchedContext,
+        ReleaseAssessment? searchedAssessment,
         Guid searchedHierarchyItemId,
         Guid? userId,
         Guid? scopeUserId,
@@ -2212,9 +2255,17 @@ internal sealed class ReleaseSearchService(
             }
         }
 
-        var releaseScope = await releaseEvaluationService
-            .ResolveScopeAsync(release, releaseFacts, searchedHierarchyItemId, cancellationToken)
-            .ConfigureAwait(false);
+        var releaseScope = releaseEvaluationService is ReleaseEvaluationService implementation &&
+            searchedContext is not null && searchedAssessment is not null
+                ? await implementation.ResolveScopeAsync(
+                    release,
+                    releaseFacts,
+                    searchedContext,
+                    searchedAssessment,
+                    cancellationToken).ConfigureAwait(false)
+                : await releaseEvaluationService
+                    .ResolveScopeAsync(release, releaseFacts, searchedHierarchyItemId, cancellationToken)
+                    .ConfigureAwait(false);
         var existingScopes = new List<ReleaseScope>();
         var pageNumber = 1;
         while (true)

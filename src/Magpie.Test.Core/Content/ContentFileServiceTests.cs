@@ -10,13 +10,16 @@ using Magpie.Abstractions.Content;
 using Magpie.Abstractions.Repositories;
 using Magpie.Core.Content;
 using Magpie.Models;
+using Magpie.Models.Api;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
+using Magpie.Models.Enums;
 using Magpie.Models.Paging;
 using Magpie.Models.Patch;
 using Magpie.Sdk.Content;
 using Magpie.Sdk.Services;
 
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 
 using Moq;
@@ -34,7 +37,9 @@ public sealed class ContentFileServiceTests
     private Mock<IContentTypeRegistry> _contentTypes = null!;
     private Mock<IFileSystem> _fileSystem = null!;
     private Mock<IMediaFileRepository> _mediaFiles = null!;
+    private Mock<IContentRepository> _contentItems = null!;
     private Mock<IAuditRecordRepository> _auditRecords = null!;
+    private Mock<ITransactionManager> _transactionManager = null!;
     private Dictionary<string, long> _files = null!;
     private RootFolder _rootFolder = null!;
     private ContentHierarchyItem _leaf = null!;
@@ -67,6 +72,9 @@ public sealed class ContentFileServiceTests
         };
         _contentHierarchyItems = new Mock<IContentHierarchyItemRepository>();
         _contentHierarchyItems
+            .Setup(r => r.GetByIdAsync(_leaf.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => _leaf);
+        _contentHierarchyItems
             .Setup(r => r.GetLineageAsync(_leaf.Id, It.IsAny<CancellationToken>()))
             .ReturnsAsync(() => [_leaf]);
         _metadataContainers = new Mock<IMetadataContainerRepository>();
@@ -87,6 +95,9 @@ public sealed class ContentFileServiceTests
         _fileSystem
             .Setup(f => f.FileExists(It.IsAny<string>()))
             .Returns((string path) => _files.ContainsKey(path));
+        _fileSystem
+            .Setup(f => f.GetFileSize(It.IsAny<string>()))
+            .Returns((string path) => _files[path]);
         _fileSystem.Setup(f => f.DirectoryExists(It.IsAny<string>())).Returns(true);
         _fileSystem.Setup(f => f.GetFullPath(It.IsAny<string>()))
             .Returns((string path) => Path.GetFullPath(path));
@@ -99,6 +110,7 @@ public sealed class ContentFileServiceTests
                 return !Path.IsPathRooted(relative) && relative != ".." &&
                     !relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal);
             });
+        _fileSystem.Setup(f => f.PathContainsLink(It.IsAny<string>(), It.IsAny<string>())).Returns(false);
         _fileSystem
             .Setup(f => f.Move(It.IsAny<string>(), It.IsAny<string>()))
             .Callback((string source, string destination, bool _) =>
@@ -109,20 +121,27 @@ public sealed class ContentFileServiceTests
             });
 
         _mediaFiles = new Mock<IMediaFileRepository>();
+        _contentItems = new Mock<IContentRepository>();
         _auditRecords = new Mock<IAuditRecordRepository>();
-        var transactionManager = new Mock<ITransactionManager>();
-        transactionManager
+        _transactionManager = new Mock<ITransactionManager>();
+        _transactionManager
             .Setup(manager => manager.ExecuteWithTransactionAsync(
                 It.IsAny<Func<CancellationToken, Task>>(),
                 It.IsAny<CancellationToken>()))
             .Returns((Func<CancellationToken, Task> operation, CancellationToken cancellationToken) =>
                 operation(cancellationToken));
-        transactionManager
+        _transactionManager
             .Setup(manager => manager.ExecuteWithTransactionAsync(
                 It.IsAny<Func<CancellationToken, Task<MediaFile>>>(),
                 It.IsAny<CancellationToken>()))
             .Returns((Func<CancellationToken, Task<MediaFile>> operation, CancellationToken cancellationToken) =>
                 operation(cancellationToken));
+        _transactionManager
+            .Setup(manager => manager.ExecuteWithTransactionAsync(
+                It.IsAny<Func<CancellationToken, Task<AttachContentFileResult>>>(),
+                It.IsAny<CancellationToken>()))
+            .Returns((Func<CancellationToken, Task<AttachContentFileResult>> operation,
+                CancellationToken cancellationToken) => operation(cancellationToken));
         _subject = new ContentFileService(
             _contentHierarchyItems.Object,
             _metadataContainers.Object,
@@ -130,8 +149,9 @@ public sealed class ContentFileServiceTests
             _contentTypes.Object,
             _fileSystem.Object,
             _mediaFiles.Object,
+            _contentItems.Object,
             _auditRecords.Object,
-            transactionManager.Object,
+            _transactionManager.Object,
             TimeProvider.System,
             NullLogger<ContentFileService>.Instance);
     }
@@ -790,5 +810,1429 @@ public sealed class ContentFileServiceTests
                     It.IsAny<CancellationToken>()),
                 Times.Once);
         }
+    }
+
+    [Test]
+    public async Task AttachAsync_ReturnsPrimaryAndFulfills_WhenFileMatchesPrimaryAndSidecarContent()
+    {
+        // Arrange
+        var path = Path.Combine(_rootFolder.Path, "movie.mkv");
+        var lineageLocked = false;
+        var contentItem = new ContentItem
+        {
+            Id = Guid.NewGuid(),
+            ContentHierarchyItemId = _leaf.Id,
+            Fulfillment = FulfillmentStatus.Missing,
+            CreatedAt = DateTime.UtcNow
+        };
+        var mediaFiles = new List<MediaFile>();
+        _files[path] = 123;
+        _contentTypes.Setup(registry => registry.GetDefinitionFor("movie")).Returns(new ContentTypeDefinition
+        {
+            Slug = "movie",
+            DisplayName = "Movie",
+            LevelDefinitions =
+            [
+                new ContentHierarchyLevelDefinition
+                {
+                    Slug = "movie",
+                    DisplayName = "Movie",
+                    CustomMetadataFields = [],
+                    AcceptedFileTypes = ["video/*"],
+                    AcceptedSidecarTypes = ["video/*"]
+                }
+            ]
+        });
+        _fileSystem.Setup(system => system.LookupMimeTypeAsync(path, It.IsAny<CancellationToken>()))
+            .ReturnsAsync("video/x-matroska");
+        _fileSystem.Setup(system => system.MatchesAnyFileTypeAsync(
+                It.IsAny<string>(),
+                It.Is<IReadOnlyList<string>>(types => types.Contains("video/*")),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        _fileSystem.Setup(system => system.ResolveFileKind("video/x-matroska")).Returns(FileKind.Video);
+        _contentHierarchyItems.Setup(repository => repository.LockAsync(_leaf.Id, It.IsAny<CancellationToken>()))
+            .Callback(() => lineageLocked = true)
+            .Returns(Task.CompletedTask);
+        _mediaFiles.Setup(repository => repository.CreateAsync(
+                It.IsAny<MediaFile>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync((MediaFile file, Guid? _, CancellationToken _) =>
+            {
+                Assert.That(lineageLocked, Is.True);
+                mediaFiles.Add(file);
+                return file;
+            });
+        _mediaFiles.Setup(repository => repository.QueryAsync(
+                It.IsAny<MediaFileQuery>(),
+                It.IsAny<PagingParameter>(),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => new PagedList<MediaFile> { Items = mediaFiles, TotalItems = mediaFiles.Count });
+        _contentItems.Setup(repository => repository.QueryAsync(
+                It.IsAny<ContentItemQuery>(),
+                It.IsAny<PagingParameter>(),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<ContentItem> { Items = [contentItem], TotalItems = 1 });
+        _contentItems.Setup(repository => repository.UpdateAsync(
+                It.IsAny<ContentItem>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        _auditRecords.Setup(repository => repository.CreateAsync(
+                It.IsAny<AuditRecord>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new AuditRecord { Category = "Content", Operation = "FileAttached" });
+
+        // Act
+        var result = await _subject.AttachAsync(_leaf.Id, path, Guid.NewGuid()).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.Result, Is.Not.Null);
+            Assert.That(result.Result!.IsPrimary, Is.True);
+            Assert.That(result.Result.MediaFile.FilePath, Is.EqualTo(path));
+            Assert.That(contentItem.Fulfillment, Is.EqualTo(FulfillmentStatus.Fulfilled));
+            Assert.That(mediaFiles, Has.Count.EqualTo(1));
+        }
+    }
+
+    [TestCase("episode.mkv")]
+    [TestCase("episode.srt")]
+    public void AttachAsync_ThrowsConfigurationMessage_WhenFileTypesAreNotConfigured(string fileName)
+    {
+        // Arrange
+        var path = Path.Combine(_rootFolder.Path, fileName);
+        _files[path] = 123;
+        _contentTypes.Setup(registry => registry.GetDefinitionFor("movie")).Returns(new ContentTypeDefinition
+        {
+            Slug = "movie",
+            DisplayName = "Movie",
+            LevelDefinitions =
+            [
+                new ContentHierarchyLevelDefinition
+                {
+                    Slug = "movie",
+                    DisplayName = "Movie",
+                    CustomMetadataFields = [],
+                    AcceptedFileTypes = [],
+                    AcceptedSidecarTypes = [".srt"]
+                }
+            ]
+        });
+
+        // Act
+        var exception = Assert.ThrowsAsync<ArgumentException>(
+            async () => await _subject.AttachAsync(_leaf.Id, path, Guid.NewGuid()).ConfigureAwait(false));
+
+        // Assert
+        Assert.That(
+            exception!.Message,
+            Is.EqualTo(
+                "This content level has no configured file types. Configure them in the level settings before importing files."));
+    }
+
+    [Test]
+    public void AttachAsync_ThrowsWithoutStoredChange_WhenFileTypesAreNotConfigured()
+    {
+        // Arrange
+        var path = Path.Combine(_rootFolder.Path, "episode.mkv");
+        _files[path] = 123;
+        _contentTypes.Setup(registry => registry.GetDefinitionFor("movie")).Returns(new ContentTypeDefinition
+        {
+            Slug = "movie",
+            DisplayName = "Movie",
+            LevelDefinitions =
+            [
+                new ContentHierarchyLevelDefinition
+                {
+                    Slug = "movie",
+                    DisplayName = "Movie",
+                    CustomMetadataFields = [],
+                    AcceptedFileTypes = []
+                }
+            ]
+        });
+
+        // Act
+        Assert.ThrowsAsync<ArgumentException>(
+            async () => await _subject.AttachAsync(_leaf.Id, path, null).ConfigureAwait(false));
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            _mediaFiles.Verify(repository => repository.CreateAsync(
+                It.IsAny<MediaFile>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()), Times.Never);
+            _contentItems.Verify(repository => repository.CreateAsync(
+                It.IsAny<ContentItem>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()), Times.Never);
+            _contentItems.Verify(repository => repository.UpdateAsync(
+                It.IsAny<ContentItem>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()), Times.Never);
+            _auditRecords.Verify(repository => repository.CreateAsync(
+                It.IsAny<AuditRecord>(),
+                It.IsAny<CancellationToken>()), Times.Never);
+        }
+    }
+
+    [Test]
+    public async Task AttachImportedAsync_AttachesPrimary_WhenContainerHasNoFileTypes()
+    {
+        // Arrange
+        var path = Path.Combine(_rootFolder.Path, "episode.mkv");
+        var contentItem = new ContentItem
+        {
+            Id = Guid.NewGuid(),
+            ContentHierarchyItemId = _leaf.Id,
+            Fulfillment = FulfillmentStatus.Missing,
+            CreatedAt = DateTime.UtcNow
+        };
+        var mediaFiles = new List<MediaFile>();
+        _files[path] = 123;
+        _contentTypes.Setup(registry => registry.GetDefinitionFor("movie")).Returns(new ContentTypeDefinition
+        {
+            Slug = "movie",
+            DisplayName = "Movie",
+            LevelDefinitions =
+            [
+                new ContentHierarchyLevelDefinition
+                {
+                    Slug = "movie",
+                    DisplayName = "Movie",
+                    CustomMetadataFields = [],
+                    AcceptedFileTypes = []
+                }
+            ]
+        });
+        _fileSystem.Setup(system => system.LookupMimeTypeAsync(path, It.IsAny<CancellationToken>()))
+            .ReturnsAsync("video/x-matroska");
+        _fileSystem.Setup(system => system.ResolveFileKind("video/x-matroska")).Returns(FileKind.Video);
+        _mediaFiles.Setup(repository => repository.CreateAsync(
+                It.IsAny<MediaFile>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync((MediaFile file, Guid? _, CancellationToken _) =>
+            {
+                mediaFiles.Add(file);
+                return file;
+            });
+        _mediaFiles.Setup(repository => repository.QueryAsync(
+                It.IsAny<MediaFileQuery>(),
+                It.IsAny<PagingParameter>(),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => new PagedList<MediaFile> { Items = mediaFiles, TotalItems = mediaFiles.Count });
+        _contentItems.Setup(repository => repository.QueryAsync(
+                It.IsAny<ContentItemQuery>(),
+                It.IsAny<PagingParameter>(),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<ContentItem> { Items = [contentItem], TotalItems = 1 });
+        _contentItems.Setup(repository => repository.UpdateAsync(
+                It.IsAny<ContentItem>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        _auditRecords.Setup(repository => repository.CreateAsync(
+                It.IsAny<AuditRecord>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new AuditRecord { Category = "Content", Operation = "FileAttached" });
+
+        // Act
+        var result = await _subject.AttachImportedAsync(_leaf.Id, path, null).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.Result, Is.Not.Null);
+            Assert.That(result.Result!.IsPrimary, Is.True);
+            Assert.That(contentItem.Fulfillment, Is.EqualTo(FulfillmentStatus.Fulfilled));
+        }
+    }
+
+    [Test]
+    public async Task AttachImportedAsync_ReturnsExistingAssociation_WhenImportIsRetried()
+    {
+        // Arrange
+        var path = Path.Combine(_rootFolder.Path, "movie.mkv");
+        var contentItem = new ContentItem
+        {
+            Id = Guid.NewGuid(),
+            ContentHierarchyItemId = _leaf.Id,
+            Fulfillment = FulfillmentStatus.Fulfilled,
+            CreatedAt = DateTime.UtcNow
+        };
+        var mediaFile = new MediaFile
+        {
+            Id = Guid.NewGuid(),
+            ContentItemId = contentItem.Id,
+            FileKind = "Video",
+            FilePath = path
+        };
+        _files[path] = 123;
+        _contentTypes.Setup(registry => registry.GetDefinitionFor("movie")).Returns(new ContentTypeDefinition
+        {
+            Slug = "movie",
+            DisplayName = "Movie",
+            LevelDefinitions =
+            [
+                new ContentHierarchyLevelDefinition
+                {
+                    Slug = "movie",
+                    DisplayName = "Movie",
+                    CustomMetadataFields = [],
+                    AcceptedFileTypes = ["video/*"]
+                }
+            ]
+        });
+        _fileSystem.Setup(system => system.LookupMimeTypeAsync(path, It.IsAny<CancellationToken>()))
+            .ReturnsAsync("video/x-matroska");
+        _fileSystem.Setup(system => system.MatchesAnyFileTypeAsync(
+                path,
+                It.Is<IReadOnlyList<string>>(types => types.Contains("video/*")),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        _mediaFiles.Setup(repository => repository.GetByPathAsync(path, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(mediaFile);
+        _contentItems.Setup(repository => repository.GetByIdAsync(contentItem.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(contentItem);
+
+        // Act
+        var result = await _subject.AttachImportedAsync(_leaf.Id, path, null).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.Result?.MediaFile.Id, Is.EqualTo(mediaFile.Id));
+            Assert.That(result.Result?.IsPrimary, Is.True);
+        }
+
+        _mediaFiles.Verify(repository => repository.CreateAsync(
+            It.IsAny<MediaFile>(),
+            It.IsAny<Guid?>(),
+            It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Test]
+    public void AttachAsync_ThrowsWithoutStoredChange_WhenFileIsOutsideConfiguredRoot()
+    {
+        // Arrange
+        var path = Path.Combine(Path.GetTempPath(), "outside", "movie.mkv");
+        _contentTypes.Setup(registry => registry.GetDefinitionFor("movie")).Returns(new ContentTypeDefinition
+        {
+            Slug = "movie",
+            DisplayName = "Movie",
+            LevelDefinitions =
+            [
+                new ContentHierarchyLevelDefinition
+                {
+                    Slug = "movie",
+                    DisplayName = "Movie",
+                    CustomMetadataFields = [],
+                    AcceptedFileTypes = ["video/*"]
+                }
+            ]
+        });
+
+        // Act
+        var exception = Assert.ThrowsAsync<ArgumentException>(
+            async () => await _subject.AttachAsync(_leaf.Id, path, null).ConfigureAwait(false));
+
+        // Assert
+        Assert.That(exception!.Message, Is.EqualTo("The selected file is outside the configured root folder."));
+        _mediaFiles.Verify(repository => repository.CreateAsync(
+            It.IsAny<MediaFile>(),
+            It.IsAny<Guid?>(),
+            It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Test]
+    public async Task AttachAsync_ReturnsSidecarAndKeepsMissing_WhenFileIsAcceptedSidecar()
+    {
+        // Arrange
+        var path = Path.Combine(_rootFolder.Path, "movie.srt");
+        var contentItem = new ContentItem
+        {
+            Id = Guid.NewGuid(),
+            ContentHierarchyItemId = _leaf.Id,
+            Fulfillment = FulfillmentStatus.Missing,
+            CreatedAt = DateTime.UtcNow
+        };
+        var mediaFiles = new List<MediaFile>();
+        _files[path] = 12;
+        _contentTypes.Setup(registry => registry.GetDefinitionFor("movie")).Returns(new ContentTypeDefinition
+        {
+            Slug = "movie",
+            DisplayName = "Movie",
+            LevelDefinitions =
+            [
+                new ContentHierarchyLevelDefinition
+                {
+                    Slug = "movie",
+                    DisplayName = "Movie",
+                    CustomMetadataFields = [],
+                    AcceptedFileTypes = ["video/*"],
+                    AcceptedSidecarTypes = [".srt"]
+                }
+            ]
+        });
+        _fileSystem.Setup(system => system.LookupMimeTypeAsync(path, It.IsAny<CancellationToken>()))
+            .ReturnsAsync("text/plain");
+        _fileSystem.Setup(system => system.MatchesAnyFileTypeAsync(
+                path,
+                It.Is<IReadOnlyList<string>>(types => types.Contains("video/*")),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(false);
+        _fileSystem.Setup(system => system.MatchesAnyFileTypeAsync(
+                path,
+                It.Is<IReadOnlyList<string>>(types => types.Contains(".srt")),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        _fileSystem.Setup(system => system.ResolveFileKind("text/plain")).Returns(FileKind.Subtitle);
+        _mediaFiles.Setup(repository => repository.CreateAsync(
+                It.IsAny<MediaFile>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync((MediaFile file, Guid? _, CancellationToken _) =>
+            {
+                mediaFiles.Add(file);
+                return file;
+            });
+        _mediaFiles.Setup(repository => repository.QueryAsync(
+                It.IsAny<MediaFileQuery>(),
+                It.IsAny<PagingParameter>(),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => new PagedList<MediaFile> { Items = mediaFiles, TotalItems = mediaFiles.Count });
+        _contentItems.Setup(repository => repository.QueryAsync(
+                It.IsAny<ContentItemQuery>(),
+                It.IsAny<PagingParameter>(),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<ContentItem> { Items = [contentItem], TotalItems = 1 });
+        _auditRecords.Setup(repository => repository.CreateAsync(
+                It.IsAny<AuditRecord>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new AuditRecord { Category = "Content", Operation = "FileAttached" });
+
+        // Act
+        var result = await _subject.AttachAsync(_leaf.Id, path, Guid.NewGuid()).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.Result, Is.Not.Null);
+            Assert.That(result.Result!.IsPrimary, Is.False);
+            Assert.That(contentItem.Fulfillment, Is.EqualTo(FulfillmentStatus.Missing));
+            Assert.That(mediaFiles, Has.Count.EqualTo(1));
+        }
+    }
+
+    [Test]
+    public void AttachAsync_ThrowsWithoutStoredChange_WhenFileTypeIsUnknown()
+    {
+        // Arrange
+        var path = Path.Combine(_rootFolder.Path, "movie.unknown");
+        _files[path] = 12;
+        _contentTypes.Setup(registry => registry.GetDefinitionFor("movie")).Returns(new ContentTypeDefinition
+        {
+            Slug = "movie",
+            DisplayName = "Movie",
+            LevelDefinitions =
+            [
+                new ContentHierarchyLevelDefinition
+                {
+                    Slug = "movie",
+                    DisplayName = "Movie",
+                    CustomMetadataFields = [],
+                    AcceptedFileTypes = ["video/*"]
+                }
+            ]
+        });
+        _fileSystem.Setup(system => system.LookupMimeTypeAsync(path, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((string?)null);
+
+        // Act
+        // Assert
+        var exception = Assert.ThrowsAsync<ArgumentException>(
+            async () => await _subject.AttachAsync(_leaf.Id, path, null).ConfigureAwait(false));
+
+        Assert.That(exception!.Message, Is.EqualTo("The selected file type is unknown."));
+        _mediaFiles.Verify(repository => repository.CreateAsync(
+            It.IsAny<MediaFile>(),
+            It.IsAny<Guid?>(),
+            It.IsAny<CancellationToken>()), Times.Never);
+        _auditRecords.Verify(repository => repository.CreateAsync(
+            It.IsAny<AuditRecord>(),
+            It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Test]
+    public void AttachAsync_ThrowsWithoutStoredChange_WhenFileTypeIsUnsupported()
+    {
+        // Arrange
+        var path = Path.Combine(_rootFolder.Path, "movie.txt");
+        _files[path] = 12;
+        _contentTypes.Setup(registry => registry.GetDefinitionFor("movie")).Returns(new ContentTypeDefinition
+        {
+            Slug = "movie",
+            DisplayName = "Movie",
+            LevelDefinitions =
+            [
+                new ContentHierarchyLevelDefinition
+                {
+                    Slug = "movie",
+                    DisplayName = "Movie",
+                    CustomMetadataFields = [],
+                    AcceptedFileTypes = ["video/*"],
+                    AcceptedSidecarTypes = [".srt"]
+                }
+            ]
+        });
+        _fileSystem.Setup(system => system.LookupMimeTypeAsync(path, It.IsAny<CancellationToken>()))
+            .ReturnsAsync("text/plain");
+        _fileSystem.Setup(system => system.MatchesAnyFileTypeAsync(
+                path,
+                It.IsAny<IReadOnlyList<string>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(false);
+
+        // Act
+        // Assert
+        Assert.That(
+            () => _subject.AttachAsync(_leaf.Id, path, null).GetAwaiter().GetResult(),
+            Throws.InstanceOf<ArgumentException>());
+        _mediaFiles.Verify(repository => repository.CreateAsync(
+            It.IsAny<MediaFile>(),
+            It.IsAny<Guid?>(),
+            It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Test]
+    public void AttachAsync_ThrowsWithoutStoredChange_WhenFileIsMissing()
+    {
+        // Arrange
+        var path = Path.Combine(_rootFolder.Path, "missing.mkv");
+        _contentTypes.Setup(registry => registry.GetDefinitionFor("movie")).Returns(new ContentTypeDefinition
+        {
+            Slug = "movie",
+            DisplayName = "Movie",
+            LevelDefinitions =
+            [
+                new ContentHierarchyLevelDefinition
+                {
+                    Slug = "movie",
+                    DisplayName = "Movie",
+                    CustomMetadataFields = []
+                }
+            ]
+        });
+
+        // Act
+        // Assert
+        Assert.That(
+            () => _subject.AttachAsync(_leaf.Id, path, null).GetAwaiter().GetResult(),
+            Throws.InstanceOf<ArgumentException>());
+        _mediaFiles.Verify(repository => repository.CreateAsync(
+            It.IsAny<MediaFile>(),
+            It.IsAny<Guid?>(),
+            It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Test]
+    public void AttachAsync_ThrowsWithoutStoredChange_WhenFileIsInaccessible()
+    {
+        // Arrange
+        var path = Path.Combine(_rootFolder.Path, "movie.mkv");
+        _files[path] = 12;
+        _contentTypes.Setup(registry => registry.GetDefinitionFor("movie")).Returns(new ContentTypeDefinition
+        {
+            Slug = "movie",
+            DisplayName = "Movie",
+            LevelDefinitions =
+            [
+                new ContentHierarchyLevelDefinition
+                {
+                    Slug = "movie",
+                    DisplayName = "Movie",
+                    CustomMetadataFields = [],
+                    AcceptedFileTypes = ["video/*"]
+                }
+            ]
+        });
+        _fileSystem.Setup(system => system.LookupMimeTypeAsync(path, It.IsAny<CancellationToken>()))
+            .ReturnsAsync("video/x-matroska");
+        _fileSystem.Setup(system => system.MatchesAnyFileTypeAsync(
+                path,
+                It.IsAny<IReadOnlyList<string>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        _fileSystem.Setup(system => system.OpenRead(path)).Throws<UnauthorizedAccessException>();
+
+        // Act
+        // Assert
+        Assert.That(
+            () => _subject.AttachAsync(_leaf.Id, path, null).GetAwaiter().GetResult(),
+            Throws.InstanceOf<ArgumentException>());
+        _mediaFiles.Verify(repository => repository.CreateAsync(
+            It.IsAny<MediaFile>(),
+            It.IsAny<Guid?>(),
+            It.IsAny<CancellationToken>()), Times.Never);
+        _transactionManager.Verify(manager => manager.ExecuteWithTransactionAsync(
+            It.IsAny<Func<CancellationToken, Task<AttachContentFileResult>>>(),
+            It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Test]
+    public void AttachAsync_ThrowsWithoutStoredChange_WhenFileIsAlreadyAttached()
+    {
+        // Arrange
+        var path = Path.Combine(_rootFolder.Path, "movie.mkv");
+        _files[path] = 12;
+        _contentTypes.Setup(registry => registry.GetDefinitionFor("movie")).Returns(new ContentTypeDefinition
+        {
+            Slug = "movie",
+            DisplayName = "Movie",
+            LevelDefinitions =
+            [
+                new ContentHierarchyLevelDefinition
+                {
+                    Slug = "movie",
+                    DisplayName = "Movie",
+                    CustomMetadataFields = [],
+                    AcceptedFileTypes = ["video/*"]
+                }
+            ]
+        });
+        _fileSystem.Setup(system => system.LookupMimeTypeAsync(path, It.IsAny<CancellationToken>()))
+            .ReturnsAsync("video/x-matroska");
+        _fileSystem.Setup(system => system.MatchesAnyFileTypeAsync(
+                path,
+                It.IsAny<IReadOnlyList<string>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        _mediaFiles.Setup(repository => repository.GetByPathAsync(path, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new MediaFile { ContentItemId = Guid.NewGuid(), FileKind = "Video", FilePath = path });
+
+        // Act
+        // Assert
+        Assert.That(
+            () => _subject.AttachAsync(_leaf.Id, path, null).GetAwaiter().GetResult(),
+            Throws.InstanceOf<ArgumentException>());
+        _mediaFiles.Verify(repository => repository.CreateAsync(
+            It.IsAny<MediaFile>(),
+            It.IsAny<Guid?>(),
+            It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Test]
+    public void AttachAsync_ThrowsWithoutStoredChange_WhenWindowsPathDiffersOnlyByCase()
+    {
+        // Arrange
+        var selectedPath = Path.Combine(_rootFolder.Path, "movie.mkv");
+        _files[selectedPath] = 12;
+        _contentTypes.Setup(registry => registry.GetDefinitionFor("movie")).Returns(new ContentTypeDefinition
+        {
+            Slug = "movie",
+            DisplayName = "Movie",
+            LevelDefinitions =
+            [
+                new ContentHierarchyLevelDefinition
+                {
+                    Slug = "movie",
+                    DisplayName = "Movie",
+                    CustomMetadataFields = [],
+                    AcceptedFileTypes = ["video/*"]
+                }
+            ]
+        });
+        _fileSystem.Setup(system => system.LookupMimeTypeAsync(selectedPath, It.IsAny<CancellationToken>()))
+            .ReturnsAsync("video/x-matroska");
+        _fileSystem.Setup(system => system.MatchesAnyFileTypeAsync(
+                selectedPath,
+                It.IsAny<IReadOnlyList<string>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        _mediaFiles.Setup(repository => repository.GetByPathAsync(selectedPath, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new MediaFile
+            {
+                ContentItemId = Guid.NewGuid(),
+                FileKind = "Video",
+                FilePath = selectedPath
+            });
+
+        // Act
+        var exception = Assert.ThrowsAsync<ArgumentException>(
+            async () => await _subject.AttachAsync(_leaf.Id, selectedPath, null).ConfigureAwait(false));
+
+        // Assert
+        Assert.That(exception!.Message, Is.EqualTo("The selected file is already attached to content."));
+        _mediaFiles.Verify(repository => repository.CreateAsync(
+            It.IsAny<MediaFile>(),
+            It.IsAny<Guid?>(),
+            It.IsAny<CancellationToken>()), Times.Never);
+        _mediaFiles.Verify(repository => repository.ListAllAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [TestCase("UNIQUE constraint failed: content_mediaFile.PathKey", typeof(ArgumentException))]
+    [TestCase("FOREIGN KEY constraint failed", typeof(DbUpdateException))]
+    public void AttachAsync_ThrowsExpectedException_WhenMediaFileInsertFails(
+        string databaseMessage,
+        Type expectedExceptionType)
+    {
+        // Arrange
+        var path = Path.Combine(_rootFolder.Path, "movie.mkv");
+        var contentItem = new ContentItem
+        {
+            Id = Guid.NewGuid(),
+            ContentHierarchyItemId = _leaf.Id,
+            Fulfillment = FulfillmentStatus.Missing,
+            CreatedAt = DateTime.UtcNow
+        };
+        _files[path] = 12;
+        _contentTypes.Setup(registry => registry.GetDefinitionFor("movie")).Returns(new ContentTypeDefinition
+        {
+            Slug = "movie",
+            DisplayName = "Movie",
+            LevelDefinitions =
+            [
+                new ContentHierarchyLevelDefinition
+                {
+                    Slug = "movie",
+                    DisplayName = "Movie",
+                    CustomMetadataFields = [],
+                    AcceptedFileTypes = ["video/*"]
+                }
+            ]
+        });
+        _fileSystem.Setup(system => system.LookupMimeTypeAsync(path, It.IsAny<CancellationToken>()))
+            .ReturnsAsync("video/x-matroska");
+        _fileSystem.Setup(system => system.MatchesAnyFileTypeAsync(
+                path,
+                It.IsAny<IReadOnlyList<string>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        _contentItems.Setup(repository => repository.QueryAsync(
+                It.IsAny<ContentItemQuery>(),
+                It.IsAny<PagingParameter>(),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<ContentItem> { Items = [contentItem], TotalItems = 1 });
+        _mediaFiles.Setup(repository => repository.CreateAsync(
+                It.IsAny<MediaFile>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new DbUpdateException("Insert failed.", new InvalidOperationException(databaseMessage)));
+
+        // Act
+        var exception = Assert.CatchAsync(
+            async () => await _subject.AttachAsync(_leaf.Id, path, null).ConfigureAwait(false));
+
+        // Assert
+        Assert.That(exception, Is.TypeOf(expectedExceptionType));
+    }
+
+    [Test]
+    public void AttachAsync_ThrowsDbUpdateException_WhenAuditInsertFails()
+    {
+        // Arrange
+        var path = Path.Combine(_rootFolder.Path, "movie.mkv");
+        var contentItem = new ContentItem
+        {
+            Id = Guid.NewGuid(),
+            ContentHierarchyItemId = _leaf.Id,
+            Fulfillment = FulfillmentStatus.Missing,
+            CreatedAt = DateTime.UtcNow
+        };
+        var mediaFile = new MediaFile
+        {
+            Id = Guid.NewGuid(),
+            ContentItemId = contentItem.Id,
+            FileKind = "Video",
+            FilePath = path
+        };
+        _files[path] = 12;
+        _contentTypes.Setup(registry => registry.GetDefinitionFor("movie")).Returns(new ContentTypeDefinition
+        {
+            Slug = "movie",
+            DisplayName = "Movie",
+            LevelDefinitions =
+            [
+                new ContentHierarchyLevelDefinition
+                {
+                    Slug = "movie",
+                    DisplayName = "Movie",
+                    CustomMetadataFields = [],
+                    AcceptedFileTypes = ["video/*"]
+                }
+            ]
+        });
+        _fileSystem.Setup(system => system.LookupMimeTypeAsync(path, It.IsAny<CancellationToken>()))
+            .ReturnsAsync("video/x-matroska");
+        _fileSystem.Setup(system => system.MatchesAnyFileTypeAsync(
+                path,
+                It.IsAny<IReadOnlyList<string>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        _fileSystem.Setup(system => system.ResolveFileKind("video/x-matroska")).Returns(FileKind.Video);
+        _mediaFiles.Setup(repository => repository.QueryAsync(
+                It.Is<MediaFileQuery>(query => query.FilePaths != null),
+                It.IsAny<PagingParameter>(),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<MediaFile>());
+        _mediaFiles.Setup(repository => repository.QueryAsync(
+                It.Is<MediaFileQuery>(query => query.ContentItemIds != null),
+                It.IsAny<PagingParameter>(),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<MediaFile> { Items = [mediaFile], TotalItems = 1 });
+        _mediaFiles.Setup(repository => repository.CreateAsync(
+                It.IsAny<MediaFile>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(mediaFile);
+        _contentItems.Setup(repository => repository.QueryAsync(
+                It.IsAny<ContentItemQuery>(),
+                It.IsAny<PagingParameter>(),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<ContentItem> { Items = [contentItem], TotalItems = 1 });
+        _contentItems.Setup(repository => repository.UpdateAsync(
+                It.IsAny<ContentItem>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        _auditRecords.Setup(repository => repository.CreateAsync(
+                It.IsAny<AuditRecord>(),
+                It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new DbUpdateException("Audit insert failed."));
+
+        // Act
+        var exception = Assert.ThrowsAsync<DbUpdateException>(
+            async () => await _subject.AttachAsync(_leaf.Id, path, null).ConfigureAwait(false));
+
+        // Assert
+        Assert.That(exception!.Message, Is.EqualTo("Audit insert failed."));
+    }
+
+    [Test]
+    public async Task AttachAsync_ReturnsNullWithoutStoredChange_WhenContentIsUnknown()
+    {
+        // Arrange
+        var unknownId = Guid.NewGuid();
+
+        // Act
+        var result = await _subject.AttachAsync(unknownId, "unknown.mkv", null).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(result.Result, Is.Null);
+        _mediaFiles.Verify(repository => repository.CreateAsync(
+            It.IsAny<MediaFile>(),
+            It.IsAny<Guid?>(),
+            It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Test]
+    public async Task UpdateFulfillmentAsync_ReturnsFalseWithoutStoredChange_WhenContentIsFulfilledExternally()
+    {
+        // Arrange
+        var contentItem = new ContentItem
+        {
+            Id = Guid.NewGuid(),
+            ContentHierarchyItemId = _leaf.Id,
+            Fulfillment = FulfillmentStatus.FulfilledExternally,
+            CreatedAt = DateTime.UtcNow
+        };
+        _contentItems.Setup(repository => repository.QueryAsync(
+                It.IsAny<ContentItemQuery>(),
+                It.IsAny<PagingParameter>(),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<ContentItem> { Items = [contentItem], TotalItems = 1 });
+
+        // Act
+        var result = await _subject.UpdateFulfillmentAsync(_leaf.Id, null).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(result, Is.False);
+        _mediaFiles.Verify(repository => repository.QueryAsync(
+            It.IsAny<MediaFileQuery>(),
+            It.IsAny<PagingParameter>(),
+            null,
+            It.IsAny<CancellationToken>()), Times.Never);
+        _contentItems.Verify(repository => repository.UpdateAsync(
+            It.IsAny<ContentItem>(),
+            It.IsAny<Guid?>(),
+            It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Test]
+    public async Task UnlinkAsync_RemovesAssociationAndSetsMissing_WhenLastPrimaryIsRemoved()
+    {
+        // Arrange
+        var path = Path.Combine(_rootFolder.Path, "movie.mkv");
+        var lineageLocked = false;
+        var contentItem = new ContentItem
+        {
+            Id = Guid.NewGuid(),
+            ContentHierarchyItemId = _leaf.Id,
+            Fulfillment = FulfillmentStatus.Fulfilled,
+            CreatedAt = DateTime.UtcNow
+        };
+        var mediaFile = new MediaFile
+        {
+            Id = Guid.NewGuid(),
+            ContentItemId = contentItem.Id,
+            FileKind = "Video",
+            FilePath = path
+        };
+        var mediaFiles = new List<MediaFile> { mediaFile };
+        _contentTypes.Setup(registry => registry.GetDefinitionFor("movie")).Returns(new ContentTypeDefinition
+        {
+            Slug = "movie",
+            DisplayName = "Movie",
+            LevelDefinitions =
+            [
+                new ContentHierarchyLevelDefinition
+                {
+                    Slug = "movie",
+                    DisplayName = "Movie",
+                    CustomMetadataFields = [],
+                    AcceptedFileTypes = ["video/*"]
+                }
+            ]
+        });
+        _mediaFiles.Setup(repository => repository.GetByIdAsync(mediaFile.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(mediaFile);
+        _contentHierarchyItems.Setup(repository => repository.LockAsync(_leaf.Id, It.IsAny<CancellationToken>()))
+            .Callback(() => lineageLocked = true)
+            .Returns(Task.CompletedTask);
+        _mediaFiles.Setup(repository => repository.DeleteAsync(
+                mediaFile.Id,
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() =>
+            {
+                Assert.That(lineageLocked, Is.True);
+                mediaFiles.Remove(mediaFile);
+                return true;
+            });
+        _mediaFiles.Setup(repository => repository.QueryAsync(
+                It.IsAny<MediaFileQuery>(),
+                It.IsAny<PagingParameter>(),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => new PagedList<MediaFile> { Items = mediaFiles, TotalItems = mediaFiles.Count });
+        _contentItems.Setup(repository => repository.GetByIdAsync(contentItem.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(contentItem);
+        _contentItems.Setup(repository => repository.QueryAsync(
+                It.IsAny<ContentItemQuery>(),
+                It.IsAny<PagingParameter>(),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<ContentItem> { Items = [contentItem], TotalItems = 1 });
+        _contentItems.Setup(repository => repository.UpdateAsync(
+                It.IsAny<ContentItem>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        _auditRecords.Setup(repository => repository.CreateAsync(
+                It.IsAny<AuditRecord>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new AuditRecord { Category = "Content", Operation = "FileUnlinked" });
+
+        // Act
+        var result = await _subject.UnlinkAsync(_leaf.Id, mediaFile.Id, Guid.NewGuid()).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.Removed, Is.True);
+            Assert.That(result.FulfillmentChanged, Is.True);
+            Assert.That(contentItem.Fulfillment, Is.EqualTo(FulfillmentStatus.Missing));
+            Assert.That(mediaFiles, Is.Empty);
+        }
+
+        _fileSystem.Verify(system => system.DeleteFile(It.IsAny<string>()), Times.Never);
+    }
+
+    [Test]
+    public async Task UnlinkAsync_KeepsFulfilled_WhenSidecarIsRemoved()
+    {
+        // Arrange
+        var primary = new MediaFile
+        {
+            Id = Guid.NewGuid(),
+            ContentItemId = Guid.NewGuid(),
+            FileKind = "Video",
+            FilePath = Path.Combine(_rootFolder.Path, "movie.mkv")
+        };
+        var sidecar = new MediaFile
+        {
+            Id = Guid.NewGuid(),
+            ContentItemId = primary.ContentItemId,
+            FileKind = "Text",
+            FilePath = Path.Combine(_rootFolder.Path, "movie.srt")
+        };
+        var contentItem = new ContentItem
+        {
+            Id = primary.ContentItemId,
+            ContentHierarchyItemId = _leaf.Id,
+            Fulfillment = FulfillmentStatus.Fulfilled,
+            CreatedAt = DateTime.UtcNow
+        };
+        var mediaFiles = new List<MediaFile> { primary, sidecar };
+        _contentTypes.Setup(registry => registry.GetDefinitionFor("movie")).Returns(new ContentTypeDefinition
+        {
+            Slug = "movie",
+            DisplayName = "Movie",
+            LevelDefinitions =
+            [
+                new ContentHierarchyLevelDefinition
+                {
+                    Slug = "movie",
+                    DisplayName = "Movie",
+                    CustomMetadataFields = [],
+                    AcceptedFileTypes = ["video/*"],
+                    AcceptedSidecarTypes = [".srt"]
+                }
+            ]
+        });
+        _fileSystem.Setup(system => system.MatchesAnyFileTypeAsync(
+                primary.FilePath,
+                It.Is<IReadOnlyList<string>>(types => types.Contains("video/*")),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        _mediaFiles.Setup(repository => repository.GetByIdAsync(sidecar.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(sidecar);
+        _mediaFiles.Setup(repository => repository.DeleteAsync(
+                sidecar.Id,
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() =>
+            {
+                mediaFiles.Remove(sidecar);
+                return true;
+            });
+        _mediaFiles.Setup(repository => repository.QueryAsync(
+                It.IsAny<MediaFileQuery>(),
+                It.IsAny<PagingParameter>(),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => new PagedList<MediaFile> { Items = mediaFiles, TotalItems = mediaFiles.Count });
+        _contentItems.Setup(repository => repository.GetByIdAsync(contentItem.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(contentItem);
+        _contentItems.Setup(repository => repository.QueryAsync(
+                It.IsAny<ContentItemQuery>(),
+                It.IsAny<PagingParameter>(),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<ContentItem> { Items = [contentItem], TotalItems = 1 });
+        _auditRecords.Setup(repository => repository.CreateAsync(
+                It.IsAny<AuditRecord>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new AuditRecord { Category = "Content", Operation = "FileUnlinked" });
+
+        // Act
+        var result = await _subject.UnlinkAsync(_leaf.Id, sidecar.Id, Guid.NewGuid()).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.Removed, Is.True);
+            Assert.That(result.FulfillmentChanged, Is.False);
+            Assert.That(contentItem.Fulfillment, Is.EqualTo(FulfillmentStatus.Fulfilled));
+            Assert.That(mediaFiles, Is.EqualTo([primary]));
+        }
+
+        _fileSystem.Verify(system => system.DeleteFile(It.IsAny<string>()), Times.Never);
+    }
+
+    [Test]
+    public async Task UnlinkAsync_SetsMissing_WhenOnlySidecarRemains()
+    {
+        // Arrange
+        var contentItem = new ContentItem
+        {
+            Id = Guid.NewGuid(),
+            ContentHierarchyItemId = _leaf.Id,
+            Fulfillment = FulfillmentStatus.Fulfilled,
+            CreatedAt = DateTime.UtcNow
+        };
+        var primary = new MediaFile
+        {
+            Id = Guid.NewGuid(),
+            ContentItemId = contentItem.Id,
+            FileKind = "Audio",
+            FilePath = Path.Combine(_rootFolder.Path, "track.flac")
+        };
+        var sidecar = new MediaFile
+        {
+            Id = Guid.NewGuid(),
+            ContentItemId = contentItem.Id,
+            FileKind = "Audio",
+            FilePath = Path.Combine(_rootFolder.Path, "playlist.m3u")
+        };
+        var mediaFiles = new List<MediaFile> { primary, sidecar };
+        _contentTypes.Setup(registry => registry.GetDefinitionFor("movie")).Returns(new ContentTypeDefinition
+        {
+            Slug = "movie",
+            DisplayName = "Movie",
+            LevelDefinitions =
+            [
+                new ContentHierarchyLevelDefinition
+                {
+                    Slug = "movie",
+                    DisplayName = "Movie",
+                    CustomMetadataFields = [],
+                    AcceptedFileTypes = ["audio/*"],
+                    AcceptedSidecarTypes = [".m3u"]
+                }
+            ]
+        });
+        _fileSystem.Setup(system => system.MatchesAnyFileTypeAsync(
+                sidecar.FilePath,
+                It.Is<IReadOnlyList<string>>(types => types.Contains(".m3u")),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        _fileSystem.Setup(system => system.MatchesAnyFileTypeAsync(
+                sidecar.FilePath,
+                It.Is<IReadOnlyList<string>>(types => types.Contains("audio/*")),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(false);
+        _mediaFiles.Setup(repository => repository.GetByIdAsync(primary.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(primary);
+        _mediaFiles.Setup(repository => repository.DeleteAsync(
+                primary.Id,
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() =>
+            {
+                mediaFiles.Remove(primary);
+                return true;
+            });
+        _mediaFiles.Setup(repository => repository.QueryAsync(
+                It.IsAny<MediaFileQuery>(),
+                It.IsAny<PagingParameter>(),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => new PagedList<MediaFile> { Items = mediaFiles, TotalItems = mediaFiles.Count });
+        _contentItems.Setup(repository => repository.GetByIdAsync(contentItem.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(contentItem);
+        _contentItems.Setup(repository => repository.QueryAsync(
+                It.IsAny<ContentItemQuery>(),
+                It.IsAny<PagingParameter>(),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<ContentItem> { Items = [contentItem], TotalItems = 1 });
+        _contentItems.Setup(repository => repository.UpdateAsync(
+                It.IsAny<ContentItem>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        _auditRecords.Setup(repository => repository.CreateAsync(
+                It.IsAny<AuditRecord>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new AuditRecord { Category = "Content", Operation = "FileUnlinked" });
+
+        // Act
+        var result = await _subject.UnlinkAsync(_leaf.Id, primary.Id, Guid.NewGuid()).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.Removed, Is.True);
+            Assert.That(result.FulfillmentChanged, Is.True);
+            Assert.That(contentItem.Fulfillment, Is.EqualTo(FulfillmentStatus.Missing));
+            Assert.That(mediaFiles, Is.EqualTo([sidecar]));
+        }
+    }
+
+    [Test]
+    public async Task DeleteAsync_ReturnsTrue_WhenOwnedRowIsRemovedConcurrently()
+    {
+        // Arrange
+        var path = Path.Combine(_rootFolder.Path, "movie.mkv");
+        var contentItem = new ContentItem
+        {
+            Id = Guid.NewGuid(),
+            ContentHierarchyItemId = _leaf.Id,
+            Fulfillment = FulfillmentStatus.Fulfilled,
+            CreatedAt = DateTime.UtcNow
+        };
+        var mediaFile = new MediaFile
+        {
+            Id = Guid.NewGuid(),
+            ContentItemId = contentItem.Id,
+            FileKind = "Video",
+            FilePath = path
+        };
+        _files[path] = 12;
+        _mediaFiles.Setup(repository => repository.GetByIdAsync(mediaFile.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(mediaFile);
+        _mediaFiles.Setup(repository => repository.DeleteAsync(
+                mediaFile.Id,
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(false);
+        _contentItems.Setup(repository => repository.GetByIdAsync(contentItem.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(contentItem);
+        _contentItems.Setup(repository => repository.QueryAsync(
+                It.IsAny<ContentItemQuery>(),
+                It.IsAny<PagingParameter>(),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<ContentItem> { Items = [contentItem], TotalItems = 1 });
+        _mediaFiles.Setup(repository => repository.QueryAsync(
+                It.IsAny<MediaFileQuery>(),
+                It.IsAny<PagingParameter>(),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<MediaFile>());
+        _contentItems.Setup(repository => repository.UpdateAsync(
+                It.IsAny<ContentItem>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        _auditRecords.Setup(repository => repository.CreateAsync(
+                It.IsAny<AuditRecord>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new AuditRecord { Category = "Content", Operation = "FileDeleted" });
+
+        // Act
+        var result = await _subject.DeleteAsync(_leaf.Id, mediaFile.Id, null).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.Deleted, Is.True);
+            Assert.That(result.FulfillmentChanged, Is.True);
+            _fileSystem.Verify(system => system.DeleteFile(path), Times.Once);
+            _auditRecords.Verify(repository => repository.CreateAsync(
+                It.Is<AuditRecord>(record =>
+                    record.Operation == "FileDeleted" &&
+                    record.EntityId == mediaFile.Id.ToString() &&
+                    record.ParentEntityId == _leaf.Id.ToString()),
+                It.IsAny<CancellationToken>()), Times.Once);
+        }
+    }
+
+    [Test]
+    public async Task DeleteAsync_RecordsMissingFileDetail_WhenOnlyOwnedRowIsRemoved()
+    {
+        // Arrange
+        var path = Path.Combine(_rootFolder.Path, "movie.mkv");
+        var contentItem = new ContentItem
+        {
+            Id = Guid.NewGuid(),
+            ContentHierarchyItemId = _leaf.Id,
+            Fulfillment = FulfillmentStatus.Fulfilled,
+            CreatedAt = DateTime.UtcNow
+        };
+        var mediaFile = new MediaFile
+        {
+            Id = Guid.NewGuid(),
+            ContentItemId = contentItem.Id,
+            FileKind = "Video",
+            FilePath = path
+        };
+        _mediaFiles.Setup(repository => repository.GetByIdAsync(mediaFile.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(mediaFile);
+        _mediaFiles.Setup(repository => repository.DeleteAsync(
+                mediaFile.Id,
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        _contentItems.Setup(repository => repository.GetByIdAsync(contentItem.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(contentItem);
+        _contentItems.Setup(repository => repository.QueryAsync(
+                It.IsAny<ContentItemQuery>(),
+                It.IsAny<PagingParameter>(),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<ContentItem> { Items = [contentItem], TotalItems = 1 });
+        _mediaFiles.Setup(repository => repository.QueryAsync(
+                It.IsAny<MediaFileQuery>(),
+                It.IsAny<PagingParameter>(),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<MediaFile>());
+        _auditRecords.Setup(repository => repository.CreateAsync(
+                It.IsAny<AuditRecord>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new AuditRecord { Category = "Content", Operation = "FileDeleted" });
+
+        // Act
+        var result = await _subject.DeleteAsync(_leaf.Id, mediaFile.Id, null).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.Deleted, Is.True);
+            _fileSystem.Verify(system => system.DeleteFile(It.IsAny<string>()), Times.Never);
+            _auditRecords.Verify(repository => repository.CreateAsync(
+                It.Is<AuditRecord>(record =>
+                    record.Operation == "FileDeleted" &&
+                    record.Detail == "Removed the missing file movie.mkv from content."),
+                It.IsAny<CancellationToken>()), Times.Once);
+        }
+    }
+
+    [Test]
+    public async Task DeleteAsync_ReturnsFalseAndSkipsAudit_WhenFileAndOwnedRowAreAlreadyRemoved()
+    {
+        // Arrange
+        var path = Path.Combine(_rootFolder.Path, "movie.mkv");
+        var contentItem = new ContentItem
+        {
+            Id = Guid.NewGuid(),
+            ContentHierarchyItemId = _leaf.Id,
+            Fulfillment = FulfillmentStatus.Fulfilled,
+            CreatedAt = DateTime.UtcNow
+        };
+        var mediaFile = new MediaFile
+        {
+            Id = Guid.NewGuid(),
+            ContentItemId = contentItem.Id,
+            FileKind = "Video",
+            FilePath = path
+        };
+        _mediaFiles.Setup(repository => repository.GetByIdAsync(mediaFile.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(mediaFile);
+        _mediaFiles.Setup(repository => repository.DeleteAsync(
+                mediaFile.Id,
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(false);
+        _contentItems.Setup(repository => repository.GetByIdAsync(contentItem.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(contentItem);
+        _contentItems.Setup(repository => repository.QueryAsync(
+                It.IsAny<ContentItemQuery>(),
+                It.IsAny<PagingParameter>(),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<ContentItem> { Items = [contentItem], TotalItems = 1 });
+
+        // Act
+        var result = await _subject.DeleteAsync(_leaf.Id, mediaFile.Id, null).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.Deleted, Is.False);
+            Assert.That(result.FulfillmentChanged, Is.False);
+            _fileSystem.Verify(system => system.DeleteFile(It.IsAny<string>()), Times.Never);
+            _auditRecords.Verify(repository => repository.CreateAsync(
+                It.IsAny<AuditRecord>(),
+                It.IsAny<CancellationToken>()), Times.Never);
+        }
+    }
+
+    [Test]
+    public async Task GetBrowserLocationAsync_ReturnsEffectiveContentPath_WhenDirectoryExists()
+    {
+        // Arrange
+        _leaf.Path = "The Matrix";
+        _contentTypes.Setup(registry => registry.GetDefinitionFor("movie")).Returns(new ContentTypeDefinition
+        {
+            Slug = "movie",
+            DisplayName = "Movie",
+            LevelDefinitions =
+            [
+                new ContentHierarchyLevelDefinition
+                {
+                    Slug = "movie",
+                    DisplayName = "Movie",
+                    CustomMetadataFields = [],
+                    Subfolder = "movies"
+                }
+            ]
+        });
+
+        // Act
+        var result = await _subject.GetBrowserLocationAsync(_leaf.Id).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Is.Not.Null);
+            Assert.That(result!.RootPath, Is.EqualTo(_rootFolder.Path));
+            Assert.That(result.InitialPath, Is.EqualTo(Path.Combine(_rootFolder.Path, "movies", "The Matrix")));
+        }
+    }
+
+    [Test]
+    public void BrowseAsync_ThrowsWithoutBrowsing_WhenPathIsOutsideConfiguredRoot()
+    {
+        // Arrange
+        var outsidePath = Path.Combine(Path.GetTempPath(), "outside", Guid.NewGuid().ToString("N"));
+
+        // Act
+        // Assert
+        Assert.That(
+            () => _subject.BrowseAsync(_leaf.Id, outsidePath).GetAwaiter().GetResult(),
+            Throws.InstanceOf<ArgumentException>());
+        _fileSystem.Verify(system => system.BrowseAsync(
+            It.IsAny<string>(),
+            It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Test]
+    public void BrowseAsync_ThrowsWithoutBrowsing_WhenPathContainsLink()
+    {
+        // Arrange
+        var linkedPath = Path.Combine(_rootFolder.Path, "linked");
+        _fileSystem.Setup(system => system.PathContainsLink(_rootFolder.Path, linkedPath)).Returns(true);
+
+        // Act
+        // Assert
+        Assert.That(
+            () => _subject.BrowseAsync(_leaf.Id, linkedPath).GetAwaiter().GetResult(),
+            Throws.InstanceOf<ArgumentException>());
+        _fileSystem.Verify(system => system.BrowseAsync(
+            It.IsAny<string>(),
+            It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Test]
+    public void AttachAsync_ThrowsWithoutStoredChange_WhenPathContainsLink()
+    {
+        // Arrange
+        var linkedPath = Path.Combine(_rootFolder.Path, "linked", "movie.mkv");
+        _files[linkedPath] = 12;
+        _contentTypes.Setup(registry => registry.GetDefinitionFor("movie")).Returns(new ContentTypeDefinition
+        {
+            Slug = "movie",
+            DisplayName = "Movie",
+            LevelDefinitions =
+            [
+                new ContentHierarchyLevelDefinition
+                {
+                    Slug = "movie",
+                    DisplayName = "Movie",
+                    CustomMetadataFields = [],
+                    AcceptedFileTypes = ["video/*"]
+                }
+            ]
+        });
+        _fileSystem.Setup(system => system.PathContainsLink(_rootFolder.Path, linkedPath)).Returns(true);
+
+        // Act
+        // Assert
+        Assert.That(
+            () => _subject.AttachAsync(_leaf.Id, linkedPath, null).GetAwaiter().GetResult(),
+            Throws.InstanceOf<ArgumentException>());
+        _mediaFiles.Verify(repository => repository.CreateAsync(
+            It.IsAny<MediaFile>(),
+            It.IsAny<Guid?>(),
+            It.IsAny<CancellationToken>()), Times.Never);
     }
 }

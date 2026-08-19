@@ -1,4 +1,5 @@
 using System;
+using System.Text.Json.Serialization;
 
 namespace Magpie.Models.Data;
 
@@ -7,6 +8,8 @@ namespace Magpie.Models.Data;
 /// </summary>
 public record MediaFile
 {
+    private string? _pathKey;
+
     /// <summary>
     /// The unique id of the media file.
     /// </summary>
@@ -31,6 +34,16 @@ public record MediaFile
     /// The full path of the file on disk.
     /// </summary>
     public required string FilePath { get; set; }
+
+    /// <summary>
+    /// The platform-specific key used to find the host path.
+    /// </summary>
+    [JsonIgnore]
+    public string PathKey
+    {
+        get => _pathKey ?? FilePath;
+        set => _pathKey = value;
+    }
 
     /// <summary>
     /// The size of the file in bytes.

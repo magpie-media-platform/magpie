@@ -216,6 +216,113 @@ describe('FileBrowser', () => {
         expect(screen.getByRole('button', { name: /go to root/i })).toBeDisabled();
     });
 
+    it('uses the configured root as the navigation boundary', async () => {
+        const user = userEvent.setup();
+        render(<FileBrowser {...defaultProps} initialPath="/home/user/Documents" rootPath="/home/user" />, {
+            wrapper: createWrapper(),
+        });
+
+        await waitFor(() => {
+            expect(mockApiGet).toHaveBeenCalledWith('/system/files?path=%2Fhome%2Fuser%2FDocuments');
+        });
+
+        expect(screen.queryByRole('button', { name: '/' })).not.toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: 'home' })).not.toBeInTheDocument();
+        await user.click(screen.getByRole('button', { name: /go to root/i }));
+
+        await waitFor(() => {
+            expect(screen.getByPlaceholderText('Enter path manually...')).toHaveValue('/home/user');
+        });
+        expect(screen.getByRole('button', { name: /go to parent/i })).toBeDisabled();
+        expect(screen.getByRole('button', { name: /go to root/i })).toBeDisabled();
+    });
+
+    it('rejects a manual path outside the configured root', async () => {
+        const user = userEvent.setup();
+        render(<FileBrowser {...defaultProps} initialPath="/home/user" rootPath="/home/user" />, {
+            wrapper: createWrapper(),
+        });
+
+        await waitFor(() => {
+            expect(screen.getByText('Documents')).toBeInTheDocument();
+        });
+
+        const pathInput = screen.getByPlaceholderText('Enter path manually...');
+        await user.clear(pathInput);
+        await user.type(pathInput, '/opt');
+        await user.click(screen.getByRole('button', { name: 'Go' }));
+
+        expect(await screen.findByText('The path must be in the configured root folder.')).toBeInTheDocument();
+        expect(mockApiGet).not.toHaveBeenCalledWith('/system/files?path=%2Fopt');
+    });
+
+    it('rejects a case-variant manual path outside a POSIX root', async () => {
+        const user = userEvent.setup();
+        render(<FileBrowser {...defaultProps} initialPath="/media/storage/Movies" rootPath="/media/storage/Movies" />, {
+            wrapper: createWrapper(),
+        });
+
+        await waitFor(() => {
+            expect(mockApiGet).toHaveBeenCalledWith('/system/files?path=%2Fmedia%2Fstorage%2FMovies');
+        });
+
+        const pathInput = screen.getByPlaceholderText('Enter path manually...');
+        await waitFor(() => expect(pathInput).toBeEnabled());
+        await user.clear(pathInput);
+        await user.type(pathInput, '/media/storage/movies');
+        await user.click(screen.getByRole('button', { name: 'Go' }));
+
+        expect(await screen.findByText('The path must be in the configured root folder.')).toBeInTheDocument();
+        expect(mockApiGet).not.toHaveBeenCalledWith('/system/files?path=%2Fmedia%2Fstorage%2Fmovies');
+    });
+
+    it('rejects a case-variant manual path outside a UNC root', async () => {
+        const user = userEvent.setup();
+        render(
+            <FileBrowser
+                {...defaultProps}
+                initialPath="\\\\Server\\Share\\Movies"
+                rootPath="\\\\Server\\Share\\Movies"
+            />,
+            { wrapper: createWrapper() },
+        );
+
+        const pathInput = screen.getByPlaceholderText('Enter path manually...');
+        await waitFor(() => expect(pathInput).toBeEnabled());
+        await user.clear(pathInput);
+        await user.type(pathInput, '\\\\server\\share\\movies-archive');
+        await user.click(screen.getByRole('button', { name: 'Go' }));
+
+        expect(await screen.findByText('The path must be in the configured root folder.')).toBeInTheDocument();
+        expect(mockApiGet).not.toHaveBeenCalledWith('/system/files?path=%5C%5Cserver%5Cshare%5Cmovies-archive');
+    });
+
+    it('allows children of the configured POSIX file-system root', async () => {
+        render(<FileBrowser {...defaultProps} initialPath="/movies/library" rootPath="/" />, {
+            wrapper: createWrapper(),
+        });
+
+        await waitFor(() => {
+            expect(mockApiGet).toHaveBeenCalledWith('/system/files?path=%2Fmovies%2Flibrary');
+        });
+        expect(screen.queryByText('The path must be in the configured root folder.')).not.toBeInTheDocument();
+    });
+
+    it('rejects a case-variant manual path outside a relative root', async () => {
+        const user = userEvent.setup();
+        render(<FileBrowser {...defaultProps} initialPath="Media/Movies" rootPath="Media/Movies" />, {
+            wrapper: createWrapper(),
+        });
+
+        const pathInput = screen.getByPlaceholderText('Enter path manually...');
+        await waitFor(() => expect(pathInput).toBeEnabled());
+        await user.clear(pathInput);
+        await user.type(pathInput, 'media/movies');
+        await user.click(screen.getByRole('button', { name: 'Go' }));
+
+        expect(await screen.findByText('The path must be in the configured root folder.')).toBeInTheDocument();
+    });
+
     it('navigates via breadcrumb', async () => {
         const user = userEvent.setup();
         render(<FileBrowser {...defaultProps} initialPath="/home/user" />, {
@@ -292,6 +399,40 @@ describe('FileBrowser', () => {
             expect(pathInput).toHaveValue('\\\\nas.example\\Media');
         });
         expect(screen.getByRole('button', { name: /go to parent/i })).toBeDisabled();
+    });
+
+    it('accepts a UNC initial path whose root differs only by case', async () => {
+        const initialPath = '\\\\NAS.example\\Media\\TV\\Shows';
+        render(
+            <FileBrowser {...defaultProps} initialPath={initialPath} rootPath="\\\\nas.example\\media" />,
+            { wrapper: createWrapper() },
+        );
+
+        await waitFor(() => {
+            expect(mockApiGet).toHaveBeenCalledWith(
+                '/system/files?path=%5C%5CNAS.example%5CMedia%5CTV%5CShows',
+            );
+        });
+        expect(screen.queryByText('The path must be in the configured root folder.')).not.toBeInTheDocument();
+    });
+
+    it('treats a case-variant UNC configured root as the navigation boundary', async () => {
+        const initialPath = '\\\\NAS.example\\Media\\TV';
+        render(
+            <FileBrowser
+                {...defaultProps}
+                initialPath={initialPath}
+                rootPath="\\\\nas.example\\media\\tv"
+            />,
+            { wrapper: createWrapper() },
+        );
+
+        await waitFor(() => {
+            expect(mockApiGet).toHaveBeenCalledWith('/system/files?path=%5C%5CNAS.example%5CMedia%5CTV');
+        });
+        expect(screen.getByRole('button', { name: /go to parent/i })).toBeDisabled();
+        expect(screen.getByRole('button', { name: /go to root/i })).toBeDisabled();
+        expect(screen.queryByRole('button', { name: '\\\\NAS.example\\Media' })).not.toBeInTheDocument();
     });
 
     it('navigates via manual path input', async () => {

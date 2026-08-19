@@ -5,8 +5,10 @@ using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Models;
+using Magpie.Models.Api;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
+using Magpie.Models.Storage;
 
 namespace Magpie.Abstractions.Content;
 
@@ -15,6 +17,104 @@ namespace Magpie.Abstractions.Content;
 /// </summary>
 public interface IContentFileService
 {
+    /// <summary>
+    /// Gets the configured root and initial path for the content file browser.
+    /// </summary>
+    /// <param name="contentHierarchyItemId">The id of the content hierarchy item</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    Task<ContentFileBrowserLocation?> GetBrowserLocationAsync(
+        Guid contentHierarchyItemId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Lists a directory within the configured root of a content hierarchy item.
+    /// </summary>
+    /// <param name="contentHierarchyItemId">The id of the content hierarchy item</param>
+    /// <param name="path">The directory to list</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    Task<IReadOnlyList<FileSystemEntry>?> BrowseAsync(
+        Guid contentHierarchyItemId,
+        string path,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Attaches an existing host file to a content hierarchy item.
+    /// </summary>
+    /// <param name="contentHierarchyItemId">The id of the content hierarchy item</param>
+    /// <param name="filePath">The full path of the host file</param>
+    /// <param name="actingUserId">The id of the user that attaches the file</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    Task<AttachContentFileResult> AttachAsync(
+        Guid contentHierarchyItemId,
+        string filePath,
+        Guid? actingUserId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Attaches a discovered library file, including a valid container fallback or an existing retry.
+    /// </summary>
+    /// <param name="contentHierarchyItemId">The id of the content hierarchy item</param>
+    /// <param name="filePath">The full path of the host file</param>
+    /// <param name="actingUserId">The id of the user that attaches the file</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    Task<AttachContentFileResult> AttachImportedAsync(
+        Guid contentHierarchyItemId,
+        string filePath,
+        Guid? actingUserId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Attaches an existing host file and updates ancestor fulfillment in the same transaction.
+    /// </summary>
+    /// <param name="contentHierarchyItemId">The id of the content hierarchy item</param>
+    /// <param name="filePath">The full path of the host file</param>
+    /// <param name="actingUserId">The id of the user that attaches the file</param>
+    /// <param name="materializeFulfillmentAsync">The operation that updates ancestor fulfillment</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    Task<AttachContentFileResult> AttachAsync(
+        Guid contentHierarchyItemId,
+        string filePath,
+        Guid? actingUserId,
+        Func<CancellationToken, Task> materializeFulfillmentAsync,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Removes a file association and keeps the host file.
+    /// </summary>
+    /// <param name="contentHierarchyItemId">The id of the content hierarchy item</param>
+    /// <param name="mediaFileId">The id of the media file</param>
+    /// <param name="actingUserId">The id of the user that unlinks the file</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    Task<UnlinkContentFileResult> UnlinkAsync(
+        Guid contentHierarchyItemId,
+        Guid mediaFileId,
+        Guid? actingUserId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Deletes a host file and removes its association.
+    /// </summary>
+    /// <param name="contentHierarchyItemId">The id of the content hierarchy item</param>
+    /// <param name="mediaFileId">The id of the media file</param>
+    /// <param name="actingUserId">The id of the user that deletes the file</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    Task<DeleteContentFileResult> DeleteAsync(
+        Guid contentHierarchyItemId,
+        Guid mediaFileId,
+        Guid? actingUserId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Reconciles direct fulfillment against the accepted primary files of a content hierarchy item.
+    /// </summary>
+    /// <param name="contentHierarchyItemId">The id of the content hierarchy item</param>
+    /// <param name="actingUserId">The id of the user that changed the files</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    Task<bool> UpdateFulfillmentAsync(
+        Guid contentHierarchyItemId,
+        Guid? actingUserId,
+        CancellationToken cancellationToken = default);
+
     /// <summary>
     /// Gets the rename that Magpie plans for a file, without a change on disk.
     /// </summary>

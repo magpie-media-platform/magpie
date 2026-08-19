@@ -4,6 +4,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
+using Magpie.Core.Caching;
 using Magpie.Extensions.Tmdb;
 using Magpie.Extensions.Tmdb.Mapping;
 using Magpie.Extensions.Tmdb.QueryEngine;
@@ -12,6 +13,7 @@ using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Models.Filtering;
 using Magpie.Models.MetadataSearch;
+using Magpie.Sdk.Caching;
 using Magpie.Sdk.Content;
 
 using Microsoft.Extensions.Logging;
@@ -26,23 +28,27 @@ namespace Magpie.Test.Extensions.Tmdb;
 [TestFixture]
 public class ContentMetadataSearcherTests
 {
+    private MemoryCacheFactory _cacheFactory = null!;
+    private MemoryCacheStore _cacheStore = null!;
     private Mock<IQueryEngine> _engine = null!;
     private Mock<ITmdbClient> _client = null!;
-    private Mock<IHydrationCache> _hydrationCache = null!;
+    private ICache _hydrationCache = null!;
     private IContentHierarchyMetadataAdvancedSearcher _searcher = null!;
 
     [SetUp]
     public void SetUp()
     {
+        _cacheStore = new MemoryCacheStore(TimeProvider.System);
+        _cacheFactory = new MemoryCacheFactory(_cacheStore);
+        _hydrationCache = _cacheFactory.GetOrCreate("tmdb-hydration");
         _engine = new Mock<IQueryEngine>();
         _client = new Mock<ITmdbClient>();
-        _hydrationCache = new Mock<IHydrationCache>();
         var settingsResolver = new Mock<ISettingsResolver>();
         settingsResolver.Setup(resolver => resolver.AcquireContextAsync(
                 It.IsAny<string?>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(new RequestContext { ApiKey = "key", Language = "en-US" });
-        var queryCache = new Mock<IQueryCache>();
+        var queryCache = new Mock<IQueryCoordinator>();
         queryCache.Setup(cache => cache.GetImageBaseUrlAsync(
                 It.IsAny<RequestContext>(),
                 It.IsAny<ITmdbClient>(),
@@ -53,9 +59,16 @@ public class ContentMetadataSearcherTests
             _engine.Object,
             settingsResolver.Object,
             _client.Object,
-            _hydrationCache.Object,
+            _cacheFactory,
             queryCache.Object,
             NullLogger<ContentMetadataSearcher>.Instance);
+    }
+
+    [TearDown]
+    public void TearDown()
+    {
+        _cacheFactory.Dispose();
+        _cacheStore.Dispose();
     }
 
     [TestCase("")]
@@ -175,7 +188,7 @@ public class ContentMetadataSearcherTests
     }
 
     [Test]
-    public async Task AdvancedSearchAsync_WarnsWithoutQuerying_WhenTvLevelSelectsOnlySeasons()
+    public async Task AdvancedSearchAsync_ReturnsEmptyWithoutWarning_WhenTvLevelSelectsOnlySeasons()
     {
         // Arrange
         var query = new ContentHierarchyItemCriteria
@@ -194,9 +207,7 @@ public class ContentMetadataSearcherTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(result.Matches, Is.Empty);
-            Assert.That(
-                result.Warnings.Select(warning => warning),
-                Has.Some.Contains("cannot search individual TV seasons or episodes"));
+            Assert.That(result.Warnings, Is.Empty);
         }
 
         _engine.VerifyNoOtherCalls();
@@ -209,7 +220,6 @@ public class ContentMetadataSearcherTests
         List<SearchHit> hits = [new() { Route = ContentRoute.TvShow, Id = 1399, Title = "Game of Thrones" }];
         _engine.Setup(engine => engine.SearchAsync(
                 It.IsAny<QueryRequest>(),
-                It.IsAny<ExecutionTrace?>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(() => new QueryExecution
             {
@@ -266,7 +276,6 @@ public class ContentMetadataSearcherTests
         ];
         _engine.Setup(engine => engine.SearchAsync(
                 It.Is<QueryRequest>(request => request.Page == 1),
-                It.IsAny<ExecutionTrace?>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(() => new QueryExecution
             {
@@ -279,7 +288,6 @@ public class ContentMetadataSearcherTests
             });
         _engine.Setup(engine => engine.SearchAsync(
                 It.Is<QueryRequest>(request => request.Page == 2),
-                It.IsAny<ExecutionTrace?>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(() => new QueryExecution
             {
@@ -309,7 +317,6 @@ public class ContentMetadataSearcherTests
         _engine.Verify(
             engine => engine.SearchAsync(
                 It.IsAny<QueryRequest>(),
-                It.IsAny<ExecutionTrace?>(),
                 It.IsAny<CancellationToken>()),
             Times.Exactly(2));
     }
@@ -325,7 +332,6 @@ public class ContentMetadataSearcherTests
         ];
         _engine.Setup(engine => engine.SearchAsync(
                 It.IsAny<QueryRequest>(),
-                It.IsAny<ExecutionTrace?>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(() => new QueryExecution
             {
@@ -355,7 +361,6 @@ public class ContentMetadataSearcherTests
         _engine.Verify(
             engine => engine.SearchAsync(
                 It.IsAny<QueryRequest>(),
-                It.IsAny<ExecutionTrace?>(),
                 It.IsAny<CancellationToken>()),
             Times.Once);
     }
@@ -367,7 +372,6 @@ public class ContentMetadataSearcherTests
         List<SearchHit> hits = [new() { Route = ContentRoute.Movie, Id = 1, Title = "One" }];
         _engine.Setup(engine => engine.SearchAsync(
                 It.IsAny<QueryRequest>(),
-                It.IsAny<ExecutionTrace?>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(() => new QueryExecution
             {
@@ -404,7 +408,6 @@ public class ContentMetadataSearcherTests
         var warning = "TMDb could not complete the remote query.";
         _engine.Setup(engine => engine.SearchAsync(
                 It.Is<QueryRequest>(request => request.Page == 1),
-                It.IsAny<ExecutionTrace?>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(() => new QueryExecution
             {
@@ -417,7 +420,6 @@ public class ContentMetadataSearcherTests
             });
         _engine.Setup(engine => engine.SearchAsync(
                 It.Is<QueryRequest>(request => request.Page == 2),
-                It.IsAny<ExecutionTrace?>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(() => new QueryExecution
             {
@@ -521,7 +523,6 @@ public class ContentMetadataSearcherTests
         execution.Diagnostics.StreamFaulted = true;
         _engine.Setup(engine => engine.SearchAsync(
                 It.IsAny<QueryRequest>(),
-                It.IsAny<ExecutionTrace?>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(execution);
 
@@ -571,21 +572,12 @@ public class ContentMetadataSearcherTests
 
         // Assert
         Assert.That(hydrated, Is.Null);
-        _hydrationCache.VerifyNoOtherCalls();
     }
 
     [Test]
     public async Task HydrateAsync_AppendsMetadataSections_WhenCandidateIsValid()
     {
         // Arrange
-        _hydrationCache.Setup(cache => cache.GetOrCreateAsync(
-                It.IsAny<HydrationCache.HydrationKey>(),
-                It.IsAny<It.IsAnyType>(),
-                It.IsAny<Func<It.IsAnyType, CancellationToken, Task<MetadataSearchCandidate?>>>(),
-                It.IsAny<CancellationToken>()))
-            .Returns(new InvocationFunc(invocation => ((Delegate)invocation.Arguments[2]).DynamicInvoke(
-                invocation.Arguments[1],
-                invocation.Arguments[3])!));
         var issued = default(Request);
         _client.Setup(client => client.GetAsync<MovieDetailDto>(
                 It.IsAny<RequestContext>(),
@@ -620,24 +612,15 @@ public class ContentMetadataSearcherTests
                     ("append_to_response", "release_dates,credits,images,external_ids,videos")
                 ]));
         }
-
-        _hydrationCache.Verify(cache => cache.GetOrCreateAsync(
-            It.IsAny<HydrationCache.HydrationKey>(),
-            It.IsAny<It.IsAnyType>(),
-            It.IsAny<Func<It.IsAnyType, CancellationToken, Task<MetadataSearchCandidate?>>>(),
-            It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Test]
     public async Task HydrateAsync_MergesCandidateAliasesIntoHydratedSubjects_WhenHydrated()
     {
         // Arrange
-        _hydrationCache.Setup(cache => cache.GetOrCreateAsync(
-                It.IsAny<HydrationCache.HydrationKey>(),
-                It.IsAny<It.IsAnyType>(),
-                It.IsAny<Func<It.IsAnyType, CancellationToken, Task<MetadataSearchCandidate?>>>(),
-                It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new MetadataSearchCandidate
+        _hydrationCache.Set(
+            "tmdb|tv|1399|en-us",
+            new MetadataSearchCandidate
             {
                 ProviderType = Constants.ProviderType,
                 ExternalIdSource = "tmdb",

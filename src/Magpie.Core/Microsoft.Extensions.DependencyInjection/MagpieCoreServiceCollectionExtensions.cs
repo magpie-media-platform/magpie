@@ -9,6 +9,7 @@ using Magpie.Abstractions.Releases;
 using Magpie.Abstractions.Repositories;
 using Magpie.Abstractions.Security;
 using Magpie.Core;
+using Magpie.Core.Caching;
 using Magpie.Core.Content;
 using Magpie.Core.Diagnostics;
 using Magpie.Core.Events;
@@ -25,6 +26,7 @@ using Magpie.Core.Repositories;
 using Magpie.Core.Security;
 using Magpie.Core.Subjects;
 using Magpie.Models.Data;
+using Magpie.Sdk.Caching;
 using Magpie.Sdk.Diagnostics;
 using Magpie.Sdk.Extensions;
 using Magpie.Sdk.Jobs;
@@ -154,6 +156,8 @@ public static class MagpieCoreServiceCollectionExtensions
         services.TryAddSingleton<IDataProtectionProvider, DefaultDataProtectionProvider>();
         services.TryAddSingleton<IPasswordPolicy, DefaultPasswordPolicy>();
         services.TryAddSingleton<IJobRuntime, DefaultJobRuntime>();
+        services.AddSingleton<MemoryCacheStore>();
+        services.TryAddScoped<ICacheFactory, MemoryCacheFactory>();
 
         services.TryAddScoped<IJobRetryPolicy, DefaultJobRetryPolicy>();
 

@@ -26,7 +26,7 @@ public class QueryExecutorTests
     private List<Request> _requests = null!;
     private Dictionary<string, int> _genres = null!;
     private Mock<ITmdbClient> _client = null!;
-    private Mock<IQueryCache> _cache = null!;
+    private Mock<IQueryCoordinator> _cache = null!;
     private Dictionary<string, QueryScanState> _scanStates = null!;
     private IQueryExecutor _subject = null!;
 
@@ -78,7 +78,7 @@ public class QueryExecutorTests
                 It.IsAny<CancellationToken>()))
             .Callback((RequestContext _, Request request, CancellationToken _) => _requests.Add(request))
             .ReturnsAsync((TvDetailDto?)null);
-        _cache = new Mock<IQueryCache>();
+        _cache = new Mock<IQueryCoordinator>();
         _scanStates = [];
         _cache.Setup(cache => cache.GetScanState(It.IsAny<string>()))
             .Returns((string key) =>
@@ -272,7 +272,6 @@ public class QueryExecutorTests
                     new MovieSearchHitDto { Id = 11, Title = "Second" }
                 ]
             });
-        var trace = new ExecutionTrace();
         var plan = new QueryPlan
         {
             Root = new FilterPlanNode
@@ -337,22 +336,12 @@ public class QueryExecutorTests
         // Act
         var execution = await _subject.ExecuteAsync(
             plan,
-            new RequestContext { ApiKey = "key", Language = "en-US", ExecutionTrace = trace },
+            new RequestContext { ApiKey = "key", Language = "en-US" },
             default).ConfigureAwait(false);
         var hits = await execution.Hits.ToListAsync().ConfigureAwait(false);
-        var outcomes = trace.Nodes();
 
         // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(hits, Has.Count.EqualTo(2));
-            Assert.That(outcomes.Single(outcome => outcome.NodeId == 3).Status, Is.EqualTo("skipped"));
-            Assert.That(
-                outcomes.Single(outcome => outcome.NodeId == 3).Reason,
-                Is.EqualTo("union result limit was satisfied"));
-            Assert.That(outcomes.Single(outcome => outcome.NodeId == 2).Status, Is.EqualTo("ran"));
-        }
-
+        Assert.That(hits, Has.Count.EqualTo(2));
         _client.Verify(
             client => client.GetAsync<SearchEnvelopeDto<MovieSearchHitDto>>(
                 It.IsAny<RequestContext>(),
@@ -528,7 +517,6 @@ public class QueryExecutorTests
     public async Task ExecuteAsync_SkipsTheFetch_WhenItsPreconditionIsUnsatisfied()
     {
         // Arrange
-        var trace = new ExecutionTrace();
         var plan = new QueryPlan
         {
             Root = new FetchPlanNode
@@ -569,20 +557,12 @@ public class QueryExecutorTests
         // Act
         var execution = await _subject.ExecuteAsync(
             plan,
-            new RequestContext { ApiKey = "key", Language = "en-US", ExecutionTrace = trace },
+            new RequestContext { ApiKey = "key", Language = "en-US" },
             default).ConfigureAwait(false);
         var hits = await execution.Hits.ToListAsync().ConfigureAwait(false);
 
         // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(hits, Is.Empty);
-            Assert.That(trace.Nodes().Single(outcome => outcome.NodeId == 2).Status, Is.EqualTo("skipped"));
-            Assert.That(
-                trace.Nodes().Single(outcome => outcome.NodeId == 2).Reason,
-                Is.EqualTo("precondition unsatisfied"));
-        }
-
+        Assert.That(hits, Is.Empty);
         _client.VerifyNoOtherCalls();
     }
 
@@ -677,7 +657,6 @@ public class QueryExecutorTests
     public async Task ExecuteAsync_ReturnsEmptyWithoutFetching_WhenARequiredSubjectGroupResolvedToNothing()
     {
         // Arrange
-        var trace = new ExecutionTrace();
         var plan = new QueryPlan
         {
             Root = new FetchPlanNode
@@ -718,20 +697,275 @@ public class QueryExecutorTests
         // Act
         var execution = await _subject.ExecuteAsync(
             plan,
-            new RequestContext { ApiKey = "key", Language = "en-US", ExecutionTrace = trace },
+            new RequestContext { ApiKey = "key", Language = "en-US" },
             default).ConfigureAwait(false);
+        var hits = await execution.Hits.ToListAsync().ConfigureAwait(false);
+
+        // Assert
+        Assert.That(hits, Is.Empty);
+        _client.VerifyNoOtherCalls();
+    }
+
+    [TestCase(false, new[] { 1726 })]
+    [TestCase(true, new int[0])]
+    public async Task ExecuteAsync_RetainsSupportedSubjectAlternativeWithoutWarning_WhenSiblingIsUnevaluable(
+        bool excluded,
+        int[] expectedIds)
+    {
+        // Arrange
+        var binding = new SubjectResolutionBinding(
+            "person-0",
+            new SubjectFilter(
+                excluded,
+                [
+                    new SubjectAlternative(
+                        [SubjectRole.Person],
+                        [[
+                            new SubjectIdentity("Alice", "tmdb", "1"),
+                            new SubjectIdentity("Alice", "musicbrainz", "abc")
+                        ]]),
+                    new SubjectAlternative(
+                        [SubjectRole.Person],
+                        [[new SubjectIdentity("Bob", "musicbrainz", "abc")]])
+                ]));
+        var plan = new QueryPlan
+        {
+            Root = new FetchPlanNode
+            {
+                Id = 2,
+                Precondition = PlanPrecondition.None,
+                Contributes = "fetch",
+                Route = ContentRoute.Movie,
+                AnchorKind = QueryAnchorKind.Search,
+                SubjectBindings = [binding],
+                PushedFilters = [],
+                RequestedPage = 1,
+                Fingerprint = "fetch-2",
+                OrdinarySearchTerm = "Iron Man",
+                Resolve = new ResolvePlanNode
+                {
+                    Id = 1,
+                    Precondition = PlanPrecondition.None,
+                    Contributes = "resolve",
+                    Route = ContentRoute.Movie,
+                    SubjectBindings = [binding],
+                    GenreFilters = [],
+                    ResolveImageBase = false
+                }
+            },
+            Warnings = [],
+            RequestedPage = 1,
+            MaximumResults = 25,
+            DefaultLanguagePreference = "en-US",
+            Fingerprint = "plan"
+        };
+
+        // Act
+        var execution = await _subject.ExecuteAsync(plan, Context, default).ConfigureAwait(false);
         var hits = await execution.Hits.ToListAsync().ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(hits, Is.Empty);
-            Assert.That(
-                trace.Nodes().Single(outcome => outcome.NodeId == 2).Reason,
-                Is.EqualTo("resolved anchor is empty"));
+            Assert.That(hits.Select(hit => hit.Id), Is.EqualTo(expectedIds));
+            Assert.That(execution.Warnings, Is.Empty);
         }
+    }
 
-        _client.VerifyNoOtherCalls();
+    [Test]
+    public async Task ExecuteAsync_RetainsSupportedSubjectRoleWithoutWarning_WhenSiblingRoleIsUnevaluable()
+    {
+        // Arrange
+        _cache.Setup(cache => cache.GetSubjectResolutionAsync(
+                It.IsAny<string>(),
+                It.IsAny<It.IsAnyType>(),
+                It.IsAny<Func<It.IsAnyType, CancellationToken, Task<SubjectResolution>>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new SubjectResolution { Kind = SubjectResolutionKind.Resolved, Id = 1, Name = "Alice" });
+        var binding = new SubjectResolutionBinding(
+            "person-0",
+            new SubjectFilter(
+                false,
+                [
+                    new SubjectAlternative(
+                        [SubjectRole.Person, SubjectRole.Company],
+                        [[new SubjectIdentity("Alice", "imdb", "nm0000001")]])
+                ]));
+        var plan = new QueryPlan
+        {
+            Root = new FetchPlanNode
+            {
+                Id = 2,
+                Precondition = PlanPrecondition.None,
+                Contributes = "fetch",
+                Route = ContentRoute.Movie,
+                AnchorKind = QueryAnchorKind.Search,
+                SubjectBindings = [binding],
+                PushedFilters = [],
+                RequestedPage = 1,
+                Fingerprint = "fetch-2",
+                OrdinarySearchTerm = "Iron Man",
+                Resolve = new ResolvePlanNode
+                {
+                    Id = 1,
+                    Precondition = PlanPrecondition.None,
+                    Contributes = "resolve",
+                    Route = ContentRoute.Movie,
+                    SubjectBindings = [binding],
+                    GenreFilters = [],
+                    ResolveImageBase = false
+                }
+            },
+            Warnings = [],
+            RequestedPage = 1,
+            MaximumResults = 25,
+            DefaultLanguagePreference = "en-US",
+            Fingerprint = "plan"
+        };
+
+        // Act
+        var execution = await _subject.ExecuteAsync(plan, Context, default).ConfigureAwait(false);
+        var hits = await execution.Hits.ToListAsync().ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(hits.Select(hit => hit.Id), Is.EqualTo([1726]));
+            Assert.That(execution.Warnings, Is.Empty);
+        }
+    }
+
+    [Test]
+    public async Task ExecuteAsync_PreservesRuntimeWarning_WhenSubjectResolutionReturnsMatches()
+    {
+        // Arrange
+        _cache.Setup(cache => cache.GetSubjectResolutionsAsync(
+                It.IsAny<string>(),
+                It.IsAny<It.IsAnyType>(),
+                It.IsAny<Func<It.IsAnyType, CancellationToken, Task<IReadOnlyList<SubjectResolution>>>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync([
+                new SubjectResolution
+                {
+                    Kind = SubjectResolutionKind.Resolved,
+                    Id = 1,
+                    Name = "Alice",
+                    Incomplete = true,
+                    Warning = "TMDb person name search reached the 500-page API limit."
+                }
+            ]);
+        var binding = new SubjectResolutionBinding(
+            "person-0",
+            new SubjectFilter(
+                false,
+                [new SubjectAlternative([SubjectRole.Person], [[new SubjectIdentity("Alice", null, null)]])]));
+        var plan = new QueryPlan
+        {
+            Root = new FetchPlanNode
+            {
+                Id = 2,
+                Precondition = PlanPrecondition.None,
+                Contributes = "fetch",
+                Route = ContentRoute.Movie,
+                AnchorKind = QueryAnchorKind.Search,
+                SubjectBindings = [binding],
+                PushedFilters = [],
+                RequestedPage = 1,
+                Fingerprint = "fetch-2",
+                OrdinarySearchTerm = "Iron Man",
+                Resolve = new ResolvePlanNode
+                {
+                    Id = 1,
+                    Precondition = PlanPrecondition.None,
+                    Contributes = "resolve",
+                    Route = ContentRoute.Movie,
+                    SubjectBindings = [binding],
+                    GenreFilters = [],
+                    ResolveImageBase = false
+                }
+            },
+            Warnings = [],
+            RequestedPage = 1,
+            MaximumResults = 25,
+            DefaultLanguagePreference = "en-US",
+            Fingerprint = "plan"
+        };
+
+        // Act
+        var execution = await _subject.ExecuteAsync(plan, Context, default).ConfigureAwait(false);
+        var hits = await execution.Hits.ToListAsync().ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(hits.Select(hit => hit.Id), Is.EqualTo([1726]));
+            Assert.That(
+                execution.Warnings,
+                Is.EqualTo(["TMDb person name search reached the 500-page API limit."]));
+        }
+    }
+
+    [Test]
+    public async Task ExecuteAsync_FetchesWithoutWarning_WhenExcludedSubjectIsAbsent()
+    {
+        // Arrange
+        _cache.Setup(cache => cache.GetSubjectResolutionsAsync(
+                It.IsAny<string>(),
+                It.IsAny<It.IsAnyType>(),
+                It.IsAny<Func<It.IsAnyType, CancellationToken, Task<IReadOnlyList<SubjectResolution>>>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync([new SubjectResolution { Kind = SubjectResolutionKind.NotFound }]);
+        var binding = new SubjectResolutionBinding(
+            "person-0",
+            new SubjectFilter(
+                true,
+                [
+                    new SubjectAlternative(
+                        [SubjectRole.Person],
+                        [[new SubjectIdentity("Nobody", null, null)]])
+                ]));
+        var plan = new QueryPlan
+        {
+            Root = new FetchPlanNode
+            {
+                Id = 2,
+                Precondition = PlanPrecondition.None,
+                Contributes = "fetch",
+                Route = ContentRoute.Movie,
+                AnchorKind = QueryAnchorKind.Search,
+                SubjectBindings = [binding],
+                PushedFilters = [],
+                RequestedPage = 1,
+                Fingerprint = "fetch-2",
+                OrdinarySearchTerm = "Iron Man",
+                Resolve = new ResolvePlanNode
+                {
+                    Id = 1,
+                    Precondition = PlanPrecondition.None,
+                    Contributes = "resolve",
+                    Route = ContentRoute.Movie,
+                    SubjectBindings = [binding],
+                    GenreFilters = [],
+                    ResolveImageBase = false
+                }
+            },
+            Warnings = [],
+            RequestedPage = 1,
+            MaximumResults = 25,
+            DefaultLanguagePreference = "en-US",
+            Fingerprint = "plan"
+        };
+
+        // Act
+        var execution = await _subject.ExecuteAsync(plan, Context, default).ConfigureAwait(false);
+        var hits = await execution.Hits.ToListAsync().ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(hits.Select(hit => hit.Id), Is.EqualTo([1726]));
+            Assert.That(execution.Warnings, Is.Empty);
+        }
     }
 
     [Test]
@@ -850,7 +1084,6 @@ public class QueryExecutorTests
                 TotalResults = 1,
                 Results = [new MovieSearchHitDto { Id = 10, Title = "First" }]
             });
-        var trace = new ExecutionTrace();
         var plan = new QueryPlan
         {
             Root = new CoalescePlanNode
@@ -898,19 +1131,12 @@ public class QueryExecutorTests
         // Act
         var execution = await _subject.ExecuteAsync(
             plan,
-            new RequestContext { ApiKey = "key", Language = "en-US", ExecutionTrace = trace },
+            new RequestContext { ApiKey = "key", Language = "en-US" },
             default).ConfigureAwait(false);
         var hits = await execution.Hits.ToListAsync().ConfigureAwait(false);
 
         // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(hits.Single().Id, Is.EqualTo(10));
-            Assert.That(trace.Nodes().Single(outcome => outcome.NodeId == 3).Status, Is.EqualTo("skipped"));
-            Assert.That(
-                trace.Nodes().Single(outcome => outcome.NodeId == 3).Reason,
-                Is.EqualTo("coalesce already satisfied"));
-        }
+        Assert.That(hits.Single().Id, Is.EqualTo(10));
 
         _client.Verify(
             client => client.GetAsync<SearchEnvelopeDto<MovieSearchHitDto>>(
@@ -1093,7 +1319,7 @@ public class QueryExecutorTests
     }
 
     [Test]
-    public async Task ExecuteAsync_WarnsWithoutCallingRemote_WhenTheContentIdSourceHasNoLookup()
+    public async Task ExecuteAsync_ReturnsEmptyWithoutWarning_WhenTheContentIdSourceHasNoLookup()
     {
         // Arrange
         var plan = new QueryPlan
@@ -1129,23 +1355,67 @@ public class QueryExecutorTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(hits, Is.Empty);
-            Assert.That(
-                execution.Warnings.Select(warning => warning),
-                Has.Some.Contains("were not found on the requested route"));
+            Assert.That(execution.Warnings, Is.Empty);
         }
 
         _client.VerifyNoOtherCalls();
     }
 
     [Test]
-    public async Task ExecuteAsync_WarnsAboutMissingIdentifiers_WhenOnlySomeAlternativesResolve()
+    public async Task ExecuteAsync_ReturnsSupportedHitWithoutWarning_WhenUnsupportedAlternativeDoesNotResolve()
     {
         // Arrange
         _client.Setup(client => client.GetAsync<MovieDetailDto>(
                 It.IsAny<RequestContext>(),
                 It.IsAny<Request>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync((MovieDetailDto?)null);
+            .ReturnsAsync(new MovieDetailDto { Id = 550, Title = "Fight Club" });
+        var plan = new QueryPlan
+        {
+            Root = new FetchPlanNode
+            {
+                Id = 1,
+                Precondition = PlanPrecondition.None,
+                Contributes = "fetch",
+                Route = ContentRoute.Movie,
+                AnchorKind = QueryAnchorKind.ContentIds,
+                SubjectBindings = [],
+                PushedFilters = [],
+                RequestedPage = 1,
+                Fingerprint = "fetch-1",
+                ContentIdFilters =
+                [
+                    new ContentIdFilter(
+                        false,
+                        [new ContentId("tmdb", "550"), new ContentId("musicbrainz", "abc")])
+                ]
+            },
+            Warnings = [],
+            RequestedPage = 1,
+            MaximumResults = 25,
+            DefaultLanguagePreference = "en-US",
+            Fingerprint = "plan"
+        };
+
+        // Act
+        var execution = await _subject.ExecuteAsync(
+            plan,
+            new RequestContext { ApiKey = "key", Language = "en-US" },
+            default).ConfigureAwait(false);
+        var hits = await execution.Hits.ToListAsync().ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(hits.Select(hit => hit.Id), Is.EqualTo([550]));
+            Assert.That(execution.Warnings, Is.Empty);
+        }
+    }
+
+    [Test]
+    public async Task ExecuteAsync_WarnsWithoutHits_WhenSupportedIdentifierDoesNotResolve()
+    {
+        // Arrange
         var plan = new QueryPlan
         {
             Root = new FetchPlanNode
@@ -1169,10 +1439,7 @@ public class QueryExecutorTests
         };
 
         // Act
-        var execution = await _subject.ExecuteAsync(
-            plan,
-            new RequestContext { ApiKey = "key", Language = "en-US" },
-            default).ConfigureAwait(false);
+        var execution = await _subject.ExecuteAsync(plan, Context, default).ConfigureAwait(false);
         var hits = await execution.Hits.ToListAsync().ConfigureAwait(false);
 
         // Assert
@@ -1180,7 +1447,7 @@ public class QueryExecutorTests
         {
             Assert.That(hits, Is.Empty);
             Assert.That(
-                execution.Warnings.Select(warning => warning),
+                execution.Warnings,
                 Is.EqualTo(["One or more exact TMDb content identifiers were not found on the requested route."]));
         }
     }
@@ -1191,6 +1458,7 @@ public class QueryExecutorTests
         // Arrange
         _cache.Setup(cache => cache.GetCreditsAsync(
                 "3/person/1/tv_credits?language=en-US",
+                RequestRole.TvCredits,
                 It.IsAny<It.IsAnyType>(),
                 It.IsAny<Func<It.IsAnyType, CancellationToken, Task<CreditResponse>>>(),
                 It.IsAny<CancellationToken>()))
@@ -1207,6 +1475,7 @@ public class QueryExecutorTests
             });
         _cache.Setup(cache => cache.GetCreditsAsync(
                 "3/person/2/tv_credits?language=en-US",
+                RequestRole.TvCredits,
                 It.IsAny<It.IsAnyType>(),
                 It.IsAny<Func<It.IsAnyType, CancellationToken, Task<CreditResponse>>>(),
                 It.IsAny<CancellationToken>()))
@@ -1294,6 +1563,7 @@ public class QueryExecutorTests
         // Arrange
         _cache.Setup(cache => cache.GetCreditsAsync(
                 "3/person/1/tv_credits?language=en-US",
+                RequestRole.TvCredits,
                 It.IsAny<It.IsAnyType>(),
                 It.IsAny<Func<It.IsAnyType, CancellationToken, Task<CreditResponse>>>(),
                 It.IsAny<CancellationToken>()))
@@ -1363,6 +1633,7 @@ public class QueryExecutorTests
         // Arrange
         _cache.Setup(cache => cache.GetCreditsAsync(
                 "3/person/1/tv_credits?language=en-US",
+                RequestRole.TvCredits,
                 It.IsAny<It.IsAnyType>(),
                 It.IsAny<Func<It.IsAnyType, CancellationToken, Task<CreditResponse>>>(),
                 It.IsAny<CancellationToken>()))
@@ -2482,6 +2753,136 @@ public class QueryExecutorTests
         Assert.That(
             _requests.Single().QueryParameters.Single(pair => pair.Key == "with_genres").Value,
             Is.EqualTo("28|18"));
+    }
+
+    [Test]
+    public async Task ExecuteAsync_RetainsResolvedGenreAlternativeWithoutWarning_WhenSiblingIsUnresolved()
+    {
+        // Arrange
+        _genres["Action"] = 28;
+        var genre = new GenreFilter(
+            false,
+            [
+                [new GenrePredicate(CriteriaValueOperator.Equals, false, ["Action"])],
+                [new GenrePredicate(CriteriaValueOperator.Equals, false, ["Missing"])]
+            ]);
+        var plan = new QueryPlan
+        {
+            Root = new FetchPlanNode
+            {
+                Id = 2,
+                Precondition = PlanPrecondition.None,
+                Contributes = "fetch",
+                Route = ContentRoute.Movie,
+                AnchorKind = QueryAnchorKind.Discover,
+                SubjectBindings = [],
+                PushedFilters = [],
+                RequestedPage = 1,
+                Fingerprint = "fetch",
+                Resolve = new ResolvePlanNode
+                {
+                    Id = 1,
+                    Precondition = PlanPrecondition.None,
+                    Contributes = "resolve",
+                    Route = ContentRoute.Movie,
+                    SubjectBindings = [],
+                    GenreFilters = [genre],
+                    ResolveImageBase = false
+                },
+                DiscoverParameters =
+                [
+                    new DiscoverParameter
+                    {
+                        Name = "with_genres",
+                        Combination = DiscoverCombination.Or,
+                        GenreFilters = [genre]
+                    }
+                ]
+            },
+            Warnings = [],
+            RequestedPage = 1,
+            MaximumResults = 25,
+            DefaultLanguagePreference = "en-US",
+            Fingerprint = "plan"
+        };
+
+        // Act
+        var execution = await _subject.ExecuteAsync(plan, Context, default).ConfigureAwait(false);
+        var hits = await execution.Hits.ToListAsync().ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(hits.Select(hit => hit.Id), Is.EqualTo([1726]));
+            Assert.That(execution.Warnings, Is.Empty);
+            Assert.That(
+                _requests.Single().QueryParameters.Single(pair => pair.Key == "with_genres").Value,
+                Is.EqualTo("28"));
+        }
+    }
+
+    [Test]
+    public async Task ExecuteAsync_ReturnsEmptyWithoutWarning_WhenNoGenreAlternativeResolves()
+    {
+        // Arrange
+        var genre = new GenreFilter(
+            false,
+            [
+                [new GenrePredicate(CriteriaValueOperator.Equals, false, ["Missing"])],
+                [new GenrePredicate(CriteriaValueOperator.Equals, false, ["Also Missing"])]
+            ]);
+        var plan = new QueryPlan
+        {
+            Root = new FetchPlanNode
+            {
+                Id = 2,
+                Precondition = PlanPrecondition.None,
+                Contributes = "fetch",
+                Route = ContentRoute.Movie,
+                AnchorKind = QueryAnchorKind.Discover,
+                SubjectBindings = [],
+                PushedFilters = [],
+                RequestedPage = 1,
+                Fingerprint = "fetch",
+                Resolve = new ResolvePlanNode
+                {
+                    Id = 1,
+                    Precondition = PlanPrecondition.None,
+                    Contributes = "resolve",
+                    Route = ContentRoute.Movie,
+                    SubjectBindings = [],
+                    GenreFilters = [genre],
+                    ResolveImageBase = false
+                },
+                DiscoverParameters =
+                [
+                    new DiscoverParameter
+                    {
+                        Name = "with_genres",
+                        Combination = DiscoverCombination.Or,
+                        GenreFilters = [genre]
+                    }
+                ]
+            },
+            Warnings = [],
+            RequestedPage = 1,
+            MaximumResults = 25,
+            DefaultLanguagePreference = "en-US",
+            Fingerprint = "plan"
+        };
+
+        // Act
+        var execution = await _subject.ExecuteAsync(plan, Context, default).ConfigureAwait(false);
+        var hits = await execution.Hits.ToListAsync().ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(hits, Is.Empty);
+            Assert.That(execution.Warnings, Is.Empty);
+        }
+
+        _client.VerifyNoOtherCalls();
     }
 
     [Test]

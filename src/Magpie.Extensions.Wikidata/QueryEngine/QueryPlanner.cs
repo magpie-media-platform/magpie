@@ -12,25 +12,11 @@ namespace Magpie.Extensions.Wikidata.QueryEngine;
 
 internal sealed class QueryPlanner : IQueryPlanner
 {
-    private static readonly string UnboundedWarning
-        = "Wikidata search requires a supported positive title, text, identifier, date, duration, genre, language," +
-        " relationship, rating, award, image, or reference criterion.";
-
     private static readonly string SourceKeyPrefix = Constants.ProviderType + ":";
 
     private static readonly string[] SourceKeyTemplates = [.. Enum.GetValues(typeof(EntityKind))
         .Cast<EntityKind>()
         .Select(kind => SourceKeyPrefix + kind.ToString().ToLowerInvariant() + ":q")];
-
-    private static string ApproximateWarning(string diagnostic, string filter) =>
-        diagnostic;
-
-    private static string UnsupportedWarning(string diagnostic, string filter) =>
-        diagnostic;
-
-    private static string ResidualNoBoundWarning(string source) =>
-        "Wikidata can apply " + source +
-                " only as a local residual; a supported positive server bound is required.";
 
     public QueryPlan Plan(
         EntityKind entityKind,
@@ -64,6 +50,16 @@ internal sealed class QueryPlanner : IQueryPlanner
                 OrdinaryTerm = normalizedOrdinaryTerm
             };
             unsupported = unsupported.PrepareDiagnostics();
+            Telemetry.Plans.Add(
+                1,
+                new KeyValuePair<string, object?>("provider", Telemetry.Provider),
+                new KeyValuePair<string, object?>("content_type", entityKind.ToString()),
+                new KeyValuePair<string, object?>("anchor_kind", QueryStrategy.Unsupported.ToString()));
+            Telemetry.PlansRefused.Add(
+                1,
+                new KeyValuePair<string, object?>("provider", Telemetry.Provider),
+                new KeyValuePair<string, object?>("content_type", entityKind.ToString()),
+                new KeyValuePair<string, object?>("reason", TerminalReason.Unbounded));
             return unsupported;
         }
 
@@ -74,20 +70,17 @@ internal sealed class QueryPlanner : IQueryPlanner
 
         var filters = new List<QueryFilter>();
         var residualFilters = new List<ResidualFilter>();
-        var warnings = new List<string>();
         var mappedKnownEmpty = MapCriteria(
             criteria,
             entityKind,
             filters,
             residualFilters,
-            criterionDispositions,
-            warnings);
+            criterionDispositions);
         var knownEmpty = identityExcluded || mappedKnownEmpty;
         if (identityExcluded)
         {
             filters.Clear();
             residualFilters.Clear();
-            warnings.Clear();
             for (var index = identityDispositionCount; index < criterionDispositions.Count; index++)
             {
                 criterionDispositions[index] = criterionDispositions[index] with
@@ -103,7 +96,7 @@ internal sealed class QueryPlanner : IQueryPlanner
             filter.Kind == QueryFilterKind.ExternalId && !filter.Negate);
         if (hasExactIdentitySeed)
         {
-            PreferExactIdentityBoundForRelationshipResiduals(filters, criterionDispositions, warnings);
+            PreferExactIdentityBoundForRelationshipResiduals(filters, criterionDispositions);
         }
 
         var hasPositiveTitleFilter = filters.Any(filter =>
@@ -118,8 +111,6 @@ internal sealed class QueryPlanner : IQueryPlanner
 
         if (!knownEmpty && !selective)
         {
-            warnings.Add(UnboundedWarning);
-            var residualIndex = 0;
             for (var index = 0; index < criterionDispositions.Count; index++)
             {
                 var disposition = criterionDispositions[index];
@@ -129,18 +120,13 @@ internal sealed class QueryPlanner : IQueryPlanner
                     continue;
                 }
 
-                var warning = ResidualNoBoundWarning(residualFilters[residualIndex].Source);
-                residualIndex++;
-                warnings.Add(warning);
                 criterionDispositions[index] = disposition with
                 {
                     Reason = disposition.Disposition == CriterionDispositionKind.Residual
                         ? "Planned for local residual evaluation, but no selective server bound was available."
                         : "Planned as a coarse server filter and local residual, but no selective server bound " +
                             "was available.",
-                    Warning = disposition.Warning is null
-                        ? warning
-                        : disposition.Warning + " " + warning
+                    Warning = null
                 };
             }
         }
@@ -152,7 +138,7 @@ internal sealed class QueryPlanner : IQueryPlanner
             Filters = filters,
             ResidualFilters = residualFilters,
             CriterionDispositions = criterionDispositions,
-            Warnings = [.. warnings.Distinct()],
+            Warnings = [],
             Page = Math.Max(1, page),
             MaximumResults = Math.Max(1, maximumResults),
             UsesLocalPaging = !knownEmpty && (residualFilters.Count > 0 || hasTitleSeed),
@@ -160,13 +146,31 @@ internal sealed class QueryPlanner : IQueryPlanner
             ProjectCandidateDetails = true
         };
         plan = plan.PrepareDiagnostics();
+        Telemetry.Plans.Add(
+            1,
+            new KeyValuePair<string, object?>("provider", Telemetry.Provider),
+            new KeyValuePair<string, object?>("content_type", entityKind.ToString()),
+            new KeyValuePair<string, object?>("anchor_kind", strategy.ToString()));
+        if (strategy == QueryStrategy.Empty)
+        {
+            Telemetry.PlansRefused.Add(
+                1,
+                new KeyValuePair<string, object?>("provider", Telemetry.Provider),
+                new KeyValuePair<string, object?>("content_type", entityKind.ToString()),
+                new KeyValuePair<string, object?>(
+                    "reason",
+                    criterionDispositions.Any(value =>
+                        value.Disposition == CriterionDispositionKind.ProvablyUnsatisfiable)
+                            ? TerminalReason.KnownEmpty
+                            : TerminalReason.Unbounded));
+        }
+
         return plan;
     }
 
     private void PreferExactIdentityBoundForRelationshipResiduals(
         List<QueryFilter> filters,
-        List<CriterionDisposition> criterionDispositions,
-        List<string> warnings)
+        List<CriterionDisposition> criterionDispositions)
     {
         var residualSources = criterionDispositions
             .Where(disposition => disposition.Disposition == CriterionDispositionKind.ServerFilterAndResidual)
@@ -197,12 +201,6 @@ internal sealed class QueryPlanner : IQueryPlanner
                 continue;
             }
 
-            if (disposition.Warning is not null)
-            {
-                warnings.RemoveAll(warning =>
-                    string.Equals(warning, disposition.Warning, StringComparison.Ordinal));
-            }
-
             criterionDispositions[index] = disposition with
             {
                 Disposition = CriterionDispositionKind.Residual,
@@ -217,14 +215,13 @@ internal sealed class QueryPlanner : IQueryPlanner
         EntityKind entityKind,
         List<QueryFilter> filters,
         List<ResidualFilter> residualFilters,
-        List<CriterionDisposition> criterionDispositions,
-        List<string> warnings)
+        List<CriterionDisposition> criterionDispositions)
     {
         var matchesNothing = false;
 
         void Add(string source, MappedCriterion mapped)
         {
-            AddMapped(source, mapped, filters, residualFilters, criterionDispositions, warnings);
+            AddMapped(source, mapped, filters, residualFilters, criterionDispositions);
             matchesNothing |= mapped.MatchesNothing;
         }
 
@@ -518,8 +515,7 @@ internal sealed class QueryPlanner : IQueryPlanner
         MappedCriterion mapped,
         List<QueryFilter> filters,
         List<ResidualFilter> residualFilters,
-        List<CriterionDisposition> criterionDispositions,
-        List<string> warnings)
+        List<CriterionDisposition> criterionDispositions)
     {
         if (mapped.Filter is not null)
         {
@@ -529,11 +525,6 @@ internal sealed class QueryPlanner : IQueryPlanner
         if (mapped.ResidualFilter is not null)
         {
             residualFilters.Add(mapped.ResidualFilter);
-        }
-
-        if (mapped.Warning is not null)
-        {
-            warnings.Add(mapped.Warning);
         }
 
         criterionDispositions.Add(ToDisposition(source, mapped));
@@ -877,7 +868,12 @@ internal sealed class QueryPlanner : IQueryPlanner
             if (!TrySimpleValues(alternative.Value, out var values) ||
                 !TryOptionalValues(alternative.Source, out var sources))
             {
-                return Unsupported(nameof(MetadataCriteria.ExternalIds));
+                if (!negate && alternatives.Count > 1)
+                {
+                    continue;
+                }
+
+                return Unsupported(nameof(MetadataCriteria.ExternalIds), negate);
             }
 
             var qids = new List<string>();
@@ -888,7 +884,12 @@ internal sealed class QueryPlanner : IQueryPlanner
                 {
                     if (!TryMapExternalValue(entityKind, source, value, out var qid, out var propertyValue))
                     {
-                        return Unsupported(nameof(MetadataCriteria.ExternalIds));
+                        if (negate)
+                        {
+                            return Unsupported(nameof(MetadataCriteria.ExternalIds), negate);
+                        }
+
+                        continue;
                     }
 
                     if (qid is not null)
@@ -903,11 +904,26 @@ internal sealed class QueryPlanner : IQueryPlanner
                 }
             }
 
+            if (qids.Count == 0 && externalIds.Count == 0)
+            {
+                if (!negate && alternatives.Count > 1)
+                {
+                    continue;
+                }
+
+                return Unsupported(nameof(MetadataCriteria.ExternalIds), negate);
+            }
+
             mapped.Add(new SubjectFilter
             {
                 Qids = [.. qids.Distinct(StringComparer.Ordinal)],
                 ExternalIds = [.. externalIds.Distinct()]
             });
+        }
+
+        if (mapped.Count == 0)
+        {
+            return Unsupported(nameof(MetadataCriteria.ExternalIds), negate);
         }
 
         return Supported(new QueryFilter
@@ -922,39 +938,98 @@ internal sealed class QueryPlanner : IQueryPlanner
         IReadOnlyList<RelationshipCriteria> alternatives,
         bool negate)
     {
+        var applicable = new List<RelationshipCriteria>();
+        var cannotCompile = false;
+        foreach (var alternative in alternatives)
+        {
+            if (alternative.RelatedMetadataContainerId.And.Any())
+            {
+                continue;
+            }
+
+            if (TryRelationshipProperties(alternative, out _, out var propertiesCannotCompile))
+            {
+                applicable.Add(alternative);
+            }
+            else
+            {
+                cannotCompile |= propertiesCannotCompile;
+            }
+        }
+
+        if (applicable.Count == 0)
+        {
+            return cannotCompile
+                ? Unsupported(nameof(MetadataCriteria.Relationships), negate)
+                : InapplicableRelationships(negate);
+        }
+
         if (TryCompileResidualRelationshipGroup(
-            alternatives,
+            applicable,
             negate,
             out var residual,
             out var coarseFilter))
         {
             return new MappedCriterion(
                 Filter: coarseFilter,
-                ResidualFilter: residual,
-                Warning: null);
+                ResidualFilter: residual);
         }
 
         var mapped = new List<SubjectFilter>();
-        foreach (var alternative in alternatives)
+        var mappedCriteria = new List<RelationshipCriteria>();
+        foreach (var alternative in applicable)
         {
             if (!TryMapRelationshipAlternative(
                 alternative,
                 allowFuzzySubjectNames: !negate,
-                out var mappedAlternative))
+                out var mappedAlternative,
+                out var residualAlternative))
             {
+                if (!negate && applicable.Count > 1)
+                {
+                    continue;
+                }
+
                 return TryCompileResidualRelationshipGroup(
-                    alternatives,
+                    applicable,
                     negate,
                     out residual,
                     out coarseFilter)
                     ? new MappedCriterion(
                         Filter: coarseFilter,
-                        ResidualFilter: residual,
-                        Warning: null)
-                    : UnsupportedRelationships();
+                        ResidualFilter: residual)
+                    : Unsupported(nameof(MetadataCriteria.Relationships), negate);
+            }
+
+            if (RequiresRelationshipResidual(residualAlternative!, negate) &&
+                !TryCompileResidualRelationshipAlternative(residualAlternative!, out _))
+            {
+                if (!negate && applicable.Count > 1)
+                {
+                    continue;
+                }
+
+                return Unsupported(nameof(MetadataCriteria.Relationships), negate);
             }
 
             mapped.Add(mappedAlternative!);
+            mappedCriteria.Add(residualAlternative!);
+        }
+
+        if (mapped.Count == 0)
+        {
+            return Unsupported(nameof(MetadataCriteria.Relationships), negate);
+        }
+
+        if (TryCompileResidualRelationshipGroup(
+            mappedCriteria,
+            negate,
+            out residual,
+            out coarseFilter))
+        {
+            return new MappedCriterion(
+                Filter: coarseFilter,
+                ResidualFilter: residual);
         }
 
         return Supported(new QueryFilter
@@ -968,16 +1043,17 @@ internal sealed class QueryPlanner : IQueryPlanner
     private bool TryMapRelationshipAlternative(
         RelationshipCriteria alternative,
         bool allowFuzzySubjectNames,
-        out SubjectFilter? mapped)
+        out SubjectFilter? mapped,
+        out RelationshipCriteria? residualAlternative)
     {
         mapped = null;
-        if (!TryRelationshipProperties(alternative, out var propertyIds) ||
+        residualAlternative = null;
+        if (!TryRelationshipProperties(alternative, out var propertyIds, out _) ||
             !TryOptionalRelationshipSubjectValues(
                 alternative.Subject,
                 out var subjectValues,
                 out var subjectOperator) ||
             alternative.ExternalIds.None.Count > 0 ||
-            alternative.Qualifier.And.Any() ||
             alternative.RelatedMetadataContainerId.And.Any())
         {
             return false;
@@ -1005,14 +1081,28 @@ internal sealed class QueryPlanner : IQueryPlanner
 
         if (names.Count > 5)
         {
-            return false;
+            if (!allowFuzzySubjectNames || qids.Count == 0)
+            {
+                return false;
+            }
+
+            names.Clear();
+            alternative = alternative with
+            {
+                Subject = new CriteriaSet<PropertyCriterion<string>>
+                {
+                    And = [alternative.Subject.And.Single() with { Value = null, Values = qids }]
+                }
+            };
         }
 
         var externalIdGroups = new List<ExternalIdGroup>();
+        var residualExternalIdGroups = new List<List<ExternalIdCriteria>>();
         foreach (var group in alternative.ExternalIds.Some)
         {
             var qidGroup = new List<string>();
             var externalIdGroup = new List<PropertyValue>();
+            var residualExternalIds = new List<ExternalIdCriteria>();
             foreach (var external in group)
             {
                 if (!TrySimpleValues(external.Value, out var values) ||
@@ -1021,12 +1111,18 @@ internal sealed class QueryPlanner : IQueryPlanner
                     return false;
                 }
 
-                if (sources.Any(source => !IsSupportedSubjectExternalSource(source)))
+                if (!allowFuzzySubjectNames &&
+                    sources.Any(source => !IsSupportedSubjectExternalSource(source)))
                 {
                     return false;
                 }
 
-                foreach (var source in SourcesOrUnspecified(sources))
+                var supportedSources = sources.Where(IsSupportedSubjectExternalSource).ToArray();
+                var mappedValues = new HashSet<string>(StringComparer.Ordinal);
+                var mappedSources = sources.Count == 0
+                    ? SourcesOrUnspecified(sources)
+                    : supportedSources.Select(source => (string?)source);
+                foreach (var source in mappedSources)
                 {
                     foreach (var value in values)
                     {
@@ -1040,12 +1136,38 @@ internal sealed class QueryPlanner : IQueryPlanner
                             qidGroup.Add(qid);
                         }
 
+                        mappedValues.Add(value);
                         externalIdGroup.AddRange(mappedExternals);
                     }
                 }
+
+                if (mappedValues.Count > 0)
+                {
+                    residualExternalIds.Add(external with
+                    {
+                        Source = sources.Count == 0
+                            ? external.Source
+                            : new CriteriaSet<PropertyCriterion<string>>
+                            {
+                                And = [external.Source.And.Single() with
+                                {
+                                    Value = null,
+                                    Values = supportedSources
+                                }]
+                            },
+                        Value = new CriteriaSet<PropertyCriterion<string>>
+                        {
+                            And = [external.Value.And.Single() with
+                            {
+                                Value = null,
+                                Values = mappedValues
+                            }]
+                        }
+                    });
+                }
             }
 
-            if (qidGroup.Count == 0 && externalIdGroup.Count == 0)
+            if (qidGroup.Count == 0 && externalIdGroup.Count == 0 || residualExternalIds.Count == 0)
             {
                 return false;
             }
@@ -1055,6 +1177,7 @@ internal sealed class QueryPlanner : IQueryPlanner
                 Qids = [.. qidGroup.Distinct(StringComparer.Ordinal)],
                 ExternalIds = [.. externalIdGroup.Distinct()]
             });
+            residualExternalIdGroups.Add(residualExternalIds);
         }
 
         mapped = new SubjectFilter
@@ -1063,6 +1186,10 @@ internal sealed class QueryPlanner : IQueryPlanner
             Qids = qids,
             Names = names,
             ExternalIdGroups = externalIdGroups
+        };
+        residualAlternative = alternative with
+        {
+            ExternalIds = alternative.ExternalIds with { Some = residualExternalIdGroups }
         };
         return true;
     }
@@ -1178,7 +1305,7 @@ internal sealed class QueryPlanner : IQueryPlanner
         out ResidualRelationshipAlternative? compiled)
     {
         compiled = null;
-        if (!TryRelationshipProperties(alternative, out var propertyIds) ||
+        if (!TryRelationshipProperties(alternative, out var propertyIds, out _) ||
             alternative.RelatedMetadataContainerId.And.Any() ||
             alternative.ExternalIds.None.Count > 0)
         {
@@ -1739,19 +1866,24 @@ internal sealed class QueryPlanner : IQueryPlanner
             return outerNegate ? Ignored() : KnownEmpty();
         }
 
+        if (!outerNegate && possible.Any(value => value.UnsupportedField is null))
+        {
+            possible = possible.Where(value => value.UnsupportedField is null).ToArray();
+        }
+
         var unsupportedField = possible
             .Select(value => value.UnsupportedField)
             .FirstOrDefault(value => value is not null);
         if (unsupportedField is not null)
         {
-            return Unsupported(unsupportedField);
+            return Unsupported(unsupportedField, outerNegate);
         }
 
         var requiresResidual = possible.Any(value => value.RequiresResidual || value.Coarse is null);
         if (!requiresResidual)
         {
             var directFilter = CollectionQueryFilter(filterKind, possible, outerNegate);
-            return Supported(directFilter, NameResolutionWarning(source, directFilter));
+            return Supported(directFilter);
         }
 
         var residual = new ResidualFilter
@@ -1776,16 +1908,8 @@ internal sealed class QueryPlanner : IQueryPlanner
         var filter = canApplyCoarse ? CollectionQueryFilter(filterKind, possible, negate: false) : null;
         return new MappedCriterion(
             Filter: filter,
-            Warning: filter is null ? null : NameResolutionWarning(source, filter),
             ResidualFilter: residual);
     }
-
-    private string? NameResolutionWarning(string source, QueryFilter filter) =>
-        filter.Alternatives.Any(value => value.Names.Count > 0)
-            ? ApproximateWarning(
-                "Wikidata " + source + " name matching may omit a matching result.",
-                source)
-            : null;
 
     private QueryFilter CollectionQueryFilter(
         QueryFilterKind filterKind,
@@ -2304,14 +2428,14 @@ internal sealed class QueryPlanner : IQueryPlanner
                 or CriteriaValueOperator.EndsWithString;
         if (values.Length == 0 || (!exactOperator && !fuzzySubjectOperator))
         {
-            return Unsupported(key);
+            return Unsupported(key, criterion.Negate);
         }
 
         if (normalizedKey is "relationship.externalid" or "relationship.externalidsource")
         {
             if (!TryBuildCustomRelationshipExternalFilter(customGroup, out var pairedFilter))
             {
-                return Unsupported(key);
+                return Unsupported(key, criterion.Negate);
             }
 
             return normalizedKey == "relationship.externalid" &&
@@ -2334,7 +2458,7 @@ internal sealed class QueryPlanner : IQueryPlanner
                 : normalizedKey.Substring(RelationshipFieldKeys.SubjectKindPrefix.Length);
             if (!TryMapRole(role, out var properties))
             {
-                return Unsupported(key);
+                return InapplicableCustom(key, criterion.Negate);
             }
 
             if (HasCustomKey(customGroup, RelationshipFieldKeys.Kind) ||
@@ -2342,13 +2466,13 @@ internal sealed class QueryPlanner : IQueryPlanner
             {
                 if (!TryCustomRelationshipProperties(customGroup, out var groupProperties))
                 {
-                    return Unsupported(key);
+                    return InapplicableCustom(key, criterion.Negate);
                 }
 
                 properties = [.. properties.Intersect(groupProperties, StringComparer.Ordinal)];
                 if (properties.Count == 0)
                 {
-                    return KnownEmpty();
+                    return InapplicableCustom(key, criterion.Negate);
                 }
             }
 
@@ -2359,7 +2483,7 @@ internal sealed class QueryPlanner : IQueryPlanner
                 (!TryBuildCustomRelationshipExternalFilter(customGroup, out pairedExternalFilter) ||
                     pairedExternalFilter!.Negate))
             {
-                return Unsupported(key);
+                return Unsupported(key, criterion.Negate);
             }
 
             var pairedExternalGroup = pairedExternalFilter?.Alternatives.Single().ExternalIdGroups.SingleOrDefault();
@@ -2379,7 +2503,12 @@ internal sealed class QueryPlanner : IQueryPlanner
 
             if (names.Count > 5)
             {
-                return Unsupported(key);
+                if (criterion.Negate || qids.Count == 0)
+                {
+                    return Unsupported(key, criterion.Negate);
+                }
+
+                names.Clear();
             }
 
             if (criterion.Negate && (fuzzySubjectOperator || pairedExternalFilter is not null))
@@ -2438,7 +2567,6 @@ internal sealed class QueryPlanner : IQueryPlanner
                     ? Residual(residual)
                     : new MappedCriterion(
                         Filter: coarseFilter,
-                        Warning: null,
                         ResidualFilter: residual);
             }
 
@@ -2461,15 +2589,9 @@ internal sealed class QueryPlanner : IQueryPlanner
 
         if (normalizedKey is "relationship.kind" or "relationship.type")
         {
-            var properties = new List<string>();
-            foreach (var value in values)
+            if (!TryMapRoleProperties(values, out var properties))
             {
-                if (!TryMapRole(value, out var roleProperties))
-                {
-                    return Unsupported(key);
-                }
-
-                properties.AddRange(roleProperties);
+                return InapplicableCustom(key, criterion.Negate);
             }
 
             return Supported(new QueryFilter
@@ -2480,7 +2602,7 @@ internal sealed class QueryPlanner : IQueryPlanner
             });
         }
 
-        return Unsupported(key);
+        return InapplicableCustom(key, criterion.Negate);
     }
 
     private IReadOnlyDictionary<string, PropertyCriterion<string>> MergeCustomItems(
@@ -2785,12 +2907,13 @@ internal sealed class QueryPlanner : IQueryPlanner
 
         var qids = new List<string>();
         var externalIds = new List<PropertyValue>();
-        if ((sourceCriterion.Values ?? []).Any(source => !IsSupportedSubjectExternalSource(source)))
+        if (externalIdCriterion.Negate &&
+            (sourceCriterion.Values ?? []).Any(source => !IsSupportedSubjectExternalSource(source)))
         {
             return false;
         }
 
-        foreach (var source in sourceCriterion.Values ?? [])
+        foreach (var source in (sourceCriterion.Values ?? []).Where(IsSupportedSubjectExternalSource))
         {
             foreach (var value in externalIdCriterion.Values ?? [])
             {
@@ -2886,19 +3009,7 @@ internal sealed class QueryPlanner : IQueryPlanner
             return false;
         }
 
-        var mapped = new List<string>();
-        foreach (var value in criterion.Values ?? [])
-        {
-            if (!TryMapRole(value, out var roleProperties))
-            {
-                return false;
-            }
-
-            mapped.AddRange(roleProperties);
-        }
-
-        properties = [.. mapped.Distinct(StringComparer.Ordinal)];
-        return properties.Count > 0;
+        return TryMapRoleProperties(criterion.Values ?? [], out properties);
     }
 
     private bool IsSelective(QueryFilter filter)
@@ -2927,11 +3038,17 @@ internal sealed class QueryPlanner : IQueryPlanner
             or QueryFilterKind.Reference;
     }
 
-    private bool TryRelationshipProperties(RelationshipCriteria criteria, out IReadOnlyList<string> properties)
+    private bool TryRelationshipProperties(
+        RelationshipCriteria criteria,
+        out IReadOnlyList<string> properties,
+        out bool cannotCompile)
     {
         properties = [];
-        if (!TryRoleProperties(criteria.Kind, out var kinds) ||
-            !TryRoleProperties(criteria.Type, out var types))
+        var kindsMapped = TryRoleProperties(criteria.Kind, out var kinds, out var kindsCannotCompile);
+        var typesMapped = TryRoleProperties(criteria.Type, out var types, out var typesCannotCompile);
+        var knownAbsent = !kindsMapped && !kindsCannotCompile || !typesMapped && !typesCannotCompile;
+        cannotCompile = !knownAbsent && (kindsCannotCompile || typesCannotCompile);
+        if (!kindsMapped || !typesMapped)
         {
             return false;
         }
@@ -2959,9 +3076,11 @@ internal sealed class QueryPlanner : IQueryPlanner
 
     private bool TryRoleProperties(
         CriteriaSet<PropertyCriterion<string>> criteria,
-        out IReadOnlyList<string> properties)
+        out IReadOnlyList<string> properties,
+        out bool cannotCompile)
     {
         properties = [];
+        cannotCompile = false;
         if (!criteria.And.Any())
         {
             return true;
@@ -2969,22 +3088,28 @@ internal sealed class QueryPlanner : IQueryPlanner
 
         if (!TrySimpleValues(criteria, out var roles))
         {
+            cannotCompile = true;
             return false;
         }
 
+        return TryMapRoleProperties(roles, out properties);
+    }
+
+    private bool TryMapRoleProperties(
+        IEnumerable<string> roles,
+        out IReadOnlyList<string> properties)
+    {
         var mapped = new List<string>();
         foreach (var role in roles)
         {
-            if (!TryMapRole(role, out var roleProperties))
+            if (TryMapRole(role, out var roleProperties))
             {
-                return false;
+                mapped.AddRange(roleProperties);
             }
-
-            mapped.AddRange(roleProperties);
         }
 
         properties = [.. mapped.Distinct(StringComparer.Ordinal)];
-        return true;
+        return properties.Count > 0;
     }
 
     private bool TryMapRole(string role, out IReadOnlyList<string> properties)
@@ -3252,11 +3377,10 @@ internal sealed class QueryPlanner : IQueryPlanner
         return normalized is "wikidata" or "wd" or "qid";
     }
 
-    private MappedCriterion Supported(QueryFilter filter, string? warning = null) =>
-        new(filter, warning);
+    private MappedCriterion Supported(QueryFilter filter) => new(filter);
 
     private MappedCriterion Residual(ResidualFilter filter) =>
-        new(Filter: null, Warning: null, ResidualFilter: filter);
+        new(Filter: null, ResidualFilter: filter);
 
     private ResidualStringCriterion StringCriterion(
         CriteriaValueOperator valueOperator,
@@ -3276,43 +3400,45 @@ internal sealed class QueryPlanner : IQueryPlanner
     private MappedCriterion KnownEmpty(string? reason = null) =>
         new(
             Filter: null,
-            Warning: null,
             MatchesNothing: true,
             Reason: reason ?? "The criterion is provably unsatisfiable for Wikidata.");
 
     private MappedCriterion Ignored(string? reason = null) =>
         new(
             Filter: null,
-            Warning: null,
             Reason: reason ?? "The criterion is always satisfied and requires no filter.");
 
-    private MappedCriterion Unsupported(string field) =>
+    private MappedCriterion Unsupported(string field, bool negate = false) =>
         new(
             Filter: null,
-            Warning: UnsupportedWarning(
-                "Wikidata cannot safely apply " + field + "; that criterion was not sent to Wikidata.",
-                field),
-            Reason: "The criterion cannot be applied safely by Wikidata.");
+            MatchesNothing: true,
+            Reason: negate
+                ? "Wikidata cannot apply the excluded " + field + " criterion safely."
+                : "Wikidata cannot apply the " + field + " criterion.",
+            IsUnsupported: true);
 
-    private MappedCriterion UnsupportedRelationships() =>
-        new(
-            Filter: null,
-            Warning: null,
-            Refused: true,
-            Reason: "Wikidata has no relationship data for the criterion, so it contributes no results.");
+    private MappedCriterion InapplicableCustom(string field, bool negate) =>
+        negate
+            ? Ignored("Wikidata has no data for the " + field + " criterion, so it is always satisfied.")
+            : KnownEmpty("Wikidata has no data for the " + field + " criterion.");
+
+    private MappedCriterion InapplicableRelationships(bool negate) =>
+        negate
+            ? Ignored("Wikidata has no relationship data for the criterion, so it is always satisfied.")
+            : KnownEmpty("Wikidata has no relationship data for the criterion.");
 
     private CriterionDisposition ToDisposition(string source, MappedCriterion mapped)
     {
-        var refused = mapped.Refused || mapped.Warning is not null;
-        var disposition = (mapped.Filter, mapped.ResidualFilter, mapped.MatchesNothing, refused) switch
-        {
-            (not null, not null, _, _) => CriterionDispositionKind.ServerFilterAndResidual,
-            (not null, null, _, _) => CriterionDispositionKind.ServerFilter,
-            (null, not null, _, _) => CriterionDispositionKind.Residual,
-            (null, null, true, _) => CriterionDispositionKind.ProvablyUnsatisfiable,
-            (null, null, false, true) => CriterionDispositionKind.Refused,
-            _ => CriterionDispositionKind.Omitted
-        };
+        var disposition = mapped.IsUnsupported
+            ? CriterionDispositionKind.Refused
+            : (mapped.Filter, mapped.ResidualFilter, mapped.MatchesNothing) switch
+            {
+                (not null, not null, _) => CriterionDispositionKind.ServerFilterAndResidual,
+                (not null, null, _) => CriterionDispositionKind.ServerFilter,
+                (null, not null, _) => CriterionDispositionKind.Residual,
+                (null, null, true) => CriterionDispositionKind.ProvablyUnsatisfiable,
+                _ => CriterionDispositionKind.Omitted
+            };
         var reason = mapped.Reason ??
             disposition switch
             {
@@ -3331,8 +3457,7 @@ internal sealed class QueryPlanner : IQueryPlanner
         {
             Source = source,
             Disposition = disposition,
-            Reason = reason,
-            Warning = mapped.Warning
+            Reason = reason
         };
     }
 
@@ -3341,11 +3466,10 @@ internal sealed class QueryPlanner : IQueryPlanner
 
     private sealed record MappedCriterion(
         QueryFilter? Filter,
-        string? Warning,
         bool MatchesNothing = false,
         ResidualFilter? ResidualFilter = null,
         string? Reason = null,
-        bool Refused = false);
+        bool IsUnsupported = false);
 
     private sealed class CollectionAlternativeCompilation
     {

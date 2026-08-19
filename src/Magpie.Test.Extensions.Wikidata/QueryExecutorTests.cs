@@ -772,7 +772,7 @@ internal sealed class QueryExecutorTests
                 ["type"] = new SparqlBindingDto { Value = "Q11424" }
             })
         ];
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetSearchAsync(
             It.IsAny<string>(),
             It.IsAny<Func<CancellationToken, Task<IReadOnlyList<Dictionary<string, SparqlBindingDto>>>>>(),
@@ -822,7 +822,7 @@ internal sealed class QueryExecutorTests
                 ["itemLabel"] = new SparqlBindingDto { Type = "literal", Value = "The Matrix" }
             }
         ];
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetSearchAsync(
             It.IsAny<string>(),
             It.IsAny<Func<CancellationToken, Task<IReadOnlyList<Dictionary<string, SparqlBindingDto>>>>>(),
@@ -886,7 +886,7 @@ internal sealed class QueryExecutorTests
                 RequestContext _,
                 CancellationToken _) => sparqlRequest = request)
             .ReturnsAsync(rows);
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetSearchAsync(
             It.IsAny<string>(),
             It.IsAny<Func<CancellationToken, Task<IReadOnlyList<Dictionary<string, SparqlBindingDto>>>>>(),
@@ -917,26 +917,16 @@ internal sealed class QueryExecutorTests
         var result = await subject.SearchAsync(plan, context, default).ConfigureAwait(false);
 
         // Assert
-        var finalPaging = result.Execution.Stages.Single(value =>
-            value.Name == QueryDiagnostics.FinalPaging);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(result.Hits, Has.Count.EqualTo(2));
             Assert.That(result.PageInfo.HasMore, Is.True);
             Assert.That(sparqlRequest?.QueryText, Does.Contain("LIMIT 3"));
-            Assert.That(finalPaging.RowsIn, Is.EqualTo(5));
-            Assert.That(finalPaging.RowsOut, Is.EqualTo(2));
-            Assert.That(finalPaging.OffsetRowsDropped, Is.Zero);
-            Assert.That(result.Execution.ReturnedCount, Is.EqualTo(2));
-            Assert.That(result.Execution.HasMore, Is.True);
-            Assert.That(result.Execution.BoundHit, Is.False);
-            Assert.That(result.Execution.WarningCount, Is.Zero);
-            Assert.That(result.Execution.TerminationReason, Does.Contain("lookahead row"));
         }
     }
 
     [Test]
-    public async Task SearchAsync_LocalSecondPage_RecordsAllSurvivorsAndConsumedOffset()
+    public async Task SearchAsync_LocalSecondPage_ReturnsTheOffsetPage()
     {
         // Arrange
         var context = new RequestContext
@@ -954,7 +944,7 @@ internal sealed class QueryExecutorTests
                 ["type"] = new SparqlBindingDto { Value = "Q11424" }
             })
         ];
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetSearchAsync(
             It.IsAny<string>(),
             It.IsAny<Func<CancellationToken, Task<IReadOnlyList<Dictionary<string, SparqlBindingDto>>>>>(),
@@ -978,19 +968,12 @@ internal sealed class QueryExecutorTests
 
         // Act
         var result = await subject.SearchAsync(plan, context, default).ConfigureAwait(false);
-        var executionJson = result.Execution.SerializeExecution();
 
         // Assert
-        var finalPaging = result.Execution.Stages.Single(value =>
-            value.Name == QueryDiagnostics.FinalPaging);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(result.Hits.Select(hit => hit.Qid), Is.EqualTo(["Q3", "Q4"]));
             Assert.That(result.PageInfo.HasMore, Is.True);
-            Assert.That(finalPaging.RowsIn, Is.EqualTo(5));
-            Assert.That(finalPaging.RowsOut, Is.EqualTo(2));
-            Assert.That(finalPaging.OffsetRowsDropped, Is.EqualTo(2));
-            Assert.That(executionJson, Does.Contain("\"offsetRowsDropped\":2"));
         }
     }
 
@@ -1045,7 +1028,7 @@ internal sealed class QueryExecutorTests
                     ["type"] = new SparqlBindingDto { Value = "Q11424" }
                 })
         ];
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.SetupSequence(value => value.GetSearchAsync(
             It.IsAny<string>(),
             It.IsAny<Func<CancellationToken, Task<IReadOnlyList<Dictionary<string, SparqlBindingDto>>>>>(),
@@ -1114,7 +1097,7 @@ internal sealed class QueryExecutorTests
                 ["type"] = new SparqlBindingDto { Value = "Q11424" }
             }
         ];
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.SetupSequence(value => value.GetSearchAsync(
             It.IsAny<string>(),
             It.IsAny<Func<CancellationToken, Task<IReadOnlyList<Dictionary<string, SparqlBindingDto>>>>>(),
@@ -1168,7 +1151,7 @@ internal sealed class QueryExecutorTests
                 ["type"] = new SparqlBindingDto { Value = "Q11424" }
             })
         ];
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetSearchAsync(
             It.IsAny<string>(),
             It.IsAny<Func<CancellationToken, Task<IReadOnlyList<Dictionary<string, SparqlBindingDto>>>>>(),
@@ -1217,12 +1200,12 @@ internal sealed class QueryExecutorTests
             FallbackLanguages = ["en"],
             UserAgent = "Magpie/test"
         };
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetEntitySearchAsync(
             It.IsAny<string>(),
             It.IsAny<Func<CancellationToken, Task<IReadOnlyList<string>>>>(),
             It.IsAny<CancellationToken>(),
-            It.IsAny<QueryExecution.StageInvocation?>()))
+            It.IsAny<Action<SearchCacheProvenance>?>()))
             .ReturnsAsync([]);
         IQueryExecutor subject = new QueryExecutor(
             new Mock<IWikidataClient>(MockBehavior.Strict).Object,
@@ -1275,12 +1258,12 @@ internal sealed class QueryExecutorTests
             FallbackLanguages = ["en"],
             UserAgent = "Magpie/test"
         };
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetEntitySearchAsync(
             It.IsAny<string>(),
             It.IsAny<Func<CancellationToken, Task<IReadOnlyList<string>>>>(),
             It.IsAny<CancellationToken>(),
-            It.IsAny<QueryExecution.StageInvocation?>()))
+            It.IsAny<Action<SearchCacheProvenance>?>()))
             .ReturnsAsync([]);
         IQueryExecutor subject = new QueryExecutor(
             new Mock<IWikidataClient>(MockBehavior.Strict).Object,
@@ -1370,7 +1353,7 @@ internal sealed class QueryExecutorTests
                 ["genres"] = new SparqlBindingDto { Value = "science fictionaction film" }
             }
         ];
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.SetupSequence(value => value.GetSearchAsync(
             It.IsAny<string>(),
             It.IsAny<Func<CancellationToken, Task<IReadOnlyList<Dictionary<string, SparqlBindingDto>>>>>(),
@@ -1444,12 +1427,12 @@ internal sealed class QueryExecutorTests
                 RequestContext _,
                 CancellationToken _) => sparqlRequest = request)
             .ReturnsAsync(rows);
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetEntitySearchAsync(
             It.IsAny<string>(),
             It.IsAny<Func<CancellationToken, Task<IReadOnlyList<string>>>>(),
             It.IsAny<CancellationToken>(),
-            It.IsAny<QueryExecution.StageInvocation?>()))
+            It.IsAny<Action<SearchCacheProvenance>?>()))
             .ReturnsAsync(["Q83495"]);
         cache.Setup(value => value.GetSearchAsync(
             It.IsAny<string>(),
@@ -1489,16 +1472,11 @@ internal sealed class QueryExecutorTests
         var result = await subject.SearchAsync(plan, context, default).ConfigureAwait(false);
 
         // Assert
-        var resolution = result.Execution.Stages.Single(value =>
-            value.Name == QueryDiagnostics.TitleResolution);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(result.Hits, Has.Count.EqualTo(1));
             Assert.That(sparqlRequest?.QueryText, Does.Contain("wd:Q83495"));
             Assert.That(sparqlRequest?.QueryText, Does.Contain("The Mat"));
-            Assert.That(resolution.RowsIn, Is.EqualTo(1));
-            Assert.That(resolution.RowsOut, Is.EqualTo(1));
-            Assert.That(resolution.IdsProduced, Is.EqualTo(1));
         }
     }
 
@@ -1532,12 +1510,12 @@ internal sealed class QueryExecutorTests
                 RequestContext _,
                 CancellationToken _) => sparqlRequest = request)
             .ReturnsAsync(rows);
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.SetupSequence(value => value.GetEntitySearchAsync(
             It.IsAny<string>(),
             It.IsAny<Func<CancellationToken, Task<IReadOnlyList<string>>>>(),
             It.IsAny<CancellationToken>(),
-            It.IsAny<QueryExecution.StageInvocation?>()))
+            It.IsAny<Action<SearchCacheProvenance>?>()))
             .ReturnsAsync(["Q111"])
             .ReturnsAsync(["Q999"]);
         cache.Setup(value => value.GetSearchAsync(
@@ -1619,12 +1597,12 @@ internal sealed class QueryExecutorTests
                 RequestContext _,
                 CancellationToken _) => sparqlRequest = request)
             .ReturnsAsync(rows);
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetEntitySearchAsync(
             It.IsAny<string>(),
             It.IsAny<Func<CancellationToken, Task<IReadOnlyList<string>>>>(),
             It.IsAny<CancellationToken>(),
-            It.IsAny<QueryExecution.StageInvocation?>()))
+            It.IsAny<Action<SearchCacheProvenance>?>()))
             .ReturnsAsync(["Q43416", "Q42"]);
         cache.Setup(value => value.GetSearchAsync(
             It.IsAny<string>(),
@@ -1718,7 +1696,7 @@ internal sealed class QueryExecutorTests
                 ["type"] = new SparqlBindingDto { Value = "Q11424" }
             }
         ];
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.SetupSequence(value => value.GetSearchAsync(
             It.IsAny<string>(),
             It.IsAny<Func<CancellationToken, Task<IReadOnlyList<Dictionary<string, SparqlBindingDto>>>>>(),
@@ -1745,27 +1723,16 @@ internal sealed class QueryExecutorTests
         var result = await subject.SearchAsync(plan, context, default).ConfigureAwait(false);
 
         // Assert
-        var wdqs = result.Execution.Stages.Single(value =>
-            value.Name == QueryDiagnostics.WdqsWindows);
-        var deduplication = result.Execution.Stages.Single(value =>
-            value.Name == QueryDiagnostics.CandidateDeduplication);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(result.Hits, Has.Count.EqualTo(1));
             Assert.That(result.Hits[0].Qid, Is.EqualTo("Q1"));
             Assert.That(result.Warnings.Select(warning => warning), Has.None.Contains("more than 50"));
-            Assert.That(wdqs.Invocations, Is.EqualTo(2));
-            Assert.That(wdqs.SentinelsDropped, Is.EqualTo(1));
-            Assert.That(wdqs.LookaheadRows, Is.EqualTo(1));
-            Assert.That(deduplication.Invocations, Is.EqualTo(2));
-            Assert.That(deduplication.RowsIn, Is.EqualTo(2));
-            Assert.That(deduplication.RowsOut, Is.EqualTo(1));
-            Assert.That(deduplication.DuplicatesDropped, Is.EqualTo(1));
         }
     }
 
     [Test]
-    public async Task SearchAsync_TerminalFailure_PreservesLookaheadAndCrossWindowDuplicateDiagnostics()
+    public async Task SearchAsync_TerminalFailure_ReturnsRateLimitWarningWithoutHits()
     {
         // Arrange
         var context = new RequestContext
@@ -1797,7 +1764,7 @@ internal sealed class QueryExecutorTests
         ];
         var rateLimited = new HttpRequestException("Wikidata request remained rate limited.");
         rateLimited.Data["wikidata.rate-limited"] = true;
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.SetupSequence(value => value.GetSearchAsync(
             It.IsAny<string>(),
             It.IsAny<Func<CancellationToken, Task<IReadOnlyList<Dictionary<string, SparqlBindingDto>>>>>(),
@@ -1825,24 +1792,10 @@ internal sealed class QueryExecutorTests
         var result = await subject.SearchAsync(plan, context, default).ConfigureAwait(false);
 
         // Assert
-        var wdqs = result.Execution.Stages.Single(value =>
-            value.Name == QueryDiagnostics.WdqsWindows);
-        var deduplication = result.Execution.Stages.Single(value =>
-            value.Name == QueryDiagnostics.CandidateDeduplication);
-        var finalPaging = result.Execution.Stages.Single(value =>
-            value.Name == QueryDiagnostics.FinalPaging);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(result.Hits, Is.Empty);
             Assert.That(result.Warnings.Select(warning => warning), Has.Some.Contains("rate limited"));
-            Assert.That(wdqs.Invocations, Is.EqualTo(3));
-            Assert.That(wdqs.SentinelsDropped, Is.EqualTo(2));
-            Assert.That(wdqs.LookaheadRows, Is.EqualTo(2));
-            Assert.That(deduplication.Invocations, Is.EqualTo(2));
-            Assert.That(deduplication.RowsIn, Is.EqualTo(2));
-            Assert.That(deduplication.RowsOut, Is.EqualTo(1));
-            Assert.That(deduplication.DuplicatesDropped, Is.EqualTo(1));
-            Assert.That(finalPaging.Status, Is.EqualTo("SKIPPED"));
         }
     }
 
@@ -1865,7 +1818,7 @@ internal sealed class QueryExecutorTests
                 ["type"] = new SparqlBindingDto { Value = "Q11424" }
             })
         ];
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetSearchAsync(
             It.IsAny<string>(),
             It.IsAny<Func<CancellationToken, Task<IReadOnlyList<Dictionary<string, SparqlBindingDto>>>>>(),
@@ -1906,28 +1859,15 @@ internal sealed class QueryExecutorTests
         var result = await subject.SearchAsync(plan, context, default).ConfigureAwait(false);
 
         // Assert
-        var residual = result.Execution.Stages.Single(value =>
-            value.Name == QueryDiagnostics.ResidualHitEvaluation);
-        var finalPaging = result.Execution.Stages.Single(value =>
-            value.Name == QueryDiagnostics.FinalPaging);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(result.Hits, Has.Count.EqualTo(1));
             Assert.That(result.Hits[0].Qid, Is.EqualTo("Q1"));
-            Assert.That(residual.RowsIn, Is.EqualTo(2));
-            Assert.That(residual.RowsOut, Is.EqualTo(1));
-            Assert.That(residual.Rejections["Title"], Is.EqualTo(1));
-            Assert.That(finalPaging.RowsIn, Is.EqualTo(1));
-            Assert.That(finalPaging.RowsOut, Is.EqualTo(1));
-            Assert.That(result.Execution.HasMore, Is.False);
-            Assert.That(result.Execution.BoundHit, Is.False);
-            Assert.That(result.Execution.WarningCount, Is.Zero);
-            Assert.That(result.Execution.TerminationReason, Does.Contain("source was exhausted"));
         }
     }
 
     [Test]
-    public async Task SearchAsync_ResidualHydrationIsSkipped_WhenCandidateFilteringRemovesAllHits()
+    public async Task SearchAsync_ReturnsNoHits_WhenCandidateFilteringRemovesAllHits()
     {
         // Arrange
         var context = new RequestContext
@@ -1945,7 +1885,7 @@ internal sealed class QueryExecutorTests
                 ["type"] = new SparqlBindingDto { Value = "Q11424" }
             }
         ];
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetSearchAsync(
             It.IsAny<string>(),
             It.IsAny<Func<CancellationToken, Task<IReadOnlyList<Dictionary<string, SparqlBindingDto>>>>>(),
@@ -1986,18 +1926,9 @@ internal sealed class QueryExecutorTests
         var result = await subject.SearchAsync(plan, context, default).ConfigureAwait(false);
 
         // Assert
-        var residual = result.Execution.Stages.Single(value =>
-            value.Name == QueryDiagnostics.ResidualHitEvaluation);
-        var entityHydration = result.Execution.Stages.Single(value =>
-            value.Name == QueryDiagnostics.ResidualEntityHydration);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(result.Hits, Is.Empty);
-            Assert.That(residual.Status, Is.EqualTo("SKIPPED"));
-            Assert.That(entityHydration.Status, Is.EqualTo("SKIPPED"));
-            Assert.That(entityHydration.AvoidedLogicalInvocations, Is.EqualTo(1));
-            Assert.That(result.Execution.PrunedStages, Is.GreaterThanOrEqualTo(2));
-            Assert.That(result.Execution.AvoidedLogicalInvocations, Is.GreaterThanOrEqualTo(1));
         }
     }
 
@@ -2020,7 +1951,7 @@ internal sealed class QueryExecutorTests
                 ["type"] = new SparqlBindingDto { Value = "Q11424" }
             }
         ];
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetSearchAsync(
             It.IsAny<string>(),
             It.IsAny<Func<CancellationToken, Task<IReadOnlyList<Dictionary<string, SparqlBindingDto>>>>>(),
@@ -2073,7 +2004,6 @@ internal sealed class QueryExecutorTests
                 result.Warnings.Select(warning => warning),
                 Has.Some.Contains("could not fully verify"));
             Assert.That(result.Warnings.Select(warning => warning), Has.Some.Contains("Title"));
-            Assert.That(result.Execution.WarningCount, Is.EqualTo(2));
         }
     }
 
@@ -2114,7 +2044,7 @@ internal sealed class QueryExecutorTests
                 ["type"] = new SparqlBindingDto { Value = "Q11424" }
             }
         ];
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.SetupSequence(value => value.GetSearchAsync(
             It.IsAny<string>(),
             It.IsAny<Func<CancellationToken, Task<IReadOnlyList<Dictionary<string, SparqlBindingDto>>>>>(),
@@ -2189,7 +2119,7 @@ internal sealed class QueryExecutorTests
     }
 
     [Test]
-    public async Task SearchAsync_RelationshipSeed_RecordsMappingRejectionsAndDuplicatesBeforeCandidateExecution()
+    public async Task SearchAsync_RelationshipSeed_ReturnsRateLimitWarningWithoutHits()
     {
         // Arrange
         var context = new RequestContext
@@ -2208,7 +2138,7 @@ internal sealed class QueryExecutorTests
         ];
         var rateLimited = new HttpRequestException("Wikidata request remained rate limited.");
         rateLimited.Data["wikidata.rate-limited"] = true;
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.SetupSequence(value => value.GetSearchAsync(
             It.IsAny<string>(),
             It.IsAny<Func<CancellationToken, Task<IReadOnlyList<Dictionary<string, SparqlBindingDto>>>>>(),
@@ -2257,19 +2187,10 @@ internal sealed class QueryExecutorTests
         var result = await subject.SearchAsync(plan, context, default).ConfigureAwait(false);
 
         // Assert
-        var seed = result.Execution.Stages.Single(value =>
-            value.Name == QueryDiagnostics.RelationshipSeedWindows);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(result.Hits, Is.Empty);
             Assert.That(result.Warnings.Select(warning => warning), Has.Some.Contains("rate limited"));
-            Assert.That(seed.RowsProduced, Is.EqualTo(5));
-            Assert.That(seed.RowsIn, Is.EqualTo(5));
-            Assert.That(seed.RowsOut, Is.EqualTo(2));
-            Assert.That(seed.Rejections["invalidQid"], Is.EqualTo(3));
-            Assert.That(seed.IdsProduced, Is.EqualTo(1));
-            Assert.That(seed.DuplicatesDropped, Is.EqualTo(1));
-            Assert.That(seed.LookaheadRows, Is.Zero);
         }
     }
 
@@ -2302,7 +2223,7 @@ internal sealed class QueryExecutorTests
                 ["type"] = new SparqlBindingDto { Value = "Q11424" }
             }
         ];
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.SetupSequence(value => value.GetSearchAsync(
             It.IsAny<string>(),
             It.IsAny<Func<CancellationToken, Task<IReadOnlyList<Dictionary<string, SparqlBindingDto>>>>>(),
@@ -2373,7 +2294,7 @@ internal sealed class QueryExecutorTests
                 ["type"] = new SparqlBindingDto { Value = "Q11424" }
             }
         ];
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetSearchAsync(
             It.IsAny<string>(),
             It.IsAny<Func<CancellationToken, Task<IReadOnlyList<Dictionary<string, SparqlBindingDto>>>>>(),
@@ -2385,7 +2306,7 @@ internal sealed class QueryExecutorTests
             It.Is<IReadOnlyCollection<string>>(qids => qids.SequenceEqual(new[] { "Q1" })),
             It.IsAny<RequestContext>(),
             It.IsAny<CancellationToken>(),
-            It.IsAny<QueryExecution.StageInvocation?>()))
+            It.IsAny<Action<SearchCacheProvenance>?>()))
             .ReturnsAsync(new Dictionary<string, EntityDto>
             {
                 ["Q1"] = new EntityDto
@@ -2415,7 +2336,7 @@ internal sealed class QueryExecutorTests
             It.Is<IReadOnlyCollection<string>>(qids => qids.SequenceEqual(new[] { "Q100" })),
             It.IsAny<RequestContext>(),
             It.IsAny<CancellationToken>(),
-            It.IsAny<QueryExecution.StageInvocation?>()))
+            It.IsAny<Action<SearchCacheProvenance>?>()))
             .ReturnsAsync(new Dictionary<string, EntityDto>
             {
                 ["Q100"] = new EntityDto
@@ -2474,21 +2395,23 @@ internal sealed class QueryExecutorTests
                 It.Is<IReadOnlyCollection<string>>(qids => qids.SequenceEqual(new[] { "Q1" })),
                 It.IsAny<RequestContext>(),
                 It.IsAny<CancellationToken>(),
-                It.IsAny<QueryExecution.StageInvocation?>()),
+                It.IsAny<Action<SearchCacheProvenance>?>()),
             Times.Once);
         cache.Verify(
             value => value.GetEntitiesAsync(
                 It.Is<IReadOnlyCollection<string>>(qids => qids.SequenceEqual(new[] { "Q100" })),
                 It.IsAny<RequestContext>(),
                 It.IsAny<CancellationToken>(),
-                It.IsAny<QueryExecution.StageInvocation?>()),
+                It.IsAny<Action<SearchCacheProvenance>?>()),
             Times.Once);
     }
 
     [Test]
-    public async Task SearchAsync_HydrationStages_RecordTheProvenanceTheResolverReports()
+    public async Task SearchAsync_HydrationRequests_PassCacheProvenanceObservers()
     {
         // Arrange
+        Action<SearchCacheProvenance>? candidateObserver = null;
+        Action<SearchCacheProvenance>? supportObserver = null;
         var context = new RequestContext
         {
             Language = "en",
@@ -2504,7 +2427,7 @@ internal sealed class QueryExecutorTests
                 ["type"] = new SparqlBindingDto { Value = "Q11424" }
             }
         ];
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetSearchAsync(
             It.IsAny<string>(),
             It.IsAny<Func<CancellationToken, Task<IReadOnlyList<Dictionary<string, SparqlBindingDto>>>>>(),
@@ -2516,13 +2439,12 @@ internal sealed class QueryExecutorTests
             It.Is<IReadOnlyCollection<string>>(qids => qids.SequenceEqual(new[] { "Q1" })),
             It.IsAny<RequestContext>(),
             It.IsAny<CancellationToken>(),
-            It.IsAny<QueryExecution.StageInvocation?>()))
+            It.IsAny<Action<SearchCacheProvenance>?>()))
             .Callback((
                 IReadOnlyCollection<string> _,
                 RequestContext _,
                 CancellationToken _,
-                QueryExecution.StageInvocation? invocation) =>
-                invocation?.RecordCacheProvenance(SearchCacheProvenance.Remote))
+                Action<SearchCacheProvenance>? observer) => candidateObserver = observer)
             .ReturnsAsync(new Dictionary<string, EntityDto>
             {
                 ["Q1"] = new EntityDto
@@ -2552,13 +2474,12 @@ internal sealed class QueryExecutorTests
             It.Is<IReadOnlyCollection<string>>(qids => qids.SequenceEqual(new[] { "Q100" })),
             It.IsAny<RequestContext>(),
             It.IsAny<CancellationToken>(),
-            It.IsAny<QueryExecution.StageInvocation?>()))
+            It.IsAny<Action<SearchCacheProvenance>?>()))
             .Callback((
                 IReadOnlyCollection<string> _,
                 RequestContext _,
                 CancellationToken _,
-                QueryExecution.StageInvocation? invocation) =>
-                invocation?.RecordCacheProvenance(SearchCacheProvenance.Cache))
+                Action<SearchCacheProvenance>? observer) => supportObserver = observer)
             .ReturnsAsync(new Dictionary<string, EntityDto>
             {
                 ["Q100"] = new EntityDto
@@ -2604,17 +2525,11 @@ internal sealed class QueryExecutorTests
         var result = await subject.SearchAsync(plan, context, default).ConfigureAwait(false);
 
         // Assert
-        var entityHydration = result.Execution.Stages.Single(value =>
-            value.Name == QueryDiagnostics.ResidualEntityHydration);
-        var supportHydration = result.Execution.Stages.Single(value =>
-            value.Name == QueryDiagnostics.ResidualSupportHydration);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(result.Hits, Has.Count.EqualTo(1));
-            Assert.That(entityHydration.RemoteCacheFills, Is.EqualTo(1));
-            Assert.That(entityHydration.CacheHits, Is.Zero);
-            Assert.That(supportHydration.RemoteCacheFills, Is.Zero);
-            Assert.That(supportHydration.CacheHits, Is.EqualTo(1));
+            Assert.That(candidateObserver, Is.Not.Null);
+            Assert.That(supportObserver, Is.Not.Null);
         }
     }
 
@@ -2647,7 +2562,7 @@ internal sealed class QueryExecutorTests
             It.IsAny<RequestContext>(),
             It.IsAny<CancellationToken>()))
             .ReturnsAsync(rows);
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetHierarchyAsync(
             It.IsAny<string>(),
             It.IsAny<Func<CancellationToken, Task<HierarchyResult>>>(),
@@ -2681,7 +2596,7 @@ internal sealed class QueryExecutorTests
     }
 
     [Test]
-    public async Task SearchAsync_RateLimitedWindow_ReturnsWarningAndPrunesRemainingStages()
+    public async Task SearchAsync_RateLimitedWindow_ReturnsWarningWithoutHits()
     {
         // Arrange
         var context = new RequestContext
@@ -2698,7 +2613,7 @@ internal sealed class QueryExecutorTests
             It.IsAny<RequestContext>(),
             It.IsAny<CancellationToken>()))
             .ThrowsAsync(rateLimited);
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetSearchAsync(
             It.IsAny<string>(),
             It.IsAny<Func<CancellationToken, Task<IReadOnlyList<Dictionary<string, SparqlBindingDto>>>>>(),
@@ -2749,43 +2664,17 @@ internal sealed class QueryExecutorTests
         var result = await subject.SearchAsync(plan, context, default).ConfigureAwait(false);
 
         // Assert
-        var wdqs = result.Execution.Stages.Single(value =>
-            value.Name == QueryDiagnostics.WdqsWindows);
-        var projection = result.Execution.Stages.Single(value =>
-            value.Name == QueryDiagnostics.CandidateProjection);
-        var entityHydration = result.Execution.Stages.Single(value =>
-            value.Name == QueryDiagnostics.ResidualEntityHydration);
-        var supportHydration = result.Execution.Stages.Single(value =>
-            value.Name == QueryDiagnostics.ResidualSupportHydration);
-        var finalPaging = result.Execution.Stages.Single(value =>
-            value.Name == QueryDiagnostics.FinalPaging);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(result.Hits, Is.Empty);
             Assert.That(result.Warnings, Has.Count.EqualTo(1));
             Assert.That(result.Warnings.Select(warning => warning), Has.Some.Contains("rate limited"));
             Assert.That(result.PageInfo.HasMore, Is.False);
-            Assert.That(wdqs.HttpRequests, Is.EqualTo(1));
-            Assert.That(wdqs.RemoteCacheFills, Is.EqualTo(1));
-            Assert.That(projection.Status, Is.EqualTo("SKIPPED"));
-            Assert.That(projection.AvoidedLogicalInvocations, Is.EqualTo(1));
-            Assert.That(entityHydration.Status, Is.EqualTo("SKIPPED"));
-            Assert.That(entityHydration.AvoidedLogicalInvocations, Is.EqualTo(1));
-            Assert.That(supportHydration.Status, Is.EqualTo("SKIPPED"));
-            Assert.That(supportHydration.AvoidedLogicalInvocations, Is.EqualTo(1));
-            Assert.That(finalPaging.Status, Is.EqualTo("SKIPPED"));
-            Assert.That(result.Execution.PrunedStages, Is.GreaterThanOrEqualTo(5));
-            Assert.That(result.Execution.AvoidedLogicalInvocations, Is.EqualTo(3));
-            Assert.That(result.Execution.ReturnedCount, Is.Zero);
-            Assert.That(result.Execution.HasMore, Is.False);
-            Assert.That(result.Execution.BoundHit, Is.False);
-            Assert.That(result.Execution.WarningCount, Is.EqualTo(1));
-            Assert.That(result.Execution.TerminationReason, Does.Contain("rate limited"));
         }
     }
 
     [Test]
-    public async Task SearchAsync_ProviderCancellation_RecordsBoundAndPrunedOutcome()
+    public async Task SearchAsync_ProviderCancellation_ReturnsTimeoutWarning()
     {
         // Arrange
         var context = new RequestContext
@@ -2800,7 +2689,7 @@ internal sealed class QueryExecutorTests
             It.IsAny<RequestContext>(),
             It.IsAny<CancellationToken>()))
             .ThrowsAsync(new OperationCanceledException());
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetSearchAsync(
             It.IsAny<string>(),
             It.IsAny<Func<CancellationToken, Task<IReadOnlyList<Dictionary<string, SparqlBindingDto>>>>>(),
@@ -2831,29 +2720,16 @@ internal sealed class QueryExecutorTests
         var result = await subject.SearchAsync(plan, context, default).ConfigureAwait(false);
 
         // Assert
-        var projection = result.Execution.Stages.Single(value =>
-            value.Name == QueryDiagnostics.CandidateProjection);
-        var finalPaging = result.Execution.Stages.Single(value =>
-            value.Name == QueryDiagnostics.FinalPaging);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(result.Hits, Is.Empty);
             Assert.That(result.Warnings, Has.Count.EqualTo(1));
             Assert.That(result.Warnings.Select(warning => warning), Has.Some.Contains("timed out"));
-            Assert.That(result.Execution.Requests, Is.EqualTo(1));
-            Assert.That(result.Execution.BoundHit, Is.True);
-            Assert.That(result.Execution.HasMore, Is.False);
-            Assert.That(result.Execution.ReturnedCount, Is.Zero);
-            Assert.That(result.Execution.WarningCount, Is.EqualTo(1));
-            Assert.That(result.Execution.TerminationReason, Does.Contain("timeout"));
-            Assert.That(projection.Status, Is.EqualTo("SKIPPED"));
-            Assert.That(projection.AvoidedLogicalInvocations, Is.EqualTo(1));
-            Assert.That(finalPaging.Status, Is.EqualTo("SKIPPED"));
         }
     }
 
     [Test]
-    public async Task SearchAsync_HttpFailure_SkipsFinalPaging()
+    public async Task SearchAsync_HttpFailure_ReturnsFailureWarning()
     {
         // Arrange
         var context = new RequestContext
@@ -2862,7 +2738,7 @@ internal sealed class QueryExecutorTests
             FallbackLanguages = ["en"],
             UserAgent = "Magpie/test"
         };
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetSearchAsync(
             It.IsAny<string>(),
             It.IsAny<Func<CancellationToken, Task<IReadOnlyList<Dictionary<string, SparqlBindingDto>>>>>(),
@@ -2886,19 +2762,15 @@ internal sealed class QueryExecutorTests
         var result = await subject.SearchAsync(plan, context, default).ConfigureAwait(false);
 
         // Assert
-        var finalPaging = result.Execution.Stages.Single(value =>
-            value.Name == QueryDiagnostics.FinalPaging);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(result.Hits, Is.Empty);
             Assert.That(result.Warnings.Select(warning => warning), Has.Some.Contains("search failed"));
-            Assert.That(finalPaging.Status, Is.EqualTo("SKIPPED"));
-            Assert.That(finalPaging.SkippedInvocations, Is.EqualTo(1));
         }
     }
 
     [Test]
-    public async Task SearchAsync_RepeatedSearches_ReturnFrozenIsolatedExecutions()
+    public async Task SearchAsync_CachedFill_SkipsTheClientCall()
     {
         // Arrange
         var context = new RequestContext
@@ -2907,75 +2779,7 @@ internal sealed class QueryExecutorTests
             FallbackLanguages = ["en"],
             UserAgent = "Magpie/test"
         };
-        var client = new Mock<IWikidataClient>();
-        client.Setup(value => value.ExecuteSparqlAsync(
-            It.IsAny<SparqlRequest>(),
-            It.IsAny<RequestContext>(),
-            It.IsAny<CancellationToken>()))
-            .ReturnsAsync([]);
-        var cache = new Mock<IQueryCache>();
-        cache.Setup(value => value.GetSearchAsync(
-            It.IsAny<string>(),
-            It.IsAny<Func<CancellationToken, Task<IReadOnlyList<Dictionary<string, SparqlBindingDto>>>>>(),
-            It.IsAny<CancellationToken>(),
-            It.IsAny<Action<SearchCacheProvenance>?>()))
-            .Returns(async (
-                string _,
-                Func<CancellationToken, Task<IReadOnlyList<Dictionary<string, SparqlBindingDto>>>> factory,
-                CancellationToken token,
-                Action<SearchCacheProvenance>? provenance) =>
-            {
-                provenance?.Invoke(SearchCacheProvenance.Remote);
-                return new SearchCacheResult(
-                    await factory(token).ConfigureAwait(false),
-                    SearchCacheProvenance.Remote);
-            });
-        IQueryExecutor subject = new QueryExecutor(
-            client.Object,
-            cache.Object,
-            NullLogger<QueryExecutor>.Instance);
-        var plan = new QueryPlan
-        {
-            EntityKind = EntityKind.Movie,
-            Strategy = QueryStrategy.Structured,
-            Filters = [],
-            Warnings = [],
-            Page = 1,
-            ProjectCandidateDetails = false
-        };
-
-        // Act
-        var first = await subject.SearchAsync(plan, context, default).ConfigureAwait(false);
-        var second = await subject.SearchAsync(plan, context, default).ConfigureAwait(false);
-
-        // Assert
-        var firstStage = first.Execution.Stages.Single(value =>
-            value.Name == QueryDiagnostics.WdqsWindows);
-        var secondStage = second.Execution.Stages.Single(value =>
-            value.Name == QueryDiagnostics.WdqsWindows);
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(first.Execution, Is.Not.SameAs(second.Execution));
-            Assert.That(first.Execution.IsFrozen, Is.True);
-            Assert.That(second.Execution.IsFrozen, Is.True);
-            Assert.That(firstStage.HttpRequests, Is.EqualTo(1));
-            Assert.That(firstStage.RemoteCacheFills, Is.EqualTo(1));
-            Assert.That(secondStage.HttpRequests, Is.EqualTo(1));
-            Assert.That(secondStage.RemoteCacheFills, Is.EqualTo(1));
-        }
-    }
-
-    [Test]
-    public async Task SearchAsync_CachedFill_RecordsCacheHitWithoutHttpRequest()
-    {
-        // Arrange
-        var context = new RequestContext
-        {
-            Language = "en",
-            FallbackLanguages = ["en"],
-            UserAgent = "Magpie/test"
-        };
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetSearchAsync(
             It.IsAny<string>(),
             It.IsAny<Func<CancellationToken, Task<IReadOnlyList<Dictionary<string, SparqlBindingDto>>>>>(),
@@ -2990,8 +2794,9 @@ internal sealed class QueryExecutorTests
                 provenance?.Invoke(SearchCacheProvenance.Cache);
                 return Task.FromResult(new SearchCacheResult([], SearchCacheProvenance.Cache));
             });
+        var client = new Mock<IWikidataClient>(MockBehavior.Strict);
         IQueryExecutor subject = new QueryExecutor(
-            new Mock<IWikidataClient>(MockBehavior.Strict).Object,
+            client.Object,
             cache.Object,
             NullLogger<QueryExecutor>.Instance);
         var plan = new QueryPlan
@@ -3008,20 +2813,15 @@ internal sealed class QueryExecutorTests
         var result = await subject.SearchAsync(plan, context, default).ConfigureAwait(false);
 
         // Assert
-        var stage = result.Execution.Stages.Single(value =>
-            value.Name == QueryDiagnostics.WdqsWindows);
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(result.Execution.IsFrozen, Is.True);
-            Assert.That(stage.CacheHits, Is.EqualTo(1));
-            Assert.That(stage.HttpRequests, Is.Zero);
-            Assert.That(stage.RemoteCacheFills, Is.Zero);
-            Assert.That(stage.InFlightJoins, Is.Zero);
+            Assert.That(result.Hits, Is.Empty);
+            Assert.That(client.Invocations, Is.Empty);
         }
     }
 
     [Test]
-    public async Task SearchAsync_RemoteFill_RecordsOneClientCall()
+    public async Task SearchAsync_RemoteFill_CallsTheClientOnce()
     {
         // Arrange
         var context = new RequestContext
@@ -3036,7 +2836,7 @@ internal sealed class QueryExecutorTests
             It.IsAny<RequestContext>(),
             It.IsAny<CancellationToken>()))
             .ReturnsAsync([]);
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetSearchAsync(
             It.IsAny<string>(),
             It.IsAny<Func<CancellationToken, Task<IReadOnlyList<Dictionary<string, SparqlBindingDto>>>>>(),
@@ -3071,19 +2871,15 @@ internal sealed class QueryExecutorTests
         var result = await subject.SearchAsync(plan, context, default).ConfigureAwait(false);
 
         // Assert
-        var stage = result.Execution.Stages.Single(value =>
-            value.Name == QueryDiagnostics.WdqsWindows);
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(result.Execution.Requests, Is.EqualTo(1));
-            Assert.That(stage.HttpRequests, Is.EqualTo(1));
-            Assert.That(stage.Invocations, Is.EqualTo(1));
-            Assert.That(stage.RemoteCacheFills, Is.EqualTo(1));
+            Assert.That(result.Hits, Is.Empty);
+            Assert.That(client.Invocations, Has.Count.EqualTo(1));
         }
     }
 
     [Test]
-    public async Task SearchAsync_InFlightCacheEntry_RecordsJoinWithoutHttpRequest()
+    public async Task SearchAsync_InFlightCacheEntry_SkipsTheClientCall()
     {
         // Arrange
         var context = new RequestContext
@@ -3092,7 +2888,7 @@ internal sealed class QueryExecutorTests
             FallbackLanguages = ["en"],
             UserAgent = "Magpie/test"
         };
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetSearchAsync(
             It.IsAny<string>(),
             It.IsAny<Func<CancellationToken, Task<IReadOnlyList<Dictionary<string, SparqlBindingDto>>>>>(),
@@ -3107,8 +2903,9 @@ internal sealed class QueryExecutorTests
                 provenance?.Invoke(SearchCacheProvenance.InFlight);
                 return Task.FromResult(new SearchCacheResult([], SearchCacheProvenance.InFlight));
             });
+        var client = new Mock<IWikidataClient>(MockBehavior.Strict);
         IQueryExecutor subject = new QueryExecutor(
-            new Mock<IWikidataClient>(MockBehavior.Strict).Object,
+            client.Object,
             cache.Object,
             NullLogger<QueryExecutor>.Instance);
         var plan = new QueryPlan
@@ -3125,21 +2922,16 @@ internal sealed class QueryExecutorTests
         var result = await subject.SearchAsync(plan, context, default).ConfigureAwait(false);
 
         // Assert
-        var stage = result.Execution.Stages.Single(value =>
-            value.Name == QueryDiagnostics.WdqsWindows);
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(result.Execution.IsFrozen, Is.True);
-            Assert.That(stage.InFlightJoins, Is.EqualTo(1));
-            Assert.That(stage.HttpRequests, Is.Zero);
-            Assert.That(stage.RemoteCacheFills, Is.Zero);
-            Assert.That(stage.CacheHits, Is.Zero);
+            Assert.That(result.Hits, Is.Empty);
+            Assert.That(client.Invocations, Is.Empty);
         }
     }
 
     [TestCase(QueryStrategy.Empty, true)]
     [TestCase(QueryStrategy.Unsupported, false)]
-    public async Task SearchAsync_NonExecutablePlan_ReturnsFrozenExecutionWithoutTouchingClientOrCache(
+    public async Task SearchAsync_NonExecutablePlan_ReportsSupportWithoutTouchingClientOrCache(
         QueryStrategy strategy,
         bool supported)
     {
@@ -3152,7 +2944,7 @@ internal sealed class QueryExecutorTests
         };
         IQueryExecutor subject = new QueryExecutor(
             new Mock<IWikidataClient>(MockBehavior.Strict).Object,
-            new Mock<IQueryCache>(MockBehavior.Strict).Object,
+            new Mock<IQueryCoordinator>(MockBehavior.Strict).Object,
             NullLogger<QueryExecutor>.Instance);
         var plan = new QueryPlan
         {
@@ -3170,11 +2962,6 @@ internal sealed class QueryExecutorTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(result.Supported, Is.EqualTo(supported));
-            Assert.That(result.Execution.IsFrozen, Is.True);
-            Assert.That(result.Execution.Requests, Is.Zero);
-            Assert.That(result.Execution.Stages, Has.Count.EqualTo(1));
-            Assert.That(result.Execution.Stages[0].Name, Is.EqualTo(QueryDiagnostics.FinalPaging));
-            Assert.That(result.Execution.Stages[0].Status, Is.EqualTo("RAN"));
         }
     }
 
@@ -3190,7 +2977,7 @@ internal sealed class QueryExecutorTests
         };
         IQueryExecutor subject = new QueryExecutor(
             new Mock<IWikidataClient>(MockBehavior.Strict).Object,
-            new Mock<IQueryCache>(MockBehavior.Strict).Object,
+            new Mock<IQueryCoordinator>(MockBehavior.Strict).Object,
             NullLogger<QueryExecutor>.Instance);
         var plan = new QueryPlan
         {
@@ -3214,7 +3001,7 @@ internal sealed class QueryExecutorTests
     }
 
     [Test]
-    public async Task SearchAsync_RedactedSerializers_OmitQueryAndResultValues()
+    public async Task SearchAsync_RedactedPlanSerializer_OmitsQueryAndResultValues()
     {
         // Arrange
         var context = new RequestContext
@@ -3225,7 +3012,7 @@ internal sealed class QueryExecutorTests
         };
         IQueryExecutor subject = new QueryExecutor(
             new Mock<IWikidataClient>(MockBehavior.Strict).Object,
-            new Mock<IQueryCache>(MockBehavior.Strict).Object,
+            new Mock<IQueryCoordinator>(MockBehavior.Strict).Object,
             NullLogger<QueryExecutor>.Instance);
         var plan = new QueryPlan
         {
@@ -3270,7 +3057,6 @@ internal sealed class QueryExecutorTests
         // Act
         var result = await subject.SearchAsync(prepared, context, default).ConfigureAwait(false);
         var planJson = prepared.SerializePlan();
-        var executionJson = result.Execution.SerializeExecution();
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -3285,8 +3071,6 @@ internal sealed class QueryExecutorTests
             Assert.That(planJson, Does.Not.Contain("secret-reason"));
             Assert.That(planJson, Does.Not.Contain("secret-warning"));
             Assert.That(planJson, Does.Not.Contain("ordinary-secret"));
-            Assert.That(executionJson, Does.Contain("returnedCount"));
-            Assert.That(executionJson, Does.Not.Contain("secret-warning"));
         }
     }
 
@@ -3300,7 +3084,7 @@ internal sealed class QueryExecutorTests
             FallbackLanguages = ["en"],
             UserAgent = "Magpie/test"
         };
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetSearchAsync(
             It.IsAny<string>(),
             It.IsAny<Func<CancellationToken, Task<IReadOnlyList<Dictionary<string, SparqlBindingDto>>>>>(),
@@ -3362,7 +3146,7 @@ internal sealed class QueryExecutorTests
                 ["type"] = new SparqlBindingDto { Value = Constants.MovieQid }
             }
         ];
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetSearchAsync(
             It.IsAny<string>(),
             It.IsAny<Func<CancellationToken, Task<IReadOnlyList<Dictionary<string, SparqlBindingDto>>>>>(),
@@ -3420,7 +3204,7 @@ internal sealed class QueryExecutorTests
                 ["type"] = new SparqlBindingDto { Value = Constants.MovieQid }
             }
         ];
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetSearchAsync(
             It.IsAny<string>(),
             It.IsAny<Func<CancellationToken, Task<IReadOnlyList<Dictionary<string, SparqlBindingDto>>>>>(),
@@ -3473,7 +3257,7 @@ internal sealed class QueryExecutorTests
                 ["type"] = new SparqlBindingDto { Value = Constants.MovieQid }
             }
         ];
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetSearchAsync(
             It.IsAny<string>(),
             It.IsAny<Func<CancellationToken, Task<IReadOnlyList<Dictionary<string, SparqlBindingDto>>>>>(),
@@ -3528,7 +3312,7 @@ internal sealed class QueryExecutorTests
                 ["type"] = new SparqlBindingDto { Value = Constants.MovieQid }
             }
         ];
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetSearchAsync(
             It.IsAny<string>(),
             It.IsAny<Func<CancellationToken, Task<IReadOnlyList<Dictionary<string, SparqlBindingDto>>>>>(),
@@ -3599,17 +3383,17 @@ internal sealed class QueryExecutorTests
             }
         };
         var contexts = new List<RequestContext>();
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetEntitiesAsync(
             It.IsAny<IReadOnlyCollection<string>>(),
             It.IsAny<RequestContext>(),
             It.IsAny<CancellationToken>(),
-            It.IsAny<QueryExecution.StageInvocation?>()))
+            It.IsAny<Action<SearchCacheProvenance>?>()))
             .Returns((
                 IReadOnlyCollection<string> qids,
                 RequestContext context,
                 CancellationToken _,
-                QueryExecution.StageInvocation? _) =>
+                Action<SearchCacheProvenance>? _) =>
             {
                 contexts.Add(context);
                 var languages = context.FallbackLanguages.ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -3744,17 +3528,17 @@ internal sealed class QueryExecutorTests
             }
         };
         var contexts = new List<RequestContext>();
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetEntitiesAsync(
             It.IsAny<IReadOnlyCollection<string>>(),
             It.IsAny<RequestContext>(),
             It.IsAny<CancellationToken>(),
-            It.IsAny<QueryExecution.StageInvocation?>()))
+            It.IsAny<Action<SearchCacheProvenance>?>()))
             .Returns((
                 IReadOnlyCollection<string> qids,
                 RequestContext context,
                 CancellationToken _,
-                QueryExecution.StageInvocation? _) =>
+                Action<SearchCacheProvenance>? _) =>
             {
                 contexts.Add(context);
                 var languages = context.FallbackLanguages.ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -3852,17 +3636,17 @@ internal sealed class QueryExecutorTests
         // Arrange
         var entities = new Dictionary<string, EntityDto>();
         var requests = new List<IReadOnlyList<string>>();
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetEntitiesAsync(
             It.IsAny<IReadOnlyCollection<string>>(),
             It.IsAny<RequestContext>(),
             It.IsAny<CancellationToken>(),
-            It.IsAny<QueryExecution.StageInvocation?>()))
+            It.IsAny<Action<SearchCacheProvenance>?>()))
             .Returns((
                 IReadOnlyCollection<string> qids,
                 RequestContext _,
                 CancellationToken _,
-                QueryExecution.StageInvocation? _) =>
+                Action<SearchCacheProvenance>? _) =>
             {
                 requests.Add([.. qids]);
                 IReadOnlyDictionary<string, EntityDto> resolved = qids
@@ -3995,17 +3779,17 @@ internal sealed class QueryExecutorTests
     {
         // Arrange
         var requests = new List<IReadOnlyList<string>>();
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetEntitiesAsync(
             It.IsAny<IReadOnlyCollection<string>>(),
             It.IsAny<RequestContext>(),
             It.IsAny<CancellationToken>(),
-            It.IsAny<QueryExecution.StageInvocation?>()))
+            It.IsAny<Action<SearchCacheProvenance>?>()))
             .Returns((
                 IReadOnlyCollection<string> qids,
                 RequestContext _,
                 CancellationToken _,
-                QueryExecution.StageInvocation? _) =>
+                Action<SearchCacheProvenance>? _) =>
             {
                 requests.Add([.. qids]);
                 IReadOnlyDictionary<string, EntityDto> resolved = new Dictionary<string, EntityDto>();
@@ -4088,17 +3872,17 @@ internal sealed class QueryExecutorTests
     {
         // Arrange
         var requests = new List<IReadOnlyList<string>>();
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetEntitiesAsync(
             It.IsAny<IReadOnlyCollection<string>>(),
             It.IsAny<RequestContext>(),
             It.IsAny<CancellationToken>(),
-            It.IsAny<QueryExecution.StageInvocation?>()))
+            It.IsAny<Action<SearchCacheProvenance>?>()))
             .Returns((
                 IReadOnlyCollection<string> qids,
                 RequestContext _,
                 CancellationToken _,
-                QueryExecution.StageInvocation? _) =>
+                Action<SearchCacheProvenance>? _) =>
             {
                 requests.Add([.. qids]);
                 IReadOnlyDictionary<string, EntityDto> resolved = new Dictionary<string, EntityDto>();
@@ -4184,17 +3968,17 @@ internal sealed class QueryExecutorTests
         // Arrange
         var entities = new Dictionary<string, EntityDto>();
         var requests = new List<IReadOnlyList<string>>();
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetEntitiesAsync(
             It.IsAny<IReadOnlyCollection<string>>(),
             It.IsAny<RequestContext>(),
             It.IsAny<CancellationToken>(),
-            It.IsAny<QueryExecution.StageInvocation?>()))
+            It.IsAny<Action<SearchCacheProvenance>?>()))
             .Returns((
                 IReadOnlyCollection<string> qids,
                 RequestContext _,
                 CancellationToken _,
-                QueryExecution.StageInvocation? _) =>
+                Action<SearchCacheProvenance>? _) =>
             {
                 requests.Add([.. qids]);
                 IReadOnlyDictionary<string, EntityDto> resolved = qids
@@ -4361,17 +4145,17 @@ internal sealed class QueryExecutorTests
         // Arrange
         var entities = new Dictionary<string, EntityDto>();
         var requests = new List<IReadOnlyList<string>>();
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetEntitiesAsync(
             It.IsAny<IReadOnlyCollection<string>>(),
             It.IsAny<RequestContext>(),
             It.IsAny<CancellationToken>(),
-            It.IsAny<QueryExecution.StageInvocation?>()))
+            It.IsAny<Action<SearchCacheProvenance>?>()))
             .Returns((
                 IReadOnlyCollection<string> qids,
                 RequestContext _,
                 CancellationToken _,
-                QueryExecution.StageInvocation? _) =>
+                Action<SearchCacheProvenance>? _) =>
             {
                 requests.Add([.. qids]);
                 IReadOnlyDictionary<string, EntityDto> resolved = qids
@@ -4547,17 +4331,17 @@ internal sealed class QueryExecutorTests
         // Arrange
         var entities = new Dictionary<string, EntityDto>();
         var requests = new List<IReadOnlyList<string>>();
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetEntitiesAsync(
             It.IsAny<IReadOnlyCollection<string>>(),
             It.IsAny<RequestContext>(),
             It.IsAny<CancellationToken>(),
-            It.IsAny<QueryExecution.StageInvocation?>()))
+            It.IsAny<Action<SearchCacheProvenance>?>()))
             .Returns((
                 IReadOnlyCollection<string> qids,
                 RequestContext _,
                 CancellationToken _,
-                QueryExecution.StageInvocation? _) =>
+                Action<SearchCacheProvenance>? _) =>
             {
                 requests.Add([.. qids]);
                 IReadOnlyDictionary<string, EntityDto> resolved = qids
@@ -4847,17 +4631,17 @@ internal sealed class QueryExecutorTests
         // Arrange
         var entities = new Dictionary<string, EntityDto>();
         var requests = new List<IReadOnlyList<string>>();
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetEntitiesAsync(
             It.IsAny<IReadOnlyCollection<string>>(),
             It.IsAny<RequestContext>(),
             It.IsAny<CancellationToken>(),
-            It.IsAny<QueryExecution.StageInvocation?>()))
+            It.IsAny<Action<SearchCacheProvenance>?>()))
             .Returns((
                 IReadOnlyCollection<string> qids,
                 RequestContext _,
                 CancellationToken _,
-                QueryExecution.StageInvocation? _) =>
+                Action<SearchCacheProvenance>? _) =>
             {
                 requests.Add([.. qids]);
                 IReadOnlyDictionary<string, EntityDto> resolved = qids
@@ -4979,17 +4763,17 @@ internal sealed class QueryExecutorTests
         // Arrange
         var entities = new Dictionary<string, EntityDto>();
         var requests = new List<IReadOnlyList<string>>();
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetEntitiesAsync(
             It.IsAny<IReadOnlyCollection<string>>(),
             It.IsAny<RequestContext>(),
             It.IsAny<CancellationToken>(),
-            It.IsAny<QueryExecution.StageInvocation?>()))
+            It.IsAny<Action<SearchCacheProvenance>?>()))
             .Returns((
                 IReadOnlyCollection<string> qids,
                 RequestContext _,
                 CancellationToken _,
-                QueryExecution.StageInvocation? _) =>
+                Action<SearchCacheProvenance>? _) =>
             {
                 requests.Add([.. qids]);
                 IReadOnlyDictionary<string, EntityDto> resolved = qids
@@ -5224,17 +5008,17 @@ internal sealed class QueryExecutorTests
         // Arrange
         var entities = new Dictionary<string, EntityDto>();
         var requests = new List<IReadOnlyList<string>>();
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetEntitiesAsync(
             It.IsAny<IReadOnlyCollection<string>>(),
             It.IsAny<RequestContext>(),
             It.IsAny<CancellationToken>(),
-            It.IsAny<QueryExecution.StageInvocation?>()))
+            It.IsAny<Action<SearchCacheProvenance>?>()))
             .Returns((
                 IReadOnlyCollection<string> qids,
                 RequestContext _,
                 CancellationToken _,
-                QueryExecution.StageInvocation? _) =>
+                Action<SearchCacheProvenance>? _) =>
             {
                 requests.Add([.. qids]);
                 IReadOnlyDictionary<string, EntityDto> resolved = qids
@@ -5513,17 +5297,17 @@ internal sealed class QueryExecutorTests
     {
         // Arrange
         var entities = new Dictionary<string, EntityDto>();
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetEntitiesAsync(
             It.IsAny<IReadOnlyCollection<string>>(),
             It.IsAny<RequestContext>(),
             It.IsAny<CancellationToken>(),
-            It.IsAny<QueryExecution.StageInvocation?>()))
+            It.IsAny<Action<SearchCacheProvenance>?>()))
             .Returns((
                 IReadOnlyCollection<string> qids,
                 RequestContext _,
                 CancellationToken _,
-                QueryExecution.StageInvocation? _) =>
+                Action<SearchCacheProvenance>? _) =>
             {
                 IReadOnlyDictionary<string, EntityDto> resolved = qids
                     .Where(entities.ContainsKey)
@@ -5725,17 +5509,17 @@ internal sealed class QueryExecutorTests
     {
         // Arrange
         var entities = new Dictionary<string, EntityDto>();
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetEntitiesAsync(
             It.IsAny<IReadOnlyCollection<string>>(),
             It.IsAny<RequestContext>(),
             It.IsAny<CancellationToken>(),
-            It.IsAny<QueryExecution.StageInvocation?>()))
+            It.IsAny<Action<SearchCacheProvenance>?>()))
             .Returns((
                 IReadOnlyCollection<string> qids,
                 RequestContext _,
                 CancellationToken _,
-                QueryExecution.StageInvocation? _) =>
+                Action<SearchCacheProvenance>? _) =>
             {
                 IReadOnlyDictionary<string, EntityDto> resolved = qids
                     .Where(entities.ContainsKey)
@@ -5879,17 +5663,17 @@ internal sealed class QueryExecutorTests
         // Arrange
         var entities = new Dictionary<string, EntityDto>();
         var requests = new List<IReadOnlyList<string>>();
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetEntitiesAsync(
             It.IsAny<IReadOnlyCollection<string>>(),
             It.IsAny<RequestContext>(),
             It.IsAny<CancellationToken>(),
-            It.IsAny<QueryExecution.StageInvocation?>()))
+            It.IsAny<Action<SearchCacheProvenance>?>()))
             .Returns((
                 IReadOnlyCollection<string> qids,
                 RequestContext _,
                 CancellationToken _,
-                QueryExecution.StageInvocation? _) =>
+                Action<SearchCacheProvenance>? _) =>
             {
                 requests.Add([.. qids]);
                 IReadOnlyDictionary<string, EntityDto> resolved = qids
@@ -6218,17 +6002,17 @@ internal sealed class QueryExecutorTests
         // Arrange
         var entities = new Dictionary<string, EntityDto>();
         var requests = new List<IReadOnlyList<string>>();
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetEntitiesAsync(
             It.IsAny<IReadOnlyCollection<string>>(),
             It.IsAny<RequestContext>(),
             It.IsAny<CancellationToken>(),
-            It.IsAny<QueryExecution.StageInvocation?>()))
+            It.IsAny<Action<SearchCacheProvenance>?>()))
             .Returns((
                 IReadOnlyCollection<string> qids,
                 RequestContext _,
                 CancellationToken _,
-                QueryExecution.StageInvocation? _) =>
+                Action<SearchCacheProvenance>? _) =>
             {
                 requests.Add([.. qids]);
                 IReadOnlyDictionary<string, EntityDto> resolved = qids
@@ -6403,17 +6187,17 @@ internal sealed class QueryExecutorTests
         // Arrange
         var entities = new Dictionary<string, EntityDto>();
         var requests = new List<IReadOnlyList<string>>();
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetEntitiesAsync(
             It.IsAny<IReadOnlyCollection<string>>(),
             It.IsAny<RequestContext>(),
             It.IsAny<CancellationToken>(),
-            It.IsAny<QueryExecution.StageInvocation?>()))
+            It.IsAny<Action<SearchCacheProvenance>?>()))
             .Returns((
                 IReadOnlyCollection<string> qids,
                 RequestContext _,
                 CancellationToken _,
-                QueryExecution.StageInvocation? _) =>
+                Action<SearchCacheProvenance>? _) =>
             {
                 requests.Add([.. qids]);
                 IReadOnlyDictionary<string, EntityDto> resolved = qids
@@ -6563,17 +6347,17 @@ internal sealed class QueryExecutorTests
     {
         // Arrange
         var entities = new Dictionary<string, EntityDto>();
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetEntitiesAsync(
             It.IsAny<IReadOnlyCollection<string>>(),
             It.IsAny<RequestContext>(),
             It.IsAny<CancellationToken>(),
-            It.IsAny<QueryExecution.StageInvocation?>()))
+            It.IsAny<Action<SearchCacheProvenance>?>()))
             .Returns((
                 IReadOnlyCollection<string> qids,
                 RequestContext _,
                 CancellationToken _,
-                QueryExecution.StageInvocation? _) =>
+                Action<SearchCacheProvenance>? _) =>
             {
                 IReadOnlyDictionary<string, EntityDto> resolved = qids
                     .Where(entities.ContainsKey)
@@ -6882,17 +6666,17 @@ internal sealed class QueryExecutorTests
     {
         // Arrange
         var entities = new Dictionary<string, EntityDto>();
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetEntitiesAsync(
             It.IsAny<IReadOnlyCollection<string>>(),
             It.IsAny<RequestContext>(),
             It.IsAny<CancellationToken>(),
-            It.IsAny<QueryExecution.StageInvocation?>()))
+            It.IsAny<Action<SearchCacheProvenance>?>()))
             .Returns((
                 IReadOnlyCollection<string> qids,
                 RequestContext _,
                 CancellationToken _,
-                QueryExecution.StageInvocation? _) =>
+                Action<SearchCacheProvenance>? _) =>
             {
                 IReadOnlyDictionary<string, EntityDto> resolved = qids
                     .Where(entities.ContainsKey)
@@ -7157,17 +6941,17 @@ internal sealed class QueryExecutorTests
         // Arrange
         var entities = new Dictionary<string, EntityDto>();
         var requests = new List<IReadOnlyList<string>>();
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetEntitiesAsync(
             It.IsAny<IReadOnlyCollection<string>>(),
             It.IsAny<RequestContext>(),
             It.IsAny<CancellationToken>(),
-            It.IsAny<QueryExecution.StageInvocation?>()))
+            It.IsAny<Action<SearchCacheProvenance>?>()))
             .Returns((
                 IReadOnlyCollection<string> qids,
                 RequestContext _,
                 CancellationToken _,
-                QueryExecution.StageInvocation? _) =>
+                Action<SearchCacheProvenance>? _) =>
             {
                 requests.Add([.. qids]);
                 IReadOnlyDictionary<string, EntityDto> resolved = qids
@@ -7308,17 +7092,17 @@ internal sealed class QueryExecutorTests
         // Arrange
         var entities = new Dictionary<string, EntityDto>();
         var requests = new List<IReadOnlyList<string>>();
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetEntitiesAsync(
             It.IsAny<IReadOnlyCollection<string>>(),
             It.IsAny<RequestContext>(),
             It.IsAny<CancellationToken>(),
-            It.IsAny<QueryExecution.StageInvocation?>()))
+            It.IsAny<Action<SearchCacheProvenance>?>()))
             .Returns((
                 IReadOnlyCollection<string> qids,
                 RequestContext _,
                 CancellationToken _,
-                QueryExecution.StageInvocation? _) =>
+                Action<SearchCacheProvenance>? _) =>
             {
                 requests.Add([.. qids]);
                 IReadOnlyDictionary<string, EntityDto> resolved = qids
@@ -7484,17 +7268,17 @@ internal sealed class QueryExecutorTests
     {
         // Arrange
         var entities = new Dictionary<string, EntityDto>();
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetEntitiesAsync(
             It.IsAny<IReadOnlyCollection<string>>(),
             It.IsAny<RequestContext>(),
             It.IsAny<CancellationToken>(),
-            It.IsAny<QueryExecution.StageInvocation?>()))
+            It.IsAny<Action<SearchCacheProvenance>?>()))
             .Returns((
                 IReadOnlyCollection<string> qids,
                 RequestContext _,
                 CancellationToken _,
-                QueryExecution.StageInvocation? _) =>
+                Action<SearchCacheProvenance>? _) =>
             {
                 IReadOnlyDictionary<string, EntityDto> resolved = qids
                     .Where(entities.ContainsKey)
@@ -7646,17 +7430,17 @@ internal sealed class QueryExecutorTests
         // Arrange
         var entities = new Dictionary<string, EntityDto>();
         var requests = new List<IReadOnlyList<string>>();
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetEntitiesAsync(
             It.IsAny<IReadOnlyCollection<string>>(),
             It.IsAny<RequestContext>(),
             It.IsAny<CancellationToken>(),
-            It.IsAny<QueryExecution.StageInvocation?>()))
+            It.IsAny<Action<SearchCacheProvenance>?>()))
             .Returns((
                 IReadOnlyCollection<string> qids,
                 RequestContext _,
                 CancellationToken _,
-                QueryExecution.StageInvocation? _) =>
+                Action<SearchCacheProvenance>? _) =>
             {
                 requests.Add([.. qids]);
                 IReadOnlyDictionary<string, EntityDto> resolved = qids
@@ -7825,17 +7609,17 @@ internal sealed class QueryExecutorTests
     {
         // Arrange
         var entities = new Dictionary<string, EntityDto>();
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetEntitiesAsync(
             It.IsAny<IReadOnlyCollection<string>>(),
             It.IsAny<RequestContext>(),
             It.IsAny<CancellationToken>(),
-            It.IsAny<QueryExecution.StageInvocation?>()))
+            It.IsAny<Action<SearchCacheProvenance>?>()))
             .Returns((
                 IReadOnlyCollection<string> qids,
                 RequestContext _,
                 CancellationToken _,
-                QueryExecution.StageInvocation? _) =>
+                Action<SearchCacheProvenance>? _) =>
             {
                 IReadOnlyDictionary<string, EntityDto> resolved = qids
                     .Where(entities.ContainsKey)
@@ -8049,17 +7833,17 @@ internal sealed class QueryExecutorTests
         // Arrange
         var entities = new Dictionary<string, EntityDto>();
         var requests = new List<IReadOnlyList<string>>();
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetEntitiesAsync(
             It.IsAny<IReadOnlyCollection<string>>(),
             It.IsAny<RequestContext>(),
             It.IsAny<CancellationToken>(),
-            It.IsAny<QueryExecution.StageInvocation?>()))
+            It.IsAny<Action<SearchCacheProvenance>?>()))
             .Returns((
                 IReadOnlyCollection<string> qids,
                 RequestContext _,
                 CancellationToken _,
-                QueryExecution.StageInvocation? _) =>
+                Action<SearchCacheProvenance>? _) =>
             {
                 requests.Add([.. qids]);
                 IReadOnlyDictionary<string, EntityDto> resolved = qids
@@ -8253,17 +8037,17 @@ internal sealed class QueryExecutorTests
         // Arrange
         var entities = new Dictionary<string, EntityDto>();
         var requests = new List<IReadOnlyList<string>>();
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetEntitiesAsync(
             It.IsAny<IReadOnlyCollection<string>>(),
             It.IsAny<RequestContext>(),
             It.IsAny<CancellationToken>(),
-            It.IsAny<QueryExecution.StageInvocation?>()))
+            It.IsAny<Action<SearchCacheProvenance>?>()))
             .Returns((
                 IReadOnlyCollection<string> qids,
                 RequestContext _,
                 CancellationToken _,
-                QueryExecution.StageInvocation? _) =>
+                Action<SearchCacheProvenance>? _) =>
             {
                 requests.Add([.. qids]);
                 IReadOnlyDictionary<string, EntityDto> resolved = qids
@@ -8435,17 +8219,17 @@ internal sealed class QueryExecutorTests
         // Arrange
         var entities = new Dictionary<string, EntityDto>();
         var requests = new List<IReadOnlyList<string>>();
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetEntitiesAsync(
             It.IsAny<IReadOnlyCollection<string>>(),
             It.IsAny<RequestContext>(),
             It.IsAny<CancellationToken>(),
-            It.IsAny<QueryExecution.StageInvocation?>()))
+            It.IsAny<Action<SearchCacheProvenance>?>()))
             .Returns((
                 IReadOnlyCollection<string> qids,
                 RequestContext _,
                 CancellationToken _,
-                QueryExecution.StageInvocation? _) =>
+                Action<SearchCacheProvenance>? _) =>
             {
                 requests.Add([.. qids]);
                 IReadOnlyDictionary<string, EntityDto> resolved = qids
@@ -8598,17 +8382,17 @@ internal sealed class QueryExecutorTests
     {
         // Arrange
         var entities = new Dictionary<string, EntityDto>();
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetEntitiesAsync(
             It.IsAny<IReadOnlyCollection<string>>(),
             It.IsAny<RequestContext>(),
             It.IsAny<CancellationToken>(),
-            It.IsAny<QueryExecution.StageInvocation?>()))
+            It.IsAny<Action<SearchCacheProvenance>?>()))
             .Returns((
                 IReadOnlyCollection<string> qids,
                 RequestContext _,
                 CancellationToken _,
-                QueryExecution.StageInvocation? _) =>
+                Action<SearchCacheProvenance>? _) =>
             {
                 IReadOnlyDictionary<string, EntityDto> resolved = qids
                     .Where(entities.ContainsKey)
@@ -8883,17 +8667,17 @@ internal sealed class QueryExecutorTests
     {
         // Arrange
         var entities = new Dictionary<string, EntityDto>();
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetEntitiesAsync(
             It.IsAny<IReadOnlyCollection<string>>(),
             It.IsAny<RequestContext>(),
             It.IsAny<CancellationToken>(),
-            It.IsAny<QueryExecution.StageInvocation?>()))
+            It.IsAny<Action<SearchCacheProvenance>?>()))
             .Returns((
                 IReadOnlyCollection<string> qids,
                 RequestContext _,
                 CancellationToken _,
-                QueryExecution.StageInvocation? _) =>
+                Action<SearchCacheProvenance>? _) =>
             {
                 IReadOnlyDictionary<string, EntityDto> resolved = qids
                     .Where(entities.ContainsKey)
@@ -9107,17 +8891,17 @@ internal sealed class QueryExecutorTests
         ResidualCollectionAlternative alternative)
     {
         // Arrange
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetEntitiesAsync(
             It.IsAny<IReadOnlyCollection<string>>(),
             It.IsAny<RequestContext>(),
             It.IsAny<CancellationToken>(),
-            It.IsAny<QueryExecution.StageInvocation?>()))
+            It.IsAny<Action<SearchCacheProvenance>?>()))
             .Returns((
                 IReadOnlyCollection<string> qids,
                 RequestContext _,
                 CancellationToken _,
-                QueryExecution.StageInvocation? _) =>
+                Action<SearchCacheProvenance>? _) =>
             {
                 IReadOnlyDictionary<string, EntityDto> resolved = qids
                     .Where(entities.ContainsKey)
@@ -9217,17 +9001,17 @@ internal sealed class QueryExecutorTests
     {
         // Arrange
         var entities = new Dictionary<string, EntityDto>();
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetEntitiesAsync(
             It.IsAny<IReadOnlyCollection<string>>(),
             It.IsAny<RequestContext>(),
             It.IsAny<CancellationToken>(),
-            It.IsAny<QueryExecution.StageInvocation?>()))
+            It.IsAny<Action<SearchCacheProvenance>?>()))
             .Returns((
                 IReadOnlyCollection<string> qids,
                 RequestContext _,
                 CancellationToken _,
-                QueryExecution.StageInvocation? _) =>
+                Action<SearchCacheProvenance>? _) =>
             {
                 IReadOnlyDictionary<string, EntityDto> resolved = qids
                     .Where(entities.ContainsKey)
@@ -9444,17 +9228,17 @@ internal sealed class QueryExecutorTests
         // Arrange
         var entities = new Dictionary<string, EntityDto>();
         var requests = new List<IReadOnlyList<string>>();
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetEntitiesAsync(
             It.IsAny<IReadOnlyCollection<string>>(),
             It.IsAny<RequestContext>(),
             It.IsAny<CancellationToken>(),
-            It.IsAny<QueryExecution.StageInvocation?>()))
+            It.IsAny<Action<SearchCacheProvenance>?>()))
             .Returns((
                 IReadOnlyCollection<string> qids,
                 RequestContext _,
                 CancellationToken _,
-                QueryExecution.StageInvocation? _) =>
+                Action<SearchCacheProvenance>? _) =>
             {
                 requests.Add([.. qids]);
                 IReadOnlyDictionary<string, EntityDto> resolved = qids
@@ -9616,17 +9400,17 @@ internal sealed class QueryExecutorTests
         // Arrange
         var entities = new Dictionary<string, EntityDto>();
         var requests = new List<IReadOnlyList<string>>();
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetEntitiesAsync(
             It.IsAny<IReadOnlyCollection<string>>(),
             It.IsAny<RequestContext>(),
             It.IsAny<CancellationToken>(),
-            It.IsAny<QueryExecution.StageInvocation?>()))
+            It.IsAny<Action<SearchCacheProvenance>?>()))
             .Returns((
                 IReadOnlyCollection<string> qids,
                 RequestContext _,
                 CancellationToken _,
-                QueryExecution.StageInvocation? _) =>
+                Action<SearchCacheProvenance>? _) =>
             {
                 requests.Add([.. qids]);
                 IReadOnlyDictionary<string, EntityDto> resolved = qids
@@ -9780,17 +9564,17 @@ internal sealed class QueryExecutorTests
     {
         // Arrange
         var entities = new Dictionary<string, EntityDto>();
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetEntitiesAsync(
             It.IsAny<IReadOnlyCollection<string>>(),
             It.IsAny<RequestContext>(),
             It.IsAny<CancellationToken>(),
-            It.IsAny<QueryExecution.StageInvocation?>()))
+            It.IsAny<Action<SearchCacheProvenance>?>()))
             .Returns((
                 IReadOnlyCollection<string> qids,
                 RequestContext _,
                 CancellationToken _,
-                QueryExecution.StageInvocation? _) =>
+                Action<SearchCacheProvenance>? _) =>
             {
                 IReadOnlyDictionary<string, EntityDto> resolved = qids
                     .Where(entities.ContainsKey)
@@ -10194,17 +9978,17 @@ internal sealed class QueryExecutorTests
         // Arrange
         var entities = new Dictionary<string, EntityDto>();
         var requests = new List<IReadOnlyList<string>>();
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetEntitiesAsync(
             It.IsAny<IReadOnlyCollection<string>>(),
             It.IsAny<RequestContext>(),
             It.IsAny<CancellationToken>(),
-            It.IsAny<QueryExecution.StageInvocation?>()))
+            It.IsAny<Action<SearchCacheProvenance>?>()))
             .Returns((
                 IReadOnlyCollection<string> qids,
                 RequestContext _,
                 CancellationToken _,
-                QueryExecution.StageInvocation? _) =>
+                Action<SearchCacheProvenance>? _) =>
             {
                 requests.Add([.. qids]);
                 IReadOnlyDictionary<string, EntityDto> resolved = qids
@@ -10350,17 +10134,17 @@ internal sealed class QueryExecutorTests
     {
         // Arrange
         var requests = new List<IReadOnlyList<string>>();
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetEntitiesAsync(
             It.IsAny<IReadOnlyCollection<string>>(),
             It.IsAny<RequestContext>(),
             It.IsAny<CancellationToken>(),
-            It.IsAny<QueryExecution.StageInvocation?>()))
+            It.IsAny<Action<SearchCacheProvenance>?>()))
             .Returns((
                 IReadOnlyCollection<string> qids,
                 RequestContext _,
                 CancellationToken _,
-                QueryExecution.StageInvocation? _) =>
+                Action<SearchCacheProvenance>? _) =>
             {
                 requests.Add([.. qids]);
                 IReadOnlyDictionary<string, EntityDto> resolved = new Dictionary<string, EntityDto>();
@@ -10465,17 +10249,17 @@ internal sealed class QueryExecutorTests
         // Arrange
         var entities = new Dictionary<string, EntityDto>();
         var requests = new List<IReadOnlyList<string>>();
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetEntitiesAsync(
             It.IsAny<IReadOnlyCollection<string>>(),
             It.IsAny<RequestContext>(),
             It.IsAny<CancellationToken>(),
-            It.IsAny<QueryExecution.StageInvocation?>()))
+            It.IsAny<Action<SearchCacheProvenance>?>()))
             .Returns((
                 IReadOnlyCollection<string> qids,
                 RequestContext _,
                 CancellationToken _,
-                QueryExecution.StageInvocation? _) =>
+                Action<SearchCacheProvenance>? _) =>
             {
                 requests.Add([.. qids]);
                 IReadOnlyDictionary<string, EntityDto> resolved = qids
@@ -10712,17 +10496,17 @@ internal sealed class QueryExecutorTests
     {
         // Arrange
         var entities = new Dictionary<string, EntityDto>();
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetEntitiesAsync(
             It.IsAny<IReadOnlyCollection<string>>(),
             It.IsAny<RequestContext>(),
             It.IsAny<CancellationToken>(),
-            It.IsAny<QueryExecution.StageInvocation?>()))
+            It.IsAny<Action<SearchCacheProvenance>?>()))
             .Returns((
                 IReadOnlyCollection<string> qids,
                 RequestContext _,
                 CancellationToken _,
-                QueryExecution.StageInvocation? _) =>
+                Action<SearchCacheProvenance>? _) =>
             {
                 IReadOnlyDictionary<string, EntityDto> resolved = qids
                     .Where(entities.ContainsKey)
@@ -10964,17 +10748,17 @@ internal sealed class QueryExecutorTests
     {
         // Arrange
         var entities = new Dictionary<string, EntityDto>();
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetEntitiesAsync(
             It.IsAny<IReadOnlyCollection<string>>(),
             It.IsAny<RequestContext>(),
             It.IsAny<CancellationToken>(),
-            It.IsAny<QueryExecution.StageInvocation?>()))
+            It.IsAny<Action<SearchCacheProvenance>?>()))
             .Returns((
                 IReadOnlyCollection<string> qids,
                 RequestContext _,
                 CancellationToken _,
-                QueryExecution.StageInvocation? _) =>
+                Action<SearchCacheProvenance>? _) =>
             {
                 IReadOnlyDictionary<string, EntityDto> resolved = qids
                     .Where(entities.ContainsKey)
@@ -11114,17 +10898,17 @@ internal sealed class QueryExecutorTests
     {
         // Arrange
         var entities = new Dictionary<string, EntityDto>();
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetEntitiesAsync(
             It.IsAny<IReadOnlyCollection<string>>(),
             It.IsAny<RequestContext>(),
             It.IsAny<CancellationToken>(),
-            It.IsAny<QueryExecution.StageInvocation?>()))
+            It.IsAny<Action<SearchCacheProvenance>?>()))
             .Returns((
                 IReadOnlyCollection<string> qids,
                 RequestContext _,
                 CancellationToken _,
-                QueryExecution.StageInvocation? _) =>
+                Action<SearchCacheProvenance>? _) =>
             {
                 IReadOnlyDictionary<string, EntityDto> resolved = qids
                     .Where(entities.ContainsKey)
@@ -11306,17 +11090,17 @@ internal sealed class QueryExecutorTests
     {
         // Arrange
         var entities = new Dictionary<string, EntityDto>();
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetEntitiesAsync(
             It.IsAny<IReadOnlyCollection<string>>(),
             It.IsAny<RequestContext>(),
             It.IsAny<CancellationToken>(),
-            It.IsAny<QueryExecution.StageInvocation?>()))
+            It.IsAny<Action<SearchCacheProvenance>?>()))
             .Returns((
                 IReadOnlyCollection<string> qids,
                 RequestContext _,
                 CancellationToken _,
-                QueryExecution.StageInvocation? _) =>
+                Action<SearchCacheProvenance>? _) =>
             {
                 IReadOnlyDictionary<string, EntityDto> resolved = qids
                     .Where(entities.ContainsKey)
@@ -11468,17 +11252,17 @@ internal sealed class QueryExecutorTests
     {
         // Arrange
         var entities = new Dictionary<string, EntityDto>();
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetEntitiesAsync(
             It.IsAny<IReadOnlyCollection<string>>(),
             It.IsAny<RequestContext>(),
             It.IsAny<CancellationToken>(),
-            It.IsAny<QueryExecution.StageInvocation?>()))
+            It.IsAny<Action<SearchCacheProvenance>?>()))
             .Returns((
                 IReadOnlyCollection<string> qids,
                 RequestContext _,
                 CancellationToken _,
-                QueryExecution.StageInvocation? _) =>
+                Action<SearchCacheProvenance>? _) =>
             {
                 IReadOnlyDictionary<string, EntityDto> resolved = qids
                     .Where(entities.ContainsKey)
@@ -11681,17 +11465,17 @@ internal sealed class QueryExecutorTests
     {
         // Arrange
         var entities = new Dictionary<string, EntityDto>();
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetEntitiesAsync(
             It.IsAny<IReadOnlyCollection<string>>(),
             It.IsAny<RequestContext>(),
             It.IsAny<CancellationToken>(),
-            It.IsAny<QueryExecution.StageInvocation?>()))
+            It.IsAny<Action<SearchCacheProvenance>?>()))
             .Returns((
                 IReadOnlyCollection<string> qids,
                 RequestContext _,
                 CancellationToken _,
-                QueryExecution.StageInvocation? _) =>
+                Action<SearchCacheProvenance>? _) =>
             {
                 IReadOnlyDictionary<string, EntityDto> resolved = qids
                     .Where(entities.ContainsKey)
@@ -11850,17 +11634,17 @@ internal sealed class QueryExecutorTests
     {
         // Arrange
         var entities = new Dictionary<string, EntityDto>();
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetEntitiesAsync(
             It.IsAny<IReadOnlyCollection<string>>(),
             It.IsAny<RequestContext>(),
             It.IsAny<CancellationToken>(),
-            It.IsAny<QueryExecution.StageInvocation?>()))
+            It.IsAny<Action<SearchCacheProvenance>?>()))
             .Returns((
                 IReadOnlyCollection<string> qids,
                 RequestContext _,
                 CancellationToken _,
-                QueryExecution.StageInvocation? _) =>
+                Action<SearchCacheProvenance>? _) =>
             {
                 IReadOnlyDictionary<string, EntityDto> resolved = qids
                     .Where(entities.ContainsKey)
@@ -12026,17 +11810,17 @@ internal sealed class QueryExecutorTests
     {
         // Arrange
         var entities = new Dictionary<string, EntityDto>();
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetEntitiesAsync(
             It.IsAny<IReadOnlyCollection<string>>(),
             It.IsAny<RequestContext>(),
             It.IsAny<CancellationToken>(),
-            It.IsAny<QueryExecution.StageInvocation?>()))
+            It.IsAny<Action<SearchCacheProvenance>?>()))
             .Returns((
                 IReadOnlyCollection<string> qids,
                 RequestContext _,
                 CancellationToken _,
-                QueryExecution.StageInvocation? _) =>
+                Action<SearchCacheProvenance>? _) =>
             {
                 IReadOnlyDictionary<string, EntityDto> resolved = qids
                     .Where(entities.ContainsKey)
@@ -12172,17 +11956,17 @@ internal sealed class QueryExecutorTests
     {
         // Arrange
         var entities = new Dictionary<string, EntityDto>();
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetEntitiesAsync(
             It.IsAny<IReadOnlyCollection<string>>(),
             It.IsAny<RequestContext>(),
             It.IsAny<CancellationToken>(),
-            It.IsAny<QueryExecution.StageInvocation?>()))
+            It.IsAny<Action<SearchCacheProvenance>?>()))
             .Returns((
                 IReadOnlyCollection<string> qids,
                 RequestContext _,
                 CancellationToken _,
-                QueryExecution.StageInvocation? _) =>
+                Action<SearchCacheProvenance>? _) =>
             {
                 IReadOnlyDictionary<string, EntityDto> resolved = qids
                     .Where(entities.ContainsKey)
@@ -12324,17 +12108,17 @@ internal sealed class QueryExecutorTests
         var entities = new Dictionary<string, EntityDto>();
         var requests = new List<IReadOnlyList<string>>();
         int? failedRequestNumber = null;
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetEntitiesAsync(
             It.IsAny<IReadOnlyCollection<string>>(),
             It.IsAny<RequestContext>(),
             It.IsAny<CancellationToken>(),
-            It.IsAny<QueryExecution.StageInvocation?>()))
+            It.IsAny<Action<SearchCacheProvenance>?>()))
             .Returns((
                 IReadOnlyCollection<string> qids,
                 RequestContext _,
                 CancellationToken _,
-                QueryExecution.StageInvocation? _) =>
+                Action<SearchCacheProvenance>? _) =>
             {
                 requests.Add([.. qids]);
                 if (failedRequestNumber == requests.Count)
@@ -12465,17 +12249,17 @@ internal sealed class QueryExecutorTests
         // Arrange
         var requests = new List<IReadOnlyList<string>>();
         int? failedRequestNumber = null;
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetEntitiesAsync(
             It.IsAny<IReadOnlyCollection<string>>(),
             It.IsAny<RequestContext>(),
             It.IsAny<CancellationToken>(),
-            It.IsAny<QueryExecution.StageInvocation?>()))
+            It.IsAny<Action<SearchCacheProvenance>?>()))
             .Returns((
                 IReadOnlyCollection<string> qids,
                 RequestContext _,
                 CancellationToken _,
-                QueryExecution.StageInvocation? _) =>
+                Action<SearchCacheProvenance>? _) =>
             {
                 requests.Add([.. qids]);
                 if (failedRequestNumber == requests.Count)
@@ -12562,17 +12346,17 @@ internal sealed class QueryExecutorTests
         // Arrange
         var requests = new List<IReadOnlyList<string>>();
         var hydrationCancels = false;
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetEntitiesAsync(
             It.IsAny<IReadOnlyCollection<string>>(),
             It.IsAny<RequestContext>(),
             It.IsAny<CancellationToken>(),
-            It.IsAny<QueryExecution.StageInvocation?>()))
+            It.IsAny<Action<SearchCacheProvenance>?>()))
             .Returns((
                 IReadOnlyCollection<string> qids,
                 RequestContext _,
                 CancellationToken cancellationToken,
-                QueryExecution.StageInvocation? _) =>
+                Action<SearchCacheProvenance>? _) =>
             {
                 requests.Add([.. qids]);
                 if (hydrationCancels)
@@ -12659,17 +12443,17 @@ internal sealed class QueryExecutorTests
         // Arrange
         var entities = new Dictionary<string, EntityDto>();
         var requests = new List<IReadOnlyList<string>>();
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetEntitiesAsync(
             It.IsAny<IReadOnlyCollection<string>>(),
             It.IsAny<RequestContext>(),
             It.IsAny<CancellationToken>(),
-            It.IsAny<QueryExecution.StageInvocation?>()))
+            It.IsAny<Action<SearchCacheProvenance>?>()))
             .Returns((
                 IReadOnlyCollection<string> qids,
                 RequestContext _,
                 CancellationToken _,
-                QueryExecution.StageInvocation? _) =>
+                Action<SearchCacheProvenance>? _) =>
             {
                 requests.Add([.. qids]);
                 IReadOnlyDictionary<string, EntityDto> resolved = qids
@@ -12814,7 +12598,7 @@ internal sealed class QueryExecutorTests
                 }
             }
         ];
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetSearchAsync(
             It.IsAny<string>(),
             It.IsAny<Func<CancellationToken, Task<IReadOnlyList<Dictionary<string, SparqlBindingDto>>>>>(),

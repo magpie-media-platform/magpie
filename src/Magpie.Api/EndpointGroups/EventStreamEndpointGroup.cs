@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Text;
 using System.Text.Encodings.Web;
@@ -7,6 +8,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 
+using Magpie.Api.Observability;
 using Magpie.Models;
 using Magpie.Models.Enums;
 using Magpie.Sdk.Api;
@@ -219,6 +221,12 @@ internal sealed class EventStreamEndpointGroup : IApiEndpointGroup
 
     public string Name => "events";
 
+    private static string GetNamePrefix(string name)
+    {
+        var separator = name.IndexOf('.');
+        return separator < 0 ? name : name[..separator];
+    }
+
     private static bool CanViewEvent(MagpieEvent evt, AuthenticatedUser user)
     {
         if (!CoreEventNames.Contains(evt.Name))
@@ -280,6 +288,10 @@ internal sealed class EventStreamEndpointGroup : IApiEndpointGroup
         response.Headers.CacheControl = "no-cache, no-transform";
         response.Headers["X-Accel-Buffering"] = "no";
 
+        var startedTimestamp = Stopwatch.GetTimestamp();
+        var disconnectReason = "client";
+        ApiTelemetry.SseActiveStreams.Add(1);
+
         try
         {
             await response.StartAsync(streamCts.Token).ConfigureAwait(false);
@@ -293,6 +305,9 @@ internal sealed class EventStreamEndpointGroup : IApiEndpointGroup
             {
                 if (!CanViewEvent(evt, user))
                 {
+                    ApiTelemetry.EventsDroppedByAllowlistTotal.Add(
+                        1,
+                        new KeyValuePair<string, object?>("name_prefix", GetNamePrefix(evt.Name)));
                     continue;
                 }
 
@@ -301,6 +316,9 @@ internal sealed class EventStreamEndpointGroup : IApiEndpointGroup
         }
         catch (OperationCanceledException) when (streamCts.IsCancellationRequested)
         {
+            disconnectReason = applicationLifetime.ApplicationStopping.IsCancellationRequested
+                ? "server_shutdown"
+                : "client";
         }
         catch (IOException ex)
         {
@@ -308,7 +326,15 @@ internal sealed class EventStreamEndpointGroup : IApiEndpointGroup
         }
         catch (Exception ex)
         {
+            disconnectReason = "error";
             logger.LogWarning(ex, "The event stream writer failed. The handler will close the connection.");
+        }
+        finally
+        {
+            ApiTelemetry.SseActiveStreams.Add(-1);
+            ApiTelemetry.SseStreamDuration.Record(
+                Stopwatch.GetElapsedTime(startedTimestamp).TotalSeconds,
+                new KeyValuePair<string, object?>("disconnect_reason", disconnectReason));
         }
     }
 

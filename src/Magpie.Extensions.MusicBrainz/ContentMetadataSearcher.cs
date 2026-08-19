@@ -21,7 +21,7 @@ internal sealed class ContentMetadataSearcher(
     ISettingsResolver settingsResolver,
     ISearchEngine queryEngine,
     IQueryExecutor queryExecutor,
-    IQueryCache cache,
+    IQueryCoordinator cache,
     IMusicBrainzClient client,
     ICoverArtArchiveClient coverClient,
     ILogger<ContentMetadataSearcher> logger) : IContentHierarchyMetadataAdvancedSearcher

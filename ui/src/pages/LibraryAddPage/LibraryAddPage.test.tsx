@@ -520,13 +520,43 @@ describe('LibraryAddPage', () => {
             renderLive('genre has "Action"');
 
             const search = screen.getByRole('button', { name: /^search$/i }) as HTMLButtonElement;
-            expect(search.disabled).toBe(false);
+            await waitFor(() => {
+                expect(search.disabled).toBe(false);
+            });
             expect(screen.queryByTestId('library-add-page__filter-empty')).not.toBeInTheDocument();
 
+            vi.mocked(apiGet).mockClear();
             await user.click(search);
             await waitFor(() => {
+                expect(apiGet).toHaveBeenCalledWith('/content-search?query=genre+has+%22Action%22&page=1');
                 expect(resultsTable().getByText('The Matrix')).toBeInTheDocument();
             });
+        });
+
+        it('submits current criteria with Enter through the search error path', async () => {
+            mockCandidateSearchError = {
+                name: 'ApiError',
+                status: 400,
+                message: 'Bad request',
+                details: { message: 'Unexpected token', position: 3, expected: [] },
+            };
+            const user = userEvent.setup();
+
+            render(
+                <TestWrapper>
+                    <LibraryAddPage />
+                </TestWrapper>,
+            );
+
+            const tag = screen.getByLabelText('Tag');
+            await user.type(tag, 'favorite');
+            await user.type(tag, '{Enter}');
+
+            await waitFor(() => {
+                expect(apiGet).toHaveBeenCalledWith('/content-search?query=tag+has+%22favorite%22&page=1');
+                expect(screen.getByTestId('library-add-page__error')).toBeInTheDocument();
+            });
+            expect(screen.getByText(/unexpected token/i)).toBeInTheDocument();
         });
 
         it('runs provider candidate search from edited criteria and renders candidates', async () => {
@@ -1073,6 +1103,11 @@ describe('LibraryAddPage', () => {
 
             renderLive();
 
+            await waitFor(() => {
+                expect(resultsTable().getByText('The Matrix')).toBeInTheDocument();
+            });
+            vi.mocked(apiGet).mockClear();
+
             await user.click(screen.getByRole('tab', { name: /saved filter/i }));
 
             expect(document.querySelector('[data-component="filter-bar"]')).not.toBeInTheDocument();
@@ -1144,6 +1179,11 @@ describe('LibraryAddPage', () => {
             const user = userEvent.setup();
 
             renderLive();
+
+            await waitFor(() => {
+                expect(resultsTable().getByText('The Matrix')).toBeInTheDocument();
+            });
+            vi.mocked(apiGet).mockClear();
 
             await user.click(screen.getByRole('tab', { name: /saved filter/i }));
 
@@ -1218,22 +1258,17 @@ describe('LibraryAddPage', () => {
             );
         }
 
-        it('lands a bare-query preload on the Live tab and seeds the filter without fetching', async () => {
+        it('lands a bare-query preload on the Live tab and immediately searches', async () => {
             mockApiGetByPath({});
             mockCandidateSearchResponse = candidateSearchResult([candidateSearchedCandidate]);
-            const user = userEvent.setup();
 
-            renderWithState({ filterQuery: 'contentType = "shows"', contentType: 'shows' });
+            renderWithState({ filterQuery: 'contentType = "shows"' });
 
             await waitFor(() => {
                 expect(screen.getByRole('tab', { name: /live filter/i })).toHaveAttribute('aria-selected', 'true');
             });
             expect(document.querySelector('[data-component="filter-bar"]')).toBeInTheDocument();
 
-            expect(apiGet).not.toHaveBeenCalledWith(expect.stringContaining('/content-search'));
-            expect(screen.getByTestId('library-add-page__empty-initial')).toBeInTheDocument();
-
-            await user.click(screen.getByRole('button', { name: /^search$/i }));
             await waitFor(() => {
                 expect(apiGet).toHaveBeenCalledWith('/content-search?query=contentType+%3D+%22shows%22&page=1');
             });

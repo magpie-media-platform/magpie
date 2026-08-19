@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 
 using Magpie.Abstractions.Repositories;
 using Magpie.Abstractions.Security;
+using Magpie.Core.Observability;
 using Magpie.Models;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
@@ -111,9 +112,11 @@ internal sealed class DownloadStuckDetectionJob(
                 candidates.Count,
                 $"The detection will change the status of {candidates.Count} stuck downloads.");
 
-            var appliedThreshold = candidate.Status == DownloadStatus.Stalled
-                ? thresholds.Stalled
-                : thresholds.Fetching;
+            var stalled = candidate.Status == DownloadStatus.Stalled;
+            var appliedThreshold = stalled ? thresholds.Stalled : thresholds.Fetching;
+            var thresholdKindTag = new KeyValuePair<string, object?>(
+                "threshold_kind",
+                stalled ? "stalled" : "fetching");
 
             try
             {
@@ -126,11 +129,13 @@ internal sealed class DownloadStuckDetectionJob(
                 if (currentStatusResult == CurrentClientStatusResult.Refreshed)
                 {
                     refreshed++;
+                    DownloadTelemetry.StuckDetections.Add(1, thresholdKindTag, new("outcome", "refreshed"));
                     continue;
                 }
 
                 if (currentStatusResult == CurrentClientStatusResult.VerificationFailed)
                 {
+                    DownloadTelemetry.StuckDetections.Add(1, thresholdKindTag, new("outcome", "verification_failed"));
                     continue;
                 }
 
@@ -141,6 +146,7 @@ internal sealed class DownloadStuckDetectionJob(
                 if (transitionedThisCandidate)
                 {
                     transitioned++;
+                    DownloadTelemetry.StuckDetections.Add(1, thresholdKindTag, new("outcome", "transitioned"));
                 }
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)

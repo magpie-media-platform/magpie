@@ -51,7 +51,11 @@ public sealed class MusicBrainzExtension : IExtension
             })
             .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
 
-        services.AddSingleton<IQueryCache, QueryCache>();
+        services.AddSingleton<IQueryCoordinator>(provider =>
+        {
+            using var scope = provider.CreateScope();
+            return ActivatorUtilities.CreateInstance<QueryCoordinator>(scope.ServiceProvider);
+        });
         services.AddSingleton<ICoverArtArchiveClient, CoverArtArchiveClient>();
         services.AddSingleton<IMusicBrainzClient, MusicBrainzClient>();
         services.AddScoped<ISettingsResolver, SettingsResolver>();

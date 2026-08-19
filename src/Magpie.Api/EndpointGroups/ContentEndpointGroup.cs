@@ -95,6 +95,26 @@ internal sealed class ContentEndpointGroup : IApiEndpointGroup
             .ProducesProblem(StatusCodes.Status404NotFound)
             .RequireManager();
 
+        builder.MapGet("{id:guid}/files/browser-location", GetContentFileBrowserLocationAsync)
+            .WithName(nameof(GetContentFileBrowserLocationAsync))
+            .Produces<ContentFileBrowserLocation>()
+            .ProducesProblem(StatusCodes.Status400BadRequest)
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .RequireManager();
+
+        builder.MapPost("{id:guid}/files", AttachContentFileAsync)
+            .WithName(nameof(AttachContentFileAsync))
+            .Produces<ContentFileAttachmentResult>()
+            .ProducesProblem(StatusCodes.Status400BadRequest)
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .RequireManager();
+
+        builder.MapPost("{id:guid}/files/{mediaFileId:guid}/unlink", UnlinkContentFileAsync)
+            .WithName(nameof(UnlinkContentFileAsync))
+            .Produces(StatusCodes.Status204NoContent)
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .RequireManager();
+
         builder.MapGet("{id:guid}/media-server-links", GetMediaServerLinksAsync)
             .WithName(nameof(GetMediaServerLinksAsync))
             .Produces<IReadOnlyList<MediaServerDeepLink>>()
@@ -371,6 +391,50 @@ internal sealed class ContentEndpointGroup : IApiEndpointGroup
             .ConfigureAwait(false);
 
         return deleted ? Results.NoContent() : Results.NotFound();
+    }
+
+    internal async Task<IResult> GetContentFileBrowserLocationAsync(
+        [FromServices] IContentService contentService,
+        Guid id,
+        CancellationToken cancellationToken)
+    {
+        var location = await contentService.GetFileBrowserLocationAsync(id, cancellationToken)
+            .ConfigureAwait(false);
+        return location is null ? Results.NotFound() : Results.Ok(location);
+    }
+
+    internal async Task<IResult> AttachContentFileAsync(
+        [FromServices] IContentService contentService,
+        AuthenticatedUser user,
+        Guid id,
+        [FromBody] AttachContentFileRequest request,
+        CancellationToken cancellationToken)
+    {
+        var result = await contentService.AttachFileAsync(id, request.FilePath, user.Id, cancellationToken)
+            .ConfigureAwait(false);
+        if (result is null)
+        {
+            return Results.NotFound();
+        }
+
+        return Results.Ok(result);
+    }
+
+    internal async Task<IResult> UnlinkContentFileAsync(
+        [FromServices] IContentService contentService,
+        AuthenticatedUser user,
+        Guid id,
+        Guid mediaFileId,
+        CancellationToken cancellationToken)
+    {
+        var unlinked = await contentService.UnlinkFileAsync(id, mediaFileId, user.Id, cancellationToken)
+            .ConfigureAwait(false);
+        if (!unlinked)
+        {
+            return Results.NotFound();
+        }
+
+        return Results.NoContent();
     }
 
     internal async Task<IResult> GetMediaServerLinksAsync(

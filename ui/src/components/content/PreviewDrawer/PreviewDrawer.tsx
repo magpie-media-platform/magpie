@@ -20,9 +20,10 @@ import {
     type ContentPreview,
     type ContentPreviewRelatedSubject,
 } from '@/hooks/usePreviewByExternalId';
+import { useLibraryTypes, type LibraryTypeDefinition } from '@/hooks/useLibraryTypes';
 import { isNotFoundError } from '@/lib/errors';
 import { formatTimeSpanDuration } from '@/lib/formatTime';
-import { formatSubjectKindLabel } from '@/types';
+import { resolveSubjectKindLabel, resolveSubjectKindPluralLabel } from '@/types';
 
 import './PreviewDrawer.css';
 
@@ -76,6 +77,13 @@ function groupRelatedSubjects(subjects: ContentPreviewRelatedSubject[]) {
     return Array.from(grouped, ([kind, group]) => ({ kind, subjects: group.slice(0, 12) }));
 }
 
+function subjectKindGroupLabel(kind: string, count: number, subjectTypes: LibraryTypeDefinition[]) {
+    const type = subjectTypes.find((subjectType) => subjectType.slug === kind);
+    return count === 1
+        ? resolveSubjectKindLabel(kind, type?.name)
+        : resolveSubjectKindPluralLabel(kind, type?.pluralName, type?.name);
+}
+
 export function PreviewDrawer({
     open,
     onOpenChange,
@@ -86,6 +94,7 @@ export function PreviewDrawer({
     addOptions,
     onAdd,
 }: PreviewDrawerProps) {
+    const { subjectTypes } = useLibraryTypes();
     const previewMutation = usePreviewByExternalId();
     const { mutate: runPreview, reset: resetPreview, data, error, isPending } = previewMutation;
 
@@ -228,7 +237,7 @@ export function PreviewDrawer({
                                             key={kind}
                                         >
                                             <h3 className="preview-drawer__section-title">
-                                                {formatSubjectKindLabel(kind)}
+                                                {subjectKindGroupLabel(kind, subjects.length, subjectTypes)}
                                             </h3>
                                             <ul className="preview-drawer__related-subject-list">
                                                 {subjects.map((subject, index) => (

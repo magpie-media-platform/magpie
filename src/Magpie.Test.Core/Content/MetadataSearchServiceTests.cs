@@ -5,6 +5,7 @@ using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions.Repositories;
+using Magpie.Core.Caching;
 using Magpie.Core.Content;
 using Magpie.Models;
 using Magpie.Models.Api;
@@ -16,7 +17,6 @@ using Magpie.Models.Paging;
 using Magpie.Sdk.Content;
 using Magpie.Sdk.Services;
 
-using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -29,6 +29,8 @@ namespace Magpie.Test.Core.Content;
 [TestFixture]
 public sealed class MetadataSearchServiceTests
 {
+    private MemoryCacheFactory _cacheFactory = null!;
+    private MemoryCacheStore _cacheStore = null!;
     private ILoggerFactory _loggerFactory = null!;
     private IContentTypeRegistry _registry = null!;
     private Mock<IContentHierarchyMetadataRelationshipProvider> _provider = null!;
@@ -36,6 +38,8 @@ public sealed class MetadataSearchServiceTests
     [SetUp]
     public void SetUp()
     {
+        _cacheStore = new MemoryCacheStore(TimeProvider.System);
+        _cacheFactory = new MemoryCacheFactory(_cacheStore);
         _loggerFactory = NullLoggerFactory.Instance;
 
         var contribution = new MetadataContribution
@@ -114,6 +118,13 @@ public sealed class MetadataSearchServiceTests
         _registry = new ContentTypeRegistry([movieDefinition], _loggerFactory.CreateLogger<ContentTypeRegistry>());
     }
 
+    [TearDown]
+    public void TearDown()
+    {
+        _cacheFactory.Dispose();
+        _cacheStore.Dispose();
+    }
+
     [Test]
     public async Task SearchAsync_FansOutToEverySearcher_WhoseContentTypesMatch()
     {
@@ -170,7 +181,7 @@ public sealed class MetadataSearchServiceTests
             Mock.Of<IContentHierarchyItemRepository>(),
             TimeProvider.System,
             NullLoggerFactory.Instance.CreateLogger<MetadataSearchService>(),
-            Mock.Of<IMemoryCache>());
+            _cacheFactory);
 
         // Act
         var results = await subject.SearchAsync("Fight Club", "type-a", cancellationToken: default)
@@ -258,7 +269,7 @@ public sealed class MetadataSearchServiceTests
             Mock.Of<IContentHierarchyItemRepository>(),
             TimeProvider.System,
             NullLoggerFactory.Instance.CreateLogger<MetadataSearchService>(),
-            Mock.Of<IMemoryCache>());
+            _cacheFactory);
 
         // Act
         var results = await subject.SearchAsync("Breaking Bad", "type-c", cancellationToken: default)
@@ -344,7 +355,7 @@ public sealed class MetadataSearchServiceTests
             Mock.Of<IContentHierarchyItemRepository>(),
             TimeProvider.System,
             NullLoggerFactory.Instance.CreateLogger<MetadataSearchService>(),
-            Mock.Of<IMemoryCache>());
+            _cacheFactory);
 
         // Act
         var results = await subject.SearchAsync("anything", "type-c", cancellationToken: default)
@@ -390,7 +401,7 @@ public sealed class MetadataSearchServiceTests
             Mock.Of<IContentHierarchyItemRepository>(),
             TimeProvider.System,
             NullLoggerFactory.Instance.CreateLogger<MetadataSearchService>(),
-            Mock.Of<IMemoryCache>());
+            _cacheFactory);
 
         // Act
         var results = await subject.SearchAsync("anything", "type-b", cancellationToken: default).ConfigureAwait(false);
@@ -441,7 +452,7 @@ public sealed class MetadataSearchServiceTests
             Mock.Of<IContentHierarchyItemRepository>(),
             TimeProvider.System,
             NullLoggerFactory.Instance.CreateLogger<MetadataSearchService>(),
-            Mock.Of<IMemoryCache>());
+            _cacheFactory);
 
         // Act
         var blankQuery = await subject.SearchAsync("   ", "type-a", cancellationToken: default).ConfigureAwait(false);
@@ -521,7 +532,7 @@ public sealed class MetadataSearchServiceTests
             Mock.Of<IContentHierarchyItemRepository>(),
             TimeProvider.System,
             NullLoggerFactory.Instance.CreateLogger<MetadataSearchService>(),
-            Mock.Of<IMemoryCache>());
+            _cacheFactory);
 
         using var cts = new CancellationTokenSource();
         var task = Task.Run(() => subject.SearchAsync("Fight Club", "type-a", cancellationToken: cts.Token));
@@ -602,7 +613,7 @@ public sealed class MetadataSearchServiceTests
             Mock.Of<IContentHierarchyItemRepository>(),
             TimeProvider.System,
             NullLoggerFactory.Instance.CreateLogger<MetadataSearchService>(),
-            Mock.Of<IMemoryCache>());
+            _cacheFactory);
 
         // Act
         await subject.SearchAsync("Breaking Bad", "type-c", cancellationToken: default).ConfigureAwait(false);
@@ -679,7 +690,7 @@ public sealed class MetadataSearchServiceTests
             Mock.Of<IContentHierarchyItemRepository>(),
             TimeProvider.System,
             NullLoggerFactory.Instance.CreateLogger<MetadataSearchService>(),
-            Mock.Of<IMemoryCache>());
+            _cacheFactory);
 
         // Act
         await subject.SearchAsync("anything", "type-e", cancellationToken: default).ConfigureAwait(false);
@@ -763,7 +774,7 @@ public sealed class MetadataSearchServiceTests
             Mock.Of<IContentHierarchyItemRepository>(),
             TimeProvider.System,
             NullLoggerFactory.Instance.CreateLogger<MetadataSearchService>(),
-            Mock.Of<IMemoryCache>());
+            _cacheFactory);
 
         // Act
         var results = await subject.SearchAsync("Breaking Bad", "type-c", cancellationToken: default)
@@ -833,7 +844,7 @@ public sealed class MetadataSearchServiceTests
             Mock.Of<IContentHierarchyItemRepository>(),
             TimeProvider.System,
             NullLoggerFactory.Instance.CreateLogger<MetadataSearchService>(),
-            Mock.Of<IMemoryCache>());
+            _cacheFactory);
 
         // Act
         var results = await subject.SearchAsync("anything", "type-e", cancellationToken: default).ConfigureAwait(false);
@@ -891,7 +902,7 @@ public sealed class MetadataSearchServiceTests
             Mock.Of<IContentHierarchyItemRepository>(),
             TimeProvider.System,
             NullLoggerFactory.Instance.CreateLogger<MetadataSearchService>(),
-            Mock.Of<IMemoryCache>());
+            _cacheFactory);
 
         // Act
         var results = await subject.SearchAsync("Breaking Bad", "type-c", cancellationToken: default)
@@ -966,7 +977,7 @@ public sealed class MetadataSearchServiceTests
             Mock.Of<IContentHierarchyItemRepository>(),
             TimeProvider.System,
             NullLoggerFactory.Instance.CreateLogger<MetadataSearchService>(),
-            Mock.Of<IMemoryCache>());
+            _cacheFactory);
 
         // Act
         var results = await subject.SearchAsync("anything", "type-e", cancellationToken: default).ConfigureAwait(false);
@@ -1028,7 +1039,7 @@ public sealed class MetadataSearchServiceTests
             Mock.Of<IContentHierarchyItemRepository>(),
             TimeProvider.System,
             NullLoggerFactory.Instance.CreateLogger<MetadataSearchService>(),
-            Mock.Of<IMemoryCache>());
+            _cacheFactory);
 
         // Act
         await subject.SearchAsync("Fight Club", "type-a", cancellationToken: default).ConfigureAwait(false);
@@ -1079,7 +1090,7 @@ public sealed class MetadataSearchServiceTests
             Mock.Of<IContentHierarchyItemRepository>(),
             TimeProvider.System,
             NullLoggerFactory.Instance.CreateLogger<MetadataSearchService>(),
-            Mock.Of<IMemoryCache>());
+            _cacheFactory);
 
         // Act
         await subject.SearchAsync("Fight Club", "type-a", page: requestedPage, default).ConfigureAwait(false);
@@ -1190,7 +1201,6 @@ public sealed class MetadataSearchServiceTests
         var registry = new ContentTypeRegistry(
             [Mock.Of<IContentTypeDefinitionProvider>(provider => provider.Definition == definition)],
             NullLoggerFactory.Instance.CreateLogger<ContentTypeRegistry>());
-        using var memoryCache = new MemoryCache(new MemoryCacheOptions());
         IMetadataSearchService subject = new MetadataSearchService(
             [],
             [searcher.Object],
@@ -1198,7 +1208,7 @@ public sealed class MetadataSearchServiceTests
             hierarchyItems.Object,
             TimeProvider.System,
             NullLoggerFactory.Instance.CreateLogger<MetadataSearchService>(),
-            memoryCache);
+            _cacheFactory);
         var criteria = new ContentFilterCriteria
         {
             ContentHierarchyItem = new CriteriaSet<ContentHierarchyItemCriteria>
@@ -1390,7 +1400,6 @@ public sealed class MetadataSearchServiceTests
         var registry = new ContentTypeRegistry(
             [],
             NullLoggerFactory.Instance.CreateLogger<ContentTypeRegistry>());
-        using var memoryCache = new MemoryCache(new MemoryCacheOptions());
         IMetadataSearchService subject = new MetadataSearchService(
             [],
             [searcher.Object],
@@ -1398,7 +1407,7 @@ public sealed class MetadataSearchServiceTests
             hierarchyItems.Object,
             TimeProvider.System,
             NullLoggerFactory.Instance.CreateLogger<MetadataSearchService>(),
-            memoryCache);
+            _cacheFactory);
 
         // Act
         var result = await subject.SearchCandidatesAsync(
@@ -1524,8 +1533,6 @@ public sealed class MetadataSearchServiceTests
             [],
             NullLoggerFactory.Instance.CreateLogger<ContentTypeRegistry>());
 
-        using var memoryCache = new MemoryCache(new MemoryCacheOptions());
-
         var subject = new MetadataSearchService(
             [],
             [searcher.Object],
@@ -1533,7 +1540,7 @@ public sealed class MetadataSearchServiceTests
             hierarchyItems.Object,
             TimeProvider.System,
             NullLoggerFactory.Instance.CreateLogger<MetadataSearchService>(),
-            memoryCache);
+            _cacheFactory);
 
         // Act
         var result = await subject.SearchCandidatesAsync(
@@ -1566,7 +1573,7 @@ public sealed class MetadataSearchServiceTests
             Mock.Of<IContentHierarchyItemRepository>(),
             TimeProvider.System,
             _loggerFactory.CreateLogger<MetadataSearchService>(),
-            Mock.Of<IMemoryCache>());
+            _cacheFactory);
         var criteria = new ContentFilterCriteria
         {
             ContentHierarchyItem = new CriteriaSet<ContentHierarchyItemCriteria>
@@ -1686,7 +1693,6 @@ public sealed class MetadataSearchServiceTests
                 PageSize = 2,
                 TotalItems = 0
             });
-        using var memoryCache = new MemoryCache(new MemoryCacheOptions());
         IMetadataSearchService subject = new MetadataSearchService(
             [],
             [first.Object, second.Object],
@@ -1694,7 +1700,7 @@ public sealed class MetadataSearchServiceTests
             hierarchyItems.Object,
             TimeProvider.System,
             _loggerFactory.CreateLogger<MetadataSearchService>(),
-            memoryCache);
+            _cacheFactory);
         var criteria = new ContentFilterCriteria
         {
             ContentHierarchyItem = new CriteriaSet<ContentHierarchyItemCriteria>
@@ -1762,7 +1768,7 @@ public sealed class MetadataSearchServiceTests
             Mock.Of<IContentHierarchyItemRepository>(),
             TimeProvider.System,
             _loggerFactory.CreateLogger<MetadataSearchService>(),
-            Mock.Of<IMemoryCache>());
+            _cacheFactory);
 
         // Act
         var preview = await subject.PreviewByExternalIdAsync(
@@ -1843,7 +1849,7 @@ public sealed class MetadataSearchServiceTests
             Mock.Of<IContentHierarchyItemRepository>(),
             TimeProvider.System,
             _loggerFactory.CreateLogger<MetadataSearchService>(),
-            Mock.Of<IMemoryCache>());
+            _cacheFactory);
 
         // Act
         var preview = await subject.PreviewByExternalIdAsync(
@@ -1877,7 +1883,7 @@ public sealed class MetadataSearchServiceTests
             Mock.Of<IContentHierarchyItemRepository>(),
             TimeProvider.System,
             _loggerFactory.CreateLogger<MetadataSearchService>(),
-            Mock.Of<IMemoryCache>());
+            _cacheFactory);
 
         // Act
         var preview = await subject.PreviewByExternalIdAsync(
@@ -1903,7 +1909,7 @@ public sealed class MetadataSearchServiceTests
             Mock.Of<IContentHierarchyItemRepository>(),
             TimeProvider.System,
             _loggerFactory.CreateLogger<MetadataSearchService>(),
-            Mock.Of<IMemoryCache>());
+            _cacheFactory);
 
         // Act
         var preview = await subject.PreviewByExternalIdAsync(
@@ -1925,7 +1931,7 @@ public sealed class MetadataSearchServiceTests
             Mock.Of<IContentHierarchyItemRepository>(),
             TimeProvider.System,
             _loggerFactory.CreateLogger<MetadataSearchService>(),
-            Mock.Of<IMemoryCache>());
+            _cacheFactory);
 
         // Act
         var preview = await subject.PreviewByExternalIdAsync(
@@ -1950,7 +1956,7 @@ public sealed class MetadataSearchServiceTests
             Mock.Of<IContentHierarchyItemRepository>(),
             TimeProvider.System,
             _loggerFactory.CreateLogger<MetadataSearchService>(),
-            Mock.Of<IMemoryCache>());
+            _cacheFactory);
 
         // Act
         ContentPreview? preview = null;
@@ -1981,7 +1987,7 @@ public sealed class MetadataSearchServiceTests
             Mock.Of<IContentHierarchyItemRepository>(),
             TimeProvider.System,
             _loggerFactory.CreateLogger<MetadataSearchService>(),
-            Mock.Of<IMemoryCache>());
+            _cacheFactory);
 
         // Act
         var preview = await subject.PreviewByExternalIdAsync(
@@ -2008,7 +2014,7 @@ public sealed class MetadataSearchServiceTests
             Mock.Of<IContentHierarchyItemRepository>(),
             TimeProvider.System,
             _loggerFactory.CreateLogger<MetadataSearchService>(),
-            Mock.Of<IMemoryCache>());
+            _cacheFactory);
 
         // Act
         var preview = await subject.PreviewByExternalIdAsync(

@@ -1,4 +1,4 @@
-import { act, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 
@@ -39,7 +39,11 @@ vi.mock('../SimpleFilterBuilder', () => ({
         value: string;
         onChange: (v: string) => void;
         [key: string]: unknown;
-    }) => <div data-testid="simple-filter-builder" data-value={value} {...props} />,
+    }) => (
+        <div data-testid="simple-filter-builder" data-value={value} {...props}>
+            <input aria-label="Simple filter value" />
+        </div>
+    ),
 }));
 
 vi.mock('@/lib/simpleFilterQuery', () => ({
@@ -330,6 +334,49 @@ describe('FilterBar', () => {
 
             const saveButton = document.querySelector('[data-action="save-filter"]');
             expect(saveButton).toBeInTheDocument();
+        });
+    });
+
+    describe('submit', () => {
+        it('submits the current filter value with Enter', () => {
+            const onSubmit = vi.fn();
+            render(<FilterBar value='genre = "Drama"' onChange={mockOnChange} onSubmit={onSubmit} defaultExpanded />);
+
+            fireEvent.keyDown(screen.getByLabelText('Simple filter value'), { key: 'Enter' });
+
+            expect(onSubmit).toHaveBeenCalledOnce();
+        });
+
+        it('uses the change path when no submit action is provided', () => {
+            render(<FilterBar value='genre = "Drama"' onChange={mockOnChange} defaultExpanded />);
+
+            fireEvent.keyDown(screen.getByLabelText('Simple filter value'), { key: 'Enter' });
+
+            expect(mockOnChange).toHaveBeenCalledWith('genre = "Drama"');
+        });
+
+        it('does not submit while a listbox is open', () => {
+            const onSubmit = vi.fn();
+            render(<FilterBar value='genre = "Drama"' onChange={mockOnChange} onSubmit={onSubmit} defaultExpanded />);
+            screen
+                .getByTestId('simple-filter-builder')
+                .appendChild(Object.assign(document.createElement('div'), { role: 'listbox' }));
+
+            fireEvent.keyDown(screen.getByLabelText('Simple filter value'), { key: 'Enter' });
+
+            expect(onSubmit).not.toHaveBeenCalled();
+        });
+
+        it('does not submit during IME composition', () => {
+            const onSubmit = vi.fn();
+            render(<FilterBar value='genre = "Drama"' onChange={mockOnChange} onSubmit={onSubmit} defaultExpanded />);
+
+            fireEvent.keyDown(screen.getByLabelText('Simple filter value'), {
+                key: 'Enter',
+                isComposing: true,
+            });
+
+            expect(onSubmit).not.toHaveBeenCalled();
         });
     });
 

@@ -38,4 +38,9 @@ public sealed record SubjectKindDefinition
     /// The custom metadata fields of this subject kind.
     /// </summary>
     public required IReadOnlyList<CustomMetadataDefinition> CustomMetadataFields { get; init; }
+
+    /// <summary>
+    /// The metadata fields that identify matching subjects when external IDs do not.
+    /// </summary>
+    public MetadataField FallbackIdentityFields { get; init; }
 }

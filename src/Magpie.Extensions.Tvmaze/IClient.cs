@@ -1,17 +1,13 @@
-using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Extensions.Tvmaze.Mapping;
-using Magpie.Extensions.Tvmaze.Pipeline;
 
 namespace Magpie.Extensions.Tvmaze;
 
 internal interface IClient
 {
-    IDisposable? BeginExecutionTrace(Action<WireAttemptOutcome> recorder) => null;
-
     Task<IReadOnlyList<SearchHitDto>> SearchShowsAsync(string query, CancellationToken cancellationToken);
 
     Task<IReadOnlyList<ShowDto>?> GetShowsPageAsync(int page, CancellationToken cancellationToken);

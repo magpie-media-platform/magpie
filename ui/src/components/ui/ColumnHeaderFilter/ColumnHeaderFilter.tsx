@@ -51,7 +51,19 @@ interface DateRangeFilterProps extends BaseProps {
     onChange: (range: { from: string; to: string }) => void;
 }
 
-export type ColumnHeaderFilterProps = FacetFilterProps | TextFilterProps | DateRangeFilterProps;
+interface NumberRangeFilterProps extends BaseProps {
+    type: 'numberRange';
+    min: string;
+    max: string;
+    unit?: string;
+    onChange: (range: { min: string; max: string }) => void;
+}
+
+export type ColumnHeaderFilterProps =
+    | FacetFilterProps
+    | TextFilterProps
+    | DateRangeFilterProps
+    | NumberRangeFilterProps;
 
 const FACET_ANY = '__any__';
 
@@ -101,6 +113,7 @@ export function ColumnHeaderFilter(props: ColumnHeaderFilterProps) {
                     {props.type === 'facet' && <FacetBody {...props} onClose={() => setOpen(false)} />}
                     {props.type === 'text' && <TextBody {...props} onClose={() => setOpen(false)} />}
                     {props.type === 'dateRange' && <DateRangeBody {...props} onClose={() => setOpen(false)} />}
+                    {props.type === 'numberRange' && <NumberRangeBody {...props} onClose={() => setOpen(false)} />}
                 </DropdownMenuContent>
             </DropdownMenu>
         </span>
@@ -214,6 +227,68 @@ function DateRangeBody({ from, to, onChange, label, onClose }: DateRangeFilterPr
                         setDraftFrom('');
                         setDraftTo('');
                         onChange({ from: '', to: '' });
+                        onClose();
+                    }}
+                >
+                    <XIcon weight="bold" aria-hidden="true" />
+                    Clear
+                </Button>
+                <Button variant="primary" size="sm" onClick={apply}>
+                    Apply
+                </Button>
+            </div>
+        </div>
+    );
+}
+
+function NumberRangeBody({
+    min,
+    max,
+    unit,
+    onChange,
+    label,
+    onClose,
+}: NumberRangeFilterProps & { onClose: () => void }) {
+    const [draftMin, setDraftMin] = useState(min);
+    const [draftMax, setDraftMax] = useState(max);
+
+    const apply = useCallback(() => {
+        onChange({ min: draftMin, max: draftMax });
+        onClose();
+    }, [draftMax, draftMin, onChange, onClose]);
+
+    return (
+        <div className="column-header-filter__form">
+            <Label htmlFor="column-header-filter-min">
+                {label} minimum{unit ? ` (${unit})` : ''}
+            </Label>
+            <Input
+                id="column-header-filter-min"
+                size="sm"
+                type="number"
+                min="0"
+                value={draftMin}
+                onChange={(e) => setDraftMin(e.target.value)}
+            />
+            <Label htmlFor="column-header-filter-max">
+                {label} maximum{unit ? ` (${unit})` : ''}
+            </Label>
+            <Input
+                id="column-header-filter-max"
+                size="sm"
+                type="number"
+                min="0"
+                value={draftMax}
+                onChange={(e) => setDraftMax(e.target.value)}
+            />
+            <div className="column-header-filter__actions">
+                <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => {
+                        setDraftMin('');
+                        setDraftMax('');
+                        onChange({ min: '', max: '' });
                         onClose();
                     }}
                 >

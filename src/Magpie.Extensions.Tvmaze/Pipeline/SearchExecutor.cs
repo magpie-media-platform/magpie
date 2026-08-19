@@ -732,9 +732,6 @@ internal sealed class SearchExecutor(IClient client, ILogger<SearchExecutor> log
             ? int.MaxValue
             : plan.MaximumResults + 1;
         var context = new PlanExecutionContext(requiredCount, plan.MaximumResults, plan.Warnings);
-        using var traceScope = logger.IsEnabled(LogLevel.Trace)
-            ? client.BeginExecutionTrace(context.RecordWireAttempt)
-            : null;
         var execution = plan.Root is FilterPlanNode filter
             ? await ExecuteVerifiedNodeAsync(
                 filter.Child,
@@ -1722,11 +1719,6 @@ internal sealed class SearchExecutor(IClient client, ILogger<SearchExecutor> log
         internal void Reject(string reason)
         {
             Outcome.Rejections[reason] = Outcome.Rejections.GetValueOrDefault(reason) + 1;
-        }
-
-        internal void RecordWireAttempt(WireAttemptOutcome attempt)
-        {
-            Outcome.WireAttempts.Add(attempt with { Sequence = Outcome.WireAttempts.Count + 1 });
         }
     }
 }

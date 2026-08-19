@@ -49,6 +49,7 @@ public sealed class MagpieCoreApiExtension : IExtension
         services.AddSingleton<IApiEndpointGroup, ExtensionsEndpointGroup>();
         services.AddSingleton<IApiEndpointGroup, FileTypesEndpointGroup>();
         services.AddSingleton<IApiEndpointGroup, IndexerFeedsEndpointGroup>();
+        services.AddSingleton<IApiEndpointGroup, IndexerSearchEndpointGroup>();
         services.AddSingleton<IApiEndpointGroup, IndexersEndpointGroup>();
         services.AddSingleton<IApiEndpointGroup, InteractiveSearchEndpointGroup>();
         services.AddSingleton<IApiEndpointGroup, JobsEndpointGroup>();

@@ -93,7 +93,7 @@ internal sealed class DefaultJobScheduleDiagnostic(
         CadenceMeasurement? cadence,
         List<DiagnosticFinding> findings)
     {
-        _ = ReadIntegerParameter(trigger, spec, "retryCooldownHours", ParameterFloor.Positive, findings);
+        _ = ReadIntegerParameter(trigger, spec, "retryCooldownHours", ParameterFloor.NonNegative, findings);
 
         if (cadence is not { } measured)
         {

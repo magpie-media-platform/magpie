@@ -35,7 +35,7 @@ public class SubjectMetadataProviderTests
                 It.IsAny<string?>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(new RequestContext { ApiKey = "key", Language = "en-US" });
-        var cache = new Mock<IQueryCache>();
+        var cache = new Mock<IQueryCoordinator>();
         cache.Setup(subject => subject.GetImageBaseUrlAsync(
                 It.IsAny<RequestContext>(),
                 It.IsAny<ITmdbClient>(),

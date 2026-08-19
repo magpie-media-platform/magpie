@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Threading;
 
 using Magpie.Extensions.Cardigann.Engine;
 using Magpie.Extensions.Cardigann.Engine.Session;
@@ -15,6 +17,12 @@ internal sealed class CardigannRuntimeIntegrationFactory(
     ICardigannSessionManager sessions,
     ILogger<CardigannIndexerIntegration> logger) : IRuntimeIndexerIntegrationFactory
 {
+    private const int MaximumCachedDefinitions = 100;
+
+    private readonly Dictionary<string, CardigannDefinition> _definitions = new(StringComparer.Ordinal);
+    private readonly Queue<string> _definitionOrder = new();
+    private readonly Lock _definitionsLock = new();
+
     public const string DefinitionTypeName = "cardigann";
 
     public string DefinitionType => DefinitionTypeName;
@@ -28,7 +36,21 @@ internal sealed class CardigannRuntimeIntegrationFactory(
                 "(SchemaData is empty).");
         }
 
-        var definition = loader.LoadString(indexer.SchemaData!, indexer.Name);
-        return new CardigannIndexerIntegration(definition, parser, sessions, logger);
+        // ponytail: Definition parsing is infrequent. Use a concurrent bounded cache if this lock causes contention.
+        lock (_definitionsLock)
+        {
+            if (!_definitions.TryGetValue(indexer.SchemaData, out var definition))
+            {
+                definition = loader.LoadString(indexer.SchemaData, indexer.Name);
+                _definitions.Add(indexer.SchemaData, definition);
+                _definitionOrder.Enqueue(indexer.SchemaData);
+                if (_definitionOrder.Count > MaximumCachedDefinitions)
+                {
+                    _definitions.Remove(_definitionOrder.Dequeue());
+                }
+            }
+
+            return new CardigannIndexerIntegration(indexer.Id, definition, parser, sessions, logger);
+        }
     }
 }

@@ -228,6 +228,51 @@ describe('SubjectsPage', () => {
             expect(screen.queryByRole('heading', { name: 'Subjects', level: 1 })).not.toBeInTheDocument();
         });
 
+        it('uses extension-provided singular and plural names', () => {
+            mockUseLibraryTypes.mockReturnValue({
+                contentTypes: [],
+                subjectTypes: [
+                    {
+                        id: 'story-guide',
+                        name: 'Narrative Guide',
+                        pluralName: 'Narrative Guides',
+                        slug: 'story-guide',
+                        levels: [],
+                    },
+                ],
+                isLoading: false,
+                error: null,
+                refetch: vi.fn(),
+            });
+            vi.mocked(useSubjects).mockReturnValue({
+                subjects: [
+                    {
+                        ...mockApiSubjects[0],
+                        id: 'subject-extension',
+                        kind: 'story-guide',
+                        metadataContainer: createMockMetadataContainer('Jane Doe'),
+                    },
+                ],
+                isLoading: false,
+                error: null,
+                totalItems: 1,
+                pageNumber: 1,
+                pageSize: 50,
+                updateSubjectTags: vi.fn(),
+                isUpdating: false,
+                deleteSubject: vi.fn(),
+                isDeleting: false,
+                refetch: mockRefetch,
+            });
+
+            renderScopedSubjectsPage('story-guide');
+
+            expect(screen.getByRole('heading', { name: 'Narrative Guides', level: 1 })).toBeInTheDocument();
+            const list = document.querySelector('[data-component="subject-list"]') as HTMLElement;
+            expect(within(list).getByText('Narrative Guide')).toBeInTheDocument();
+            expect(screen.queryByText('Story Guide')).not.toBeInTheDocument();
+        });
+
         it('sets the browser tab title to the umbrella label when unscoped', () => {
             renderSubjectsPage();
 

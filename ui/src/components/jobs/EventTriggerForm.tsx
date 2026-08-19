@@ -5,6 +5,7 @@ import { useUnsavedChangesGuard } from '@/hooks/useUnsavedChangesGuard';
 import { stripBlankRows, useFormDirty } from '@/hooks/useFormDirty';
 import { useExternalChangeConflict } from '@/hooks/useExternalChangeConflict';
 import type { EditableEventContextCriterion } from '@/lib/eventContextCriteria';
+import type { JobParameterDefinition } from '@/hooks/useJobs';
 
 import { Alert } from '@/components/ui/Alert';
 import { Button } from '@/components/ui/Button';
@@ -18,6 +19,16 @@ import { UnsavedChangesDialog } from '@/components/ui/UnsavedChangesDialog';
 import { ExternalChangeConflictWarning, StaleSaveConfirmationDialog } from '@/components/ui/ExternalChangeConflict';
 
 import { eventPatternExample, eventPatternPresets } from './eventPatternPresets';
+import { eventBindingKeys } from './eventBindingCatalog';
+import { JobParameterFieldset } from './JobParameterFieldset';
+import {
+    areJobParameterValuesEqual,
+    getEventBindingKind,
+    jobParameterErrorKey,
+    normalizeJobParameterValues,
+    seedJobParameters,
+    validateJobParameters,
+} from './jobParameters';
 
 import './EventTriggerForm.css';
 import './TriggerForm.css';
@@ -30,6 +41,7 @@ export interface JobTemplateOption {
     onDemand?: boolean;
     enabled?: boolean;
     supportedTriggerModes?: string[];
+    parameters?: JobParameterDefinition[];
 }
 
 export type EventTriggerFilterItem = EditableEventContextCriterion;
@@ -42,6 +54,7 @@ export interface EventTriggerFormValues {
     filters: EventTriggerFilterItem[];
     enabled: boolean;
     delaySeconds: number;
+    parameters: Record<string, string>;
 }
 
 interface EventTriggerFormProps {
@@ -67,6 +80,7 @@ const emptyValues: EventTriggerFormValues = {
     filters: [],
     enabled: true,
     delaySeconds: 0,
+    parameters: {},
 };
 
 const CUSTOM_PRESET = 'custom';
@@ -84,6 +98,7 @@ function normalizeTrigger(values: EventTriggerFormValues): unknown {
             .filter((pattern) => pattern !== ''),
         enabled: values.enabled,
         delaySeconds: values.delaySeconds,
+        parameters: values.parameters,
         filters: stripBlankRows(values.filters, isBlankEventFilter),
     };
 }
@@ -92,6 +107,14 @@ function isTemplateUnavailableForEventTrigger(template: JobTemplateOption | unde
     return (
         template?.enabled === false ||
         (template?.supportedTriggerModes !== undefined && !template.supportedTriggerModes.includes(EVENT_TRIGGER_MODE))
+    );
+}
+
+function getEventBoundParameters(parameters: Record<string, string> | undefined): Set<string> {
+    return new Set(
+        Object.entries(parameters ?? {})
+            .filter(([, value]) => getEventBindingKind(value) !== 'static')
+            .map(([name]) => name),
     );
 }
 
@@ -108,6 +131,9 @@ export function EventTriggerForm({
 
     const [values, setValues] = useState<EventTriggerFormValues>(initialValues ?? emptyValues);
     const [errors, setErrors] = useState<Record<string, string>>({});
+    const [eventBoundParameters, setEventBoundParameters] = useState(() =>
+        getEventBoundParameters(initialValues?.parameters),
+    );
     const filterKeyCounter = useRef(0);
     const [filterKeys, setFilterKeys] = useState<string[]>(() =>
         (initialValues?.filters ?? []).map(() => `filter-${filterKeyCounter.current++}`),
@@ -143,6 +169,7 @@ export function EventTriggerForm({
         cleanValuesRef.current = newValues;
         loadedEntityIdRef.current = nextEntityId;
         setErrors({});
+        setEventBoundParameters(getEventBoundParameters(newValues.parameters));
         setShowUnsavedDialog(false);
         setShowStaleSaveConfirmation(false);
         setFilterKeys(newValues.filters.map(() => `filter-${filterKeyCounter.current++}`));
@@ -191,10 +218,19 @@ export function EventTriggerForm({
         setErrors((prev) => ({ ...prev, name: '' }));
     }, []);
 
-    const handleTemplateChange = useCallback((templateId: string) => {
-        setValues((prev) => ({ ...prev, templateId }));
-        setErrors((prev) => ({ ...prev, templateId: '' }));
-    }, []);
+    const handleTemplateChange = useCallback(
+        (templateId: string) => {
+            const template = templates.find((candidate) => candidate.id === templateId);
+            setValues((prev) => ({
+                ...prev,
+                templateId,
+                parameters: seedJobParameters(template?.parameters),
+            }));
+            setErrors((prev) => ({ ...prev, templateId: '' }));
+            setEventBoundParameters(new Set());
+        },
+        [templates],
+    );
 
     const handlePresetChange = useCallback((preset: string) => {
         setSelectedPreset(preset);
@@ -240,6 +276,34 @@ export function EventTriggerForm({
 
     const handleEnabledChange = useCallback((enabled: boolean) => {
         setValues((prev) => ({ ...prev, enabled }));
+    }, []);
+
+    const handleParameterChange = useCallback((name: string, value: string) => {
+        setValues((prev) => ({
+            ...prev,
+            parameters: { ...prev.parameters, [name]: value },
+        }));
+        setErrors((prev) => {
+            const errorKey = jobParameterErrorKey(name);
+            if (!prev[errorKey]) {
+                return prev;
+            }
+            const next = { ...prev };
+            delete next[errorKey];
+            return next;
+        });
+    }, []);
+
+    const handleParameterBindingChange = useCallback((name: string, enabled: boolean) => {
+        setEventBoundParameters((previous) => {
+            const next = new Set(previous);
+            if (enabled) {
+                next.add(name);
+            } else {
+                next.delete(name);
+            }
+            return next;
+        });
     }, []);
 
     const handleAddFilter = useCallback(() => {
@@ -329,6 +393,9 @@ export function EventTriggerForm({
             }
         });
 
+        const selectedTemplate = templates.find((template) => template.id === values.templateId);
+        Object.assign(newErrors, validateJobParameters(selectedTemplate?.parameters, values.parameters, true));
+
         setErrors(newErrors);
         return Object.keys(newErrors).length === 0;
     }, [currentTemplateId, templates, values]);
@@ -336,7 +403,7 @@ export function EventTriggerForm({
     const save = useCallback(async () => {
         conflict.beginOwnSave();
         try {
-            await onSubmit(values);
+            await onSubmit({ ...values, parameters: normalizeJobParameterValues(values.parameters) });
             conflict.endOwnSave(true);
         } catch {
             conflict.endOwnSave(false);
@@ -363,6 +430,20 @@ export function EventTriggerForm({
         [templates, values.templateId],
     );
 
+    useEffect(() => {
+        if (!open) {
+            return;
+        }
+        const seeded = seedJobParameters(selectedTemplate?.parameters, values.parameters);
+        if (!areJobParameterValuesEqual(seeded, values.parameters)) {
+            cleanValuesRef.current = {
+                ...cleanValuesRef.current,
+                parameters: seedJobParameters(selectedTemplate?.parameters, cleanValuesRef.current.parameters),
+            };
+            setValues((prev) => ({ ...prev, parameters: seeded }));
+        }
+    }, [open, selectedTemplate, values.parameters]);
+
     const selectedPresetLabel = useMemo(() => {
         if (selectedPreset === CUSTOM_PRESET) {
             return 'Custom';
@@ -370,6 +451,8 @@ export function EventTriggerForm({
         const preset = eventPatternPresets.find((p) => p.value === selectedPreset);
         return preset?.label ?? 'Custom';
     }, [selectedPreset]);
+
+    const parameterSpec = selectedTemplate?.parameters ?? [];
 
     return (
         <Sheet open={open} onOpenChange={handleOpenChange}>
@@ -594,6 +677,35 @@ export function EventTriggerForm({
                                 Wait this many seconds after the event fires before running the job.
                             </p>
                         </div>
+
+                        {parameterSpec.length > 0 && (
+                            <div className="event-trigger-form__parameter-section">
+                                <JobParameterFieldset
+                                    parameters={parameterSpec}
+                                    values={values.parameters}
+                                    errors={errors}
+                                    disabled={isSubmitting}
+                                    idPrefix="event-trigger-parameter"
+                                    classNames={{
+                                        fieldset: 'event-trigger-form__parameters',
+                                        legend: 'event-trigger-form__legend',
+                                        field: 'event-trigger-form__field',
+                                        toggleField: 'event-trigger-form__field event-trigger-form__field--toggle',
+                                        toggleWrapper: 'event-trigger-form__toggle-wrapper',
+                                        help: 'event-trigger-form__help',
+                                    }}
+                                    dataField="parameters"
+                                    eventBindingKeys={eventBindingKeys}
+                                    eventBoundParameters={eventBoundParameters}
+                                    onEventBindingChange={handleParameterBindingChange}
+                                    onChange={handleParameterChange}
+                                />
+                                <p className="event-trigger-form__help">
+                                    Use {'${event.key}'} to bind event context. Use {'$${'} for a literal {'${'}. You
+                                    can enter keys that are not in the suggestions.
+                                </p>
+                            </div>
+                        )}
 
                         <div className="event-trigger-form__field">
                             <div className="event-trigger-form__label-row">

@@ -5,5 +5,6 @@ internal enum SubjectResolutionKind
     Resolved,
     NotFound,
     Ambiguous,
+    Unsupported,
     Failed
 }

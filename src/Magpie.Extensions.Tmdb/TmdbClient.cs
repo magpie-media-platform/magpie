@@ -52,10 +52,16 @@ internal sealed class TmdbClient(IHttpClientFactory httpClientFactory, ILogger<T
     public Task<T?> GetAsync<T>(RequestContext context, Request request, CancellationToken cancellationToken)
         where T : class
     {
-        return GetAsync<T>(context, request.Path, request.QueryParameters, request.ResponseProfile, cancellationToken);
+        return GetAsync<T>(
+            context,
+            request.Endpoint,
+            request.Path,
+            request.QueryParameters,
+            request.ResponseProfile,
+            cancellationToken);
     }
 
-    public async Task<T?> GetAsync<T>(
+    public Task<T?> GetAsync<T>(
         RequestContext context,
         string path,
         IReadOnlyList<(string Key, string Value)>? queryParameters,
@@ -63,57 +69,7 @@ internal sealed class TmdbClient(IHttpClientFactory httpClientFactory, ILogger<T
         CancellationToken cancellationToken)
         where T : class
     {
-        var trace = context.ExecutionTrace;
-        var traceId = trace?.BeginRequest(
-            context.PlanNodeId,
-            path,
-            ScrubApiKey(BuildRequestTarget(path, queryParameters, context)));
-        var stopwatch = Stopwatch.StartNew();
-        try
-        {
-            var body = await GetJsonAsync(context, path, queryParameters, profile, cancellationToken)
-                .ConfigureAwait(false);
-            if (string.IsNullOrWhiteSpace(body))
-            {
-                if (traceId is { } notFoundId)
-                {
-                    trace!.CompleteRequest(notFoundId, "notFound", 0, 0, stopwatch.ElapsedMilliseconds);
-                }
-
-                return null;
-            }
-
-            var result = JsonSerializer.Deserialize<T>(body!, JsonOptions);
-            if (traceId is { } completedId)
-            {
-                trace!.CompleteRequest(
-                    completedId,
-                    "complete",
-                    ResponseCount(result),
-                    Encoding.UTF8.GetByteCount(body!),
-                    stopwatch.ElapsedMilliseconds);
-            }
-
-            return result;
-        }
-        catch (OperationCanceledException)
-        {
-            if (traceId is { } canceledId)
-            {
-                trace!.CompleteRequest(canceledId, "canceled", null, 0, stopwatch.ElapsedMilliseconds);
-            }
-
-            throw;
-        }
-        catch (Exception)
-        {
-            if (traceId is { } failedId)
-            {
-                trace!.CompleteRequest(failedId, "failed", null, 0, stopwatch.ElapsedMilliseconds);
-            }
-
-            throw;
-        }
+        return GetAsync<T>(context, RequestRole.Detail, path, queryParameters, profile, cancellationToken);
     }
 
     private static async Task<string> ReadBoundedAsync(
@@ -203,6 +159,66 @@ internal sealed class TmdbClient(IHttpClientFactory httpClientFactory, ILogger<T
         }
 
         return builder.ToString();
+    }
+
+    private async Task<T?> GetAsync<T>(
+        RequestContext context,
+        string role,
+        string path,
+        IReadOnlyList<(string Key, string Value)>? queryParameters,
+        ResponseProfile profile,
+        CancellationToken cancellationToken)
+        where T : class
+    {
+        using var activity = Telemetry.Source.StartChild("tmdb.query.request", context.Telemetry?.Activity);
+        if (activity is not null)
+        {
+            activity.SetTag("magpie.request.role", role);
+            activity.SetTag("magpie.request.target", ScrubApiKey(BuildRequestTarget(path, queryParameters, context)));
+            activity.SetTag("magpie.cache.hit", false);
+            if (context.PlanNodeId is { } planNodeId)
+            {
+                activity.SetTag("magpie.query.node.id", planNodeId);
+            }
+        }
+
+        Telemetry.Requests.Add(
+            1,
+            Telemetry.ProviderTag,
+            new KeyValuePair<string, object?>("request_role", role),
+            Telemetry.CacheMissTag);
+        try
+        {
+            var body = await GetJsonAsync(context, path, queryParameters, profile, cancellationToken)
+                .ConfigureAwait(false);
+            if (string.IsNullOrWhiteSpace(body))
+            {
+                context.Telemetry?.RecordRequest(0);
+                activity?.SetTag("magpie.request.status", "notFound");
+                activity?.SetTag("magpie.request.rows", 0);
+                activity?.SetTag("magpie.request.payload_bytes", 0);
+                return null;
+            }
+
+            var result = JsonSerializer.Deserialize<T>(body!, JsonOptions);
+            var rows = ResponseCount(result);
+            context.Telemetry?.RecordRequest(rows);
+            activity?.SetTag("magpie.request.status", "complete");
+            activity?.SetTag("magpie.request.rows", rows);
+            activity?.SetTag("magpie.request.payload_bytes", Encoding.UTF8.GetByteCount(body!));
+            return result;
+        }
+        catch (OperationCanceledException)
+        {
+            activity?.SetTag("magpie.request.status", "canceled");
+            throw;
+        }
+        catch (Exception)
+        {
+            activity?.SetTag("magpie.request.status", "failed");
+            activity?.SetStatus(ActivityStatusCode.Error);
+            throw;
+        }
     }
 
     private async Task<string?> GetJsonAsync(

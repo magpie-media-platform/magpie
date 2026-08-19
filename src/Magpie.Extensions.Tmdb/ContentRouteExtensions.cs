@@ -45,6 +45,18 @@ internal static class ContentRouteExtensions
         };
     }
 
+    internal static string ContentTypeName(this ContentRoute route)
+    {
+        return route switch
+        {
+            ContentRoute.Movie => "movie",
+            ContentRoute.TvShow => "tv",
+            ContentRoute.TvSeason => "tvSeason",
+            ContentRoute.TvEpisode => "tvEpisode",
+            _ => throw new ArgumentOutOfRangeException(nameof(route))
+        };
+    }
+
     internal static ContentRoute? ResolveDiscoverRoute(this string levelSlug)
     {
         return levelSlug switch

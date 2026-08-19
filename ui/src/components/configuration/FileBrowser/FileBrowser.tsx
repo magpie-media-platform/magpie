@@ -99,6 +99,33 @@ function buildPath(path: string, segmentCount: number): string {
     return `${details.rootPath}${separator}${segments.join(details.separator)}`;
 }
 
+function normalizePath(path: string): string {
+    return path.replace(/[\\/]+/g, '/').replace(/\/+$/, '') || '/';
+}
+
+function isWindowsPath(path: string): boolean {
+    return /^[A-Za-z]:[\\/]/.test(path) || /^[\\/]{2}/.test(path);
+}
+
+function pathsEqual(left: string, right: string): boolean {
+    const normalizedLeft = normalizePath(left);
+    const normalizedRight = normalizePath(right);
+    return isWindowsPath(left) && isWindowsPath(right)
+        ? normalizedLeft.toLowerCase() === normalizedRight.toLowerCase()
+        : normalizedLeft === normalizedRight;
+}
+
+function isPathWithin(rootPath: string, path: string): boolean {
+    const caseInsensitive = isWindowsPath(rootPath) && isWindowsPath(path);
+    const root = normalizePath(rootPath);
+    const target = normalizePath(path);
+    const comparisonRoot = caseInsensitive ? root.toLowerCase() : root;
+    const comparisonTarget = caseInsensitive ? target.toLowerCase() : target;
+    return (
+        pathsEqual(rootPath, path) || comparisonTarget.startsWith(comparisonRoot === '/' ? '/' : `${comparisonRoot}/`)
+    );
+}
+
 export interface FileBrowserProps {
     open: boolean;
 
@@ -109,6 +136,8 @@ export interface FileBrowserProps {
     mode?: PathInputMode;
 
     initialPath?: string;
+
+    rootPath?: string;
 
     title?: string;
 
@@ -123,6 +152,7 @@ export function FileBrowser({
     onSelect,
     mode = 'folder',
     initialPath,
+    rootPath,
     title,
     description,
     endpoint,
@@ -132,28 +162,36 @@ export function FileBrowser({
     const [currentPath, setCurrentPath] = useState(defaultInitialPath);
     const [manualPath, setManualPath] = useState(defaultInitialPath);
     const [selectedEntry, setSelectedEntry] = useState<FileSystemEntry | null>(null);
+    const [validationError, setValidationError] = useState<string | null>(null);
 
     const { navigate: browseNavigate, entries, isLoading: loading, error: apiError, reset } = useFileBrowser(endpoint);
 
-    const error = apiError?.message ?? null;
+    const error = validationError ?? apiError?.message ?? null;
 
     const pathDetails = getPathDetails(currentPath);
-    const isAtRoot = pathDetails.segments.length === 0;
+    const isAtRoot = rootPath ? pathsEqual(currentPath, rootPath) : pathDetails.segments.length === 0;
 
     const navigateTo = useCallback(
         (path: string) => {
+            if (rootPath && !isPathWithin(rootPath, path)) {
+                setValidationError('The path must be in the configured root folder.');
+                return;
+            }
+
+            setValidationError(null);
             setSelectedEntry(null);
             setCurrentPath(path);
             setManualPath(path);
             browseNavigate(path);
         },
-        [browseNavigate],
+        [browseNavigate, rootPath],
     );
 
     useEffect(() => {
         if (open) {
             navigateTo(defaultInitialPath);
         } else {
+            setValidationError(null);
             reset();
         }
     }, [open, defaultInitialPath, navigateTo, reset]);
@@ -161,12 +199,12 @@ export function FileBrowser({
     const navigateUp = useCallback(() => {
         if (isAtRoot) return;
         const parentPath = buildPath(currentPath, pathDetails.segments.length - 1);
-        navigateTo(parentPath);
-    }, [currentPath, isAtRoot, navigateTo, pathDetails.segments.length]);
+        navigateTo(rootPath && !isPathWithin(rootPath, parentPath) ? rootPath : parentPath);
+    }, [currentPath, isAtRoot, navigateTo, pathDetails.segments.length, rootPath]);
 
     const navigateHome = useCallback(() => {
-        navigateTo(pathDetails.rootPath);
-    }, [navigateTo, pathDetails.rootPath]);
+        navigateTo(rootPath ?? pathDetails.rootPath);
+    }, [navigateTo, pathDetails.rootPath, rootPath]);
 
     const handleEntryClick = useCallback((entry: FileSystemEntry) => {
         setSelectedEntry(entry);
@@ -219,13 +257,15 @@ export function FileBrowser({
         return true;
     });
 
-    const breadcrumbSegments = [
+    const allBreadcrumbSegments = [
         { name: pathDetails.rootPath, path: pathDetails.rootPath },
         ...pathDetails.segments.map((segment, index) => ({
             name: segment,
             path: buildPath(currentPath, index + 1),
         })),
     ];
+    const rootIndex = rootPath ? allBreadcrumbSegments.findIndex((segment) => pathsEqual(segment.path, rootPath)) : 0;
+    const breadcrumbSegments = allBreadcrumbSegments.slice(Math.max(0, rootIndex));
 
     const canSelect = mode === 'folder' || (selectedEntry && (mode === 'both' || selectedEntry.type === mode));
 

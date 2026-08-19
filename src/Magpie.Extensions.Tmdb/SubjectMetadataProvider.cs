@@ -15,7 +15,7 @@ namespace Magpie.Extensions.Tmdb;
 internal sealed class SubjectMetadataProvider(
     ISettingsResolver resolver,
     ITmdbClient client,
-    IQueryCache queryCache,
+    IQueryCoordinator queryCache,
     TimeProvider timeProvider,
     ILogger<SubjectMetadataProvider> logger) : ISubjectMetadataProvider
 {

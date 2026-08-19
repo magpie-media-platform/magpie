@@ -17,7 +17,7 @@ namespace Magpie.Extensions.Tmdb;
 internal sealed class ContentMetadataProvider(
     ISettingsResolver resolver,
     ITmdbClient client,
-    IQueryCache queryCache,
+    IQueryCoordinator queryCache,
     TimeProvider timeProvider,
     ILogger<ContentMetadataProvider> logger) : IContentHierarchyMetadataRelationshipProvider
 {

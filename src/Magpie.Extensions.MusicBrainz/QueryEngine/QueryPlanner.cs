@@ -10,11 +10,9 @@ using Magpie.Models.Enums;
 using Magpie.Models.Filtering;
 using Magpie.Sdk.Content;
 
-using Microsoft.Extensions.Logging;
-
 namespace Magpie.Extensions.MusicBrainz.QueryEngine;
 
-internal sealed class QueryPlanner(ILogger<QueryPlanner> logger) : IQueryPlanner
+internal sealed class QueryPlanner : IQueryPlanner
 {
     private static readonly string GenreTagApproximationWarning =
         "musicbrainz genre matching uses the broader tag data returned by search.";
@@ -152,6 +150,15 @@ internal sealed class QueryPlanner(ILogger<QueryPlanner> logger) : IQueryPlanner
             ? (Strategy: QueryStrategy.None, JustifyingFilter: null)
             : SelectStrategy(request.Target, filters, artistCompositions.Count > 0);
         var strategy = selection.Strategy;
+        if (knownEmpty)
+        {
+            RecordPlanRefused("known_empty");
+        }
+        else if (strategy == QueryStrategy.None)
+        {
+            RecordPlanRefused("unbounded");
+        }
+
         if (strategy != QueryStrategy.Lucene)
         {
             warningDetails.RemoveAll(warning => warning.Detail == GenreTagApproximationWarning);
@@ -225,7 +232,7 @@ internal sealed class QueryPlanner(ILogger<QueryPlanner> logger) : IQueryPlanner
             Root = BuildRoot(state, strategy),
             TraceProvenance = BuildTraceProvenance(state, knownEmpty, strategy, criterionTraces)
         };
-        TracePlan(plan);
+        RecordPlan(plan);
         return plan;
     }
 
@@ -3117,6 +3124,11 @@ internal sealed class QueryPlanner(ILogger<QueryPlanner> logger) : IQueryPlanner
     {
         var term = request.OrdinaryTerm?.Trim();
         var strategy = string.IsNullOrWhiteSpace(term) ? QueryStrategy.None : QueryStrategy.Lucene;
+        if (strategy == QueryStrategy.None)
+        {
+            RecordPlanRefused("unbounded");
+        }
+
         var state = new PlanningState
         {
             Target = request.Target,
@@ -3134,7 +3146,7 @@ internal sealed class QueryPlanner(ILogger<QueryPlanner> logger) : IQueryPlanner
             Fingerprint = Fingerprint(request.Target, [], [], [], term)
         };
         plan = plan with { Root = BuildRoot(state, strategy) };
-        TracePlan(plan);
+        RecordPlan(plan);
         return plan;
     }
 
@@ -3160,15 +3172,23 @@ internal sealed class QueryPlanner(ILogger<QueryPlanner> logger) : IQueryPlanner
         };
     }
 
-    private void TracePlan(QueryPlan plan)
+    private void RecordPlan(QueryPlan plan)
     {
-        if (!logger.IsEnabled(LogLevel.Trace))
-        {
-            return;
-        }
+        var fetch = plan.Root?.Flatten().OfType<FetchPlanNode>().FirstOrDefault();
+        Telemetry.Plans.Add(
+            1,
+            Telemetry.Provider,
+            Telemetry.ContentType,
+            new KeyValuePair<string, object?>("anchor_kind", fetch?.AnchorKind.ToString() ?? "none"));
+    }
 
-        var json = plan.SerializePlan();
-        logger.LogTrace("PLAN MusicBrainz {PlanJson}", json);
+    private void RecordPlanRefused(string reason)
+    {
+        Telemetry.PlansRefused.Add(
+            1,
+            Telemetry.Provider,
+            Telemetry.ContentType,
+            new KeyValuePair<string, object?>("reason", reason));
     }
 
     private QueryTraceProvenance.Disposition CriterionDisposition(

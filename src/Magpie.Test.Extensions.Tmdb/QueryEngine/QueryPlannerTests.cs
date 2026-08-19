@@ -8,8 +8,6 @@ using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Models.Filtering;
 
-using Microsoft.Extensions.Logging.Abstractions;
-
 using NUnit.Framework;
 
 namespace Magpie.Test.Extensions.Tmdb.QueryEngine;
@@ -22,7 +20,7 @@ public class QueryPlannerTests
     [SetUp]
     public void SetUp()
     {
-        _subject = new QueryPlanner(NullLogger<QueryPlanner>.Instance);
+        _subject = new QueryPlanner();
     }
 
     [Test]
@@ -1184,6 +1182,46 @@ public class QueryPlannerTests
     }
 
     [Test]
+    public void Plan_ReturnsDataQualityWarning_WhenTvDurationFilterIsApplied()
+    {
+        // Arrange
+        var criteria = new MetadataCriteria
+        {
+            Title = new CriteriaSet<PropertyCriterion<string>>
+            {
+                And = [new PropertyCriterion<string> { Values = ["The Bear"] }]
+            },
+            Duration = new CriteriaSet<PropertyCriterion<TimeSpan>>
+            {
+                And =
+                [
+                    new PropertyCriterion<TimeSpan>
+                    {
+                        Operator = CriteriaValueOperator.GreaterThanOrEqual,
+                        Values = [TimeSpan.FromMinutes(30)]
+                    }
+                ]
+            }
+        };
+
+        // Act
+        var plan = _subject.Plan(new QueryRequest
+        {
+            Route = ContentRoute.TvShow,
+            Criteria = criteria,
+            Page = 1,
+            DefaultLanguagePreference = "en-US"
+        });
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(((FilterPlanNode)plan.Root).DurationFilters, Has.Count.EqualTo(1));
+            Assert.That(plan.Warnings, Is.EqualTo(["TMDb series runtime data can be incomplete."]));
+        }
+    }
+
+    [Test]
     public void Plan_KeepsBothTextFiltersWithoutWarning_WhenOneFieldCarriesTwoCriteria()
     {
         // Arrange
@@ -1375,7 +1413,107 @@ public class QueryPlannerTests
     }
 
     [Test]
-    public void Plan_KnownEmptyWithWarning_WhenImdbContentIdIsInvalid()
+    public void Plan_ReturnsEmptyWithoutWarning_WhenExcludedContentIdCannotCompile()
+    {
+        // Arrange
+        var criteria = new MetadataCriteria
+        {
+            Title = new CriteriaSet<PropertyCriterion<string>>
+            {
+                And = [new PropertyCriterion<string> { Values = ["Iron Man"] }]
+            },
+            ExternalIds = new CollectionCriteria<ExternalIdCriteria>
+            {
+                None =
+                [
+                    new ExternalIdCriteria
+                    {
+                        Source = new CriteriaSet<PropertyCriterion<string>>
+                        {
+                            And = [new PropertyCriterion<string> { Values = ["imdb"] }]
+                        },
+                        Value = new CriteriaSet<PropertyCriterion<string>>
+                        {
+                            And =
+                            [
+                                new PropertyCriterion<string>
+                                {
+                                    Operator = CriteriaValueOperator.Regex,
+                                    Values = ["^tt"]
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }
+        };
+
+        // Act
+        var plan = _subject.Plan(new QueryRequest
+        {
+            Route = ContentRoute.Movie,
+            Criteria = criteria,
+            Page = 1,
+            DefaultLanguagePreference = "en-US"
+        });
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(((UnionPlanNode)plan.Root).Children, Is.Empty);
+            Assert.That(plan.Warnings, Is.Empty);
+        }
+    }
+
+    [Test]
+    public void Plan_ReturnsEmptyWithoutWarning_WhenExcludedContentIdSourceIsPartlyUnsupported()
+    {
+        // Arrange
+        var criteria = new MetadataCriteria
+        {
+            Title = new CriteriaSet<PropertyCriterion<string>>
+            {
+                And = [new PropertyCriterion<string> { Values = ["Iron Man"] }]
+            },
+            ExternalIds = new CollectionCriteria<ExternalIdCriteria>
+            {
+                None = [new ExternalIdCriteria
+                {
+                    Source = new CriteriaSet<PropertyCriterion<string>>
+                    {
+                        And = [new PropertyCriterion<string>
+                        {
+                            Operator = CriteriaValueOperator.In,
+                            Values = ["tmdb", "thetvdb"]
+                        }]
+                    },
+                    Value = new CriteriaSet<PropertyCriterion<string>>
+                    {
+                        And = [new PropertyCriterion<string> { Values = ["550"] }]
+                    }
+                }]
+            }
+        };
+
+        // Act
+        var plan = _subject.Plan(new QueryRequest
+        {
+            Route = ContentRoute.Movie,
+            Criteria = criteria,
+            Page = 1,
+            DefaultLanguagePreference = "en-US"
+        });
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(((UnionPlanNode)plan.Root).Children, Is.Empty);
+            Assert.That(plan.Warnings, Is.Empty);
+        }
+    }
+
+    [Test]
+    public void Plan_KnownEmptyWithoutWarning_WhenImdbContentIdIsInvalid()
     {
         // Arrange
         var criteria = new MetadataCriteria
@@ -1409,9 +1547,7 @@ public class QueryPlannerTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(((UnionPlanNode)plan.Root).Children, Is.Empty);
-            Assert.That(
-                plan.Warnings.Select(warning => warning),
-                Has.Exactly(1).Contains("ignored an invalid exact content identifier"));
+            Assert.That(plan.Warnings, Is.Empty);
         }
     }
 
@@ -1650,6 +1786,142 @@ public class QueryPlannerTests
             Assert.That(fetch.PushedFilters, Does.Not.Contain("duration[0] runtime"));
             Assert.That(filter.ResidualPredicates, Does.Contain("duration[0]"));
             Assert.That(filter.ResidualPredicates, Does.Not.Contain("duration[1]"));
+            Assert.That(plan.Warnings, Is.Empty);
+        }
+    }
+
+    [Test]
+    public void Plan_KeepsSupportedGenreAlternativeWithoutWarning_WhenSiblingIsUnsupported()
+    {
+        // Arrange
+        var criteria = new MetadataCriteria
+        {
+            Genres = new CollectionCriteria<GenreCriteria>
+            {
+                Some =
+                [[
+                    new GenreCriteria
+                    {
+                        Name = new CriteriaSet<PropertyCriterion<string>>
+                        {
+                            And =
+                            [
+                                new PropertyCriterion<string>
+                                {
+                                    Operator = CriteriaValueOperator.GreaterThan,
+                                    Values = ["Action"]
+                                }
+                            ]
+                        }
+                    },
+                    new GenreCriteria
+                    {
+                        Name = new CriteriaSet<PropertyCriterion<string>>
+                        {
+                            And = [new PropertyCriterion<string> { Values = ["Comedy"] }]
+                        }
+                    }
+                ]]
+            }
+        };
+
+        // Act
+        var plan = _subject.Plan(new QueryRequest
+        {
+            Route = ContentRoute.Movie,
+            Criteria = criteria,
+            Page = 1,
+            DefaultLanguagePreference = "en-US"
+        });
+        var filter = ((FilterPlanNode)plan.Root).GenreFilters.Single();
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(filter.Alternatives.Single().Single().Values, Is.EqualTo(["Comedy"]));
+            Assert.That(plan.Warnings, Is.Empty);
+        }
+    }
+
+    [Test]
+    public void Plan_ReturnsEmpty_WhenExcludedGenreOperatorIsUnsupported()
+    {
+        // Arrange
+        var criteria = new MetadataCriteria
+        {
+            Title = new CriteriaSet<PropertyCriterion<string>>
+            {
+                And = [new PropertyCriterion<string> { Values = ["The Thing"] }]
+            },
+            Genres = new CollectionCriteria<GenreCriteria>
+            {
+                None =
+                [
+                    new GenreCriteria
+                    {
+                        Name = new CriteriaSet<PropertyCriterion<string>>
+                        {
+                            And =
+                            [
+                                new PropertyCriterion<string>
+                                {
+                                    Operator = CriteriaValueOperator.Regex,
+                                    Values = ["^Hor"]
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }
+        };
+
+        // Act
+        var plan = _subject.Plan(new QueryRequest
+        {
+            Route = ContentRoute.Movie,
+            Criteria = criteria,
+            Page = 1,
+            DefaultLanguagePreference = "en-US"
+        });
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(((UnionPlanNode)plan.Root).Children, Is.Empty);
+            Assert.That(plan.Warnings, Is.Empty);
+        }
+    }
+
+    [Test]
+    public void Plan_IgnoresExcludedGenreCriterion_WhenCriterionIsEmpty()
+    {
+        // Arrange
+        var criteria = new MetadataCriteria
+        {
+            Title = new CriteriaSet<PropertyCriterion<string>>
+            {
+                And = [new PropertyCriterion<string> { Values = ["The Thing"] }]
+            },
+            Genres = new CollectionCriteria<GenreCriteria>
+            {
+                None = [new GenreCriteria()]
+            }
+        };
+
+        // Act
+        var plan = _subject.Plan(new QueryRequest
+        {
+            Route = ContentRoute.Movie,
+            Criteria = criteria,
+            Page = 1,
+            DefaultLanguagePreference = "en-US"
+        });
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(plan.Root, Is.TypeOf<FilterPlanNode>());
+            Assert.That(((FilterPlanNode)plan.Root).GenreFilters, Is.Empty);
             Assert.That(plan.Warnings, Is.Empty);
         }
     }
@@ -2339,9 +2611,7 @@ public class QueryPlannerTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(((UnionPlanNode)plan.Root).Children, Is.Empty);
-            Assert.That(
-                plan.Warnings.Select(warning => warning),
-                Has.Exactly(1).Contains("does not provide established dates"));
+            Assert.That(plan.Warnings, Is.Empty);
         }
     }
 
@@ -2447,9 +2717,7 @@ public class QueryPlannerTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(((UnionPlanNode)plan.Root).Children, Is.Empty);
-            Assert.That(
-                plan.Warnings.Select(warning => warning),
-                Has.Exactly(1).Contains("does not provide award metadata"));
+            Assert.That(plan.Warnings, Is.Empty);
         }
     }
 
@@ -2527,9 +2795,7 @@ public class QueryPlannerTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(((UnionPlanNode)plan.Root).Children, Is.Empty);
-            Assert.That(
-                plan.Warnings.Select(warning => warning),
-                Has.Exactly(1).Contains("does not provide tag metadata"));
+            Assert.That(plan.Warnings, Is.Empty);
         }
     }
 
@@ -2598,9 +2864,7 @@ public class QueryPlannerTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(((UnionPlanNode)plan.Root).Children, Is.Empty);
-            Assert.That(
-                plan.Warnings.Select(warning => warning),
-                Has.Exactly(1).Contains("does not provide custom metadata"));
+            Assert.That(plan.Warnings, Is.Empty);
         }
     }
 
@@ -2782,7 +3046,56 @@ public class QueryPlannerTests
     }
 
     [Test]
-    public void Plan_Warns_WhenContentRatingOperatorIsUnsupported()
+    public void Plan_ReturnsEmptyWithoutWarning_WhenExcludedContentRatingOperatorIsUnsupported()
+    {
+        // Arrange
+        var criteria = new MetadataCriteria
+        {
+            Title = new CriteriaSet<PropertyCriterion<string>>
+            {
+                And = [new PropertyCriterion<string> { Values = ["Iron Man"] }]
+            },
+            ContentRatings = new CollectionCriteria<ContentRatingCriteria>
+            {
+                None =
+                [
+                    new ContentRatingCriteria
+                    {
+                        Rating = new CriteriaSet<PropertyCriterion<string>>
+                        {
+                            And =
+                            [
+                                new PropertyCriterion<string>
+                                {
+                                    Operator = CriteriaValueOperator.GreaterThan,
+                                    Values = ["PG"]
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }
+        };
+
+        // Act
+        var plan = _subject.Plan(new QueryRequest
+        {
+            Route = ContentRoute.Movie,
+            Criteria = criteria,
+            Page = 1,
+            DefaultLanguagePreference = "en-US"
+        });
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(((UnionPlanNode)plan.Root).Children, Is.Empty);
+            Assert.That(plan.Warnings, Is.Empty);
+        }
+    }
+
+    [Test]
+    public void Plan_ReturnsEmptyWithoutWarning_WhenContentRatingOperatorIsUnsupported()
     {
         // Arrange
         var criteria = new MetadataCriteria
@@ -2824,7 +3137,7 @@ public class QueryPlannerTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(((UnionPlanNode)plan.Root).Children, Is.Empty);
-            Assert.That(plan.Warnings.Select(warning => warning), Has.Some.Contains("content rating"));
+            Assert.That(plan.Warnings, Is.Empty);
         }
     }
 
@@ -3006,6 +3319,241 @@ public class QueryPlannerTests
         {
             Assert.That(plan.Root, Is.TypeOf<FilterPlanNode>());
             Assert.That(((FilterPlanNode)plan.Root).SubjectBindings, Is.Empty);
+            Assert.That(plan.Warnings, Is.Empty);
+        }
+    }
+
+    [Test]
+    public void Plan_KeepsTitle_WhenExcludedRelationshipRoleIsAbsent()
+    {
+        // Arrange
+        var criteria = new MetadataCriteria
+        {
+            Title = new CriteriaSet<PropertyCriterion<string>>
+            {
+                And = [new PropertyCriterion<string> { Values = ["The Matrix"] }]
+            },
+            Relationships = new CollectionCriteria<RelationshipCriteria>
+            {
+                None = [new RelationshipCriteria
+                {
+                    Kind = new CriteriaSet<PropertyCriterion<string>>
+                    {
+                        And = [new PropertyCriterion<string> { Values = ["chef"] }]
+                    }
+                }]
+            }
+        };
+
+        // Act
+        var plan = _subject.Plan(new QueryRequest
+        {
+            Route = ContentRoute.Movie,
+            Criteria = criteria,
+            Page = 1,
+            DefaultLanguagePreference = "en-US"
+        });
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(plan.Root, Is.TypeOf<FilterPlanNode>());
+            Assert.That(((FilterPlanNode)plan.Root).TextFilters.Single().Values, Is.EqualTo(["The Matrix"]));
+            Assert.That(((FilterPlanNode)plan.Root).SubjectBindings, Is.Empty);
+            Assert.That(plan.Warnings, Is.Empty);
+        }
+    }
+
+    [Test]
+    public void Plan_ReturnsEmpty_WhenExcludedRelationshipRoleOperatorCannotCompile()
+    {
+        // Arrange
+        var criteria = new MetadataCriteria
+        {
+            Title = new CriteriaSet<PropertyCriterion<string>>
+            {
+                And = [new PropertyCriterion<string> { Values = ["The Matrix"] }]
+            },
+            Relationships = new CollectionCriteria<RelationshipCriteria>
+            {
+                None = [new RelationshipCriteria
+                {
+                    Kind = new CriteriaSet<PropertyCriterion<string>>
+                    {
+                        And = [new PropertyCriterion<string>
+                        {
+                            Operator = CriteriaValueOperator.Regex,
+                            Values = ["^chef"]
+                        }]
+                    }
+                }]
+            }
+        };
+
+        // Act
+        var plan = _subject.Plan(new QueryRequest
+        {
+            Route = ContentRoute.Movie,
+            Criteria = criteria,
+            Page = 1,
+            DefaultLanguagePreference = "en-US"
+        });
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(((UnionPlanNode)plan.Root).Children, Is.Empty);
+            Assert.That(plan.Warnings, Is.Empty);
+        }
+    }
+
+    [Test]
+    public void Plan_ReturnsEmpty_WhenExcludedRelationshipSubjectOperatorCannotCompile()
+    {
+        // Arrange
+        var criteria = new MetadataCriteria
+        {
+            Title = new CriteriaSet<PropertyCriterion<string>>
+            {
+                And = [new PropertyCriterion<string> { Values = ["The Matrix"] }]
+            },
+            Relationships = new CollectionCriteria<RelationshipCriteria>
+            {
+                None = [new RelationshipCriteria
+                {
+                    Kind = new CriteriaSet<PropertyCriterion<string>>
+                    {
+                        And = [new PropertyCriterion<string> { Values = ["director"] }]
+                    },
+                    Subject = new CriteriaSet<PropertyCriterion<string>>
+                    {
+                        And = [new PropertyCriterion<string>
+                        {
+                            Operator = CriteriaValueOperator.Regex,
+                            Values = ["^Tom"]
+                        }]
+                    }
+                }]
+            }
+        };
+
+        // Act
+        var plan = _subject.Plan(new QueryRequest
+        {
+            Route = ContentRoute.Movie,
+            Criteria = criteria,
+            Page = 1,
+            DefaultLanguagePreference = "en-US"
+        });
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(((UnionPlanNode)plan.Root).Children, Is.Empty);
+            Assert.That(plan.Warnings, Is.Empty);
+        }
+    }
+
+    [Test]
+    public void Plan_ReturnsEmpty_WhenExcludedRelationshipQualifierOperatorCannotCompile()
+    {
+        // Arrange
+        var criteria = new MetadataCriteria
+        {
+            Title = new CriteriaSet<PropertyCriterion<string>>
+            {
+                And = [new PropertyCriterion<string> { Values = ["The Matrix"] }]
+            },
+            Relationships = new CollectionCriteria<RelationshipCriteria>
+            {
+                None = [new RelationshipCriteria
+                {
+                    Kind = new CriteriaSet<PropertyCriterion<string>>
+                    {
+                        And = [new PropertyCriterion<string> { Values = ["director"] }]
+                    },
+                    Qualifier = new CriteriaSet<PropertyCriterion<string>>
+                    {
+                        And = [new PropertyCriterion<string>
+                        {
+                            Operator = CriteriaValueOperator.Regex,
+                            Values = ["^lead"]
+                        }]
+                    }
+                }]
+            }
+        };
+
+        // Act
+        var plan = _subject.Plan(new QueryRequest
+        {
+            Route = ContentRoute.Movie,
+            Criteria = criteria,
+            Page = 1,
+            DefaultLanguagePreference = "en-US"
+        });
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(((UnionPlanNode)plan.Root).Children, Is.Empty);
+            Assert.That(plan.Warnings, Is.Empty);
+        }
+    }
+
+    [Test]
+    public void Plan_ReturnsEmpty_WhenExcludedRelationshipExternalIdOperatorCannotCompile()
+    {
+        // Arrange
+        var criteria = new MetadataCriteria
+        {
+            Title = new CriteriaSet<PropertyCriterion<string>>
+            {
+                And = [new PropertyCriterion<string> { Values = ["The Matrix"] }]
+            },
+            Relationships = new CollectionCriteria<RelationshipCriteria>
+            {
+                None = [new RelationshipCriteria
+                {
+                    Kind = new CriteriaSet<PropertyCriterion<string>>
+                    {
+                        And = [new PropertyCriterion<string> { Values = ["director"] }]
+                    },
+                    ExternalIds = new CollectionCriteria<ExternalIdCriteria>
+                    {
+                        Some = [[new ExternalIdCriteria
+                        {
+                            Source = new CriteriaSet<PropertyCriterion<string>>
+                            {
+                                And = [new PropertyCriterion<string> { Values = ["imdb"] }]
+                            },
+                            Value = new CriteriaSet<PropertyCriterion<string>>
+                            {
+                                And = [new PropertyCriterion<string>
+                                {
+                                    Operator = CriteriaValueOperator.Regex,
+                                    Values = ["^nm"]
+                                }]
+                            }
+                        }]]
+                    }
+                }]
+            }
+        };
+
+        // Act
+        var plan = _subject.Plan(new QueryRequest
+        {
+            Route = ContentRoute.Movie,
+            Criteria = criteria,
+            Page = 1,
+            DefaultLanguagePreference = "en-US"
+        });
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(((UnionPlanNode)plan.Root).Children, Is.Empty);
             Assert.That(plan.Warnings, Is.Empty);
         }
     }

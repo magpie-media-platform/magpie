@@ -109,13 +109,15 @@ const DownloadItem = ({ download, url }: DownloadItemProps) => {
             <div className="download-queue-widget__item-header">
                 <span className="download-queue-widget__item-title">
                     {download.contentId ? (
-                        <ContentLineageTitle
-                            qualifiedName={{
-                                id: download.contentId,
-                                parentId: download.parentId,
-                                title: download.title,
-                            }}
-                        />
+                        <Link to={`/library/${download.contentId}`}>
+                            <ContentLineageTitle
+                                qualifiedName={{
+                                    id: download.contentId,
+                                    parentId: download.parentId,
+                                    title: download.title,
+                                }}
+                            />
+                        </Link>
                     ) : (
                         download.title
                     )}

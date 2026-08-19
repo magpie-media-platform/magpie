@@ -33,4 +33,14 @@ public sealed record ReleaseSearchPhase
     /// The number of connections that answered without an error.
     /// </summary>
     public int ConnectionsSucceeded { get; init; }
+
+    /// <summary>
+    /// The outcome of each connection that the phase considered.
+    /// </summary>
+    public IReadOnlyList<ReleaseSearchConnectionOutcome> Connections { get; init; } = [];
+
+    /// <summary>
+    /// The releases of the phase after the executor coalesced the duplicates.
+    /// </summary>
+    public IReadOnlyList<ReleaseSearchCandidate> Candidates { get; init; } = [];
 }

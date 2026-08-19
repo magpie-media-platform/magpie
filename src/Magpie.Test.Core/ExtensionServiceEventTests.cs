@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using Magpie.Abstractions;
 using Magpie.Abstractions.Repositories;
 using Magpie.Core;
+using Magpie.Core.Caching;
 using Magpie.Core.Config;
 using Magpie.Core.Extensions;
 using Magpie.Models;
@@ -14,7 +15,6 @@ using Magpie.Models.Data;
 using Magpie.Sdk.Events;
 using Magpie.Sdk.Services;
 
-using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging.Abstractions;
 
 using Moq;
@@ -59,7 +59,8 @@ public sealed class ExtensionServiceEventTests
             .Setup(bus => bus.PublishAsync(It.IsAny<MagpieEvent>(), It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
         using var httpClient = new HttpClient();
-        using var memoryCache = new MemoryCache(new MemoryCacheOptions());
+        using var cacheStore = new MemoryCacheStore(TimeProvider.System);
+        using var cacheFactory = new MemoryCacheFactory(cacheStore);
         var packageSources = Mock.Of<IExtensionPackageSourceRepository>();
         var subject = new ExtensionService(
             httpClient,
@@ -70,7 +71,7 @@ public sealed class ExtensionServiceEventTests
             new MagpieHostOptions(),
             Mock.Of<IExtensionLifecycleManager>(),
             eventBus.Object,
-            memoryCache,
+            cacheFactory,
             Mock.Of<IFileSystem>(),
             TimeProvider.System,
             NullLogger<ExtensionService>.Instance);
@@ -128,12 +129,13 @@ public sealed class ExtensionServiceEventTests
             .Returns(Task.CompletedTask);
 
         using var httpClient = new HttpClient();
-        using var memoryCache = new MemoryCache(new MemoryCacheOptions());
+        using var cacheStore = new MemoryCacheStore(TimeProvider.System);
+        using var cacheFactory = new MemoryCacheFactory(cacheStore);
 
         var fileSystem = new FileSystem(
             Mock.Of<IBlockedFileTypeRepository>(),
             Mock.Of<IMimeMappingRepository>(),
-            memoryCache,
+            cacheFactory,
             NullLogger<FileSystem>.Instance);
         var subject = new ExtensionService(
             httpClient,
@@ -152,7 +154,7 @@ public sealed class ExtensionServiceEventTests
             new MagpieHostOptions(),
             lifecycleManager.Object,
             Mock.Of<IEventBus>(),
-            memoryCache,
+            cacheFactory,
             fileSystem,
             TimeProvider.System,
             NullLogger<ExtensionService>.Instance);
@@ -210,11 +212,12 @@ public sealed class ExtensionServiceEventTests
             .Setup(manager => manager.InvokeUninstallAsync(extension, It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
         using var httpClient = new HttpClient();
-        using var memoryCache = new MemoryCache(new MemoryCacheOptions());
+        using var cacheStore = new MemoryCacheStore(TimeProvider.System);
+        using var cacheFactory = new MemoryCacheFactory(cacheStore);
         var fileSystem = new FileSystem(
             Mock.Of<IBlockedFileTypeRepository>(),
             Mock.Of<IMimeMappingRepository>(),
-            memoryCache,
+            cacheFactory,
             NullLogger<FileSystem>.Instance);
         var subject = new ExtensionService(
             httpClient,
@@ -233,7 +236,7 @@ public sealed class ExtensionServiceEventTests
             new MagpieHostOptions(),
             lifecycleManager.Object,
             Mock.Of<IEventBus>(),
-            memoryCache,
+            cacheFactory,
             fileSystem,
             TimeProvider.System,
             NullLogger<ExtensionService>.Instance);

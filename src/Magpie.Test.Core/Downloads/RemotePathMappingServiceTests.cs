@@ -6,11 +6,11 @@ using System.Threading.Tasks;
 
 using Magpie.Abstractions.Repositories;
 using Magpie.Core;
+using Magpie.Core.Caching;
 using Magpie.Models.Data;
 using Magpie.Sdk.Integrations;
 using Magpie.Sdk.Services;
 
-using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging.Abstractions;
 
 using Moq;
@@ -22,7 +22,8 @@ namespace Magpie.Test.Core.Downloads;
 [TestFixture]
 public class RemotePathMappingServiceTests
 {
-    private MemoryCache _cache = null!;
+    private MemoryCacheFactory _cacheFactory = null!;
+    private MemoryCacheStore _cacheStore = null!;
     private Mock<IDownloadClientRepository> _downloadClientRepository = null!;
     private IDownloadClientService _downloadClientService = null!;
     private IRemotePathMappingService _service = null!;
@@ -31,7 +32,8 @@ public class RemotePathMappingServiceTests
     [SetUp]
     public void SetUp()
     {
-        _cache = new(new MemoryCacheOptions());
+        _cacheStore = new MemoryCacheStore(TimeProvider.System);
+        _cacheFactory = new MemoryCacheFactory(_cacheStore);
         _testRoot = Path.Combine(Path.GetTempPath(), "magpie-remote-path-mapping-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(_testRoot);
         _downloadClientRepository = new Mock<IDownloadClientRepository>();
@@ -57,14 +59,15 @@ public class RemotePathMappingServiceTests
             new FileSystem(
                 Mock.Of<IBlockedFileTypeRepository>(),
                 Mock.Of<IMimeMappingRepository>(),
-                _cache,
+                _cacheFactory,
                 NullLogger<FileSystem>.Instance));
     }
 
     [TearDown]
     public void TearDown()
     {
-        _cache.Dispose();
+        _cacheFactory.Dispose();
+        _cacheStore.Dispose();
         if (Directory.Exists(_testRoot))
         {
             Directory.Delete(_testRoot, recursive: true);

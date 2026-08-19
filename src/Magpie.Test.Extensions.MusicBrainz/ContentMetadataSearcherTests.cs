@@ -39,7 +39,7 @@ public class ContentMetadataSearcherTests
     private Mock<ISettingsResolver> _settingsResolver = null!;
     private Mock<ISearchEngine> _queryEngine = null!;
     private Mock<IQueryExecutor> _queryExecutor = null!;
-    private Mock<IQueryCache> _cache = null!;
+    private Mock<IQueryCoordinator> _cache = null!;
     private Mock<IMusicBrainzClient> _client = null!;
     private Mock<ICoverArtArchiveClient> _coverClient = null!;
     private IContentHierarchyMetadataAdvancedSearcher _subject = null!;
@@ -52,7 +52,7 @@ public class ContentMetadataSearcherTests
             .ReturnsAsync(new Settings());
         _queryEngine = new Mock<ISearchEngine>();
         _queryExecutor = new Mock<IQueryExecutor>();
-        _cache = new Mock<IQueryCache>();
+        _cache = new Mock<IQueryCoordinator>();
         _cache.Setup(cache => cache.GetCoverAsync(
                 It.IsAny<CoverCacheKey>(),
                 It.IsAny<Func<CancellationToken, Task<FetchResult<Uri>>>>(),
@@ -758,6 +758,7 @@ public class ContentMetadataSearcherTests
                 [albumId] = new()
                 {
                     Title = "Unlicensed Forklift Ballet",
+                    OriginalTitle = "Forklift Ballet",
                     Relationships = relationships
                 }
             }
@@ -768,7 +769,13 @@ public class ContentMetadataSearcherTests
                 It.IsAny<Guid>(),
                 It.IsAny<IReadOnlyCollection<string>>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync([new MaterializedMetadata { Title = "Court Ordered Smoothie" }]);
+            .ReturnsAsync([
+                new MaterializedMetadata
+                {
+                    Title = "Court Ordered Smoothie",
+                    OriginalTitle = "Judicial Smoothie",
+                },
+            ]);
 
         IContentFactProvider subject = new ContentFactProvider(metadataService.Object);
 
@@ -778,10 +785,16 @@ public class ContentMetadataSearcherTests
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(factSets, Has.Count.EqualTo(1));
+            Assert.That(factSets, Has.Count.EqualTo(4));
             Assert.That(factSets[0], Has.Count.EqualTo(2));
             Assert.That(factSets[0][0].Value, Is.EqualTo("Court Ordered Smoothie"));
             Assert.That(factSets[0][1].Value, Is.EqualTo("Unlicensed Forklift Ballet"));
+            Assert.That(factSets[1][0].Value, Is.EqualTo("Court Ordered Smoothie"));
+            Assert.That(factSets[1][1].Value, Is.EqualTo("Forklift Ballet"));
+            Assert.That(factSets[2][0].Value, Is.EqualTo("Judicial Smoothie"));
+            Assert.That(factSets[2][1].Value, Is.EqualTo("Unlicensed Forklift Ballet"));
+            Assert.That(factSets[3][0].Value, Is.EqualTo("Judicial Smoothie"));
+            Assert.That(factSets[3][1].Value, Is.EqualTo("Forklift Ballet"));
         }
     }
 
@@ -849,6 +862,7 @@ public class ContentMetadataSearcherTests
                 [trackId] = new()
                 {
                     Title = "Dad's Emergency Contact",
+                    OriginalTitle = "Emergency Contact",
                     Relationships = relationships
                 }
             }
@@ -869,7 +883,7 @@ public class ContentMetadataSearcherTests
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(factSets, Has.Count.EqualTo(2));
+            Assert.That(factSets, Has.Count.EqualTo(4));
             Assert.That(factSets[0], Has.Count.EqualTo(3));
             Assert.That(factSets[0][0].Value, Is.EqualTo("Court Ordered Smoothie"));
             Assert.That(factSets[0][1].Value, Is.EqualTo("Unlicensed Forklift Ballet"));
@@ -877,6 +891,13 @@ public class ContentMetadataSearcherTests
             Assert.That(factSets[1], Has.Count.EqualTo(2));
             Assert.That(factSets[1][0].Value, Is.EqualTo("Court Ordered Smoothie"));
             Assert.That(factSets[1][1].Value, Is.EqualTo("Dad's Emergency Contact"));
+            Assert.That(factSets[2], Has.Count.EqualTo(3));
+            Assert.That(factSets[2][0].Value, Is.EqualTo("Court Ordered Smoothie"));
+            Assert.That(factSets[2][1].Value, Is.EqualTo("Unlicensed Forklift Ballet"));
+            Assert.That(factSets[2][2].Value, Is.EqualTo("Emergency Contact"));
+            Assert.That(factSets[3], Has.Count.EqualTo(2));
+            Assert.That(factSets[3][0].Value, Is.EqualTo("Court Ordered Smoothie"));
+            Assert.That(factSets[3][1].Value, Is.EqualTo("Emergency Contact"));
         }
     }
 

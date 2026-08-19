@@ -387,6 +387,7 @@ public sealed class CardigannSessionManagerTests
             BaseUri,
             HttpMethod.Get,
             new Uri("https://tracker.test/search"),
+            null,
             "magpie-test",
             captureCookies: true,
             default)
@@ -394,6 +395,33 @@ public sealed class CardigannSessionManagerTests
 
         // Assert
         Assert.That(searchCookie, Is.EqualTo("sid=PASTED"));
+    }
+
+    [Test]
+    public async Task SendAsync_PostsFormBody_WhenFormBodyIsProvided()
+    {
+        // Arrange
+        var postedBody = string.Empty;
+        _http.When(HttpMethod.Post, "https://tracker.test/search").Respond(async request =>
+        {
+            postedBody = await request.Content!.ReadAsStringAsync(default).ConfigureAwait(false);
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("<html></html>") };
+        });
+
+        // Act
+        using var response = await _sessions.SendAsync(
+            SessionKey,
+            BaseUri,
+            HttpMethod.Post,
+            new Uri("https://tracker.test/search"),
+            "q=cool%20movie",
+            "magpie-test",
+            captureCookies: false,
+            default)
+            .ConfigureAwait(false);
+
+        // Assert
+        Assert.That(postedBody, Is.EqualTo("q=cool%20movie"));
     }
 
     [Test]
@@ -426,6 +454,7 @@ public sealed class CardigannSessionManagerTests
             BaseUri,
             HttpMethod.Get,
             new Uri("https://evil.test/steal"),
+            null,
             "magpie-test",
             captureCookies: true,
             default)
@@ -466,6 +495,7 @@ public sealed class CardigannSessionManagerTests
             BaseUri,
             HttpMethod.Get,
             new Uri("https://tracker.test/search"),
+            null,
             "magpie-test",
             captureCookies: true,
             default)

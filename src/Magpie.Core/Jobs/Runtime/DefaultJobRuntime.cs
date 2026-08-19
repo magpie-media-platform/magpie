@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
+using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -7,6 +9,7 @@ using Magpie.Abstractions;
 using Magpie.Abstractions.Jobs;
 using Magpie.Abstractions.Repositories;
 using Magpie.Core.Events;
+using Magpie.Core.Observability;
 using Magpie.Models;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
@@ -21,6 +24,14 @@ namespace Magpie.Core.Jobs.Runtime;
 
 internal sealed class DefaultJobRuntime : IJobRuntime
 {
+    private const string OutcomeCompleted = "completed";
+
+    private const string OutcomeFailed = "failed";
+
+    private const string OutcomeCancelled = "cancelled";
+
+    private const string OutcomeTimeout = "timeout";
+
     private static readonly TimeSpan DefaultHeartbeatInterval = TimeSpan.FromSeconds(30);
 
     private static readonly TimeSpan DefaultMaxRunDuration = TimeSpan.FromHours(1);
@@ -118,6 +129,10 @@ internal sealed class DefaultJobRuntime : IJobRuntime
                 "No job handler exists for job type {JobType}. The runtime will mark execution {ExecutionId} as failed",
                 execution.JobType,
                 executionId);
+            JobsTelemetry.FailuresTotal.Add(
+                1,
+                new KeyValuePair<string, object?>("job.type", execution.JobType),
+                new KeyValuePair<string, object?>("reason_kind", "no_handler"));
             var noHandlerReason = $"No handler registered for job type {execution.JobType}";
             var failedByThisRun = execution.Status is JobExecutionStatus.Running
                 ? await executions.TryMarkRunningFailedAsync(executionId, noHandlerReason, default)
@@ -190,6 +205,40 @@ internal sealed class DefaultJobRuntime : IJobRuntime
             return;
         }
 
+        DistributedContextPropagator.Current.ExtractTraceIdAndState(
+            execution.TriggerContext,
+            static (object? carrier, string key, out string? value, out IEnumerable<string>? values) =>
+            {
+                values = null;
+                value = ((IDictionary<string, string>)carrier!).TryGetValue(key, out var found) ? found : null;
+            },
+            out var traceParent,
+            out var traceState);
+        var links = ActivityContext.TryParse(traceParent, traceState, isRemote: true, out var triggerContext)
+            ? new[] { new ActivityLink(triggerContext) }
+            : null;
+        using var activity = JobsTelemetry.Source.StartActivity(
+            $"job {execution.JobType}",
+            ActivityKind.Internal,
+            parentContext: default,
+            tags: null,
+            links: links);
+        if (activity is not null)
+        {
+            activity.SetTag("job.execution_id", executionId);
+            activity.SetTag("job.type", execution.JobType);
+            activity.SetTag("job.trigger_mode", GetTriggerMode(execution));
+            activity.SetTag("job.execution_mode", execution.ExecutionMode.ToString());
+            activity.SetTag("job.attempt", execution.Attempt ?? 1);
+            activity.SetTag("job.lock_partition_kind", spec.ConcurrencyScope.ToString());
+            activity.SetTag("job.correlation_id", execution.CorrelationId);
+            activity.SetTag("job.parent_execution_id", execution.ParentExecutionId);
+            activity.SetTag("job.node_id", _nodeId);
+        }
+
+        var startedTimestamp = Stopwatch.GetTimestamp();
+        var outcome = OutcomeCompleted;
+
         using var heartbeatCts = new CancellationTokenSource();
         var heartbeatPump = RunHeartbeatPumpAsync(executionId, heartbeatCts.Token);
 
@@ -207,7 +256,13 @@ internal sealed class DefaultJobRuntime : IJobRuntime
                     "The runtime will mark execution {ExecutionId} as failed",
                     execution.JobType,
                     executionId);
+                JobsTelemetry.FailuresTotal.Add(
+                    1,
+                    new KeyValuePair<string, object?>("job.type", execution.JobType),
+                    new KeyValuePair<string, object?>("reason_kind", "no_handler"));
+                outcome = OutcomeFailed;
                 var noHandlerReason = $"No handler registered for job type {execution.JobType}";
+                activity?.SetStatus(ActivityStatusCode.Error, noHandlerReason);
                 var failedByThisRun = await executions
                     .TryMarkRunningFailedAsync(executionId, noHandlerReason, default)
                     .ConfigureAwait(false);
@@ -246,12 +301,16 @@ internal sealed class DefaultJobRuntime : IJobRuntime
                     .ConfigureAwait(false);
                 if (cancelledByThisRun)
                 {
+                    outcome = OutcomeCancelled;
+                    activity?.AddEvent(new ActivityEvent("cancelled"));
                     _logger.LogInformation(
                         "An operator cancelled job execution {ExecutionId} ({JobType})",
                         executionId,
                         execution.JobType);
                 }
             }
+
+            activity?.SetStatus(ActivityStatusCode.Ok);
 
             _logger.LogDebug(
                 "The job handler returned for execution {ExecutionId} ({JobType})",
@@ -263,6 +322,9 @@ internal sealed class DefaultJobRuntime : IJobRuntime
             var hostShutdown = cancellationToken.IsCancellationRequested;
             if (runningEntry.OperatorCancelled)
             {
+                outcome = OutcomeCancelled;
+                activity?.AddEvent(new ActivityEvent("cancelled"));
+                activity?.SetStatus(ActivityStatusCode.Ok);
                 var cancelledByThisRun = await executions
                     .TryMarkCancellationRequestedCancelledAsync(executionId, reason: null, default)
                     .ConfigureAwait(false);
@@ -278,6 +340,8 @@ internal sealed class DefaultJobRuntime : IJobRuntime
             {
                 var seconds = effectiveTimeout.TotalSeconds;
                 var reason = $"Timed out after {seconds:N0}s";
+                outcome = OutcomeTimeout;
+                activity?.SetStatus(ActivityStatusCode.Error, reason);
                 var failedByThisRun = await TransitionFailureAsync(
                     executions,
                     auditRecords,
@@ -292,6 +356,10 @@ internal sealed class DefaultJobRuntime : IJobRuntime
                     .ConfigureAwait(false);
                 if (failedByThisRun)
                 {
+                    JobsTelemetry.FailuresTotal.Add(
+                        1,
+                        new KeyValuePair<string, object?>("job.type", execution.JobType),
+                        new KeyValuePair<string, object?>("reason_kind", "timeout"));
                     _logger.LogWarning(
                         "Job execution {ExecutionId} ({JobType}) timed out after {TimeoutSeconds:N0}s",
                         executionId,
@@ -302,6 +370,8 @@ internal sealed class DefaultJobRuntime : IJobRuntime
             else if (hostShutdown)
             {
                 const string reason = "Interrupted by host shutdown";
+                outcome = OutcomeFailed;
+                activity?.SetStatus(ActivityStatusCode.Error, reason);
                 var failedByThisRun = await TransitionFailureAsync(
                     executions,
                     auditRecords,
@@ -316,6 +386,10 @@ internal sealed class DefaultJobRuntime : IJobRuntime
                     .ConfigureAwait(false);
                 if (failedByThisRun)
                 {
+                    JobsTelemetry.FailuresTotal.Add(
+                        1,
+                        new KeyValuePair<string, object?>("job.type", execution.JobType),
+                        new KeyValuePair<string, object?>("reason_kind", "host_shutdown"));
                     _logger.LogWarning(
                         "The host shutdown interrupted execution {ExecutionId} ({JobType}). " +
                         "The runtime applied the {Policy} policy",
@@ -330,6 +404,9 @@ internal sealed class DefaultJobRuntime : IJobRuntime
                         .ConfigureAwait(false);
                     if (cancelledByThisRun)
                     {
+                        outcome = OutcomeCancelled;
+                        activity?.AddEvent(new ActivityEvent("cancelled"));
+                        activity?.SetStatus(ActivityStatusCode.Ok);
                         _logger.LogInformation(
                             "An operator cancelled job execution {ExecutionId} ({JobType})",
                             executionId,
@@ -340,6 +417,12 @@ internal sealed class DefaultJobRuntime : IJobRuntime
         }
         catch (Exception ex)
         {
+            outcome = OutcomeFailed;
+            activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+            JobsTelemetry.FailuresTotal.Add(
+                1,
+                new KeyValuePair<string, object?>("job.type", execution.JobType),
+                new KeyValuePair<string, object?>("reason_kind", "exception"));
             _logger.LogError(ex, "Job execution {ExecutionId} ({JobType}) failed", executionId, execution.JobType);
             await TransitionFailureAsync(
                 executions,
@@ -375,7 +458,27 @@ internal sealed class DefaultJobRuntime : IJobRuntime
 
             _running.TryRemove(executionId, out _);
             jobCts.Dispose();
+
+            JobsTelemetry.ExecutionDuration.Record(
+                Stopwatch.GetElapsedTime(startedTimestamp).TotalMilliseconds,
+                new KeyValuePair<string, object?>("job.type", execution.JobType),
+                new KeyValuePair<string, object?>("outcome", outcome));
         }
+    }
+
+    private static string GetTriggerMode(JobExecution execution)
+    {
+        if (execution.ScheduleTriggerId is not null)
+        {
+            return "schedule";
+        }
+
+        if (execution.EventTriggerId is not null)
+        {
+            return "event";
+        }
+
+        return execution.CreatedByUserId is not null ? "manual" : "system";
     }
 
     private async Task<bool> TransitionFailureAsync(
@@ -449,6 +552,7 @@ internal sealed class DefaultJobRuntime : IJobRuntime
 
         if (result.Retry is { } retry)
         {
+            JobsTelemetry.RetriesTotal.Add(1, new KeyValuePair<string, object?>("job.type", failed.JobType));
             _logger.LogInformation(
                 "The runtime queued {Policy} execution {NextExecutionId} for {ExecutionId} ({JobType}) as attempt " +
                 "{Attempt} at {NotBeforeAt:O}",

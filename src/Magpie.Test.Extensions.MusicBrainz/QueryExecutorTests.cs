@@ -11,8 +11,6 @@ using Magpie.Extensions.MusicBrainz.QueryEngine;
 using Magpie.Models.Enums;
 using Magpie.Models.Filtering;
 
-using Microsoft.Extensions.Logging.Abstractions;
-
 using Moq;
 
 using NUnit.Framework;
@@ -101,7 +99,7 @@ public class QueryExecutorTests
     };
 
     private Mock<IMusicBrainzClient> _client = null!;
-    private Mock<IQueryCache> _cache = null!;
+    private Mock<IQueryCoordinator> _cache = null!;
     private Mock<ICoverArtArchiveClient> _coverClient = null!;
     private Dictionary<string, VerifiedScan> _scans = null!;
     private IQueryExecutor _subject = null!;
@@ -110,7 +108,7 @@ public class QueryExecutorTests
     public void SetUp()
     {
         _client = new Mock<IMusicBrainzClient>();
-        _cache = new Mock<IQueryCache>();
+        _cache = new Mock<IQueryCoordinator>();
         _coverClient = new Mock<ICoverArtArchiveClient>();
         _scans = [];
         _cache.Setup(cache => cache.GetSearchPageAsync(
@@ -194,11 +192,7 @@ public class QueryExecutorTests
                 CoverCacheKey _,
                 Func<CancellationToken, Task<FetchResult<Uri>>> loader,
                 CancellationToken token) => loader(token));
-        _subject = new QueryExecutor(
-            _client.Object,
-            _cache.Object,
-            _coverClient.Object,
-            NullLogger<QueryExecutor>.Instance);
+        _subject = new QueryExecutor(_client.Object, _cache.Object, _coverClient.Object);
     }
 
     [Test]

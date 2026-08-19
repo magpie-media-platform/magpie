@@ -26,6 +26,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\Magpie.Core\Magpie.Core.csproj" />
     <ProjectReference Include="..\Magpie.Extensions.MusicBrainz\Magpie.Extensions.MusicBrainz.csproj" />
   </ItemGroup>
 

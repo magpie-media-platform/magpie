@@ -39,7 +39,7 @@ public sealed class WikidataExtension : IExtension
             });
 
         services.AddSingleton<IWikidataClient, WikidataClient>();
-        services.AddSingleton<IQueryCache, QueryCache>();
+        services.AddSingleton<IQueryCoordinator, QueryCoordinator>();
         services.AddSingleton<IQueryPlanner, QueryPlanner>();
         services.AddSingleton<IEntityResolver, EntityResolver>();
         services.AddSingleton<IQueryExecutor, QueryExecutor>();

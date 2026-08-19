@@ -26,8 +26,9 @@
     <PackageReference Include="RichardSzalay.MockHttp" />
   </ItemGroup>
 
-  <ItemGroup>
-    <ProjectReference Include="..\Magpie.Extensions.Tmdb\Magpie.Extensions.Tmdb.csproj" />
+    <ItemGroup>
+      <ProjectReference Include="..\Magpie.Core\Magpie.Core.csproj" />
+      <ProjectReference Include="..\Magpie.Extensions.Tmdb\Magpie.Extensions.Tmdb.csproj" />
   </ItemGroup>
 
 </Project>

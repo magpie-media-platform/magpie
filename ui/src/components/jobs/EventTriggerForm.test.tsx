@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import type { ReactNode } from 'react';
@@ -60,6 +60,7 @@ describe('EventTriggerForm', () => {
             filters: [],
             enabled: true,
             delaySeconds: 0,
+            parameters: {},
         };
 
         render(
@@ -249,6 +250,7 @@ describe('EventTriggerForm - Template selector', () => {
             filters: [],
             enabled: true,
             delaySeconds: 0,
+            parameters: {},
         };
 
         render(
@@ -505,6 +507,7 @@ describe('EventTriggerForm - Form submission', () => {
             filters: [],
             enabled: true,
             delaySeconds: 0,
+            parameters: {},
         });
     });
 
@@ -546,6 +549,302 @@ describe('EventTriggerForm - Form submission', () => {
     });
 });
 
+describe('EventTriggerForm - Parameter bindings', () => {
+    const templatesWithParameters: JobTemplateOption[] = [
+        {
+            id: 'parameterized-job',
+            name: 'Parameterized Job',
+            supportedTriggerModes: ['Event'],
+            parameters: [
+                { name: 'TargetId', description: 'The target id.', type: 1, required: true, defaultValue: null },
+            ],
+        },
+    ];
+
+    it('saves an event trigger when a required manual parameter is empty', async () => {
+        const user = userEvent.setup();
+        const onSubmit = vi.fn();
+
+        render(
+            <TestWrapper>
+                <EventTriggerForm
+                    open={true}
+                    onOpenChange={() => {}}
+                    initialValues={{
+                        id: 'trigger-1',
+                        name: 'Renamed Trigger',
+                        templateId: 'parameterized-job',
+                        eventNamePatterns: ['content\\.hierarchyItem\\.created'],
+                        filters: [],
+                        enabled: true,
+                        delaySeconds: 0,
+                        parameters: {},
+                    }}
+                    templates={templatesWithParameters}
+                    onSubmit={onSubmit}
+                />
+            </TestWrapper>,
+        );
+
+        await user.click(screen.getByRole('button', { name: /save/i }));
+
+        await waitFor(() => expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ parameters: {} })));
+    });
+
+    it('shows static and bound parameters as different values and offers known event keys', async () => {
+        const user = userEvent.setup();
+        const onSubmit = vi.fn();
+
+        render(
+            <TestWrapper>
+                <EventTriggerForm
+                    open={true}
+                    onOpenChange={() => {}}
+                    initialValues={{
+                        id: 'trigger-1',
+                        name: 'Bound Trigger',
+                        templateId: 'parameterized-job',
+                        eventNamePatterns: ['content\\.hierarchyItem\\.created'],
+                        filters: [],
+                        enabled: true,
+                        delaySeconds: 0,
+                        parameters: { TargetId: '42' },
+                    }}
+                    templates={templatesWithParameters}
+                    onSubmit={onSubmit}
+                />
+            </TestWrapper>,
+        );
+
+        const parameter = document.querySelector('[data-parameter="TargetId"]')!;
+        const input = document.querySelector<HTMLInputElement>('[data-field="parameter-TargetId"]')!;
+        const suggestions = screen.getByTestId('event-trigger-parameter-event-binding-suggestions');
+        expect(parameter).toHaveAttribute('data-binding', 'static');
+        expect(parameter).toHaveTextContent('Static');
+        expect(Array.from(suggestions.querySelectorAll('option')).map((option) => option.value)).toContain(
+            '${event.content.hierarchyItemId}',
+        );
+
+        await user.click(screen.getByRole('switch', { name: 'Bind to event' }));
+        await user.clear(input);
+        fireEvent.change(input, { target: { value: '${event.extension.customKey}' } });
+
+        expect(parameter).toHaveAttribute('data-binding', 'event');
+        expect(parameter).toHaveTextContent('Event binding');
+
+        await user.click(screen.getByRole('button', { name: /save/i }));
+
+        await waitFor(() => {
+            expect(onSubmit).toHaveBeenCalledWith(
+                expect.objectContaining({ parameters: { TargetId: '${event.extension.customKey}' } }),
+            );
+        });
+    });
+
+    it('keeps boolean and date controls typed until each parameter is bound', async () => {
+        const user = userEvent.setup();
+        const templates: JobTemplateOption[] = [
+            {
+                id: 'typed-job',
+                name: 'Typed Job',
+                supportedTriggerModes: ['Event'],
+                parameters: [
+                    { name: 'Enabled', description: null, type: 2, required: false, defaultValue: null },
+                    { name: 'StartDate', description: null, type: 3, required: false, defaultValue: null },
+                ],
+            },
+        ];
+
+        render(
+            <TestWrapper>
+                <EventTriggerForm
+                    open={true}
+                    onOpenChange={() => {}}
+                    initialValues={{
+                        id: 'trigger-1',
+                        name: 'Typed Trigger',
+                        templateId: 'typed-job',
+                        eventNamePatterns: ['content.updated'],
+                        filters: [],
+                        enabled: true,
+                        delaySeconds: 0,
+                        parameters: { Enabled: 'true', StartDate: '2026-08-10' },
+                    }}
+                    templates={templates}
+                    onSubmit={() => {}}
+                />
+            </TestWrapper>,
+        );
+
+        expect(document.querySelector('[data-field="parameter-Enabled"]')).toHaveAttribute('data-state', 'checked');
+        expect(screen.getByLabelText('StartDate')).toHaveAttribute('type', 'date');
+
+        const bindingSwitches = screen.getAllByRole('switch', { name: 'Bind to event' });
+        await user.click(bindingSwitches[0]);
+
+        expect(document.querySelector('[data-field="parameter-Enabled"]')).toHaveAttribute('type', 'text');
+        expect(screen.getByLabelText('StartDate')).toHaveAttribute('type', 'date');
+
+        await user.click(bindingSwitches[1]);
+
+        expect(screen.getByLabelText('StartDate')).toHaveAttribute('type', 'text');
+    });
+
+    it('confirms before discarding an event binding', async () => {
+        const user = userEvent.setup();
+
+        render(
+            <TestWrapper>
+                <EventTriggerForm
+                    open={true}
+                    onOpenChange={() => {}}
+                    initialValues={{
+                        id: 'trigger-1',
+                        name: 'Bound Trigger',
+                        templateId: 'parameterized-job',
+                        eventNamePatterns: ['content.updated'],
+                        filters: [],
+                        enabled: true,
+                        delaySeconds: 0,
+                        parameters: { TargetId: '${event.content.hierarchyItemId}' },
+                    }}
+                    templates={templatesWithParameters}
+                    onSubmit={() => {}}
+                />
+            </TestWrapper>,
+        );
+
+        const bindingSwitch = screen.getByRole('switch', { name: 'Bind to event' });
+        const input = document.querySelector<HTMLInputElement>('[data-field="parameter-TargetId"]')!;
+        await user.click(bindingSwitch);
+        expect(input).toHaveValue('${event.content.hierarchyItemId}');
+        expect(screen.getByRole('dialog', { name: 'Turn off event binding?' })).toBeInTheDocument();
+
+        await user.click(screen.getByRole('button', { name: 'Keep binding' }));
+        expect(input).toHaveValue('${event.content.hierarchyItemId}');
+
+        await user.click(bindingSwitch);
+        await user.click(screen.getByRole('button', { name: 'Discard value' }));
+        expect(input).toHaveValue(null);
+    });
+
+    it('shows an escaped binding as a static parameter', () => {
+        render(
+            <TestWrapper>
+                <EventTriggerForm
+                    open={true}
+                    onOpenChange={() => {}}
+                    initialValues={{
+                        id: 'trigger-1',
+                        name: 'Static Trigger',
+                        templateId: 'parameterized-job',
+                        eventNamePatterns: ['content\\.hierarchyItem\\.created'],
+                        filters: [],
+                        enabled: true,
+                        delaySeconds: 0,
+                        parameters: { TargetId: '$${event.content.hierarchyItemId}' },
+                    }}
+                    templates={templatesWithParameters}
+                    onSubmit={() => {}}
+                />
+            </TestWrapper>,
+        );
+
+        const parameter = document.querySelector('[data-parameter="TargetId"]')!;
+        expect(parameter).toHaveAttribute('data-binding', 'static');
+        expect(parameter).toHaveTextContent('Static');
+    });
+
+    it.each([
+        {
+            value: '${event.content.itemId',
+            badge: 'Invalid binding',
+            error: 'TargetId has a malformed event binding',
+        },
+        {
+            value: 'id=${event.content.itemId}',
+            badge: 'Event binding',
+            error: 'TargetId must be a number',
+        },
+        {
+            value: '0x10',
+            badge: 'Static',
+            error: 'TargetId must be a number',
+        },
+    ])('rejects $value before saving', async ({ value, badge, error }) => {
+        const user = userEvent.setup();
+        const onSubmit = vi.fn();
+
+        render(
+            <TestWrapper>
+                <EventTriggerForm
+                    open={true}
+                    onOpenChange={() => {}}
+                    initialValues={{
+                        id: 'trigger-1',
+                        name: 'Invalid Trigger',
+                        templateId: 'parameterized-job',
+                        eventNamePatterns: ['content\\.hierarchyItem\\.created'],
+                        filters: [],
+                        enabled: true,
+                        delaySeconds: 0,
+                        parameters: { TargetId: value },
+                    }}
+                    templates={templatesWithParameters}
+                    onSubmit={onSubmit}
+                />
+            </TestWrapper>,
+        );
+
+        expect(document.querySelector('[data-parameter="TargetId"]')).toHaveTextContent(badge);
+
+        await user.click(screen.getByRole('button', { name: /save/i }));
+
+        expect(await screen.findByText(error)).toHaveAttribute('role', 'alert');
+        expect(onSubmit).not.toHaveBeenCalled();
+    });
+
+    it('rejects a year-only date in binding mode', async () => {
+        const user = userEvent.setup();
+        const onSubmit = vi.fn();
+        const templates: JobTemplateOption[] = [
+            {
+                id: 'date-job',
+                name: 'Date job',
+                supportedTriggerModes: ['Event'],
+                parameters: [{ name: 'StartDate', description: null, type: 3, required: false, defaultValue: null }],
+            },
+        ];
+
+        render(
+            <TestWrapper>
+                <EventTriggerForm
+                    open={true}
+                    onOpenChange={() => {}}
+                    initialValues={{
+                        id: 'trigger-1',
+                        name: 'Date Trigger',
+                        templateId: 'date-job',
+                        eventNamePatterns: ['content.updated'],
+                        filters: [],
+                        enabled: true,
+                        delaySeconds: 0,
+                        parameters: { StartDate: '2000' },
+                    }}
+                    templates={templates}
+                    onSubmit={onSubmit}
+                />
+            </TestWrapper>,
+        );
+
+        await user.click(screen.getByRole('switch', { name: 'Bind to event' }));
+        await user.click(screen.getByRole('button', { name: /save/i }));
+
+        expect(await screen.findByText('StartDate must be a valid date')).toHaveAttribute('role', 'alert');
+        expect(onSubmit).not.toHaveBeenCalled();
+    });
+});
+
 describe('EventTriggerForm - Cancel button', () => {
     it('renders cancel button', () => {
         render(
@@ -579,6 +878,7 @@ describe('EventTriggerForm - Initial values', () => {
             filters: [{ key: 'type', pattern: 'movie', negate: false }],
             enabled: false,
             delaySeconds: 30,
+            parameters: {},
         };
 
         render(
@@ -612,6 +912,7 @@ describe('EventTriggerForm - Initial values', () => {
             filters: [],
             enabled: true,
             delaySeconds: 0,
+            parameters: {},
         };
 
         render(
@@ -725,6 +1026,7 @@ describe('EventTriggerForm - Multi-pattern editing', () => {
             filters: [],
             enabled: true,
             delaySeconds: 10,
+            parameters: {},
         };
         const onSubmit = vi.fn();
 

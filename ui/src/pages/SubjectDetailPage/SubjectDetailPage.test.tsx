@@ -7,6 +7,7 @@ import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { MemoryRouter, Routes, Route, useLocation } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { BinocularsIcon, FunnelIcon } from '@phosphor-icons/react';
 
 const { mockCurrentRole } = vi.hoisted(() => ({
     mockCurrentRole: { current: 3 },
@@ -52,6 +53,7 @@ import { Role } from '@/auth';
 import { ToastStateProvider } from '@/components/ui/Toast';
 import { TooltipProvider } from '@/components/ui/Tooltip';
 import type { ApiSubject } from '@/hooks/useSubjects';
+import { STANDARD_METADATA_FIELDS } from '@/hooks/useLibraryTypes';
 
 const mockApiGet = vi.mocked(apiGet);
 const mockApiPost = vi.mocked(apiPost);
@@ -80,8 +82,9 @@ vi.mock('@/hooks/useLibraryTypes', async (importOriginal) => {
 });
 
 const mockUseSubjectInspector = vi.fn();
+const mockSubjectInspectorRefetch = vi.fn();
 vi.mock('@/hooks/useSubjectMetadataInspector', () => ({
-    useSubjectMetadataInspector: () => mockUseSubjectInspector(),
+    useSubjectMetadataInspector: (id: string | undefined) => mockUseSubjectInspector(id),
     usePatchSubjectMetadataInspector: () => ({ mutate: vi.fn(), isPending: false }),
     useReorderSubjectMetadataContributions: () => ({ mutateAsync: vi.fn(), isPending: false }),
 }));
@@ -182,6 +185,97 @@ const mockApiSubject: ApiSubject = {
     },
 };
 
+const defaultMaterializedSubject = {
+    containerId: 'mc-1',
+    subjectId: 'subject-1',
+    title: 'Breaking Bad',
+    overview:
+        "A chemistry teacher diagnosed with inoperable lung cancer turns to manufacturing and selling methamphetamine with a former student in order to secure his family's future.",
+    publishDate: '2008-01-20T00:00:00Z',
+    language: 'English',
+    productionStatus: 'Ended',
+    genres: [
+        { id: 'g1', name: 'Drama', ordinal: 0 },
+        { id: 'g2', name: 'Crime', ordinal: 1 },
+        { id: 'g3', name: 'Thriller', ordinal: 2 },
+    ],
+    contentRatings: [{ id: 'cr1', body: 'MPAA', rating: 'TV-MA', ordinal: 0 }],
+    externalIds: [
+        { id: 'eid1', value: 'tt0903747', source: 'Provider H', ordinal: 0 },
+        { id: 'eid2', value: '1396', source: 'Provider A', ordinal: 1 },
+        { id: 'eid3', value: '81189', source: 'PROVIDER-J', ordinal: 2 },
+        { id: 'eid4', value: 'technical-id', source: 'internal.magpie', ordinal: 3 },
+    ],
+    awards: [
+        {
+            id: 'a1',
+            body: 'Emmy Awards',
+            name: 'Outstanding Drama Series',
+            year: 2013,
+            status: 'Won',
+            ordinal: 0,
+        },
+        {
+            id: 'a2',
+            body: 'Emmy Awards',
+            name: 'Outstanding Drama Series',
+            year: 2014,
+            status: 'Won',
+            ordinal: 1,
+        },
+    ],
+    images: [
+        {
+            id: 'image-1',
+            type: 'poster',
+            url: 'https://image.provider-a.example/t/p/w300/poster1.jpg',
+            width: 300,
+            height: 450,
+            ordinal: 0,
+        },
+        {
+            id: 'image-2',
+            type: 'backdrop',
+            url: 'https://image.provider-a.example/t/p/w780/backdrop1.jpg',
+            width: 780,
+            height: 439,
+            ordinal: 1,
+        },
+        {
+            id: 'image-3',
+            type: 'poster',
+            url: 'https://image.provider-a.example/t/p/w300/poster2.jpg',
+            width: 300,
+            height: 450,
+            ordinal: 2,
+        },
+        {
+            id: 'image-4',
+            type: 'backdrop',
+            url: 'https://image.provider-a.example/t/p/w780/backdrop2.jpg',
+            width: 780,
+            height: 439,
+            ordinal: 3,
+        },
+    ],
+    relationships: [
+        { id: 'rel-1', kind: 'Actor', qualifier: 'Walter White', ordinal: 0 },
+        { id: 'rel-2', kind: 'Actor', qualifier: 'Jesse Pinkman', ordinal: 1 },
+        { id: 'rel-3', kind: 'Creator', qualifier: null, ordinal: 2 },
+    ],
+    references: [
+        {
+            id: 'reference-1',
+            ordinal: 0,
+            kind: 'database',
+            source: 'IMDb',
+            url: 'https://www.imdb.com/name/walt',
+            displayName: 'IMDb profile',
+        },
+    ],
+};
+const mockMaterializedSubject = { current: defaultMaterializedSubject as Record<string, unknown> };
+
 function createTestQueryClient() {
     return new QueryClient({
         defaultOptions: {
@@ -244,10 +338,33 @@ describe('SubjectDetailPage', () => {
         mockCurrentRole.current = Role.Admin;
         mockUseExtensions.mockReturnValue(defaultContext);
         mockUseSlotExtensions.mockReturnValue(noExtensions);
-        mockSubjectTypes.mockReturnValue([{ slug: 'person', name: 'Person', pluralName: 'People', levels: [] }]);
-        mockUseSubjectInspector.mockReturnValue({
+        mockSubjectTypes.mockReturnValue([
+            {
+                slug: 'person',
+                name: 'Person',
+                pluralName: 'People',
+                levels: [],
+                standardMetadataFields: STANDARD_METADATA_FIELDS.filter((field) =>
+                    [
+                        'Language',
+                        'ProductionStatus',
+                        'BirthDate',
+                        'DeathDate',
+                        'Established',
+                        'Dissolved',
+                        'Genres',
+                        'Previews',
+                    ].includes(field.field),
+                ),
+                customMetadataFields: [],
+            },
+        ]);
+        mockMaterializedSubject.current = defaultMaterializedSubject;
+        const inspectorResult = {
             data: {
-                materialized: { containerId: 'mc-1', subjectId: 'subject-1', title: 'Breaking Bad' },
+                get materialized() {
+                    return mockMaterializedSubject.current;
+                },
                 contributions: [
                     {
                         id: 'contrib-1',
@@ -262,7 +379,18 @@ describe('SubjectDetailPage', () => {
             },
             isLoading: false,
             error: null,
-        });
+            refetch: mockSubjectInspectorRefetch,
+        };
+        mockUseSubjectInspector.mockImplementation((id: string | undefined) =>
+            id === 'subject-1'
+                ? inspectorResult
+                : {
+                      data: undefined,
+                      isLoading: false,
+                      error: new ApiError(404, 'Not found'),
+                      refetch: mockSubjectInspectorRefetch,
+                  },
+        );
 
         mockApiGet.mockImplementation((url: string) => {
             if (url === '/subjects/subject-1') {
@@ -330,27 +458,52 @@ describe('SubjectDetailPage', () => {
         });
     });
 
-    describe('requester-only actions', () => {
-        it('hides subject actions for Viewer users', async () => {
+    describe('subject actions', () => {
+        it('shows only Search library for Viewer users', async () => {
             mockCurrentRole.current = Role.Viewer;
 
             renderWithRouter('subject-1');
 
             await screen.findByRole('heading', { name: /Breaking Bad/i, level: 1 });
 
-            expect(screen.queryByRole('button', { name: /create filter/i })).not.toBeInTheDocument();
+            expect(screen.getByRole('link', { name: 'Search library' })).toBeInTheDocument();
+            expect(screen.queryByRole('link', { name: 'Add content' })).not.toBeInTheDocument();
             expect(screen.queryByRole('button', { name: /^refresh$/i })).not.toBeInTheDocument();
+            expect(screen.queryByText('Create filter')).not.toBeInTheDocument();
         });
 
-        it('renders enabled subject actions for Requester users', async () => {
+        it('shows Search library and Refresh for Requester users', async () => {
             mockCurrentRole.current = Role.Requester;
 
             renderWithRouter('subject-1');
 
-            const createFilter = await screen.findByRole('button', { name: /create filter/i });
+            const searchLibrary = await screen.findByRole('link', { name: 'Search library' });
             const refresh = screen.getByRole('button', { name: /^refresh$/i });
 
-            expect(createFilter).toBeEnabled();
+            expect(searchLibrary).toBeInTheDocument();
+            expect(screen.queryByRole('link', { name: 'Add content' })).not.toBeInTheDocument();
+            expect(refresh).toBeEnabled();
+        });
+
+        it('shows all three actions with their required icons for Manager users', async () => {
+            mockCurrentRole.current = Role.Manager;
+
+            renderWithRouter('subject-1');
+
+            const searchLibrary = await screen.findByRole('link', { name: 'Search library' });
+            const addContent = screen.getByRole('link', { name: 'Add content' });
+            const refresh = screen.getByRole('button', { name: 'Refresh' });
+            const { container: expectedIcons } = render(
+                <>
+                    <FunnelIcon weight="bold" aria-hidden="true" />
+                    <BinocularsIcon weight="bold" aria-hidden="true" />
+                </>,
+            );
+            const expectedFilterIcon = expectedIcons.querySelectorAll('svg').item(0);
+            const expectedAddContentIcon = expectedIcons.querySelectorAll('svg').item(1);
+
+            expect(searchLibrary.querySelector('svg')?.isEqualNode(expectedFilterIcon)).toBe(true);
+            expect(addContent.querySelector('svg')?.isEqualNode(expectedAddContentIcon)).toBe(true);
             expect(refresh).toBeEnabled();
         });
     });
@@ -380,9 +533,49 @@ describe('SubjectDetailPage', () => {
         });
     });
 
-    describe('create filter', () => {
-        it('navigates to the Filters page with a query scoping content to this subject', async () => {
-            mockCurrentRole.current = Role.Requester;
+    describe('subject searches', () => {
+        it('navigates within the SPA to Library with the live relationship query', async () => {
+            mockCurrentRole.current = Role.Viewer;
+            const queryClient = createTestQueryClient();
+            let capturedPathname = '';
+            let capturedSearch = '';
+
+            function LocationProbe() {
+                const location = useLocation();
+                capturedPathname = location.pathname;
+                capturedSearch = location.search;
+                return null;
+            }
+
+            render(
+                <QueryClientProvider client={queryClient}>
+                    <TooltipProvider>
+                        <ToastStateProvider>
+                            <MemoryRouter initialEntries={[{ pathname: '/subjects/subject-1' }]}>
+                                <Routes>
+                                    <Route path="/subjects/:subjectId" element={<SubjectDetailPage />} />
+                                    <Route path="/library/all" element={<LocationProbe />} />
+                                </Routes>
+                            </MemoryRouter>
+                        </ToastStateProvider>
+                    </TooltipProvider>
+                </QueryClientProvider>,
+            );
+
+            const searchLibrary = await screen.findByRole('link', { name: 'Search library' });
+            await userEvent.click(searchLibrary);
+
+            await waitFor(() => {
+                expect(capturedPathname).toBe('/library/all');
+            });
+            expect(new URLSearchParams(capturedSearch).get('filter')).toBe(
+                'Relationships has (Name = "Breaking Bad" and Type = "person")',
+            );
+            expect(mockApiPost).not.toHaveBeenCalled();
+        });
+
+        it('navigates within the SPA to Add content with the same live relationship query', async () => {
+            mockCurrentRole.current = Role.Manager;
             const queryClient = createTestQueryClient();
             let capturedPathname = '';
             let capturedState: unknown = null;
@@ -401,7 +594,7 @@ describe('SubjectDetailPage', () => {
                             <MemoryRouter initialEntries={[{ pathname: '/subjects/subject-1' }]}>
                                 <Routes>
                                     <Route path="/subjects/:subjectId" element={<SubjectDetailPage />} />
-                                    <Route path="/filters" element={<LocationProbe />} />
+                                    <Route path="/library/add" element={<LocationProbe />} />
                                 </Routes>
                             </MemoryRouter>
                         </ToastStateProvider>
@@ -409,19 +602,16 @@ describe('SubjectDetailPage', () => {
                 </QueryClientProvider>,
             );
 
-            const createFilter = await screen.findByRole('button', { name: /create filter/i });
-            await userEvent.click(createFilter);
+            const addContent = await screen.findByRole('link', { name: 'Add content' });
+            await userEvent.click(addContent);
 
             await waitFor(() => {
-                expect(capturedPathname).toBe('/filters');
+                expect(capturedPathname).toBe('/library/add');
             });
-            expect(capturedState).toEqual(
-                expect.objectContaining({
-                    createName: 'Breaking Bad',
-                    createQuery: expect.stringContaining('Type = "person"'),
-                }),
-            );
-            expect((capturedState as { createQuery: string }).createQuery).toContain('Name = "Breaking Bad"');
+            expect(capturedState).toEqual({
+                filterQuery: 'Relationships has (Name = "Breaking Bad" and Type = "person")',
+            });
+            expect(mockApiPost).not.toHaveBeenCalled();
         });
     });
 
@@ -440,11 +630,10 @@ describe('SubjectDetailPage', () => {
             });
         });
 
-        it('renders the year', async () => {
+        it('does not render the subject publish year', async () => {
             renderWithRouter('subject-1');
-            await waitFor(() => {
-                expect(screen.getByText('(2008)')).toBeInTheDocument();
-            });
+            await screen.findByRole('heading', { name: /Breaking Bad/i, level: 1 });
+            expect(screen.queryByText('(2008)')).not.toBeInTheDocument();
         });
 
         it('renders the subject image', async () => {
@@ -482,6 +671,7 @@ describe('SubjectDetailPage', () => {
                 'Fourth provider bio line should be contained by the clamp.',
                 'Fifth provider bio line must not expand the header indefinitely.',
             ].join('\n');
+            mockMaterializedSubject.current = { ...defaultMaterializedSubject, overview: longDescription };
             const container = mockApiSubject.metadataContainer!;
             mockApiGet.mockImplementation((url: string) => {
                 if (url === '/subjects/subject-1') {
@@ -527,22 +717,21 @@ describe('SubjectDetailPage', () => {
             expect(document.querySelectorAll('[data-component="subject-genres"]')).toHaveLength(1);
         });
 
-        it('renders content rating badge', async () => {
+        it('does not render content ratings for subjects', async () => {
             renderWithRouter('subject-1');
-            await waitFor(() => {
-                expect(screen.getByText('TV-MA')).toBeInTheDocument();
-            });
+            await screen.findByRole('heading', { name: /Breaking Bad/i, level: 1 });
+            expect(screen.queryByText('TV-MA')).not.toBeInTheDocument();
         });
 
-        it('renders status badge', async () => {
-            renderWithRouter('subject-1');
+        it('renders the supported production status in Details', async () => {
+            renderWithRouter('subject-1', undefined, '?tab=details');
             await waitFor(() => {
                 expect(screen.getByText('Ended')).toBeInTheDocument();
             });
         });
 
-        it('renders language', async () => {
-            renderWithRouter('subject-1');
+        it('renders the supported language in Details', async () => {
+            renderWithRouter('subject-1', undefined, '?tab=details');
             await waitFor(() => {
                 expect(screen.getByText('English')).toBeInTheDocument();
             });
@@ -651,6 +840,10 @@ describe('SubjectDetailPage', () => {
 
         it('collapses and expands the Genres row with the shared show-all control', async () => {
             const genreNames = Array.from({ length: 13 }, (_, i) => `Genre ${i + 1}`);
+            mockMaterializedSubject.current = {
+                ...defaultMaterializedSubject,
+                genres: genreNames.map((name, ordinal) => ({ id: `g-${ordinal}`, name, ordinal })),
+            };
             const container = mockApiSubject.metadataContainer!;
             mockApiGet.mockImplementation((url: string) => {
                 if (url === '/subjects/subject-1') {
@@ -734,6 +927,23 @@ describe('SubjectDetailPage', () => {
             });
         });
 
+        it('renders subject previews when the kind catalog supports them', async () => {
+            mockMaterializedSubject.current = {
+                ...defaultMaterializedSubject,
+                previews: [
+                    {
+                        id: 'preview-1',
+                        ordinal: 0,
+                        kind: 'trailer',
+                        url: 'https://www.youtube.com/watch?v=TRAILER1',
+                    },
+                ],
+            };
+            renderWithRouter('subject-1');
+
+            expect(await screen.findByRole('tab', { name: /previews/i })).toHaveTextContent('1');
+        });
+
         it('shows Related Content in its tab panel when selected', async () => {
             const user = userEvent.setup();
             renderWithRouter('subject-1');
@@ -813,6 +1023,7 @@ describe('SubjectDetailPage', () => {
         });
 
         it('falls back to the default tab when ?tab=images targets a hidden conditional tab', async () => {
+            mockMaterializedSubject.current = { ...defaultMaterializedSubject, images: [] };
             mockApiGet.mockImplementation((url: string) => {
                 if (url === '/subjects/subject-1') {
                     const container = mockApiSubject.metadataContainer!;
@@ -869,6 +1080,11 @@ describe('SubjectDetailPage', () => {
         });
 
         it('renders no Links section when the subject has no references', async () => {
+            mockMaterializedSubject.current = {
+                ...defaultMaterializedSubject,
+                externalIds: [],
+                references: [],
+            };
             mockApiGet.mockImplementation((url: string) => {
                 if (url === '/subjects/subject-1') {
                     const container = mockApiSubject.metadataContainer!;
@@ -892,33 +1108,45 @@ describe('SubjectDetailPage', () => {
     });
 
     describe('Details tab - Details panel', () => {
-        function withContribution(overrides: Record<string, unknown>) {
-            const container = mockApiSubject.metadataContainer!;
-            return {
-                ...mockApiSubject,
-                metadataContainer: {
-                    ...container,
-                    contributions: container.contributions.map((c, i) => (i === 0 ? { ...c, ...overrides } : c)),
+        it('renders the exact supported scalar, alternate-text, and declared custom rows', async () => {
+            mockSubjectTypes.mockReturnValue([
+                {
+                    slug: 'person',
+                    name: 'Person',
+                    pluralName: 'People',
+                    levels: [],
+                    standardMetadataFields: STANDARD_METADATA_FIELDS.filter((field) =>
+                        [
+                            'OriginalTitle',
+                            'SortTitle',
+                            'Language',
+                            'ProductionStatus',
+                            'Established',
+                            'Dissolved',
+                            'BirthDate',
+                            'DeathDate',
+                        ].includes(field.field),
+                    ),
+                    customMetadataFields: [{ key: 'ethnicity', displayName: 'Ethnicity' }],
                 },
+            ]);
+            mockMaterializedSubject.current = {
+                ...defaultMaterializedSubject,
+                originalTitle: 'Metastasis',
+                sortTitle: 'Breaking Bad, The',
+                established: '2000-01-02T15:30:00-08:00',
+                dissolved: '2001-02-03T00:00:00Z',
+                birthDate: '1956-03-07T00:00:00Z',
+                deathDate: '2020-12-01T00:00:00Z',
+                alternateTexts: [
+                    { id: 'alternate-2', ordinal: 2, kind: 'Title', text: 'Los Pollos', language: 'es' },
+                    { id: 'alternate-1', ordinal: 1, kind: 'Description', text: 'Chimie', language: 'fr' },
+                ],
+                customMetadata: [
+                    { id: 'custom-1', key: 'ethnicity', value: 'Caucasian' },
+                    { id: 'custom-2', key: 'provider-secret', value: 'must stay in Metadata' },
+                ],
             };
-        }
-
-        it('renders built-in scalar dates before custom values', async () => {
-            mockApiGet.mockImplementation((url: string) => {
-                if (url === '/subjects/subject-1') {
-                    return Promise.resolve(
-                        withContribution({
-                            birthDate: '1956-03-07T00:00:00Z',
-                            deathDate: '2020-12-01T00:00:00Z',
-                            customMetadata: [
-                                { key: 'Ethnicity', value: 'Caucasian' },
-                                { key: 'Height', value: '170 cm' },
-                            ],
-                        }),
-                    );
-                }
-                return Promise.reject({ status: 404, message: 'Not found' });
-            });
 
             renderWithRouter('subject-1', undefined, '?tab=details');
 
@@ -928,21 +1156,41 @@ describe('SubjectDetailPage', () => {
                 return node as HTMLElement;
             });
 
+            expect(panel).toHaveClass('details-panel--facts');
+            expect(panel).toBe(screen.getByRole('region', { name: 'Details' }));
+            expect(within(panel).queryByRole('heading', { name: 'Details' })).not.toBeInTheDocument();
+
             const labels = within(panel)
                 .getAllByRole('term')
                 .map((node) => node.textContent);
-            expect(labels).toEqual(['Birth date', 'Death date', 'Ethnicity', 'Height']);
+            expect(labels).toEqual([
+                'Original title',
+                'Sort title',
+                'Language',
+                'Production status',
+                'Established',
+                'Dissolved',
+                'Birth date',
+                'Death date',
+                'Ethnicity',
+            ]);
+            expect(
+                within(screen.getByRole('heading', { name: 'Alternate texts' }).closest('section') as HTMLElement)
+                    .getAllByRole('term')
+                    .map((node) => node.textContent),
+            ).toEqual(['Descriptionfr', 'Titlees']);
 
             expect(within(panel).getByText('Caucasian')).toBeInTheDocument();
+            expect(within(panel).queryByText('must stay in Metadata')).not.toBeInTheDocument();
         });
 
         it('only renders rows whose value is present', async () => {
-            mockApiGet.mockImplementation((url: string) => {
-                if (url === '/subjects/subject-1') {
-                    return Promise.resolve(withContribution({ birthDate: '1956-03-07T00:00:00Z' }));
-                }
-                return Promise.reject({ status: 404, message: 'Not found' });
-            });
+            mockMaterializedSubject.current = {
+                containerId: 'mc-1',
+                subjectId: 'subject-1',
+                title: 'Breaking Bad',
+                birthDate: '1956-03-07T00:00:00Z',
+            };
 
             renderWithRouter('subject-1', undefined, '?tab=details');
 
@@ -959,6 +1207,12 @@ describe('SubjectDetailPage', () => {
         });
 
         it('renders nothing when there are no scalars and no custom values', async () => {
+            mockMaterializedSubject.current = {
+                containerId: 'mc-1',
+                subjectId: 'subject-1',
+                title: 'Breaking Bad',
+                externalIds: defaultMaterializedSubject.externalIds,
+            };
             renderWithRouter('subject-1', undefined, '?tab=details');
 
             await waitFor(() => {
@@ -1000,22 +1254,35 @@ describe('SubjectDetailPage', () => {
                 expect(screen.getByText('81189')).toBeInTheDocument();
             });
         });
+
+        it('keeps internal external IDs out of Links and Details', async () => {
+            renderWithRouter('subject-1', undefined, '?tab=details');
+
+            await screen.findByText('tt0903747');
+            expect(screen.queryByText('technical-id')).not.toBeInTheDocument();
+        });
     });
 
-    describe('Details tab - Awards', () => {
-        it('renders awards section', async () => {
-            renderWithRouter('subject-1', undefined, '?tab=details');
-            await waitFor(() => {
-                expect(screen.getByRole('heading', { name: /awards/i })).toBeInTheDocument();
+    describe('Awards', () => {
+        it('groups award years in materialized order under the biography', async () => {
+            renderWithRouter('subject-1');
+            const panel = await waitFor(() => {
+                const node = document.querySelector('[data-component="subject-awards-panel"]');
+                expect(node).toBeInTheDocument();
+                return node as HTMLElement;
             });
-        });
 
-        it('renders award items', async () => {
-            renderWithRouter('subject-1', undefined, '?tab=details');
-            await waitFor(() => {
-                const awards = screen.getAllByText(/Emmy Awards Outstanding Drama Series/);
-                expect(awards.length).toBe(2);
-            });
+            expect(panel.closest('header')).toBe(screen.getByRole('banner'));
+            expect(
+                within(panel)
+                    .getAllByRole('term')
+                    .map((node) => node.textContent),
+            ).toEqual(['Emmy Awards']);
+            expect(
+                within(panel)
+                    .getAllByRole('definition')
+                    .map((node) => node.textContent),
+            ).toEqual(['Outstanding Drama Series 2013, 2014']);
         });
     });
 
@@ -1268,6 +1535,36 @@ describe('SubjectDetailPage', () => {
                 '/library/subjects/all',
             );
             expect(screen.queryByRole('heading', { name: 'Subject Not Found' })).not.toBeInTheDocument();
+        });
+
+        it('shows a scoped metadata error beside the surviving page and retries the inspector query', async () => {
+            mockUseSubjectInspector.mockReturnValue({
+                data: undefined,
+                isLoading: false,
+                error: new ApiError(500, 'Inspector failed'),
+                refetch: mockSubjectInspectorRefetch,
+            });
+
+            const user = userEvent.setup();
+            renderWithRouter('subject-1');
+
+            const alert = await screen.findByTestId('subject-metadata-error');
+            expect(within(alert).getByText('Failed to Load Subject Metadata')).toBeInTheDocument();
+            expect(within(alert).getByText('Inspector failed')).toBeInTheDocument();
+
+            expect(screen.getByRole('banner')).toBeInTheDocument();
+            expect(screen.getByRole('heading', { name: /Breaking Bad/i })).toBeInTheDocument();
+            expect(screen.queryByRole('heading', { name: 'Subject Not Found' })).not.toBeInTheDocument();
+
+            await user.click(within(alert).getByRole('button', { name: /retry/i }));
+            expect(mockSubjectInspectorRefetch).toHaveBeenCalled();
+        });
+
+        it('shows not found rather than a metadata error when both queries 404', async () => {
+            renderWithRouter('nonexistent-id');
+
+            expect(await screen.findByRole('heading', { name: 'Subject Not Found' })).toBeInTheDocument();
+            expect(screen.queryByTestId('subject-metadata-error')).not.toBeInTheDocument();
         });
     });
 

@@ -29,6 +29,13 @@ public interface IContentHierarchyItemRepository :
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Locks an item until the current transaction completes.
+    /// </summary>
+    /// <param name="contentHierarchyItemId">The id of the content hierarchy item to lock</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    Task LockAsync(Guid contentHierarchyItemId, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Creates an item, or does nothing when its unique key exists already.
     /// </summary>
     /// <param name="model">The content hierarchy item to create</param>

@@ -46,8 +46,11 @@ public sealed class TmdbExtension : IExtension
         services.AddSingleton<ITmdbClient, TmdbClient>();
         services.AddScoped<ISettingsResolver, SettingsResolver>();
 
-        services.AddSingleton<IQueryCache, QueryCache>();
-        services.AddSingleton<IHydrationCache, HydrationCache>();
+        services.AddSingleton<IQueryCoordinator>(provider =>
+        {
+            using var scope = provider.CreateScope();
+            return ActivatorUtilities.CreateInstance<QueryCoordinator>(scope.ServiceProvider);
+        });
         services.AddScoped<IQueryPlanner, QueryPlanner>();
         services.AddScoped<IQueryExecutor, QueryExecutor>();
         services.AddScoped<IQueryEngine, QueryEngine.QueryEngine>();

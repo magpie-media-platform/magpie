@@ -8,7 +8,7 @@ internal sealed record RequestContext
 
     internal required string Language { get; init; }
 
-    internal ExecutionTrace? ExecutionTrace { get; init; }
+    internal QueryTelemetry? Telemetry { get; init; }
 
     internal int? PlanNodeId { get; init; }
 }

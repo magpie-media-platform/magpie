@@ -11,13 +11,14 @@ export interface DetailRow {
     mono?: boolean;
 }
 
-type DetailsPanelVariant = 'default' | 'dialog';
+type DetailsPanelVariant = 'default' | 'dialog' | 'facts';
 
 export interface DetailsPanelProps {
     rows: DetailRow[];
     title?: string;
     icon?: ReactNode;
     variant?: DetailsPanelVariant;
+    'aria-label'?: string;
     'data-component'?: string;
 }
 
@@ -43,6 +44,7 @@ export function DetailsPanel({
     title,
     icon,
     variant = 'default',
+    'aria-label': ariaLabel,
     'data-component': dataComponent,
 }: DetailsPanelProps) {
     if (rows.length === 0) {
@@ -50,10 +52,10 @@ export function DetailsPanel({
     }
 
     const isDialog = variant === 'dialog';
-    const classes = isDialog ? 'details-panel details-panel--dialog' : 'details-panel';
+    const classes = variant === 'default' ? 'details-panel' : `details-panel details-panel--${variant}`;
 
     return (
-        <section className={classes} data-component={dataComponent}>
+        <section className={classes} aria-label={ariaLabel} data-component={dataComponent}>
             {title && (
                 <h2 className="details-panel__title">
                     {icon}

@@ -1492,7 +1492,8 @@ namespace Magpie.Data.SqlServer.Migrations
 
                     b.Property<string>("FilePath")
                         .IsRequired()
-                        .HasColumnType("nvarchar(450)");
+                        .HasColumnType("nvarchar(450)")
+                        .UseCollation("Latin1_General_100_BIN2");
 
                     b.Property<long>("FileSize")
                         .HasColumnType("bigint");
@@ -1509,11 +1510,19 @@ namespace Magpie.Data.SqlServer.Migrations
                     b.Property<Guid?>("ModifiedByUserId")
                         .HasColumnType("uniqueidentifier");
 
+                    b.Property<string>("PathKey")
+                        .IsRequired()
+                        .HasColumnType("nvarchar(450)")
+                        .UseCollation("Latin1_General_100_BIN2");
+
                     b.HasKey("Id");
 
                     b.HasIndex("ContentItemId");
 
                     b.HasIndex("FilePath")
+                        .IsUnique();
+
+                    b.HasIndex("PathKey")
                         .IsUnique();
 
                     b.ToTable("content_mediaFile", (string)null);
@@ -1948,13 +1957,13 @@ namespace Magpie.Data.SqlServer.Migrations
 
             modelBuilder.Entity("Magpie.Models.Data.RefreshToken", b =>
                 {
-                    b.Property<string>("AccessTokenJti")
-                        .HasMaxLength(36)
-                        .HasColumnType("nvarchar(36)");
-
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("AccessTokenJti")
+                        .HasMaxLength(36)
+                        .HasColumnType("nvarchar(36)");
 
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("datetime2");

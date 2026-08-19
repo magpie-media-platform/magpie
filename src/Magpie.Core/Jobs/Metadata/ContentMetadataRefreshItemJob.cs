@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -9,6 +10,7 @@ using System.Threading.Tasks;
 using Magpie.Abstractions;
 using Magpie.Abstractions.Repositories;
 using Magpie.Core.Events;
+using Magpie.Core.Observability;
 using Magpie.Models;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
@@ -71,6 +73,29 @@ internal sealed class ContentMetadataRefreshItemJob(
     private const string NoMetadataReturnedStatus =
         "The provider returned no metadata, so the refresh will try again.";
 
+    private const MetadataField NameLikeFallbackIdentityFields =
+        MetadataField.Title | MetadataField.OriginalTitle | MetadataField.SortTitle;
+
+    private static readonly MetadataField[] SupportedFallbackIdentityFields =
+    [
+        MetadataField.Title,
+        MetadataField.OriginalTitle,
+        MetadataField.SortTitle,
+        MetadataField.Language,
+        MetadataField.Overview,
+        MetadataField.PublishDate,
+        MetadataField.Duration,
+        MetadataField.SequenceNumber,
+        MetadataField.ProductionStatus,
+        MetadataField.Established,
+        MetadataField.Dissolved,
+        MetadataField.BirthDate,
+        MetadataField.DeathDate
+    ];
+
+    private static readonly MetadataField SupportedFallbackIdentityFieldMask =
+        SupportedFallbackIdentityFields.Aggregate(MetadataField.None, (all, field) => all | field);
+
     private static Guid ResolveContentHierarchyItemId(JobContext context)
     {
         if (context.Parameters.TryGetValue(
@@ -80,18 +105,6 @@ internal sealed class ContentMetadataRefreshItemJob(
             if (!Guid.TryParse(rawParameter, out var parsed))
             {
                 throw new ArgumentException("The content item ID has an invalid format.");
-            }
-
-            return parsed;
-        }
-
-        if (context.Event is { Context: var eventContext } &&
-            eventContext.TryGetValue(MagpieEvents.Keys.ContentHierarchyItemId, out var rawFromEvent) &&
-            !string.IsNullOrWhiteSpace(rawFromEvent))
-        {
-            if (!Guid.TryParse(rawFromEvent, out var parsed))
-            {
-                throw new ArgumentException("The job received an invalid content item ID.");
             }
 
             return parsed;
@@ -188,6 +201,9 @@ internal sealed class ContentMetadataRefreshItemJob(
         ILogger logger,
         CancellationToken cancellationToken)
     {
+        using var activity = ContentTelemetry.Source.StartActivity("magpie.metadata.provider_fetch");
+        activity?.SetTag("magpie.provider.type", provider.ProviderType);
+
         try
         {
             var result = await provider.TryGetMetadataAsync(
@@ -205,6 +221,8 @@ internal sealed class ContentMetadataRefreshItemJob(
                 logger.LogInformation("Provider {ProviderType} returned no contribution", provider.ProviderType);
             }
 
+            activity?.SetTag("magpie.result.contribution_found", result?.Contribution is not null);
+
             return new ProviderFetchResult(provider, result, null);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -213,8 +231,113 @@ internal sealed class ContentMetadataRefreshItemJob(
         }
         catch (Exception ex)
         {
+            activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
             return new ProviderFetchResult(provider, null, ex);
         }
+    }
+
+    private static object? GetFallbackIdentityValue(MetadataContribution contribution, MetadataField field) =>
+        field switch
+        {
+            MetadataField.Title => contribution.Title,
+            MetadataField.OriginalTitle => contribution.OriginalTitle,
+            MetadataField.SortTitle => contribution.SortTitle,
+            MetadataField.Language => contribution.Language,
+            MetadataField.Overview => contribution.Overview,
+            MetadataField.PublishDate => contribution.PublishDate,
+            MetadataField.Duration => contribution.Duration,
+            MetadataField.SequenceNumber => contribution.SequenceNumber,
+            MetadataField.ProductionStatus => contribution.ProductionStatus,
+            MetadataField.Established => contribution.Established,
+            MetadataField.Dissolved => contribution.Dissolved,
+            MetadataField.BirthDate => contribution.BirthDate,
+            MetadataField.DeathDate => contribution.DeathDate,
+            _ => null
+        };
+
+    private static bool IsFallbackIdentityValuePresent(object? value) =>
+        value is string text ? !string.IsNullOrWhiteSpace(text) : value is not null;
+
+    private static MetadataField GetUnsupportedFallbackIdentityFields(MetadataField fields) =>
+        fields & ~SupportedFallbackIdentityFieldMask;
+
+    private static bool MatchesFallbackIdentity(
+        MetadataField fields,
+        MetadataContribution? incoming,
+        MetadataContribution? existing)
+    {
+        if (incoming is null ||
+            existing is null ||
+            GetUnsupportedFallbackIdentityFields(fields) != MetadataField.None ||
+            (fields & ~NameLikeFallbackIdentityFields) == MetadataField.None)
+        {
+            return false;
+        }
+
+        foreach (var field in SupportedFallbackIdentityFields)
+        {
+            if ((fields & field) == MetadataField.None)
+            {
+                continue;
+            }
+
+            var left = GetFallbackIdentityValue(incoming, field);
+            var right = GetFallbackIdentityValue(existing, field);
+            if (!IsFallbackIdentityValuePresent(left) ||
+                !IsFallbackIdentityValuePresent(right) ||
+                (left is string leftText && right is string rightText
+                    ? !string.Equals(leftText.Trim(), rightText.Trim(), StringComparison.OrdinalIgnoreCase)
+                    : !left!.Equals(right)))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static IReadOnlyList<(string Source, string Value)> GetExternalIds(
+        SubjectRelationshipDefinition definition) =>
+        definition.SubjectExternalIds?
+            .Where(pair => !string.IsNullOrWhiteSpace(pair.Key) && !string.IsNullOrWhiteSpace(pair.Value))
+            .Select(pair => (
+                pair.Key.NormalizeExternalIdentifierName(),
+                pair.Value.NormalizeExternalIdentifierValue()))
+            .ToArray() ?? [];
+
+    private static bool MatchesResolvedSubjectExternalId(
+        SubjectRelationshipDefinition incoming,
+        IReadOnlyList<(string Source, string Value)> incomingIds,
+        ResolvedSubject existing)
+    {
+        if (!string.Equals(incoming.SubjectKind, existing.Definition.SubjectKind, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return incomingIds.Any(left => existing.ExternalIds.Contains(left));
+    }
+
+    private static bool HasExternalIdConflict(
+        IReadOnlyList<(string Source, string Value)> incomingIds,
+        IReadOnlyList<(string Source, string Value)> existingIds) =>
+        incomingIds.Any(left => existingIds.Any(right =>
+            string.Equals(left.Source, right.Source, StringComparison.Ordinal) && left.Value != right.Value));
+
+    private static bool MatchesResolvedSubjectFallbackIdentity(
+        SubjectRelationshipDefinition incoming,
+        ResolvedSubject existing,
+        MetadataField fallbackFields)
+    {
+        if (!string.Equals(incoming.SubjectKind, existing.Definition.SubjectKind, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return MatchesFallbackIdentity(
+            fallbackFields,
+            incoming.InitialSubjectContribution,
+            existing.Definition.InitialSubjectContribution);
     }
 
     public async Task ExecuteAsync(JobContext context, CancellationToken cancellationToken = default)
@@ -236,6 +359,39 @@ internal sealed class ContentMetadataRefreshItemJob(
         IProgressReporter? progress,
         CancellationToken cancellationToken = default)
     {
+        using var activity = ContentTelemetry.Source.StartActivity("magpie.metadata.refresh");
+        activity?.SetTag("magpie.content_hierarchy_item_id", contentHierarchyItemId.ToString());
+        var started = Stopwatch.GetTimestamp();
+        string? refreshedContentType = null;
+
+        try
+        {
+            refreshedContentType = await RefreshCoreAsync(
+                contentHierarchyItemId,
+                userId,
+                correlationId,
+                progress,
+                activity,
+                cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            ContentTelemetry.RefreshDuration.Record(
+                Stopwatch.GetElapsedTime(started).TotalMilliseconds,
+                new KeyValuePair<string, object?>(
+                    "content_type",
+                    refreshedContentType ?? activity?.GetTagItem("magpie.content_type") as string ?? "unknown"));
+        }
+    }
+
+    private async Task<string?> RefreshCoreAsync(
+        Guid contentHierarchyItemId,
+        Guid? userId,
+        Guid? correlationId,
+        IProgressReporter? progress,
+        Activity? activity,
+        CancellationToken cancellationToken)
+    {
         progress?.Report(0, "The refresh will load the content item.");
 
         var item = await contentHierarchyItemRepository.GetByIdAsync(contentHierarchyItemId, cancellationToken)
@@ -244,8 +400,10 @@ internal sealed class ContentMetadataRefreshItemJob(
         {
             logger.LogInformation("The refresh skipped missing item {ContentHierarchyItemId}", contentHierarchyItemId);
             progress?.Report(1, "The refresh stopped because the content item does not exist.");
-            return;
+            return null;
         }
+
+        activity?.SetTag("magpie.content_type", item.ContentType);
 
         var container = item.MetadataContainer ??
             await metadataContainerRepository.GetByIdAsync(item.MetadataContainerId, cancellationToken)
@@ -256,7 +414,7 @@ internal sealed class ContentMetadataRefreshItemJob(
                 "The refresh skipped item {ContentHierarchyItemId} because it has no metadata container",
                 item.Id);
             progress?.Report(1, "The refresh stopped because the metadata container does not exist.");
-            return;
+            return item.ContentType;
         }
 
         if (contentTypeRegistry.GetDefinitionFor(item.ContentType) is null)
@@ -265,12 +423,13 @@ internal sealed class ContentMetadataRefreshItemJob(
                 "The refresh skipped item {ContentHierarchyItemId} because its content type is not registered",
                 item.Id);
             progress?.Report(1, "The refresh stopped because the content type is not registered.");
-            return;
+            return item.ContentType;
         }
 
         var providers = metadataProviders
             .Where(p => p.SupportedContentTypes.Any(supported => supported == "*" || supported == item.ContentType))
             .ToArray();
+        activity?.SetTag("magpie.providers_matched", providers.Length);
 
         foreach (var group in providers
             .Where(p => !string.IsNullOrWhiteSpace(p.ProviderType))
@@ -362,6 +521,10 @@ internal sealed class ContentMetadataRefreshItemJob(
                 var subjectRelationships = new List<SubjectRelationshipDefinition>();
                 if (provider is IContentHierarchyMetadataRelationshipProvider relationshipProvider)
                 {
+                    using var expandActivity =
+                        ContentTelemetry.Source.StartActivity("magpie.metadata.relationships.expand");
+                    expandActivity?.SetTag("magpie.provider.type", provider.ProviderType);
+
                     try
                     {
                         var expanded = await relationshipProvider.GetRelationshipsAsync(
@@ -377,9 +540,12 @@ internal sealed class ContentMetadataRefreshItemJob(
                         {
                             subjectRelationships.AddRange(expanded);
                         }
+
+                        expandActivity?.SetTag("magpie.relationships.found_count", expanded?.Count ?? 0);
                     }
                     catch (Exception ex)
                     {
+                        expandActivity?.SetStatus(ActivityStatusCode.Error, ex.Message);
                         logger.LogError(
                             ex,
                             "Provider {ProviderType} failed to expand the related subjects, so the " +
@@ -429,7 +595,7 @@ internal sealed class ContentMetadataRefreshItemJob(
                 "The refresh got no metadata for item {ContentHierarchyItemId}",
                 item.Id);
             progress?.Report(1, NoMetadataReturnedStatus);
-            return;
+            return item.ContentType;
         }
 
         cancellationToken.ThrowIfCancellationRequested();
@@ -478,6 +644,8 @@ internal sealed class ContentMetadataRefreshItemJob(
         }
 
         progress?.Report(1, "The metadata refresh completed.");
+
+        return item.ContentType;
     }
 
     private async Task<IReadOnlyList<Guid>> ApplyRefreshWritesAsync(
@@ -492,12 +660,18 @@ internal sealed class ContentMetadataRefreshItemJob(
         CancellationToken cancellationToken)
     {
         var addedRelationshipContainerIds = new List<Guid>();
+        using var activity = ContentTelemetry.Source.StartActivity("magpie.metadata.write");
+        activity?.SetTag("magpie.write.contributions_replaced", replacements.Count);
+
+        var cascadedChildCount = 0;
+
         try
         {
             await transactionManager.ExecuteWithTransactionAsync(
                 async ct =>
                 {
                     addedRelationshipContainerIds.Clear();
+                    var resolvedSubjects = new List<ResolvedSubject>();
                     foreach (var replacement in replacements)
                     {
                         if (replacement.ExistingProviderContributions.Count == 1)
@@ -549,6 +723,7 @@ internal sealed class ContentMetadataRefreshItemJob(
                             addedRelationshipContainerIds.AddRange(await UpsertSubjectRelationshipsAsync(
                                 replacement.Contribution,
                                 replacement.SubjectRelationships,
+                                resolvedSubjects,
                                 userId,
                                 correlationId,
                                 ct).ConfigureAwait(false));
@@ -573,13 +748,21 @@ internal sealed class ContentMetadataRefreshItemJob(
                         .Where(child => child.MetadataContainer?.Contributions.Any(
                             contribution => contribution.ExternalIds.Count > 0) == true)
                         .Select(child => child.Id));
+
+                    using var cascadeActivity = ContentTelemetry.Source.StartActivity("magpie.metadata.cascade");
+                    cascadeActivity?.SetTag("magpie.cascade.child_count", childIds.Count);
                     await EnqueueChildRefreshesAsync(
                         childIds,
                         userId,
                         correlationId,
                         ct).ConfigureAwait(false);
+                    cascadedChildCount = childIds.Count;
                 },
                 cancellationToken).ConfigureAwait(false);
+
+            ContentTelemetry.RefreshCascadeChildren.Record(
+                cascadedChildCount,
+                new KeyValuePair<string, object?>("content_type", item.ContentType));
 
             return addedRelationshipContainerIds;
         }
@@ -589,6 +772,7 @@ internal sealed class ContentMetadataRefreshItemJob(
         }
         catch (Exception ex)
         {
+            activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
             logger.LogError(ex, "The refresh failed to write the metadata for item {ContentHierarchyItemId}", item.Id);
             throw;
         }
@@ -777,6 +961,7 @@ internal sealed class ContentMetadataRefreshItemJob(
     private async Task<IReadOnlyList<Guid>> UpsertSubjectRelationshipsAsync(
         MetadataContribution contribution,
         IReadOnlyList<SubjectRelationshipDefinition> definitions,
+        List<ResolvedSubject> resolvedSubjects,
         Guid? userId,
         Guid? correlationId,
         CancellationToken cancellationToken)
@@ -787,6 +972,7 @@ internal sealed class ContentMetadataRefreshItemJob(
 
         var seenSet = seen.ToHashSet();
         var addedContainerIds = new List<Guid>();
+        var warnedUnsupportedFallbackKinds = new HashSet<string>(StringComparer.Ordinal);
 
         foreach (var definition in definitions)
         {
@@ -798,19 +984,73 @@ internal sealed class ContentMetadataRefreshItemJob(
                 continue;
             }
 
-            if (!subjectKindRegistry.Contains(definition.SubjectKind))
+            var subjectKind = subjectKindRegistry.Definitions
+                .FirstOrDefault(kind => string.Equals(kind.Slug, definition.SubjectKind, StringComparison.Ordinal));
+            if (subjectKind is null)
             {
                 logger.LogWarning("The refresh skipped unknown subject kind {SubjectKind}", definition.SubjectKind);
                 continue;
             }
 
-            var subjectContainerId = await UpsertSubjectAsync(definition, userId, correlationId, cancellationToken)
-                .ConfigureAwait(false);
+            var fallbackFields = subjectKind.FallbackIdentityFields;
+            var unsupportedFields = GetUnsupportedFallbackIdentityFields(fallbackFields);
+            if (unsupportedFields != MetadataField.None &&
+                warnedUnsupportedFallbackKinds.Add(definition.SubjectKind))
+            {
+                logger.LogWarning(
+                    "Subject kind {SubjectKind} declares unsupported fallback identity fields " +
+                    "{FallbackIdentityFields}; fallback matching is disabled",
+                    definition.SubjectKind,
+                    unsupportedFields);
+            }
+
+            var externalIds = GetExternalIds(definition);
+            var resolvedSubject = resolvedSubjects.FirstOrDefault(subject =>
+                MatchesResolvedSubjectExternalId(definition, externalIds, subject));
+            var subjectContainerId = resolvedSubject?.MetadataContainerId;
+            if (subjectContainerId is null)
+            {
+                subjectContainerId = await FindExistingSubjectContainerIdAsync(definition, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
+            if (subjectContainerId is null)
+            {
+                var fallbackCandidates = resolvedSubjects
+                    .Where(subject => MatchesResolvedSubjectFallbackIdentity(definition, subject, fallbackFields))
+                    .Select(subject => subject.MetadataContainerId)
+                    .Distinct()
+                    .Where(containerId => !resolvedSubjects.Any(subject =>
+                        subject.MetadataContainerId == containerId &&
+                        HasExternalIdConflict(externalIds, subject.ExternalIds)))
+                    .Take(2)
+                    .ToArray();
+                if (fallbackCandidates.Length == 1)
+                {
+                    subjectContainerId = fallbackCandidates[0];
+                }
+                else if (fallbackCandidates.Length > 1)
+                {
+                    logger.LogWarning(
+                        "The metadata refresh found ambiguous in-run fallback matches for subject " +
+                        "{SubjectName} of kind {SubjectKind}; a new subject will be created",
+                        definition.SubjectName,
+                        definition.SubjectKind);
+                }
+            }
+
+            if (subjectContainerId is null)
+            {
+                subjectContainerId = await UpsertSubjectAsync(definition, userId, correlationId, cancellationToken)
+                    .ConfigureAwait(false);
+            }
 
             if (subjectContainerId is null)
             {
                 continue;
             }
+
+            resolvedSubjects.Add(new(definition, subjectContainerId.Value, externalIds));
 
             var key = new MetadataRelationshipKey(
                 subjectContainerId,
@@ -1072,6 +1312,11 @@ internal sealed class ContentMetadataRefreshItemJob(
         IReadOnlyList<MetadataContribution> ExistingProviderContributions,
         MetadataContribution Contribution,
         IReadOnlyList<SubjectRelationshipDefinition> SubjectRelationships);
+
+    private sealed record ResolvedSubject(
+        SubjectRelationshipDefinition Definition,
+        Guid MetadataContainerId,
+        IReadOnlyList<(string Source, string Value)> ExternalIds);
 
     private sealed record ProviderChildDefinition(string ProviderType, ChildHierarchyDefinition Definition);
 

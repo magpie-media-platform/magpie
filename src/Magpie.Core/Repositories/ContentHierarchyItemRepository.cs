@@ -149,6 +149,27 @@ internal sealed class ContentHierarchyItemRepository(
         }
     }
 
+    public async Task LockAsync(Guid contentHierarchyItemId, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            await context.ContentHierarchyItems
+                .Where(item => item.Id == contentHierarchyItemId)
+                .ExecuteUpdateAsync(
+                    setters => setters.SetProperty(item => item.ModifiedAt, item => item.ModifiedAt),
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(
+                ex,
+                "The hierarchy item repository failed to lock item {ContentHierarchyItemId}.",
+                contentHierarchyItemId);
+            throw;
+        }
+    }
+
     public async Task<IReadOnlyDictionary<Guid, int>> GetChildCountsByParentAsync(
         IReadOnlyCollection<Guid> parentIds,
         CancellationToken cancellationToken = default)

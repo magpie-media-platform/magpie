@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
@@ -7,7 +8,6 @@ using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Extensions.Tvmaze;
-using Magpie.Extensions.Tvmaze.Pipeline;
 using Magpie.Models;
 using Magpie.Sdk.Services;
 
@@ -698,7 +698,7 @@ public class TvmazeClientTests
     }
 
     [Test]
-    public async Task LookupShowAsync_FollowsMovedPermanently_AndRecordsEveryWireAttempt()
+    public async Task LookupShowAsync_EmitsRequestSpanPerWireAttempt_WhenLookupIsMovedPermanently()
     {
         // Arrange
         using var http = new MockHttpMessageHandler();
@@ -712,14 +712,20 @@ public class TvmazeClientTests
             });
         http.Expect(HttpMethod.Get, "https://api.tvmaze.com/shows/82")
             .Respond("application/json", LookupJson);
-        var attempts = new List<WireAttemptOutcome>();
+        var spans = new List<Activity>();
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == "magpie.extensions.tvmaze",
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStopped = spans.Add
+        };
+        ActivitySource.AddActivityListener(listener);
         var httpClient = http.ToHttpClient();
         using var disposableClient = new TvmazeClient(
             _settingsService.Object,
             Mock.Of<IHttpClientFactory>(factory => factory.CreateClient(TvmazeClient.HttpClientName) == httpClient),
             NullLogger<TvmazeClient>.Instance);
         var client = disposableClient;
-        using var traceScope = ((IClient)client).BeginExecutionTrace(attempts.Add);
 
         // Act
         var show = await client.LookupShowAsync("imdb", "tt0944947", default).ConfigureAwait(false);
@@ -730,14 +736,15 @@ public class TvmazeClientTests
         {
             Assert.That(show!.Id, Is.EqualTo(82));
             Assert.That(
-                attempts.Select(attempt => attempt.Url),
+                spans.Select(span => span.OperationName),
+                Is.EqualTo(["tvmaze.query.request", "tvmaze.query.request"]));
+            Assert.That(
+                spans.Select(span => span.GetTagItem("magpie.request.target")),
                 Is.EqualTo(
                 [
                     "https://api.tvmaze.com/lookup/shows?imdb=tt0944947",
                     "https://api.tvmaze.com/shows/82"
                 ]));
-            Assert.That(attempts.Select(attempt => attempt.StatusCode), Is.EqualTo([301, 200]));
-            Assert.That(attempts.Select(attempt => attempt.Redirect), Is.EqualTo([true, false]));
         }
 
         http.VerifyNoOutstandingExpectation();

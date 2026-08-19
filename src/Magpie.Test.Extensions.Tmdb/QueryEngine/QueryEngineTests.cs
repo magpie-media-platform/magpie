@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -24,7 +25,7 @@ public class QueryEngineTests
 {
     private Mock<ISettingsResolver> _settingsResolver = null!;
     private Mock<IQueryExecutor> _executor = null!;
-    private Mock<IQueryCache> _cache = null!;
+    private Mock<IQueryCoordinator> _cache = null!;
     private Mock<IQueryPlanner> _planner = null!;
     private IQueryEngine _subject = null!;
 
@@ -33,7 +34,7 @@ public class QueryEngineTests
     {
         _settingsResolver = new Mock<ISettingsResolver>();
         _executor = new Mock<IQueryExecutor>();
-        _cache = new Mock<IQueryCache>();
+        _cache = new Mock<IQueryCoordinator>();
         _planner = new Mock<IQueryPlanner>();
         _subject = new TmdbQueryEngine(
             _settingsResolver.Object,
@@ -140,6 +141,13 @@ public class QueryEngineTests
                 RequestedPage = 1,
                 PagingMode = QueryPagingMode.LogicalStream
             });
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == "magpie.extensions.tmdb",
+            Sample = (ref ActivityCreationOptions<ActivityContext> options) =>
+                ActivitySamplingResult.PropagationData
+        };
+        ActivitySource.AddActivityListener(listener);
 
         // Act
         var execution = await _subject.SearchAsync(request, default).ConfigureAwait(false);
@@ -149,10 +157,18 @@ public class QueryEngineTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(hits.Single().Id, Is.EqualTo(1726));
-            Assert.That(execution.Diagnostics.Plan, Is.SameAs(plan));
             _planner.Verify(planner => planner.Plan(request), Times.Once);
             _executor.Verify(
-                executor => executor.ExecuteAsync(plan, context, It.IsAny<CancellationToken>()),
+                executor => executor.ExecuteAsync(
+                    plan,
+                    It.Is<RequestContext>(actual =>
+                        actual.ApiKey == "key" &&
+                        actual.Language == "en-US" &&
+                        actual.Telemetry != null &&
+                        actual.Telemetry.Activity != null &&
+                        actual.Telemetry.Activity.OperationName == "tmdb.query.execute" &&
+                        "plan".Equals(actual.Telemetry.Activity.GetTagItem("magpie.query.fingerprint"))),
+                    It.IsAny<CancellationToken>()),
                 Times.Once);
         }
     }
@@ -500,70 +516,5 @@ public class QueryEngineTests
         // Assert
         Assert.CatchAsync<OperationCanceledException>(async () =>
             await execution.Hits.ToListAsync().ConfigureAwait(false));
-    }
-
-    [Test]
-    public async Task SearchAsync_CarriesCallerTrace_WhenExecutionContextIsCreated()
-    {
-        // Arrange
-        var trace = new ExecutionTrace();
-        var plan = new QueryPlan
-        {
-            Root = new UnionPlanNode
-            {
-                Id = 1,
-                Precondition = PlanPrecondition.None,
-                Contributes = "movie search",
-                Children = []
-            },
-            Warnings = [],
-            RequestedPage = 1,
-            MaximumResults = 25,
-            DefaultLanguagePreference = "en-US",
-            Fingerprint = "plan"
-        };
-        List<SearchHit> planned = [new() { Route = ContentRoute.Movie, Id = 1 }];
-        _planner.Setup(planner => planner.Plan(It.IsAny<QueryRequest>())).Returns(plan);
-        _settingsResolver.Setup(resolver => resolver.AcquireContextAsync(
-                It.IsAny<string?>(),
-                It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new RequestContext { ApiKey = "key", Language = "en-US" });
-        _executor.Setup(executor => executor.ExecuteAsync(
-                It.IsAny<QueryPlan>(),
-                It.IsAny<RequestContext>(),
-                It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new QueryExecution
-            {
-                Supported = true,
-                Hits = planned.ToAsyncEnumerable(),
-                Warnings = [],
-                RequestedPage = 1,
-                PagingMode = QueryPagingMode.LogicalStream
-            });
-
-        // Act
-        var execution = await _subject.SearchAsync(
-            new QueryRequest
-            {
-                Route = ContentRoute.Movie,
-                Criteria = new MetadataCriteria(),
-                Page = 1,
-                DefaultLanguagePreference = "en-US"
-            },
-            trace,
-            default).ConfigureAwait(false);
-        await execution.Hits.ToListAsync().ConfigureAwait(false);
-
-        // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(execution.Diagnostics.Trace, Is.SameAs(trace));
-            _executor.Verify(
-                executor => executor.ExecuteAsync(
-                    plan,
-                    It.Is<RequestContext>(context => context.ExecutionTrace == trace),
-                    It.IsAny<CancellationToken>()),
-                Times.Once);
-        }
     }
 }

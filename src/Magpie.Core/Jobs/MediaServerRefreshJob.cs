@@ -1,11 +1,13 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions.Repositories;
+using Magpie.Core.Observability;
 using Magpie.Models;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
@@ -91,6 +93,9 @@ internal sealed class MediaServerRefreshJob(
         var contentHierarchyItemId = ResolveContentHierarchyItemId(context);
         var progress = progressReporter;
 
+        using var activity = MediaServerTelemetry.Source.StartActivity("MediaServerRefresh");
+        activity?.SetTag("magpie.content_hierarchy_item_id", contentHierarchyItemId?.ToString());
+
         progress?.Report(0, "The refresh will load the media servers.");
 
         var integrations = BuildIntegrationMap();
@@ -99,6 +104,8 @@ internal sealed class MediaServerRefreshJob(
             .OrderBy(s => s.Name, StringComparer.Ordinal)
             .ThenBy(s => s.Id)
             .ToArray();
+
+        activity?.SetTag("magpie.media_servers.server_count", enabledServers.Length);
 
         var scope = await ResolveScopeAsync(contentHierarchyItemId, cancellationToken)
             .ConfigureAwait(false);
@@ -112,10 +119,19 @@ internal sealed class MediaServerRefreshJob(
                 enabledServers.Length,
                 $"The media-server refresh will refresh the libraries on {server.Name}.");
 
+            using var serverActivity = MediaServerTelemetry.Source.StartActivity("ServerRefresh");
+            serverActivity?.SetTag("magpie.media_server.provider_type", server.ProviderType);
+            serverActivity?.SetTag("magpie.media_server.id", server.Id.ToString());
+            serverActivity?.SetTag("magpie.media_server.name", server.Name);
+
+            var startedAt = Stopwatch.GetTimestamp();
+            var outcome = "error";
+
             try
             {
                 if (!integrations.TryGetValue(server.ProviderType, out var integration))
                 {
+                    outcome = "skipped_not_refreshable";
                     logger.LogWarning(
                         "No media server integration exists for provider type {ProviderType}",
                         server.ProviderType);
@@ -124,6 +140,7 @@ internal sealed class MediaServerRefreshJob(
 
                 if (integration is not IRefreshableMediaServerIntegration refreshableIntegration)
                 {
+                    outcome = "skipped_not_refreshable";
                     logger.LogDebug(
                         "The integration does not support refresh. The job skipped media server {MediaServerName}",
                         server.Name);
@@ -134,6 +151,7 @@ internal sealed class MediaServerRefreshJob(
                     server.ContentTypes.Count > 0 &&
                     !server.ContentTypes.Contains(scope.ContentType))
                 {
+                    outcome = "skipped_content_type";
                     logger.LogDebug(
                         "The job skipped the refresh on media server {MediaServerName}. " +
                         "It is not configured for {ContentType}",
@@ -146,6 +164,7 @@ internal sealed class MediaServerRefreshJob(
                     integration.SupportedContentTypes.Count > 0 &&
                     !integration.SupportedContentTypes.Contains(scope.ContentType))
                 {
+                    outcome = "skipped_content_type";
                     logger.LogDebug(
                         "The job skipped the refresh on media server {MediaServerName}. " +
                         "The integration does not support {ContentType}",
@@ -164,22 +183,40 @@ internal sealed class MediaServerRefreshJob(
 
                 if (!refreshed)
                 {
+                    outcome = "not_triggered";
                     logger.LogWarning(
                         "Media server {MediaServerName} did not trigger an upstream refresh",
                         server.Name);
                     continue;
                 }
+
+                outcome = "success";
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
+                outcome = string.Empty;
                 throw;
             }
             catch (Exception ex)
             {
+                serverActivity?.SetStatus(ActivityStatusCode.Error, ex.Message);
                 logger.LogWarning(
                     ex,
                     "The job failed to refresh the libraries on media server {MediaServerName}",
                     server.Name);
+            }
+            finally
+            {
+                if (outcome.Length > 0)
+                {
+                    serverActivity?.SetTag("magpie.media_server.outcome", outcome);
+                    var providerTag = new KeyValuePair<string, object?>("provider_type", server.ProviderType);
+                    var outcomeTag = new KeyValuePair<string, object?>("outcome", outcome);
+                    MediaServerTelemetry.Refreshes.Add(1, providerTag, outcomeTag);
+                    MediaServerTelemetry.RefreshDuration.Record(
+                        Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds,
+                        providerTag);
+                }
             }
         }
 

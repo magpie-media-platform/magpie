@@ -12,7 +12,7 @@ using Magpie.Models.Data;
 
 namespace Magpie.Extensions.Wikidata;
 
-internal sealed class EntityResolver(IWikidataClient client, IQueryCache cache) : IEntityResolver
+internal sealed class EntityResolver(IWikidataClient client, IQueryCoordinator cache) : IEntityResolver
 {
     public async Task<EntityResolution> ResolveContentAsync(
         EntityKind kind,

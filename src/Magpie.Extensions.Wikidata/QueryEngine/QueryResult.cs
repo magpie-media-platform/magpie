@@ -15,6 +15,4 @@ internal sealed record QueryResult
     public IReadOnlyList<string> Warnings { get; init; } = [];
 
     public IReadOnlyList<CriterionDisposition> CriterionDispositions { get; init; } = [];
-
-    public QueryExecution Execution { get; init; } = null!;
 }

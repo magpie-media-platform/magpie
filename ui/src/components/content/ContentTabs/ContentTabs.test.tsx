@@ -84,7 +84,7 @@ describe('ContentFactsPanel', () => {
                     }}
                 />,
             );
-            const details = screen.getByRole('heading', { name: 'Details' }).closest('section')!;
+            const details = screen.getByRole('region', { name: 'Details' });
             const labels = within(details)
                 .getAllByRole('term')
                 .map((node) => node.textContent);
@@ -164,7 +164,7 @@ describe('ContentFactsPanel', () => {
                     }}
                 />,
             );
-            expect(screen.getByRole('heading', { name: 'Details' })).toBeInTheDocument();
+            expect(screen.getByRole('region', { name: 'Details' })).toBeInTheDocument();
             expect(screen.queryByRole('heading', { name: /custom values/i })).not.toBeInTheDocument();
             expect(screen.getByText('Studio')).toBeInTheDocument();
             expect(screen.getByText('AMC')).toBeInTheDocument();
@@ -191,8 +191,9 @@ describe('ContentFactsPanel', () => {
             );
 
             const sections = screen.getAllByRole('heading', { level: 2 });
-            expect(sections.map((heading) => heading.textContent)).toEqual(['Details', 'External IDs']);
-            const details = screen.getByRole('heading', { name: 'Details' }).closest('section')!;
+            expect(sections.map((heading) => heading.textContent)).toEqual(['External IDs']);
+            expect(screen.getByRole('region', { name: 'Details' })).toBeInTheDocument();
+            const details = screen.getByRole('region', { name: 'Details' });
             const labels = within(details)
                 .getAllByRole('term')
                 .map((label) => label.textContent);

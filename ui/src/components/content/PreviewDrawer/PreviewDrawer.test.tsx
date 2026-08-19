@@ -6,6 +6,21 @@ vi.mock('@/hooks/usePreviewByExternalId', () => ({
     usePreviewByExternalId: vi.fn(),
 }));
 
+vi.mock('@/hooks/useLibraryTypes', () => ({
+    useLibraryTypes: () => ({
+        subjectTypes: [
+            { id: 'person', name: 'Person', pluralName: 'People', slug: 'person', levels: [] },
+            {
+                id: 'production-company',
+                name: 'Studio',
+                pluralName: 'Studios',
+                slug: 'production-company',
+                levels: [],
+            },
+        ],
+    }),
+}));
+
 import { usePreviewByExternalId, type ContentPreview } from '@/hooks/usePreviewByExternalId';
 import { createApiError } from '@/lib/errors';
 import { PreviewDrawer, type PreviewDrawerTarget } from './PreviewDrawer';
@@ -178,7 +193,7 @@ describe('PreviewDrawer', () => {
         expect(groups).toHaveLength(2);
         expect(within(groups[0]).getByRole('heading')).toHaveTextContent('Person');
         expect(within(groups[0]).getByText('Leonardo DiCaprio')).toBeInTheDocument();
-        expect(within(groups[1]).getByRole('heading')).toHaveTextContent('Production Company');
+        expect(within(groups[1]).getByRole('heading')).toHaveTextContent('Studio');
         expect(within(groups[1]).getByText('Legendary Pictures')).toBeInTheDocument();
     });
 

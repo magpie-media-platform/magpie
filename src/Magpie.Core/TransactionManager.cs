@@ -1,9 +1,11 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions;
+using Magpie.Core.Observability;
 using Magpie.Data;
 
 using Microsoft.EntityFrameworkCore.Storage;
@@ -27,6 +29,7 @@ internal sealed class TransactionManager(
             return;
         }
 
+        var started = Stopwatch.GetTimestamp();
         var transaction = await context.Database
             .BeginTransactionAsync(cancellationToken)
             .ConfigureAwait(false);
@@ -41,9 +44,11 @@ internal sealed class TransactionManager(
         {
             _postCommitActions.Clear();
             await RollbackAsync(transaction, cancellationToken).ConfigureAwait(false);
+            RecordOutcome(started, committed: false);
             throw;
         }
 
+        RecordOutcome(started, committed: true);
         await DrainPostCommitActionsAsync().ConfigureAwait(false);
     }
 
@@ -56,6 +61,7 @@ internal sealed class TransactionManager(
             return await operation(cancellationToken).ConfigureAwait(false);
         }
 
+        var started = Stopwatch.GetTimestamp();
         var transaction = await context.Database
             .BeginTransactionAsync(cancellationToken)
             .ConfigureAwait(false);
@@ -71,9 +77,11 @@ internal sealed class TransactionManager(
         {
             _postCommitActions.Clear();
             await RollbackAsync(transaction, cancellationToken).ConfigureAwait(false);
+            RecordOutcome(started, committed: false);
             throw;
         }
 
+        RecordOutcome(started, committed: true);
         await DrainPostCommitActionsAsync().ConfigureAwait(false);
         return result;
     }
@@ -87,6 +95,14 @@ internal sealed class TransactionManager(
         }
 
         _postCommitActions.Add(action);
+    }
+
+    private static void RecordOutcome(long started, bool committed)
+    {
+        DataTelemetry.TransactionOutcome.Add(
+            1,
+            new KeyValuePair<string, object?>("outcome", committed ? "committed" : "rolled_back"));
+        DataTelemetry.TransactionDuration.Record(Stopwatch.GetElapsedTime(started).TotalMilliseconds);
     }
 
     private async Task DrainPostCommitActionsAsync()

@@ -18,7 +18,7 @@ import { PullToRefresh } from '@/components/ui/PullToRefresh';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { useUrlFilterState } from '@/hooks/useUrlFilterState';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
-import { useLibraryTypes, useTypeIconName } from '@/hooks/useLibraryTypes';
+import { useLibraryTypes, useTypeIconName, type LibraryTypeDefinition } from '@/hooks/useLibraryTypes';
 import { TABLE_LAYOUT_QUERY, useCardLayout } from '@/hooks/ui/useCardLayout';
 import { extractImageUrl, extractTitle } from '@/lib/metadata';
 import { getErrorMessage } from '@/lib/errors';
@@ -124,8 +124,10 @@ function removeSubjectKindClauses(query: string): string {
     return clauses.filter((clause) => !SUBJECT_KIND_CLAUSE_PATTERN.test(clause.trim())).join(' and ');
 }
 
-function transformSubject(subject: ApiSubject): SubjectItem {
-    const title = extractTitle(subject.metadataContainer) ?? `Subject ${subject.id.slice(0, 8)}`;
+function transformSubject(subject: ApiSubject, subjectTypes: LibraryTypeDefinition[]): SubjectItem {
+    const subjectType = subjectTypes.find((type) => type.slug === subject.kind);
+    const kindLabel = formatSubjectKindLabel(subject.kind, subjectType?.name);
+    const title = extractTitle(subject.metadataContainer) ?? `${kindLabel} ${subject.id.slice(0, 8)}`;
     const imageUrl = extractImageUrl(subject.metadataContainer);
 
     return {
@@ -133,6 +135,7 @@ function transformSubject(subject: ApiSubject): SubjectItem {
         title,
         imageUrl,
         kind: subject.kind,
+        kindLabel,
         tags: undefined,
         createdAt: subject.createdAt,
     };
@@ -264,7 +267,10 @@ export function SubjectsPage() {
         await refetch();
     }, [refetch]);
 
-    const items = useMemo(() => subjects.map(transformSubject), [subjects]);
+    const items = useMemo(
+        () => subjects.map((subject) => transformSubject(subject, subjectTypes)),
+        [subjects, subjectTypes],
+    );
 
     const hasActiveFilter = visibleFilterQuery.trim().length > 0;
 
@@ -273,15 +279,19 @@ export function SubjectsPage() {
             className="subjects-page__loading"
             data-testid="subjects-page__loading"
             role="status"
-            aria-label="Loading subjects"
+            aria-label={`Loading ${pageTitle.toLowerCase()}`}
         />
     ) : hasActiveFilter ? (
-        <EmptyState title="No matches found" description="No subjects match the current filter." size="sm" />
+        <EmptyState
+            title="No matches found"
+            description={`No ${pageTitle.toLowerCase()} match the current filter.`}
+            size="sm"
+        />
     ) : (
         <EmptyState
             icon={<CdnPhosphorIcon name={pageIconName} weight="duotone" />}
             title={`No ${pageTitle.toLowerCase()} yet`}
-            description="Subjects appear here once content links to them."
+            description={`${pageTitle} appear here once content links to them.`}
             size="sm"
         />
     );
@@ -307,7 +317,7 @@ export function SubjectsPage() {
                     {error && subjects.length === 0 ? (
                         <EmptyState
                             icon={<WarningCircleIcon weight="duotone" />}
-                            title="Failed to load subjects"
+                            title={`Failed to load ${pageTitle.toLowerCase()}`}
                             description={getErrorMessage(error)}
                             action={
                                 <Button variant="secondary" size="sm" onClick={() => refetch()}>
@@ -356,7 +366,7 @@ export function SubjectsPage() {
                                                         title={item.title}
                                                     >
                                                         <Badge variant="default" size="sm">
-                                                            {formatSubjectKindLabel(item.kind)}
+                                                            {item.kindLabel}
                                                         </Badge>
                                                     </MobileMediaCard>
                                                 ))}

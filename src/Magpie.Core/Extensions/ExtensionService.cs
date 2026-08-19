@@ -17,14 +17,15 @@ using Magpie.Abstractions;
 using Magpie.Abstractions.Repositories;
 using Magpie.Core.Config;
 using Magpie.Core.Events;
+using Magpie.Core.Observability;
 using Magpie.Models;
 using Magpie.Models.Api;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
+using Magpie.Sdk.Caching;
 using Magpie.Sdk.Services;
 
-using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
 
 namespace Magpie.Core.Extensions;
@@ -38,7 +39,7 @@ internal sealed class ExtensionService(
     MagpieHostOptions hostOptions,
     IExtensionLifecycleManager lifecycleManager,
     IEventBus eventBus,
-    IMemoryCache memoryCache,
+    ICacheFactory cacheFactory,
     IFileSystem fileSystem,
     TimeProvider timeProvider,
     ILogger<ExtensionService> logger) : IExtensionService
@@ -51,6 +52,15 @@ internal sealed class ExtensionService(
     private const string UpdateInfoCacheKey = "magpie.extensions.update-availability";
     private const string ManualDisableReason = "Disabled by request.";
     private const string DefaultTagFilter = "magpie";
+
+    private readonly ICache _updateInfoCache = cacheFactory.GetOrCreate(
+        "extension-update-info",
+        () => new CachePolicy
+        {
+            Freshness = UpdateInfoCacheTtl,
+            Retention = UpdateInfoCacheTtl,
+            MaximumEntries = 1,
+        });
 
     private static Extension ExtractPackage(
         Stream packageStream,
@@ -859,12 +869,15 @@ internal sealed class ExtensionService(
     private async Task<IReadOnlyDictionary<Guid, ExtensionUpdateInfo>> GetUpdateAvailabilityAsync(
         CancellationToken cancellationToken)
     {
-        if (memoryCache.TryGetValue<IReadOnlyDictionary<Guid, ExtensionUpdateInfo>>(
-            UpdateInfoCacheKey,
-            out var cached) && cached is not null)
+        if (_updateInfoCache.TryGet<IReadOnlyDictionary<Guid, ExtensionUpdateInfo>>(
+                UpdateInfoCacheKey,
+                out var cached) && cached is not null)
         {
+            DataTelemetry.CacheHit.Add(1, new KeyValuePair<string, object?>("cache", "update_check"));
             return cached;
         }
+
+        DataTelemetry.CacheMiss.Add(1, new KeyValuePair<string, object?>("cache", "update_check"));
 
         try
         {
@@ -899,10 +912,7 @@ internal sealed class ExtensionService(
 
             var map = updates.ToDictionary(update => update.ExtensionId);
 
-            memoryCache.Set(
-                UpdateInfoCacheKey,
-                map,
-                new MemoryCacheEntryOptions { Size = 1, AbsoluteExpirationRelativeToNow = UpdateInfoCacheTtl });
+            _updateInfoCache.Set(UpdateInfoCacheKey, map);
 
             return map;
         }

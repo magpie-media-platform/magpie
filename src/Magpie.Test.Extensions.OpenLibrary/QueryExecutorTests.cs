@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 
+using Magpie.Core.Caching;
 using Magpie.Extensions.OpenLibrary;
 using Magpie.Extensions.OpenLibrary.Mapping;
 using Magpie.Extensions.OpenLibrary.QueryEngine;
@@ -21,8 +22,9 @@ namespace Magpie.Test.Extensions.OpenLibrary;
 [TestFixture]
 public sealed class QueryExecutorTests
 {
+    private MemoryCacheFactory _cacheFactory = null!;
+    private MemoryCacheStore _cacheStore = null!;
     private Mock<IOpenLibraryClient> _client = null!;
-    private Mock<IQueryCache> _cache = null!;
     private IQueryExecutor _subject = null!;
     private IQueryExecutor _requestSubject = null!;
     private RequestContext _context = null!;
@@ -31,39 +33,18 @@ public sealed class QueryExecutorTests
     [SetUp]
     public void SetUp()
     {
+        _cacheStore = new MemoryCacheStore(TimeProvider.System);
+        _cacheFactory = new MemoryCacheFactory(_cacheStore);
         _client = new Mock<IOpenLibraryClient>(MockBehavior.Strict);
-        _cache = new Mock<IQueryCache>(MockBehavior.Strict);
         _context = new RequestContext { UserAgent = "test" };
         _request = null!;
         var settingsResolver = new Mock<ISettingsResolver>(MockBehavior.Strict);
         settingsResolver
             .Setup(value => value.GetRequestContextAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(_context);
-        _cache
-            .Setup(value => value.GetSourcePageAsync(
-                It.IsAny<string>(),
-                It.IsAny<bool>(),
-                It.IsAny<Func<CancellationToken, Task<SourcePage>>>(),
-                It.IsAny<CancellationToken>()))
-            .Returns((string _, bool _, Func<CancellationToken, Task<SourcePage>> factory, CancellationToken token) =>
-                factory(token));
-        _cache
-            .Setup(value => value.GetResolutionAsync(
-                It.IsAny<string>(),
-                It.IsAny<Func<CancellationToken, Task<WorkResolution>>>(),
-                It.IsAny<CancellationToken>()))
-            .Returns((string _, Func<CancellationToken, Task<WorkResolution>> factory, CancellationToken token) =>
-                factory(token));
-        _cache
-            .Setup(value => value.GetAuthorAsync(
-                It.IsAny<string>(),
-                It.IsAny<Func<CancellationToken, Task<AuthorLookup>>>(),
-                It.IsAny<CancellationToken>()))
-            .Returns((string _, Func<CancellationToken, Task<AuthorLookup>> factory, CancellationToken token) =>
-                factory(token));
         _subject = new QueryExecutor(
             _client.Object,
-            _cache.Object,
+            _cacheFactory,
             settingsResolver.Object,
             NullLogger<QueryExecutor>.Instance);
         var requestClient = new Mock<IOpenLibraryClient>(MockBehavior.Strict);
@@ -82,9 +63,16 @@ public sealed class QueryExecutorTests
             });
         _requestSubject = new QueryExecutor(
             requestClient.Object,
-            _cache.Object,
+            _cacheFactory,
             settingsResolver.Object,
             NullLogger<QueryExecutor>.Instance);
+    }
+
+    [TearDown]
+    public void TearDown()
+    {
+        _cacheFactory.Dispose();
+        _cacheStore.Dispose();
     }
 
     [Test]
@@ -579,14 +567,6 @@ public sealed class QueryExecutorTests
                   ]
                 }
                 """));
-        Task<WorkResolution>? cachedResolution = null;
-        _cache
-            .Setup(value => value.GetResolutionAsync(
-                It.IsAny<string>(),
-                It.IsAny<Func<CancellationToken, Task<WorkResolution>>>(),
-                It.IsAny<CancellationToken>()))
-            .Returns((string _, Func<CancellationToken, Task<WorkResolution>> factory, CancellationToken token) =>
-                cachedResolution ??= factory(token));
         var plan = new QueryPlan
         {
             Root = new PlanNode
@@ -637,15 +617,6 @@ public sealed class QueryExecutorTests
                 """
                 {"numFound":1,"numFoundExact":true,"start":0,"docs":[{"key":"/works/OL1W","title":"Book"}]}
                 """));
-        Task<SourcePage>? cachedPage = null;
-        _cache
-            .Setup(value => value.GetSourcePageAsync(
-                It.IsAny<string>(),
-                It.IsAny<bool>(),
-                It.IsAny<Func<CancellationToken, Task<SourcePage>>>(),
-                It.IsAny<CancellationToken>()))
-            .Returns((string _, bool _, Func<CancellationToken, Task<SourcePage>> factory, CancellationToken token) =>
-                cachedPage ??= factory(token));
         var plan = new QueryPlan
         {
             Root = new PlanNode
